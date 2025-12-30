@@ -152,10 +152,10 @@ def get_user_display_name(user: discord.User | discord.Member) -> str:
 # --- Text Cleanup ---
 
 def remove_thinking_tags(text: str) -> str:
-    """Remove <thinking>...</thinking> blocks from AI output."""
-    # Remove thinking tags and their content
-    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    """Remove <thinking>...</thinking> and <think>...</think> blocks from AI output."""
+    # Remove everything up to and including closing think/thinking tags
+    text = re.sub(r'.*?</\s*thinking\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'.*?</\s*think\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
     return text.strip()
 
 
