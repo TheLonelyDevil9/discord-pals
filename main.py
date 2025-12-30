@@ -309,6 +309,11 @@ class BotInstance:
             if guild:
                 response = convert_emojis_in_text(response, guild)
             
+            # Handle empty response
+            if not response or not response.strip():
+                print(f"[{self.name}] Warning: Empty response after processing")
+                response = "*tilts head*"
+            
             # Update mood based on response sentiment
             self._update_mood(channel_id, content, response)
             
