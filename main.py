@@ -734,20 +734,41 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
                 await interaction.followup.send("No character loaded", ephemeral=True)
                 return
             
-            history = get_history(interaction.channel_id)
             user_name = get_user_display_name(interaction.user)
+            user_id = interaction.user.id
+            guild_id = interaction.guild.id if interaction.guild else None
             
-            context = "\n".join([
+            # Get chat history
+            history = get_history(interaction.channel_id)
+            chat_context = "\n".join([
                 f"{m.get('role', 'user')}: {m.get('content', '')[:100]}"
                 for m in history[-20:]
-            ]) if history else "No conversation history yet."
+            ]) if history else ""
             
-            system = f"""You are {self.character.name}. Based on your interactions with {user_name}, give a brief, 
+            # Get memories
+            user_memories = ""
+            server_memories = ""
+            if guild_id:
+                user_memories = memory_manager.get_user_memories(guild_id, user_id)
+                server_memories = memory_manager.get_server_memories(guild_id)
+            
+            # Build context
+            context_parts = []
+            if user_memories:
+                context_parts.append(f"What you remember about {user_name}:\n{user_memories}")
+            if server_memories:
+                context_parts.append(f"Server context:\n{server_memories}")
+            if chat_context:
+                context_parts.append(f"Recent conversations:\n{chat_context}")
+            
+            full_context = "\n\n".join(context_parts) if context_parts else "No prior interactions with this user."
+            
+            system = f"""You are {self.character.name}. Based on your interactions and memories with {user_name}, give a brief, 
 in-character assessment of your affection/feelings toward them. Be genuine and reflect actual 
 interactions. Include a rough affection percentage (0-100%) if it fits your character."""
             
             response = await provider_manager.generate(
-                messages=[{"role": "user", "content": f"Recent interactions:\n{context}\n\nHow do you feel about {user_name}?"}],
+                messages=[{"role": "user", "content": f"{full_context}\n\nHow do you feel about {user_name}?"}],
                 system_prompt=system,
                 max_tokens=400
             )
@@ -771,17 +792,19 @@ interactions. Include a rough affection percentage (0-100%) if it fits your char
         guild_id = interaction.guild.id if interaction.guild else None
         channel_id = interaction.channel_id
         
-        # Get relationship context
+        # Get relationship context - recent chat history
         history = get_history(channel_id)
         recent_context = "\n".join([
-            f"{m.get('role', 'user')}: {m.get('content', '')[:80]}"
-            for m in history[-10:]
+            f"{m.get('role', 'user')}: {m.get('content', '')[:100]}"
+            for m in history[-15:]
         ]) if history else ""
         
-        # Get user-specific memories
+        # Get memories - both user-specific and server-wide
         user_memories = ""
+        server_memories = ""
         if guild_id:
             user_memories = memory_manager.get_user_memories(guild_id, user_id)
+            server_memories = memory_manager.get_server_memories(guild_id)
         
         # Build prompts with relationship context
         prompts = {
@@ -804,17 +827,22 @@ interactions. Include a rough affection percentage (0-100%) if it fits your char
             "spank": f"{user_name} spanks you. React in character with a brief, natural response.",
         }
         
-        # Build system prompt with relationship context
-        relationship_context = ""
+        # Build comprehensive system prompt with all context
+        context_parts = []
         if user_memories:
-            relationship_context += f"\n\nWhat you remember about {user_name}:\n{user_memories}"
+            context_parts.append(f"What you remember about {user_name}:\n{user_memories}")
+        if server_memories:
+            context_parts.append(f"Server context:\n{server_memories}")
         if recent_context:
-            relationship_context += f"\n\nRecent conversation:\n{recent_context}"
+            context_parts.append(f"Recent conversation:\n{recent_context}")
+        
+        relationship_context = "\n\n".join(context_parts) if context_parts else "No prior context with this user."
         
         system_prompt = f"""You are {self.character.name}. Keep your response brief (1-3 sentences).
+
 {relationship_context}
 
-Respond naturally based on your relationship with {user_name}. If you know them well, be warmer. If they're new, be appropriately reserved."""
+Respond naturally based on your relationship with {user_name}. Consider the history and memories when responding. If you know them well, be warmer. If they're new, be appropriately reserved."""
         
         response = await provider_manager.generate(
             messages=[{"role": "user", "content": prompts.get(action, "React naturally.")}],
