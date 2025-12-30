@@ -381,7 +381,7 @@ Run multiple characters from ONE process:
 }
 ```
 
-### Step 2: Add tokens to `.env`
+### Step 2: Add the **Discord** tokens to `.env`
 
 ```env
 FIREFLY_TOKEN=your_firefly_bot_token
@@ -407,7 +407,7 @@ Output:
 🤖 [Samantha] Sam#9012 is online!
 ```
 
-> **Note:** Each bot needs its own Discord Application.
+> **Note:** Each bot needs its own Discord Application ID, registration steps 3-1 through 3-9.
 
 ---
 
@@ -427,8 +427,8 @@ discord-pals/
 ├── setup.bat / setup.sh # Interactive setup
 ├── run.bat / run.sh     # Start the bot
 ├── providers.json       # AI provider config
-├── bots.json            # Multi-bot config (optional)
-├── .env                 # Your tokens (DO NOT COMMIT)
+├── bots.json            # Multi-bot config **(Optional)**
+├── .env                 # Your tokens **(DO NOT COMMIT)**
 ├── characters/          # Character definitions
 │   ├── template.md      # Example template
 │   └── your-character.md
@@ -464,11 +464,7 @@ discord-pals/
 
 ### Provider timeout
 
-→ Increase timeout in `providers.json` (try 120 for local LLMs)
-
-### Tailscale not connecting
-
-→ Make sure both devices are logged into the same Tailscale account
+→ Increase timeout in `providers.json` (try 120+ for local LLMs)
 
 ---
 
@@ -478,7 +474,6 @@ discord-pals/
 - **Test in DMs:** DM the bot directly for quiet testing
 - **Check status:** Use `/status` to verify provider health
 - **Diagnose issues:** Run `python diagnose.py` for detailed checks
-- **View logs:** `journalctl -u discord-pals -f` (on Linux)
 
 ---
 
@@ -497,4 +492,5 @@ MIT License - do whatever you want with it!
 
 ---
 
-Made with ❤️ by TLD (and AI assistants)
+Made with ❤️ by TLD (and Opus 4.5).
+Credits to SpicyMarinara again for the inspiration!
