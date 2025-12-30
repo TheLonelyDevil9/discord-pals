@@ -4,9 +4,10 @@
 
 # Discord Pals 🤖
 
-Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo. It was so easy to make work and tweak after.
+Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo. 
+It was so easy to make work it's incredible.
 
-This is a modified version of Discord Buddy called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files.
+This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files.
 Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
 
 ## ✨ Features
@@ -16,14 +17,14 @@ Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or you
 - 🏠 **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - 🔁 **Provider fallback** - Auto-retry with backup providers if one fails
 - 🩺 **Diagnose script** - Built-in connectivity checker for troubleshooting
-- 🤖 **Multi-bot support** - Run multiple bots from one process
+- 🤖 **Multi-bot support** - Run multiple bots from a single terminal/process
 - 💾 **Memory system** - Bot remembers important moments
 - 🎮 **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, and more
 - 💬 **Smart responses** - Tracks who you're replying to with full message context
 - 🛡️ **Anti-spam** - Request queue with rate limiting built-in
-- 📜 **History recall** - Recover context after clearing with `/recall` (up to 200 messages)
+- 📜 **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
 - ✨ **Customizable prompts** - Edit prompt templates without touching code
-- 🤖 **Autonomous mode** - Bot randomly joins conversations (configurable)
+- 🤖 **Autonomous mode** - Bot randomly joins conversations (configurable with recommended defaults set)
 
 ---
 
@@ -31,7 +32,7 @@ Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or you
 
 1. **Python 3.10+** - [Download here](https://www.python.org/downloads/)
 2. **A Discord Bot Token** - [Get one here](#step-3-create-your-discord-bot)
-3. **An AI Provider** - Any OpenAI-compatible API:
+3. **An AI Provider** - **Any** OpenAI-compatible API:
    - ☁️ Cloud API (DeepSeek, OpenAI, Anthropic via OpenRouter)
    - 🏠 Local LLM (llama.cpp, Ollama, LM Studio)
 
@@ -85,22 +86,25 @@ The setup wizard will:
    - ✅ Add Reactions
    - ✅ Use External Emojis
    - ✅ Manage Messages
-   - ✅ Embed Links
-   - ✅ Attach Files
+
 9. Copy the generated URL and open it to invite your bot!
 
 ### Step 4: Configure AI Provider
 
 See [AI Provider Setup](#-ai-provider-setup) below for detailed instructions.
 
-### Step 5: Configure Environment
+### Step 5: Configure the environment
 
-1. Copy `.env.example` to `.env`
-2. Add your tokens:
+1. Copy the contents of `.env.example` to a new file called `.env`
+2. Add your tokens. Any of the below can be set up in .env:
 
-```env
-DISCORD_TOKEN=your_discord_bot_token_here
-DEEPSEEK_API_KEY=your_api_key_here
+```
+Used by providers.json - add keys for your configured providers.
+
+OPENAI_API_KEY=your_openai_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
+DEEPSEEK_API_KEY=your_deepseek_api_key
+LOCAL_API_KEY=optional
 ```
 
 ### Step 6: Run the Bot
@@ -112,8 +116,8 @@ python main.py
 You should see:
 
 ```text
-✅ Loaded character: Firefly
-✅ Synced 26 commands
+✅ Loaded character: <Your Bot Here>
+✅ Synced __ commands
 🤖 YourBot#1234 is online!
 ```
 
@@ -143,7 +147,7 @@ Discord Pals supports any OpenAI-compatible API. Choose your provider:
          "name": "DeepSeek",
          "url": "https://api.deepseek.com/v1",
          "key_env": "DEEPSEEK_API_KEY",
-         "model": "deepseek-chat"
+         "model": "deepseek-reasoner"
        }
      ],
      "timeout": 60
@@ -169,14 +173,14 @@ Discord Pals supports any OpenAI-compatible API. Choose your provider:
          "name": "OpenAI",
          "url": "https://api.openai.com/v1",
          "key_env": "OPENAI_API_KEY",
-         "model": "gpt-4o-mini"
+         "model": "gpt-5.2"
        }
      ],
      "timeout": 60
    }
    ```
 
-### Option C: Local LLM (llama.cpp, Ollama, LM Studio)
+### Option C: Local LLM (llama.cpp, Ollama, LM Studio, etc)
 
 No API key needed! Just point to your local server:
 
@@ -198,7 +202,7 @@ No API key needed! Just point to your local server:
 Add placeholder to `.env`:
 
 ```env
-LOCAL_API_KEY=not-needed
+LOCAL_API_KEY=optional
 ```
 
 ### Multiple Providers (Fallback Chain)
@@ -262,7 +266,7 @@ This checks:
 | ------------------------ | ----------------------------------------- |
 | `/character list`        | List available characters                 |
 | `/character set <name>`  | Switch to a different character           |
-| `/character reload`      | Reload current character file             |
+| `/character reload`      | Hot-reloads current character file        |
 
 ### Memory Commands
 
@@ -321,8 +325,11 @@ Be as detailed as you want - the AI will use all of it!
 
 ## Special Users
 
-### YourDiscordName
+### YourDiscordName (this has to be the full username such as thelonelydevil)
 How to treat this specific user differently.
+
+### DiscordName2
+Stuff/special treatment, etc.
 ```
 
 1. Run `/character set mycharacter`
@@ -330,12 +337,12 @@ How to treat this specific user differently.
 ### Advanced Character Template
 
 ```markdown
-# Samantha
+# Samuel
 
 ## Persona
 
 `{{user}}`: Introduction?
-`Samantha`: *smiles warmly* "Hey there! I'm Sam - short for Samantha. 
+`Samantha`: *smiles warmly* "Hey there! I'm Sam - short for Samuel. 
 I'm a coffee addict, terrible at mornings, and I collect vintage vinyl records."
 
 `{{user}}`: Personality?
@@ -343,124 +350,20 @@ I'm a coffee addict, terrible at mornings, and I collect vintage vinyl records."
 definitely loyal to my friends. I hate small talk but I'll debate 
 philosophy for hours."
 
-```yaml
-Samantha's personality: warm, sarcastic, loyal, coffee-addict, night-owl
-Samantha's likes: vinyl records, black coffee, rainy days, deep conversations
-Samantha's dislikes: mornings, small talk, dishonesty
-Samantha's speech: casual, uses contractions, occasional swearing, dry humor
+```
+Samuel's personality: warm, sarcastic, loyal, coffee-addict, night-owl;
+Samuel's likes: vinyl records, black coffee, rainy days, deep conversations;
+Samuel's dislikes: mornings, small talk, dishonesty;
+Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
 ```
 
 ## Special Users
 
 ### TheLonelyDevil
 
-Samantha's best friend. Very comfortable around them, teases them often.
+Samuel's best friend. Very comfortable around them, teases them often.
 
 ```
-
----
-
-## ☁️ Cloud Deployment (Oracle Cloud)
-
-### Step 1: Create Instance
-
-1. Oracle Cloud → Compute → Create Instance
-2. Choose **Ubuntu 22.04**
-3. Shape: **VM.Standard.E2.1.Micro** (Always Free)
-4. Add your SSH key
-5. Create!
-
-### Step 2: SSH In
-
-```bash
-ssh ubuntu@<PUBLIC_IP>
-```
-
-### Step 3: Install Dependencies
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install python3 python3-pip python3-venv git -y
-```
-
-### Step 4: Clone & Setup
-
-```bash
-git clone https://github.com/YOUR_USERNAME/discord-pals.git
-cd discord-pals
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Step 5: Configure
-
-```bash
-cp .env.example .env
-nano .env  # Add your tokens
-
-cp providers.json.example providers.json
-nano providers.json  # Configure your AI provider
-```
-
-### Step 6: Install Tailscale (if using remote LLM)
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-```
-
-### Step 7: Test Run
-
-```bash
-python main.py
-```
-
-### Step 8: Run Forever (systemd)
-
-```bash
-sudo nano /etc/systemd/system/discord-pals.service
-```
-
-Paste:
-
-```ini
-[Unit]
-Description=Discord Pals Bot
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/discord-pals
-ExecStart=/home/ubuntu/discord-pals/venv/bin/python main.py
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable discord-pals
-sudo systemctl start discord-pals
-```
-
-### Useful Commands
-
-| Command | Description |
-|---------|-------------|
-| `sudo systemctl status discord-pals` | Check status |
-| `sudo systemctl restart discord-pals` | Restart bot |
-| `sudo systemctl stop discord-pals` | Stop bot |
-| `journalctl -u discord-pals -f` | View live logs |
-| `journalctl -u discord-pals -n 100` | View last 100 log lines |
-
----
 
 ## 🤖 Running Multiple Bots
 
@@ -473,7 +376,7 @@ Run multiple characters from ONE process:
   "bots": [
     {"name": "Firefly", "token_env": "FIREFLY_TOKEN", "character": "firefly"},
     {"name": "Nahida", "token_env": "NAHIDA_TOKEN", "character": "nahida"},
-    {"name": "Samantha", "token_env": "SAM_TOKEN", "character": "samantha"}
+    {"name": "Samuel", "token_env": "SAM_TOKEN", "character": "samuel"}
   ]
 }
 ```
