@@ -42,7 +42,7 @@ Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or you
 ### Step 1: Get the Code
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/discord-pals.git
+git clone https://github.com/TheLonelyDevil9/discord-pals.git
 cd discord-pals
 ```
 
