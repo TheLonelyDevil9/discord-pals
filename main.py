@@ -915,7 +915,7 @@ async def run_bots():
     # Start web dashboard
     try:
         from dashboard import start_dashboard
-        start_dashboard(bots=instances, host='127.0.0.1', port=5000)
+        start_dashboard(bots=instances, host='0.0.0.0', port=5000)
         log.online("Dashboard running at http://localhost:5000")
     except Exception as e:
         log.warn(f"Dashboard failed to start: {e}")
