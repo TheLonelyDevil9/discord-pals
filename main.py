@@ -12,6 +12,12 @@ import json
 import os
 from typing import Optional, List, Dict
 import time
+import logging
+
+# Suppress discord.py's verbose logging
+logging.getLogger('discord').setLevel(logging.WARNING)
+logging.getLogger('discord.http').setLevel(logging.WARNING)
+logging.getLogger('discord.gateway').setLevel(logging.WARNING)
 
 from config import (
     DISCORD_TOKEN, DEFAULT_CHARACTER, ERROR_DELETE_AFTER,
