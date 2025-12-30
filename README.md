@@ -16,12 +16,13 @@ This is a modified version of Discord Buddy, called Discord Pals, which is a tem
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
-- **Web dashboard** - Local web UI at localhost:5000 for managing memories, characters, settings
+- **Editable web dashboard** - Web UI at localhost:5000 for editing memories, characters, and settings
 - **Character hot-swap** - Switch characters with `/switch` command without restart
 - **Diagnose script** - Built-in connectivity checker for troubleshooting
 - **Multi-bot support** - Run multiple bots from a single terminal/process
-- **Memory system** - Bot remembers important moments
-- **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/switch`, and more
+- **Memory system** - Bot remembers important moments (per-user and server-wide)
+- **Context-aware commands** - Slash commands use chat history and memories for personalized responses
+- **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
 - **Smart responses** - Tracks who you're replying to with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
