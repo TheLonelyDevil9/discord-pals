@@ -105,6 +105,8 @@ def delete_memory(name):
     return redirect(url_for('memories'))
 
 
+# --- Characters ---
+
 @app.route('/characters')
 def characters():
     """Characters viewer page."""
@@ -116,7 +118,6 @@ def characters():
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # Get first 500 chars as preview
                 chars_data[name] = {
                     'preview': content[:500] + ('...' if len(content) > 500 else ''),
                     'full_path': str(path.absolute()),
@@ -128,47 +129,147 @@ def characters():
     return render_template('characters.html', characters=chars_data)
 
 
+@app.route('/characters/<name>/edit')
+def edit_character(name):
+    """Edit a character file."""
+    path = CHARACTERS_DIR / f"{name}.md"
+    content = ""
+    
+    if path.exists():
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except:
+            pass
+    
+    return render_template('character_edit.html', name=name, content=content)
+
+
+@app.route('/characters/<name>/save', methods=['POST'])
+def save_character(name):
+    """Save character file changes."""
+    path = CHARACTERS_DIR / f"{name}.md"
+    content = request.form.get('content', '')
+    
+    try:
+        CHARACTERS_DIR.mkdir(exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except Exception as e:
+        pass
+    
+    return redirect(url_for('characters'))
+
+
+@app.route('/characters/<name>/delete', methods=['POST'])
+def delete_character(name):
+    """Delete a character file."""
+    path = CHARACTERS_DIR / f"{name}.md"
+    
+    if path.exists():
+        try:
+            path.unlink()
+        except:
+            pass
+    
+    return redirect(url_for('characters'))
+
+
+@app.route('/characters/new', methods=['POST'])
+def new_character():
+    """Create a new character file."""
+    name = request.form.get('name', '').strip()
+    
+    if name:
+        path = CHARACTERS_DIR / f"{name}.md"
+        if not path.exists():
+            try:
+                CHARACTERS_DIR.mkdir(exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(f"# {name}\n\n## Personality\n\n## Backstory\n\n## Relationships\n")
+            except:
+                pass
+        return redirect(url_for('edit_character', name=name))
+    
+    return redirect(url_for('characters'))
+
+
+# --- Settings ---
+
 @app.route('/settings')
 def settings():
-    """Settings viewer page (read-only)."""
-    config_files = {}
+    """Settings editor page."""
+    providers_raw = "{}"
+    bots_raw = "{}"
+    autonomous_raw = "{}"
     
-    # Read providers.json if exists
     if os.path.exists('providers.json'):
         try:
             with open('providers.json', 'r') as f:
-                data = json.load(f)
-                # Mask API keys
-                for provider in data.get('providers', []):
-                    if 'key_env' in provider:
-                        provider['key_env'] = provider['key_env'] + ' (hidden)'
-                config_files['providers'] = data
+                providers_raw = f.read()
         except:
-            config_files['providers'] = {'error': 'Could not read'}
+            pass
     
-    # Read bots.json if exists
     if os.path.exists('bots.json'):
         try:
             with open('bots.json', 'r') as f:
-                data = json.load(f)
-                # Mask tokens
-                for bot in data.get('bots', []):
-                    if 'token_env' in bot:
-                        bot['token_env'] = bot['token_env'] + ' (hidden)'
-                config_files['bots'] = data
+                bots_raw = f.read()
         except:
-            config_files['bots'] = {'error': 'Could not read'}
+            pass
     
-    # Get autonomous settings
     autonomous_file = DATA_DIR / 'autonomous.json'
     if autonomous_file.exists():
         try:
             with open(autonomous_file, 'r') as f:
-                config_files['autonomous'] = json.load(f)
+                autonomous_raw = f.read()
         except:
             pass
     
-    return render_template('settings.html', configs=config_files)
+    return render_template('settings.html',
+        providers_raw=providers_raw,
+        bots_raw=bots_raw,
+        autonomous_raw=autonomous_raw
+    )
+
+
+@app.route('/settings/providers/save', methods=['POST'])
+def save_providers():
+    """Save providers.json."""
+    content = request.form.get('content', '')
+    try:
+        json.loads(content)  # Validate JSON
+        with open('providers.json', 'w') as f:
+            f.write(content)
+    except:
+        pass
+    return redirect(url_for('settings'))
+
+
+@app.route('/settings/bots/save', methods=['POST'])
+def save_bots():
+    """Save bots.json."""
+    content = request.form.get('content', '')
+    try:
+        json.loads(content)  # Validate JSON
+        with open('bots.json', 'w') as f:
+            f.write(content)
+    except:
+        pass
+    return redirect(url_for('settings'))
+
+
+@app.route('/settings/autonomous/save', methods=['POST'])
+def save_autonomous():
+    """Save autonomous.json."""
+    content = request.form.get('content', '')
+    try:
+        json.loads(content)  # Validate JSON
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(DATA_DIR / 'autonomous.json', 'w') as f:
+            f.write(content)
+    except:
+        pass
+    return redirect(url_for('settings'))
 
 
 @app.route('/api/status')

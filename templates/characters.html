@@ -17,9 +17,21 @@
             {{ data.size }} characters
         </p>
         <pre style="font-size: 0.8em; max-height: 200px;">{{ data.preview }}</pre>
+        <div style="margin-top: 15px;">
+            <a href="/characters/{{ name }}/edit" class="btn btn-primary">Edit</a>
+        </div>
         {% endif %}
     </div>
     {% endfor %}
+</div>
+
+<div class="card" style="margin-top: 20px;">
+    <h3 class="card-title">➕ New Character</h3>
+    <form action="/characters/new" method="post">
+        <input type="text" name="name" placeholder="Character name" required
+            style="width: 200px; padding: 8px; margin-right: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); border-radius: 4px;">
+        <button type="submit" class="btn btn-primary">Create</button>
+    </form>
 </div>
 {% else %}
 <div class="card">

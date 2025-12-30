@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ name }} - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">
+    <a href="/characters" style="color: var(--text-muted); text-decoration: none;">Characters</a> / {{ name }}
+</h1>
+
+<div class="card">
+    <form action="/characters/{{ name }}/save" method="post">
+        <textarea name="content" style="width: 100%; height: 500px; font-family: monospace; font-size: 14px; 
+            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
+            padding: 15px; border-radius: 4px; resize: vertical;">{{ content }}</textarea>
+
+        <div style="margin-top: 15px; display: flex; gap: 10px;">
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="/characters" class="btn">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top: 20px; border-color: var(--danger);">
+    <h3 class="card-title" style="color: var(--danger);">⚠️ Danger Zone</h3>
+    <form action="/characters/{{ name }}/delete" method="post" style="display: inline;">
+        <button type="submit" class="btn btn-danger"
+            onclick="return confirm('Are you sure you want to delete {{ name }}? This cannot be undone.')">
+            Delete Character
+        </button>
+    </form>
+</div>
+{% endblock %}

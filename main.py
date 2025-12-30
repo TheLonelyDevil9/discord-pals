@@ -305,12 +305,14 @@ class BotInstance:
             if attachment_content:
                 history[-1]["content"] = attachment_content
             
-            response = await provider_manager.generate(
-                messages=history,
-                system_prompt=system_prompt,
-                temperature=DEFAULT_TEMPERATURE,
-                max_tokens=DEFAULT_MAX_TOKENS
-            )
+            # Show typing indicator while generating
+            async with message.channel.typing():
+                response = await provider_manager.generate(
+                    messages=history,
+                    system_prompt=system_prompt,
+                    temperature=DEFAULT_TEMPERATURE,
+                    max_tokens=DEFAULT_MAX_TOKENS
+                )
             
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)
