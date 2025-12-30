@@ -1,0 +1,14 @@
+{
+  "bots": [
+    {
+      "name": "Firefly",
+      "token_env": "FIREFLY_DISCORD_TOKEN",
+      "character": "firefly"
+    },
+    {
+      "name": "George",
+      "token_env": "GEORGE_DISCORD_TOKEN",
+      "character": "george"
+    }
+  ]
+}

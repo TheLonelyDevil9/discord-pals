@@ -1,0 +1,24 @@
+{
+  "providers": [
+    {
+      "name": "OpenAI",
+      "url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-4o"
+    },
+    {
+      "name": "Anthropic (via OpenRouter)",
+      "url": "https://openrouter.ai/api/v1",
+      "key_env": "OPENROUTER_API_KEY",
+      "model": "anthropic/claude-3.5-sonnet"
+    },
+    {
+      "name": "Local LLM (LM Studio/Ollama/llama.cpp)",
+      "url": "http://localhost:1234/v1",
+      "key_env": "LOCAL_API_KEY",
+      "model": "local-model",
+      "requires_key": false
+    }
+  ],
+  "timeout": 60
+}
