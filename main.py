@@ -90,7 +90,7 @@ class BotInstance:
             except Exception as e:
                 log.error(f"Command sync failed: {e}", self.name)
             
-            log.ok(f"{self.client.user} is online!", self.name)
+            log.online(f"{self.client.user} is online!", self.name)
         
         @self.client.event
         async def on_message(message: discord.Message):

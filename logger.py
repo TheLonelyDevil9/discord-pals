@@ -11,8 +11,8 @@ QUIET = 0   # Only errors
 NORMAL = 1  # Errors + important events
 VERBOSE = 2 # Everything
 
-# Set this to control verbosity
-LOG_LEVEL = NORMAL
+# Set this to control verbosity (QUIET=errors only, NORMAL=+events, VERBOSE=+debug)
+LOG_LEVEL = QUIET
 
 
 class Colors:
@@ -70,6 +70,13 @@ def debug(msg: str, bot: str = None):
 def startup(msg: str):
     """Log startup message (always shown)."""
     print(f"{Colors.BOLD}{msg}{Colors.END}")
+
+
+def online(msg: str, bot: str = None):
+    """Log bot online status (always shown)."""
+    ts = f"{Colors.DIM}{_timestamp()}{Colors.END}"
+    prefix = f"[{bot}] " if bot else ""
+    print(f"{ts} {Colors.OK}●{Colors.END} {prefix}{msg}")
 
 
 def divider():
