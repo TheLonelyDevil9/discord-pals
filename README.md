@@ -4,21 +4,24 @@
 
 # Discord Pals
 
-Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo. 
+Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo.
 Her tool was so easy to make work, it was amazing.
 
 This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files. Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
 
-## Features:
+## Features
 
 - **Any character** - Load characters from markdown files
 - **Plug-and-play AI providers** - Configure via JSON, no code changes
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
+- **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
+- **Web dashboard** - Local web UI at localhost:5000 for managing memories, characters, settings
+- **Character hot-swap** - Switch characters with `/switch` command without restart
 - **Diagnose script** - Built-in connectivity checker for troubleshooting
 - **Multi-bot support** - Run multiple bots from a single terminal/process
 - **Memory system** - Bot remembers important moments
-- **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, and more
+- **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/switch`, and more
 - **Smart responses** - Tracks who you're replying to with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
@@ -48,7 +51,7 @@ cd discord-pals
 
 ### Step 2: Run Interactive Setup
 
-**Windows:** 
+**Windows:**
 
 Double-click `setup.bat`
 
@@ -352,10 +355,12 @@ definitely loyal to my friends. I hate small talk but I'll debate
 philosophy for hours."
 
 ```
+
 Samuel's personality: warm, sarcastic, loyal, coffee-addict, night-owl;
 Samuel's likes: vinyl records, black coffee, rainy days, deep conversations;
 Samuel's dislikes: mornings, small talk, dishonesty;
 Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
+
 ```
 
 ## Special Users
@@ -471,7 +476,9 @@ discord-pals/
 
 ## Tips
 
-- **Hot-reload:** Edit character files, then `/character reload`
+- **Hot-reload:** Edit character files, then `/reload`
+- **Switch characters:** Use `/switch` to list or change characters without restart
+- **Web dashboard:** Open <http://localhost:5000> when bot is running
 - **Test in DMs:** DM the bot directly for quiet testing
 - **Check status:** Use `/status` to verify provider health
 - **Diagnose issues:** Run `python diagnose.py` for detailed checks
@@ -487,7 +494,7 @@ discord-pals/
 
 ---
 
-## 📄 License
+## License
 
 MIT License - do whatever you want with it!
 
