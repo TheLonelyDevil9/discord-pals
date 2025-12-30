@@ -259,6 +259,7 @@ class BotInstance:
             lore = memory_manager.get_lore(guild_id) if guild_id else ""
             
             # Get both server-wide and per-user memories
+            user_memories = ""  # Initialize for later use
             if is_dm:
                 memories = memory_manager.get_dm_memories(user_id)
             elif guild_id:

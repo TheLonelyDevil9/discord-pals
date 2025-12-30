@@ -15,3 +15,5 @@ bot_data/
 characters/*.md
 !characters/template.md
 !characters/firefly.md
+env
+characters/Fly.md
