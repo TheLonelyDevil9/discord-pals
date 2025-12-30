@@ -14,10 +14,14 @@ from typing import Optional, List, Dict
 import time
 import logging
 
-# Suppress discord.py's verbose logging
+# Suppress verbose logging from all libraries
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('discord.gateway').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('openai').setLevel(logging.WARNING)
+logging.getLogger('openai._base_client').setLevel(logging.WARNING)
 
 from config import (
     DISCORD_TOKEN, DEFAULT_CHARACTER, ERROR_DELETE_AFTER,
