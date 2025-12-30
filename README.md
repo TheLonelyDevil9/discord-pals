@@ -73,8 +73,9 @@ The setup wizard will:
 3. Go to **"Bot"** in the left sidebar
 4. Click **"Reset Token"** → Copy the token (save it!)
 5. Enable these **Privileged Intents**:
-   - ✅ MESSAGE CONTENT INTENT
+   - ✅ PRESENCE INTENT
    - ✅ SERVER MEMBERS INTENT
+   - ✅ MESSAGE CONTENT INTENT
 6. Go to **"OAuth2"** → **"URL Generator"**
 7. Check: `bot` and `applications.commands`
 8. Under Bot Permissions, check:
