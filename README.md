@@ -1,44 +1,43 @@
 <p align="center">
-  <img src="images/banner.jpg" alt="Discord Pals" width="600">
+  <img src="images/banner.jpg" alt="Discord Pals" width="1200">
 </p>
 
-# Discord Pals 🤖
+# Discord Pals
 
 Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo. 
-It was so easy to make work it's incredible.
+Her tool was so easy to make work, it was amazing.
 
-This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files.
-Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
+This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files. Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
 
-## ✨ Features
+## Features:
 
-- 🎭 **Any character** - Load characters from markdown files
-- 🔄 **Plug-and-play AI providers** - Configure via JSON, no code changes
-- 🏠 **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
-- 🔁 **Provider fallback** - Auto-retry with backup providers if one fails
-- 🩺 **Diagnose script** - Built-in connectivity checker for troubleshooting
-- 🤖 **Multi-bot support** - Run multiple bots from a single terminal/process
-- 💾 **Memory system** - Bot remembers important moments
-- 🎮 **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, and more
-- 💬 **Smart responses** - Tracks who you're replying to with full message context
-- 🛡️ **Anti-spam** - Request queue with rate limiting built-in
-- 📜 **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
-- ✨ **Customizable prompts** - Edit prompt templates without touching code
-- 🤖 **Autonomous mode** - Bot randomly joins conversations (configurable with recommended defaults set)
+- **Any character** - Load characters from markdown files
+- **Plug-and-play AI providers** - Configure via JSON, no code changes
+- **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
+- **Provider fallback** - Auto-retry with backup providers if one fails
+- **Diagnose script** - Built-in connectivity checker for troubleshooting
+- **Multi-bot support** - Run multiple bots from a single terminal/process
+- **Memory system** - Bot remembers important moments
+- **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, and more
+- **Smart responses** - Tracks who you're replying to with full message context
+- **Anti-spam** - Request queue with rate limiting built-in
+- **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
+- **Customizable prompts** - Edit prompt templates without touching code
+- **Autonomous mode** - Bot randomly joins conversations (configurable with recommended defaults set)
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 1. **Python 3.10+** - [Download here](https://www.python.org/downloads/)
 2. **A Discord Bot Token** - [Get one here](#step-3-create-your-discord-bot)
 3. **An AI Provider** - **Any** OpenAI-compatible API:
-   - ☁️ Cloud API (DeepSeek, OpenAI, Anthropic via OpenRouter)
-   - 🏠 Local LLM (llama.cpp, Ollama, LM Studio)
+   - Cloud API (DeepSeek, OpenAI, Anthropic via OpenRouter)
+   - Local LLM (llama.cpp, Ollama, LM Studio)
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Step 1: Get the Code
 
@@ -49,7 +48,9 @@ cd discord-pals
 
 ### Step 2: Run Interactive Setup
 
-**Windows:** Double-click `setup.bat`
+**Windows:** 
+
+Double-click `setup.bat`
 
 **Mac/Linux:**
 
@@ -60,12 +61,12 @@ chmod +x setup.sh
 
 The setup wizard will:
 
-1. ✅ Create a Python virtual environment
-2. ✅ Install all dependencies
-3. ✅ Prompt you for AI providers (count, URLs, models)
-4. ✅ Prompt you for Discord bots (single or multi-bot)
-5. ✅ Generate `providers.json`, `bots.json`, and `.env`
-6. ✅ Open `.env` for you to add API keys
+1. Create a Python virtual environment
+2. Install all dependencies
+3. Prompt you for AI providers (count, URLs, models)
+4. Prompt you for Discord bots (single or multi-bot)
+5. Generate `providers.json`, `bots.json`, and `.env`
+6. Open `.env` for you to add API keys
 
 ### Step 3: Create Your Discord Bot
 
@@ -74,18 +75,18 @@ The setup wizard will:
 3. Go to **"Bot"** in the left sidebar
 4. Click **"Reset Token"** → Copy the token (save it!)
 5. Enable these **Privileged Intents**:
-   - ✅ PRESENCE INTENT
-   - ✅ SERVER MEMBERS INTENT
-   - ✅ MESSAGE CONTENT INTENT
+   - PRESENCE INTENT
+   - SERVER MEMBERS INTENT
+   - MESSAGE CONTENT INTENT
 6. Go to **"OAuth2"** → **"URL Generator"**
 7. Check: `bot` and `applications.commands`
 8. Under Bot Permissions, check:
-   - ✅ View Channels
-   - ✅ Send Messages
-   - ✅ Read Message History
-   - ✅ Add Reactions
-   - ✅ Use External Emojis
-   - ✅ Manage Messages
+   - View Channels
+   - Send Messages
+   - Read Message History
+   - Add Reactions
+   - Use External Emojis
+   - Manage Messages
 
 9. Copy the generated URL and open it to invite your bot!
 
@@ -116,14 +117,14 @@ python main.py
 You should see:
 
 ```text
-✅ Loaded character: <Your Bot Here>
-✅ Synced __ commands
-🤖 YourBot#1234 is online!
+Loaded character: <Your Bot Here>
+Synced __ commands (STC)
+YourBot#1234 is online!
 ```
 
 ---
 
-## 🧠 AI Provider Setup
+## AI Provider Setup
 
 Discord Pals supports any OpenAI-compatible API. Choose your provider:
 
@@ -308,7 +309,7 @@ This checks:
 
 ---
 
-## 🎭 Creating Characters
+## Creating Characters
 
 ### Basic Character
 
@@ -342,11 +343,11 @@ Stuff/special treatment, etc.
 ## Persona
 
 `{{user}}`: Introduction?
-`Samantha`: *smiles warmly* "Hey there! I'm Sam - short for Samuel. 
+`Samuel`: *smiles warmly* "Hey there! I'm Sam - short for Samuel. 
 I'm a coffee addict, terrible at mornings, and I collect vintage vinyl records."
 
 `{{user}}`: Personality?
-`Samantha`: "Hmm, let's see... I'm pretty chill, maybe a bit sarcastic, 
+`Samuel`: "Hmm, let's see... I'm pretty chill, maybe a bit sarcastic, 
 definitely loyal to my friends. I hate small talk but I'll debate 
 philosophy for hours."
 
@@ -365,7 +366,7 @@ Samuel's best friend. Very comfortable around them, teases them often.
 
 ```
 
-## 🤖 Running Multiple Bots
+## Running Multiple Bots
 
 Run multiple characters from ONE process:
 
@@ -398,20 +399,20 @@ python main.py
 Output:
 
 ```text
-🚀 Starting 3 bot(s)...
-✅ [Firefly] Loaded character: Firefly
-✅ [Nahida] Loaded character: Nahida
-✅ [Samantha] Loaded character: Samantha
+Starting 3 bot(s)...
+[Firefly] Loaded character: Firefly
+[Nahida] Loaded character: Nahida
+[Samuel] Loaded character: Samuel
 🤖 [Firefly] Fly#1234 is online!
 🤖 [Nahida] Nahida#5678 is online!
-🤖 [Samantha] Sam#9012 is online!
+🤖 [Samuel] Sam#9012 is online!
 ```
 
 > **Note:** Each bot needs its own Discord Application ID, registration steps 3-1 through 3-9.
 
 ---
 
-## 📁 File Structure
+## File Structure
 
 ```text
 discord-pals/
@@ -440,7 +441,7 @@ discord-pals/
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### "DISCORD_TOKEN not set!"
 
@@ -468,7 +469,7 @@ discord-pals/
 
 ---
 
-## 💡 Tips
+## Tips
 
 - **Hot-reload:** Edit character files, then `/character reload`
 - **Test in DMs:** DM the bot directly for quiet testing
@@ -477,7 +478,7 @@ discord-pals/
 
 ---
 
-## ❓ Need Help?
+## Need Help?
 
 1. **Check Python:** `python --version` (need 3.10+)
 2. **Check packages:** `pip list | grep discord`
