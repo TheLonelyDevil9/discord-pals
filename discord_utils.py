@@ -365,23 +365,60 @@ def store_multipart_response(channel_id: int, message_ids: List[int], full_conte
 
 # --- Autonomous Response ---
 
+import json
+import os
+
+AUTONOMOUS_FILE = "bot_data/autonomous.json"
+
+
 class AutonomousManager:
-    """Manages autonomous (unprompted) responses."""
+    """Manages autonomous (unprompted) responses with persistent storage."""
     
     def __init__(self):
         self.enabled_channels: Dict[int, float] = {}
         self.channel_cooldowns: Dict[int, timedelta] = {}
         self.last_autonomous: Dict[int, datetime] = {}
         self.default_cooldown = timedelta(minutes=2)
+        self._load()
     
-    def set_channel(self, channel_id: int, enabled: bool, chance: float = 0.1, cooldown_mins: int = 2):
+    def _load(self):
+        """Load settings from disk."""
+        try:
+            if os.path.exists(AUTONOMOUS_FILE):
+                with open(AUTONOMOUS_FILE, 'r') as f:
+                    data = json.load(f)
+                for ch_id, settings in data.items():
+                    ch_id = int(ch_id)
+                    self.enabled_channels[ch_id] = settings.get('chance', 0.05)
+                    self.channel_cooldowns[ch_id] = timedelta(minutes=settings.get('cooldown', 2))
+        except Exception:
+            pass  # Fail silently, use defaults
+    
+    def _save(self):
+        """Save settings to disk."""
+        try:
+            os.makedirs(os.path.dirname(AUTONOMOUS_FILE), exist_ok=True)
+            data = {}
+            for ch_id, chance in self.enabled_channels.items():
+                cooldown = self.channel_cooldowns.get(ch_id, self.default_cooldown)
+                data[str(ch_id)] = {
+                    'chance': chance,
+                    'cooldown': int(cooldown.total_seconds() // 60)
+                }
+            with open(AUTONOMOUS_FILE, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass  # Fail silently
+    
+    def set_channel(self, channel_id: int, enabled: bool, chance: float = 0.05, cooldown_mins: int = 2):
         if enabled:
-            self.enabled_channels[channel_id] = min(max(chance, 0.0), 1.0)  # 0-100%
+            self.enabled_channels[channel_id] = min(max(chance, 0.0), 1.0)
             self.channel_cooldowns[channel_id] = timedelta(minutes=min(max(cooldown_mins, 0), 10))
         elif channel_id in self.enabled_channels:
             del self.enabled_channels[channel_id]
             if channel_id in self.channel_cooldowns:
                 del self.channel_cooldowns[channel_id]
+        self._save()
     
     def should_respond(self, channel_id: int) -> bool:
         import random
@@ -399,8 +436,9 @@ class AutonomousManager:
     def get_status(self, channel_id: int) -> str:
         if channel_id in self.enabled_channels:
             cooldown = self.channel_cooldowns.get(channel_id, self.default_cooldown)
-            return f"✅ Enabled ({self.enabled_channels[channel_id]*100:.0f}% chance, {cooldown.seconds//60}min cooldown)"
+            return f"✅ Enabled ({self.enabled_channels[channel_id]*100:.0f}% chance, {int(cooldown.total_seconds()//60)}min cooldown)"
         return "❌ Disabled"
 
 
 autonomous_manager = AutonomousManager()
+

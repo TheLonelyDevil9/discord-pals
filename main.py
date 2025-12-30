@@ -29,6 +29,7 @@ from discord_utils import (
     update_history_on_edit, remove_assistant_from_history, store_multipart_response
 )
 from request_queue import RequestQueue
+import logger as log
 
 
 # --- Bot Instance Class ---
@@ -71,13 +72,13 @@ class BotInstance:
             # Load character
             self.character = character_manager.load(self.character_name)
             if self.character:
-                print(f"✅ [{self.name}] Loaded character: {self.character.name}")
+                log.ok(f"Loaded character: {self.character.name}", self.name)
             else:
-                print(f"⚠️ [{self.name}] Character '{self.character_name}' not found!")
+                log.warn(f"Character '{self.character_name}' not found!", self.name)
                 available = character_manager.list_available()
                 if available:
                     self.character = character_manager.load(available[0])
-                    print(f"   Loaded fallback: {self.character.name}")
+                    log.info(f"Loaded fallback: {self.character.name}", self.name)
             
             # Set up request processor
             self.request_queue.set_processor(self._process_request)
@@ -85,11 +86,11 @@ class BotInstance:
             # Sync commands
             try:
                 synced = await self.tree.sync()
-                print(f"✅ [{self.name}] Synced {len(synced)} commands")
+                log.ok(f"Synced {len(synced)} commands", self.name)
             except Exception as e:
-                print(f"❌ [{self.name}] Command sync failed: {e}")
+                log.error(f"Command sync failed: {e}", self.name)
             
-            print(f"🤖 [{self.name}] {self.client.user} is online!")
+            log.ok(f"{self.client.user} is online!", self.name)
         
         @self.client.event
         async def on_message(message: discord.Message):
@@ -209,7 +210,7 @@ class BotInstance:
                     sent_msg = await message.channel.send(line)
                     sent_messages.append(sent_msg)
             except discord.HTTPException as e:
-                print(f"[{self.name}] Failed to send: {e}")
+                log.error(f"Failed to send: {e}", self.name)
         
         return sent_messages
     
@@ -311,7 +312,7 @@ class BotInstance:
             
             # Handle empty response
             if not response or not response.strip():
-                print(f"[{self.name}] Warning: Empty response after processing")
+                log.warn("Empty response after processing", self.name)
                 response = "*tilts head*"
             
             # Update mood based on response sentiment
@@ -331,7 +332,7 @@ class BotInstance:
             asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content))
         
         except Exception as e:
-            print(f"[{self.name}] Error processing request: {e}")
+            log.error(f"Error processing: {e}", self.name)
             try:
                 await message.channel.send(f"❌ Error: {str(e)[:100]}", delete_after=ERROR_DELETE_AFTER)
             except:
@@ -476,7 +477,7 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
             add_to_history(after.channel.id, "assistant", response)
             
         except Exception as e:
-            print(f"[{self.name}] Edit response failed: {e}")
+            log.debug(f"Edit response failed: {e}", self.name)
     
     def _setup_commands(self):
         """Register slash commands."""
@@ -828,7 +829,7 @@ def load_bot_configs() -> List[dict]:
         for bot_cfg in data.get("bots", []):
             token = os.getenv(bot_cfg["token_env"])
             if not token:
-                print(f"⚠️ Token env var '{bot_cfg['token_env']}' not set, skipping {bot_cfg['name']}")
+                log.warn(f"Token env var '{bot_cfg['token_env']}' not set, skipping {bot_cfg['name']}")
                 continue
             bots.append({
                 "name": bot_cfg["name"],
@@ -838,11 +839,11 @@ def load_bot_configs() -> List[dict]:
         
         if bots:
             return bots
-        print("⚠️ No valid bots in bots.json, falling back to single-bot mode")
+        log.warn("No valid bots in bots.json, falling back to single-bot mode")
     
     # Fallback: Single bot mode
     if not DISCORD_TOKEN:
-        print("❌ DISCORD_TOKEN not set!")
+        log.error("DISCORD_TOKEN not set!")
         return []
     
     return [{
@@ -857,17 +858,18 @@ async def run_bots():
     configs = load_bot_configs()
     
     if not configs:
-        print("❌ No bots configured!")
+        log.error("No bots configured!")
         return
     
-    print(f"🚀 Starting {len(configs)} bot(s)...")
+    log.startup(f"Starting {len(configs)} bot(s)...")
+    log.divider()
     
     instances = [BotInstance(**cfg) for cfg in configs]
     
     try:
         await asyncio.gather(*[bot.start() for bot in instances])
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down...")
+        log.info("Shutting down...")
         for bot in instances:
             await bot.close()
 
@@ -879,9 +881,9 @@ if __name__ == "__main__":
     from startup import validate_startup
     
     if not validate_startup(interactive=True):
-        print("\n❌ Startup validation failed. Please fix the issues above.")
+        log.error("Startup validation failed. Please fix the issues above.")
         import sys
         sys.exit(1)
     
-    print()  # Extra line before bot startup
+    log.divider()
     asyncio.run(run_bots())
