@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/banner.jpg" alt="Discord Pals" width="600">
+</p>
+
 # Discord Pals 🤖
 
 Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo. It was so easy to make work and tweak after.
