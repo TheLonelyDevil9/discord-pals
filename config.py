@@ -15,18 +15,37 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 # --- Provider Configuration ---
 
-def load_providers():
-    """Load providers from providers.json or use defaults."""
+def load_providers() -> tuple[dict, int]:
+    """Load providers from providers.json or use defaults.
+    
+    Returns:
+        tuple: (providers_dict, timeout_seconds)
+    """
     config_path = os.path.join(os.path.dirname(__file__), "providers.json")
     timeout = 60  # Default
     
     if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            data = json.load(f)
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"⚠️ Invalid providers.json: {e}")
+            return {}, timeout
         
         providers = {}
-        for i, p in enumerate(data.get("providers", [])):
+        provider_list = data.get("providers", [])
+        
+        if not provider_list:
+            print("⚠️ providers.json has no providers defined")
+            return {}, timeout
+        
+        for i, p in enumerate(provider_list):
             tier = ["primary", "secondary", "fallback"][i] if i < 3 else f"tier_{i}"
+            
+            # Validate required fields
+            if not p.get("url"):
+                print(f"⚠️ Provider {i+1} missing 'url', skipping")
+                continue
             
             # Support requires_key=false for local LLMs
             requires_key = p.get("requires_key", True)

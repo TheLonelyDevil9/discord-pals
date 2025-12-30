@@ -501,6 +501,41 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
             else:
                 await interaction.response.send_message("❌ No character loaded", ephemeral=True)
         
+        @self.tree.command(name="switch", description="Switch to a different character")
+        @app_commands.describe(character="Character name (leave empty to list available)")
+        async def cmd_switch(interaction: discord.Interaction, character: Optional[str] = None):
+            available = character_manager.list_available()
+            
+            if not character:
+                # List available characters
+                if available:
+                    current = self.character.name if self.character else "None"
+                    char_list = "\n".join([f"• **{c}**" + (" ← current" if c.lower() == current.lower() else "") for c in available])
+                    await interaction.response.send_message(f"**Available Characters:**\n{char_list}\n\nUse `/switch <name>` to switch.", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ No characters found in `characters/` folder", ephemeral=True)
+                return
+            
+            # Find matching character (case-insensitive)
+            match = None
+            for c in available:
+                if c.lower() == character.lower():
+                    match = c
+                    break
+            
+            if not match:
+                await interaction.response.send_message(f"❌ Character '{character}' not found. Use `/switch` to see available.", ephemeral=True)
+                return
+            
+            # Load new character
+            new_char = character_manager.load(match)
+            if new_char:
+                self.character = new_char
+                self.character_name = match
+                await interaction.response.send_message(f"✅ Switched to **{new_char.name}**", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Failed to load '{match}'", ephemeral=True)
+        
         @self.tree.command(name="clear", description="Clear conversation history")
         async def cmd_clear(interaction: discord.Interaction):
             clear_history(interaction.channel_id)
@@ -875,6 +910,14 @@ async def run_bots():
     log.divider()
     
     instances = [BotInstance(**cfg) for cfg in configs]
+    
+    # Start web dashboard
+    try:
+        from dashboard import start_dashboard
+        start_dashboard(bots=instances, host='127.0.0.1', port=5000)
+        log.online("Dashboard running at http://localhost:5000")
+    except Exception as e:
+        log.warn(f"Dashboard failed to start: {e}")
     
     try:
         await asyncio.gather(*[bot.start() for bot in instances])

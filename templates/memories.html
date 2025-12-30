@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Memories - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Memories</h1>
+
+{% if memories %}
+{% for file_name, data in memories.items() %}
+<div class="card">
+    <h3 class="card-title">📁 {{ file_name }}</h3>
+
+    {% if data.error %}
+    <div class="empty">Error: {{ data.error }}</div>
+    {% elif data %}
+    <table>
+        <thead>
+            <tr>
+                <th>Key / Type</th>
+                <th>Content</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, value in data.items() %}
+            <tr>
+                <td><code>{{ key }}</code></td>
+                <td>
+                    {% if value is string %}
+                    {{ value[:200] }}{% if value|length > 200 %}...{% endif %}
+                    {% else %}
+                    <pre>{{ value | tojson(indent=2) }}</pre>
+                    {% endif %}
+                </td>
+                <td>
+                    <form action="/memories/{{ file_name }}/delete" method="post" style="display:inline;">
+                        <input type="hidden" name="key" value="{{ key }}">
+                        <button type="submit" class="btn btn-danger"
+                            onclick="return confirm('Delete this memory?')">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No memories stored</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+    <div class="empty">No memory files found in <code>bot_data/</code></div>
+</div>
+{% endif %}
+{% endblock %}

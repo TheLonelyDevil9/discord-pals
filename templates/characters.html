@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Characters - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Characters</h1>
+
+{% if characters %}
+<div class="grid">
+    {% for name, data in characters.items() %}
+    <div class="card">
+        <h3 class="card-title">🎭 {{ name }}</h3>
+
+        {% if data.error %}
+        <div class="empty">Error: {{ data.error }}</div>
+        {% else %}
+        <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
+            {{ data.size }} characters
+        </p>
+        <pre style="font-size: 0.8em; max-height: 200px;">{{ data.preview }}</pre>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="empty">No character files found in <code>characters/</code></div>
+</div>
+{% endif %}
+{% endblock %}

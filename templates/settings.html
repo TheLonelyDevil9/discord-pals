@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Settings - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Settings <span class="badge badge-warning">Read Only</span></h1>
+
+{% if configs %}
+{% for name, data in configs.items() %}
+<div class="card">
+    <h3 class="card-title">⚙️ {{ name }}.json</h3>
+    <pre>{{ data | tojson(indent=2) }}</pre>
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+    <div class="empty">No configuration files found</div>
+</div>
+{% endif %}
+{% endblock %}

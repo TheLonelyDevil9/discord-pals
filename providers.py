@@ -1,21 +1,25 @@
 """
 Discord Pals - AI Providers
-3-tier fallback system using OpenAI-compatible API.
+3-tier fallback system using OpenAI-compatible API with rate limit handling.
 """
 
-from openai import AsyncOpenAI
-from typing import List, Optional
+from openai import AsyncOpenAI, RateLimitError, APIError
+from typing import List, Dict
 from config import PROVIDERS, API_TIMEOUT
 import asyncio
 import logger as log
 
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
+
+
 class AIProviderManager:
-    """Manages 3-tier AI provider fallback."""
+    """Manages 3-tier AI provider fallback with retry logic."""
     
     def __init__(self):
-        self.providers = {}
-        self.status = {"primary": "unknown", "secondary": "unknown", "fallback": "unknown"}
+        self.providers: Dict[str, AsyncOpenAI] = {}
+        self.status: Dict[str, str] = {"primary": "unknown", "secondary": "unknown", "fallback": "unknown"}
         
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
@@ -26,32 +30,23 @@ class AIProviderManager:
                     timeout=API_TIMEOUT
                 )
     
-    async def generate(
+    async def _try_generate(
         self,
+        client: AsyncOpenAI,
+        model: str,
         messages: List[dict],
-        system_prompt: str,
-        temperature: float = 1.0,
-        max_tokens: int = 2000
-    ) -> str:
-        """Generate response with automatic fallback."""
+        temperature: float,
+        max_tokens: int,
+        tier: str
+    ) -> str | None:
+        """Try to generate with retries on rate limit."""
         
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
-        
-        for tier in ["primary", "secondary", "fallback"]:
-            if tier not in self.providers:
-                self.status[tier] = "no key"
-                continue
-            
-            provider_name = PROVIDERS[tier].get("name", tier)
-            model = PROVIDERS[tier]["model"]
-                
+        for attempt in range(MAX_RETRIES):
             try:
-                client = self.providers[tier]
-                
                 response = await asyncio.wait_for(
                     client.chat.completions.create(
                         model=model,
-                        messages=full_messages,
+                        messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens
                     ),
@@ -61,8 +56,56 @@ class AIProviderManager:
                 # Check for valid response
                 if response and response.choices and len(response.choices) > 0:
                     content = response.choices[0].message.content
-                    self.status[tier] = "ok"
                     return content if content else "..."
+                return None
+                
+            except RateLimitError as e:
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAYS[attempt]
+                    log.warn(f"[{tier}] Rate limited, retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    log.error(f"[{tier}] Rate limited, max retries exceeded")
+                    raise
+            except asyncio.TimeoutError:
+                raise
+            except APIError as e:
+                if e.status_code == 429 and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAYS[attempt]
+                    log.warn(f"[{tier}] Rate limited (429), retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+        
+        return None
+    
+    async def generate(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        temperature: float = 1.0,
+        max_tokens: int = 2000
+    ) -> str:
+        """Generate response with automatic fallback and retry."""
+        
+        full_messages = [{"role": "system", "content": system_prompt}] + messages
+        
+        for tier in ["primary", "secondary", "fallback"]:
+            if tier not in self.providers:
+                self.status[tier] = "no key"
+                continue
+            
+            model = PROVIDERS[tier]["model"]
+                
+            try:
+                client = self.providers[tier]
+                result = await self._try_generate(
+                    client, model, full_messages, temperature, max_tokens, tier
+                )
+                
+                if result:
+                    self.status[tier] = "ok"
+                    return result
                 else:
                     self.status[tier] = "empty response"
                     continue
@@ -71,8 +114,11 @@ class AIProviderManager:
                 self.status[tier] = "timeout"
                 log.error(f"[{tier}] Timeout after {API_TIMEOUT}s")
                 continue
+            except RateLimitError:
+                self.status[tier] = "rate limited"
+                continue
             except Exception as e:
-                self.status[tier] = f"error"
+                self.status[tier] = "error"
                 log.error(f"[{tier}] {str(e)[:100]}")
                 continue
         

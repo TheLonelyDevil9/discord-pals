@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Dashboard</h1>
+
+<div class="grid">
+    <div class="card stat">
+        <div class="stat-value">{{ bots|length }}</div>
+        <div class="stat-label">Active Bot(s)</div>
+    </div>
+    <div class="card stat">
+        <div class="stat-value">{{ memory_count }}</div>
+        <div class="stat-label">Memory Files</div>
+    </div>
+    <div class="card stat">
+        <div class="stat-value">{{ character_count }}</div>
+        <div class="stat-label">Characters</div>
+    </div>
+    <div class="card stat">
+        <div class="stat-value">{{ autonomous_count }}</div>
+        <div class="stat-label">Autonomous Channels</div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Bot Status</h3>
+    {% if bots %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Character</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for bot in bots %}
+            <tr>
+                <td><strong>{{ bot.name }}</strong></td>
+                <td>{{ bot.character }}</td>
+                <td>
+                    {% if bot.online %}
+                    <span class="badge badge-success">● Online</span>
+                    {% else %}
+                    <span class="badge badge-danger">● Offline</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No bots running</div>
+    {% endif %}
+</div>
+{% endblock %}
