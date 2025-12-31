@@ -272,6 +272,71 @@ def save_autonomous():
     return redirect(url_for('settings'))
 
 
+# --- Prompts ---
+
+PROMPTS_DIR = Path("prompts")
+
+@app.route('/prompts')
+def prompts():
+    """Prompts editor page."""
+    system_content = ""
+    rules_content = ""
+    
+    system_path = PROMPTS_DIR / "system.md"
+    rules_path = PROMPTS_DIR / "response_rules.md"
+    
+    if system_path.exists():
+        try:
+            with open(system_path, 'r', encoding='utf-8') as f:
+                system_content = f.read()
+        except:
+            pass
+    
+    if rules_path.exists():
+        try:
+            with open(rules_path, 'r', encoding='utf-8') as f:
+                rules_content = f.read()
+        except:
+            pass
+    
+    return render_template('prompts.html',
+        system_content=system_content,
+        rules_content=rules_content
+    )
+
+
+@app.route('/prompts/system/save', methods=['POST'])
+def save_system_prompt():
+    """Save system.md prompt."""
+    content = request.form.get('content', '')
+    try:
+        PROMPTS_DIR.mkdir(exist_ok=True)
+        with open(PROMPTS_DIR / 'system.md', 'w', encoding='utf-8') as f:
+            f.write(content)
+        # Reload prompts in character manager
+        from character import character_manager
+        character_manager.reload_prompts()
+    except:
+        pass
+    return redirect(url_for('prompts'))
+
+
+@app.route('/prompts/rules/save', methods=['POST'])
+def save_rules_prompt():
+    """Save response_rules.md prompt."""
+    content = request.form.get('content', '')
+    try:
+        PROMPTS_DIR.mkdir(exist_ok=True)
+        with open(PROMPTS_DIR / 'response_rules.md', 'w', encoding='utf-8') as f:
+            f.write(content)
+        # Reload prompts in character manager
+        from character import character_manager
+        character_manager.reload_prompts()
+    except:
+        pass
+    return redirect(url_for('prompts'))
+
+
 @app.route('/api/status')
 def api_status():
     """API endpoint for bot status."""

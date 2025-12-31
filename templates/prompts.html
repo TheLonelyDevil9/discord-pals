@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Prompts - Discord Pals{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">System Prompts</h1>
+
+{% if message %}
+<div class="card" style="background: var(--success); margin-bottom: 20px;">
+    <p style="margin: 0;">✓ {{ message }}</p>
+</div>
+{% endif %}
+
+<p style="color: var(--text-muted); margin-bottom: 20px;">
+    These prompts control how the AI behaves. Changes take effect on next message (no restart needed).
+</p>
+
+<!-- System Prompt -->
+<div class="card">
+    <h3 class="card-title">📝 System Prompt (prompts/system.md)</h3>
+    <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
+        Main prompt template. Use placeholders: {{CHARACTER_NAME}}, {{PERSONA}}, {{USER_NAME}}, {{LORE}}, {{MEMORIES}}, {{EMOJIS}}
+    </p>
+    <form action="/prompts/system/save" method="post">
+        <textarea name="content" style="width: 100%; height: 400px; font-family: monospace; font-size: 13px; 
+            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
+            padding: 15px; border-radius: 4px; resize: vertical;">{{ system_content }}</textarea>
+        <div style="margin-top: 10px;">
+            <button type="submit" class="btn btn-primary">Save System Prompt</button>
+        </div>
+    </form>
+</div>
+
+<!-- Response Rules -->
+<div class="card">
+    <h3 class="card-title">📋 Response Rules (prompts/response_rules.md)</h3>
+    <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
+        Rules appended to system prompt. Use {{USER_NAME}} placeholder.
+    </p>
+    <form action="/prompts/rules/save" method="post">
+        <textarea name="content" style="width: 100%; height: 200px; font-family: monospace; font-size: 13px; 
+            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
+            padding: 15px; border-radius: 4px; resize: vertical;">{{ rules_content }}</textarea>
+        <div style="margin-top: 10px;">
+            <button type="submit" class="btn btn-primary">Save Response Rules</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

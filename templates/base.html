@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,42 +17,46 @@
             --warning: #d29922;
             --danger: #f85149;
         }
-        
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg);
             color: var(--text);
             line-height: 1.6;
         }
-        
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }
-        
+
         nav {
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border);
             padding: 15px 0;
             margin-bottom: 30px;
         }
-        
+
         nav .container {
             display: flex;
             align-items: center;
             gap: 30px;
         }
-        
+
         nav .logo {
             font-size: 1.4em;
             font-weight: bold;
             color: var(--accent);
             text-decoration: none;
         }
-        
+
         nav a {
             color: var(--text-muted);
             text-decoration: none;
@@ -59,12 +64,13 @@
             border-radius: 6px;
             transition: all 0.2s;
         }
-        
-        nav a:hover, nav a.active {
+
+        nav a:hover,
+        nav a.active {
             color: var(--text);
             background: var(--border);
         }
-        
+
         .card {
             background: var(--bg-secondary);
             border: 1px solid var(--border);
@@ -72,38 +78,43 @@
             padding: 20px;
             margin-bottom: 20px;
         }
-        
+
         .card-title {
             font-size: 1.1em;
             margin-bottom: 15px;
             color: var(--text);
         }
-        
+
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 20px;
         }
-        
+
         .stat {
             text-align: center;
             padding: 20px;
         }
-        
+
         .stat-value {
             font-size: 2.5em;
             font-weight: bold;
             color: var(--accent);
         }
-        
+
         .stat-label {
             color: var(--text-muted);
             font-size: 0.9em;
         }
-        
-        .status-online { color: var(--success); }
-        .status-offline { color: var(--danger); }
-        
+
+        .status-online {
+            color: var(--success);
+        }
+
+        .status-offline {
+            color: var(--danger);
+        }
+
         .badge {
             display: inline-block;
             padding: 4px 10px;
@@ -111,43 +122,56 @@
             font-size: 0.8em;
             font-weight: 500;
         }
-        
-        .badge-success { background: rgba(63, 185, 80, 0.2); color: var(--success); }
-        .badge-warning { background: rgba(210, 153, 34, 0.2); color: var(--warning); }
-        .badge-danger { background: rgba(248, 81, 73, 0.2); color: var(--danger); }
-        
+
+        .badge-success {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--success);
+        }
+
+        .badge-warning {
+            background: rgba(210, 153, 34, 0.2);
+            color: var(--warning);
+        }
+
+        .badge-danger {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--danger);
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
         }
-        
-        th, td {
+
+        th,
+        td {
             text-align: left;
             padding: 12px;
             border-bottom: 1px solid var(--border);
         }
-        
+
         th {
             color: var(--text-muted);
             font-weight: 500;
             font-size: 0.85em;
             text-transform: uppercase;
         }
-        
-        pre, code {
+
+        pre,
+        code {
             background: var(--bg);
             border-radius: 6px;
             padding: 2px 6px;
             font-family: 'Fira Code', monospace;
             font-size: 0.9em;
         }
-        
+
         pre {
             padding: 15px;
             overflow-x: auto;
             max-height: 400px;
         }
-        
+
         .btn {
             display: inline-block;
             padding: 8px 16px;
@@ -158,16 +182,16 @@
             text-decoration: none;
             transition: all 0.2s;
         }
-        
+
         .btn-danger {
             background: var(--danger);
             color: white;
         }
-        
+
         .btn-danger:hover {
             opacity: 0.8;
         }
-        
+
         .empty {
             text-align: center;
             padding: 40px;
@@ -175,19 +199,22 @@
         }
     </style>
 </head>
+
 <body>
     <nav>
         <div class="container">
             <a href="/" class="logo">🤖 Discord Pals</a>
-            <a href="/" {% if request.path == '/' %}class="active"{% endif %}>Dashboard</a>
-            <a href="/memories" {% if request.path == '/memories' %}class="active"{% endif %}>Memories</a>
-            <a href="/characters" {% if request.path == '/characters' %}class="active"{% endif %}>Characters</a>
-            <a href="/settings" {% if request.path == '/settings' %}class="active"{% endif %}>Settings</a>
+            <a href="/" {% if request.path=='/' %}class="active" {% endif %}>Dashboard</a>
+            <a href="/memories" {% if request.path=='/memories' %}class="active" {% endif %}>Memories</a>
+            <a href="/characters" {% if request.path=='/characters' %}class="active" {% endif %}>Characters</a>
+            <a href="/prompts" {% if '/prompts' in request.path %}class="active" {% endif %}>Prompts</a>
+            <a href="/settings" {% if request.path=='/settings' %}class="active" {% endif %}>Settings</a>
         </div>
     </nav>
-    
+
     <main class="container">
         {% block content %}{% endblock %}
     </main>
 </body>
+
 </html>

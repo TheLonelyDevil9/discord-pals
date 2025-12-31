@@ -221,8 +221,10 @@ def check_characters() -> Tuple[bool, List[str]]:
         fail("characters/ directory not found!")
         return False, ["missing characters directory"]
     
-    # Look for .json files
-    char_files = list(chars_dir.glob("*.json"))
+    # Look for .md files (not .json - characters are markdown)
+    char_files = list(chars_dir.glob("*.md"))
+    # Exclude template.md
+    char_files = [f for f in char_files if f.name != "template.md"]
     
     if char_files:
         ok(f"Found {len(char_files)} character(s): {[f.stem for f in char_files]}")

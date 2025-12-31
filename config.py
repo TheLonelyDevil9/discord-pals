@@ -22,7 +22,7 @@ def load_providers() -> tuple[dict, int]:
         tuple: (providers_dict, timeout_seconds)
     """
     config_path = os.path.join(os.path.dirname(__file__), "providers.json")
-    timeout = 60  # Default
+    timeout = 600  # Default 10 minutes (local LLMs can be slow)
     
     if os.path.exists(config_path):
         try:
@@ -48,14 +48,15 @@ def load_providers() -> tuple[dict, int]:
                 continue
             
             # Support requires_key=false for local LLMs
-            requires_key = p.get("requires_key", True)
+            # Auto-detect: if key_env is empty or not set, assume no key needed
             key_env = p.get("key_env", "")
+            requires_key = p.get("requires_key", bool(key_env))  # Auto-detect based on key_env
             
-            if requires_key:
+            if requires_key and key_env:
                 key = os.getenv(key_env, "")
             else:
                 # Use placeholder for keyless providers (e.g., local llama.cpp)
-                key = os.getenv(key_env, "") or "not-needed"
+                key = os.getenv(key_env, "") if key_env else "not-needed"
             
             providers[tier] = {
                 "name": p.get("name", f"Provider {i+1}"),
