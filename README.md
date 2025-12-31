@@ -10,6 +10,8 @@ Her tool was so easy to make work, it was amazing.
 
 This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files. Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
 
+The system instructions were authored by legendary chef @Geechan.
+
 ## Features
 
 - **Any character** - Load characters from markdown files
