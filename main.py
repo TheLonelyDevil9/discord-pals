@@ -136,7 +136,7 @@ class BotInstance:
                     ref_msg = message.reference.cached_message
                     if ref_msg and ref_msg.author == self.client.user:
                         is_reply_to_bot = True
-                except:
+                except Exception:
                     pass
             
             is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
@@ -749,74 +749,40 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
             
             await interaction.followup.send(f"✅ Deleted {deleted} messages", ephemeral=True)
         
-        # Fun commands
-        @self.tree.command(name="kiss", description="Kiss the bot")
-        async def cmd_kiss(interaction: discord.Interaction):
-            await self._fun_command(interaction, "kiss")
+        # Fun commands - dynamically registered
+        FUN_COMMANDS = {
+            "kiss": "Kiss the bot",
+            "hug": "Hug the bot",
+            "bonk": "Bonk the bot",
+            "bite": "Bite the bot",
+            "joke": "Get a joke",
+            "pat": "Pat the bot's head",
+            "poke": "Poke the bot",
+            "tickle": "Tickle the bot",
+            "slap": "Slap the bot",
+            "cuddle": "Cuddle with the bot",
+            "compliment": "Get a compliment",
+            "roast": "Get roasted (playfully)",
+            "fortune": "Get your fortune told",
+            "challenge": "Challenge the bot",
+            "holdhands": "Hold hands with the bot",
+            "squish": "Squish the bot's face",
+            "spank": "Spank the bot",
+        }
         
-        @self.tree.command(name="hug", description="Hug the bot")
-        async def cmd_hug(interaction: discord.Interaction):
-            await self._fun_command(interaction, "hug")
-        
-        @self.tree.command(name="bonk", description="Bonk the bot")
-        async def cmd_bonk(interaction: discord.Interaction):
-            await self._fun_command(interaction, "bonk")
-        
-        @self.tree.command(name="bite", description="Bite the bot")
-        async def cmd_bite(interaction: discord.Interaction):
-            await self._fun_command(interaction, "bite")
-        
-        @self.tree.command(name="joke", description="Get a joke")
-        async def cmd_joke(interaction: discord.Interaction):
-            await self._fun_command(interaction, "joke")
-        
-        @self.tree.command(name="pat", description="Pat the bot's head")
-        async def cmd_pat(interaction: discord.Interaction):
-            await self._fun_command(interaction, "pat")
-        
-        @self.tree.command(name="poke", description="Poke the bot")
-        async def cmd_poke(interaction: discord.Interaction):
-            await self._fun_command(interaction, "poke")
-        
-        @self.tree.command(name="tickle", description="Tickle the bot")
-        async def cmd_tickle(interaction: discord.Interaction):
-            await self._fun_command(interaction, "tickle")
-        
-        @self.tree.command(name="slap", description="Slap the bot")
-        async def cmd_slap(interaction: discord.Interaction):
-            await self._fun_command(interaction, "slap")
-        
-        @self.tree.command(name="cuddle", description="Cuddle with the bot")
-        async def cmd_cuddle(interaction: discord.Interaction):
-            await self._fun_command(interaction, "cuddle")
-        
-        @self.tree.command(name="compliment", description="Get a compliment")
-        async def cmd_compliment(interaction: discord.Interaction):
-            await self._fun_command(interaction, "compliment")
-        
-        @self.tree.command(name="roast", description="Get roasted (playfully)")
-        async def cmd_roast(interaction: discord.Interaction):
-            await self._fun_command(interaction, "roast")
-        
-        @self.tree.command(name="fortune", description="Get your fortune told")
-        async def cmd_fortune(interaction: discord.Interaction):
-            await self._fun_command(interaction, "fortune")
-        
-        @self.tree.command(name="challenge", description="Challenge the bot")
-        async def cmd_challenge(interaction: discord.Interaction):
-            await self._fun_command(interaction, "challenge")
-        
-        @self.tree.command(name="holdhands", description="Hold hands with the bot")
-        async def cmd_holdhands(interaction: discord.Interaction):
-            await self._fun_command(interaction, "holdhands")
-        
-        @self.tree.command(name="squish", description="Squish the bot's face")
-        async def cmd_squish(interaction: discord.Interaction):
-            await self._fun_command(interaction, "squish")
-        
-        @self.tree.command(name="spank", description="Spank the bot")
-        async def cmd_spank(interaction: discord.Interaction):
-            await self._fun_command(interaction, "spank")
+        for cmd_name, cmd_desc in FUN_COMMANDS.items():
+            # Create closure to capture cmd_name correctly
+            def make_callback(action: str):
+                async def callback(interaction: discord.Interaction):
+                    await self._fun_command(interaction, action)
+                return callback
+            
+            cmd = app_commands.Command(
+                name=cmd_name,
+                description=cmd_desc,
+                callback=make_callback(cmd_name)
+            )
+            self.tree.add_command(cmd)
         
         @self.tree.command(name="affection", description="Check affection level")
         async def cmd_affection(interaction: discord.Interaction):
