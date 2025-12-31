@@ -17,24 +17,17 @@ class PromptManager:
     
     def __init__(self):
         self.system_template = ""
-        self.response_rules = ""
         self._load_templates()
     
     def _load_templates(self):
         """Load prompt templates from files."""
         prompts_path = os.path.join(os.path.dirname(__file__), PROMPTS_DIR)
         
-        # Load system template
+        # Load system template (now contains everything)
         system_path = os.path.join(prompts_path, "system.md")
         if os.path.exists(system_path):
             with open(system_path, 'r', encoding='utf-8') as f:
                 self.system_template = f.read()
-        
-        # Load response rules
-        rules_path = os.path.join(prompts_path, "response_rules.md")
-        if os.path.exists(rules_path):
-            with open(rules_path, 'r', encoding='utf-8') as f:
-                self.response_rules = f.read()
     
     def reload(self):
         """Reload templates from disk."""
@@ -67,8 +60,7 @@ class PromptManager:
             "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
             "{{SPECIAL_USER_CONTEXT}}": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
             "{{USER_NAME}}": user_name,
-            "{{ACTIVE_USERS}}": active_users,
-            "{{RESPONSE_RULES}}": self.response_rules.replace("{{USER_NAME}}", user_name) if user_name else ""
+            "{{ACTIVE_USERS}}": active_users
         }
         
         for key, value in replacements.items():

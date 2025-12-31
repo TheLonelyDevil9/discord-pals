@@ -321,22 +321,6 @@ def save_system_prompt():
     return redirect(url_for('prompts'))
 
 
-@app.route('/prompts/rules/save', methods=['POST'])
-def save_rules_prompt():
-    """Save response_rules.md prompt."""
-    content = request.form.get('content', '')
-    try:
-        PROMPTS_DIR.mkdir(exist_ok=True)
-        with open(PROMPTS_DIR / 'response_rules.md', 'w', encoding='utf-8') as f:
-            f.write(content)
-        # Reload prompts in character manager
-        from character import character_manager
-        character_manager.reload_prompts()
-    except:
-        pass
-    return redirect(url_for('prompts'))
-
-
 @app.route('/api/status')
 def api_status():
     """API endpoint for bot status."""
