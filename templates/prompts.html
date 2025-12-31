@@ -2,26 +2,92 @@
 {% block title %}System Prompt - Discord Pals{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 30px;">System Prompt</h1>
+<h1 style="margin-bottom: 20px;">System Prompt</h1>
 
 <p style="color: var(--text-muted); margin-bottom: 20px;">
     This prompt controls how the AI behaves. Changes take effect on next message (no restart needed).
 </p>
 
-<div class="card">
-    <h3 class="card-title">📝 prompts/system.md</h3>
-    <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
-        Available placeholders: <code>{{CHARACTER_NAME}}</code>, <code>{{PERSONA}}</code>, <code>{{USER_NAME}}</code>,
-        <code>{{LORE}}</code>, <code>{{MEMORIES}}</code>, <code>{{EMOJIS}}</code>, <code>{{GUILD_NAME}}</code>,
-        <code>{{ACTIVE_USERS}}</code>
-    </p>
-    <form action="/prompts/system/save" method="post">
-        <textarea name="content" style="width: 100%; height: 600px; font-family: monospace; font-size: 13px; 
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ system_content }}</textarea>
-        <div style="margin-top: 10px;">
-            <button type="submit" class="btn btn-primary">Save Prompt</button>
-        </div>
-    </form>
+<div style="display: grid; grid-template-columns: 1fr 280px; gap: 20px;">
+    <!-- Main Editor -->
+    <div class="card" style="margin-bottom: 0;">
+        <h3 class="card-title">📝 prompts/system.md</h3>
+        <form action="/prompts/system/save" method="post">
+            <textarea name="content" style="width: 100%; height: 600px; font-family: monospace; font-size: 13px; 
+                background: var(--bg); border: 1px solid var(--border); color: var(--text); 
+                padding: 15px; border-radius: 4px; resize: vertical;">{{ system_content }}</textarea>
+            <div style="margin-top: 10px;">
+                <button type="submit" class="btn btn-primary">Save Prompt</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Placeholders Sidebar -->
+    <div class="card" style="margin-bottom: 0; height: fit-content; position: sticky; top: 20px;">
+        <h3 class="card-title">🔧 Placeholders</h3>
+        <p style="color: var(--text-muted); font-size: 0.85em; margin-bottom: 15px;">
+            These get replaced with real values at runtime:
+        </p>
+        <ul style="list-style: none; font-family: monospace; font-size: 0.85em;">
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{CHARACTER_NAME}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Bot's character name
+                </div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{PERSONA}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Character personality
+                    from .md file</div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{USER_NAME}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Current user's display
+                    name</div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{GUILD_NAME}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Discord server name
+                </div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{MEMORIES}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Stored memories for
+                    user/server</div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{LORE}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Server lore context
+                </div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{EMOJIS}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Available server
+                    emojis</div>
+            </li>
+            <li style="padding: 6px 0; border-bottom: 1px solid var(--border);">
+                <code>{{ACTIVE_USERS}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Other users in
+                    conversation</div>
+            </li>
+            <li style="padding: 6px 0;">
+                <code>{{SPECIAL_USER_CONTEXT}}</code>
+                <div style="color: var(--text-muted); font-size: 0.9em; font-family: sans-serif;">Per-user context from
+                    character file</div>
+            </li>
+        </ul>
+    </div>
 </div>
+
+<style>
+    @media (max-width: 900px) {
+        div[style*="grid-template-columns: 1fr 280px"] {
+            display: block !important;
+        }
+
+        div[style*="position: sticky"] {
+            position: static !important;
+            margin-top: 20px;
+        }
+    }
+</style>
 {% endblock %}

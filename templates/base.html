@@ -197,6 +197,56 @@
             padding: 40px;
             color: var(--text-muted);
         }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #0d1117;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            nav .container {
+                flex-wrap: wrap;
+                gap: 10px;
+                padding: 10px;
+            }
+
+            nav .logo {
+                width: 100%;
+                text-align: center;
+                margin-bottom: 5px;
+            }
+
+            nav a {
+                padding: 6px 12px;
+                font-size: 0.9em;
+            }
+
+            .container {
+                padding: 10px;
+            }
+
+            .card {
+                padding: 15px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            textarea {
+                font-size: 12px !important;
+            }
+
+            pre {
+                font-size: 0.8em;
+                max-height: 250px;
+            }
+        }
     </style>
 </head>
 
