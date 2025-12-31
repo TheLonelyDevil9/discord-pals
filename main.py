@@ -107,7 +107,7 @@ class BotInstance:
         async def on_message(message: discord.Message):
             if message.author == self.client.user:
                 return
-            if message.content.startswith('/'):
+            if message.content.startswith('/'):  # Slash commands and // OOC messages
                 return
             
             is_dm = isinstance(message.channel, discord.DMChannel)
