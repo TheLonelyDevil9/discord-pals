@@ -98,10 +98,17 @@ DEFAULT_CHARACTER = os.getenv('DEFAULT_CHARACTER', 'firefly')
 # Data Storage
 DATA_DIR = "bot_data"
 MEMORIES_FILE = os.path.join(DATA_DIR, "memories.json")
-DM_MEMORIES_FILE = os.path.join(DATA_DIR, "dm_memories.json")
-USER_MEMORIES_FILE = os.path.join(DATA_DIR, "user_memories.json")
+DM_MEMORIES_FILE = os.path.join(DATA_DIR, "dm_memories.json")  # Legacy shared file
+USER_MEMORIES_FILE = os.path.join(DATA_DIR, "user_memories.json")  # Legacy shared file
 LORE_FILE = os.path.join(DATA_DIR, "lore.json")
 AUTONOMOUS_FILE = os.path.join(DATA_DIR, "autonomous.json")
+
+# Per-character memory directories
+DM_MEMORIES_DIR = os.path.join(DATA_DIR, "dm_memories")
+USER_MEMORIES_DIR = os.path.join(DATA_DIR, "user_memories")
+
+# Global user profiles (cross-server, per-user facts that follow users everywhere)
+GLOBAL_USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
 # Timing
 ERROR_DELETE_AFTER = 10.0

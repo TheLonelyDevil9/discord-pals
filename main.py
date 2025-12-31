@@ -363,21 +363,31 @@ class BotInstance:
             emojis = get_guild_emojis(guild) if guild else ""
             lore = memory_manager.get_lore(guild_id) if guild_id else ""
             
-            # Get both server-wide and per-user memories
+            # Get both server-wide and per-user memories (per-character)
+            char_name = self.character.name if self.character else None
             user_memories = ""  # Initialize for later use
+            global_profile = memory_manager.get_global_user_profile(user_id)  # Cross-server facts
+            
             if is_dm:
-                memories = memory_manager.get_dm_memories(user_id)
+                memories = memory_manager.get_dm_memories(user_id, character_name=char_name)
+                # Combine with global profile
+                if global_profile and memories:
+                    memories = f"What you know about this user (cross-server):\n{global_profile}\n\nFrom DMs:\n{memories}"
+                elif global_profile:
+                    memories = f"What you know about this user:\n{global_profile}"
             elif guild_id:
                 server_memories = memory_manager.get_server_memories(guild_id)
-                user_memories = memory_manager.get_user_memories(guild_id, user_id)
+                user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
                 
-                # Combine memories with per-user taking priority
-                if user_memories and server_memories:
-                    memories = f"About {user_name}:\n{user_memories}\n\nGeneral:\n{server_memories}"
-                elif user_memories:
-                    memories = f"About {user_name}:\n{user_memories}"
-                else:
-                    memories = server_memories
+                # Combine memories: global profile + per-user + server-wide
+                memory_parts = []
+                if global_profile:
+                    memory_parts.append(f"What you know about {user_name} (cross-server):\n{global_profile}")
+                if user_memories:
+                    memory_parts.append(f"About {user_name} (this server):\n{user_memories}")
+                if server_memories:
+                    memory_parts.append(f"General:\n{server_memories}")
+                memories = "\n\n".join(memory_parts) if memory_parts else ""
             else:
                 memories = ""
             
@@ -674,8 +684,9 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
         @self.tree.command(name="memories", description="View saved memories")
         async def cmd_memories(interaction: discord.Interaction):
             is_dm = isinstance(interaction.channel, discord.DMChannel)
+            char_name = self.character.name if self.character else None
             if is_dm:
-                memories = memory_manager.get_dm_memories(interaction.user.id)
+                memories = memory_manager.get_dm_memories(interaction.user.id, character_name=char_name)
             else:
                 memories = memory_manager.get_server_memories(interaction.guild_id)
             
@@ -817,10 +828,11 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
             ]) if history else ""
             
             # Get memories
+            char_name = self.character.name if self.character else None
             user_memories = ""
             server_memories = ""
             if guild_id:
-                user_memories = memory_manager.get_user_memories(guild_id, user_id)
+                user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
                 server_memories = memory_manager.get_server_memories(guild_id)
             
             # Build context
@@ -871,10 +883,11 @@ interactions. Include a rough affection percentage (0-100%) if it fits your char
         ]) if history else ""
         
         # Get memories - both user-specific and server-wide
+        char_name = self.character.name if self.character else None
         user_memories = ""
         server_memories = ""
         if guild_id:
-            user_memories = memory_manager.get_user_memories(guild_id, user_id)
+            user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
             server_memories = memory_manager.get_server_memories(guild_id)
         
         # Build prompts with relationship context
