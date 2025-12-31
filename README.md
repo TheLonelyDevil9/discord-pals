@@ -23,7 +23,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Character hot-swap** - Switch characters with `/switch` command without restart
 - **Diagnose script** - Built-in connectivity checker for troubleshooting
 - **Multi-bot support** - Run multiple bots from a single terminal/process
-- **Memory system** - Bot remembers important moments (per-user and server-wide)
+- **Memory system** - Intelligent memory with per-character isolation and cross-server user profiles
 - **Context-aware commands** - Slash commands use chat history and memories for personalized responses
 - **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
 - **Smart responses** - Tracks who you're replying to with full message context
@@ -254,6 +254,26 @@ This checks:
 - API keys are set
 - Provider connectivity
 - Model availability
+
+---
+
+## 🧠 Memory Architecture
+
+The bot uses a layered memory system for intelligent context management:
+
+| Memory Type | Scope | File Location |
+|-------------|-------|---------------|
+| **Global User Profile** | Cross-server (follows users everywhere) | `bot_data/user_profiles.json` |
+| **DM Memories** | Per-character (each character has own DM memories) | `bot_data/dm_memories/{character}.json` |
+| **User Memories** | Per-character, per-server | `bot_data/user_memories/{character}.json` |
+| **Server Memories** | Shared across all characters | `bot_data/memories.json` |
+| **Lore** | Shared across all characters | `bot_data/lore.json` |
+
+When a user talks to the bot, context is loaded in priority order:
+
+1. Global user profile (facts that follow them across servers)
+2. Character-specific memories about that user
+3. Server-wide memories
 
 ---
 
