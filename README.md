@@ -506,4 +506,4 @@ MIT License - do whatever you want with it!
 
 Made with ❤️ by TLD (and Opus 4.5).
 
-Credits to SpicyMarinara again for the inspiration, and Geechan for naming the project!
+Credits to SpicyMarinara again for the inspiration, and Geechan for naming the project as well as the system prompt!
