@@ -180,7 +180,11 @@ class BotInstance:
         
         @self.client.event
         async def on_message_edit(before: discord.Message, after: discord.Message):
+            # Ignore our own edits (including slash command followups)
             if after.author == self.client.user:
+                return
+            # Ignore other bots' edits entirely
+            if after.author.bot:
                 return
             if before.content == after.content:
                 return
