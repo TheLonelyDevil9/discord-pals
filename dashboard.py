@@ -388,13 +388,28 @@ def config_page():
         except:
             pass
     
-    # Get bots and their current characters
+    # Get bots and their current characters + autonomous channels
+    from discord_utils import autonomous_manager
     bots_info = []
     for bot in bot_instances:
+        # Get channel names for autonomous channels this bot can see
+        auto_channels = []
+        if hasattr(bot, 'client') and bot.client.is_ready():
+            for channel_id in autonomous_manager.enabled_channels:
+                channel = bot.client.get_channel(channel_id)
+                if channel:
+                    guild_name = channel.guild.name if hasattr(channel, 'guild') else 'DM'
+                    auto_channels.append({
+                        'id': channel_id,
+                        'name': channel.name,
+                        'guild': guild_name
+                    })
+        
         bots_info.append({
             'name': bot.name,
             'character': bot.character.name if bot.character else 'None',
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False
+            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
+            'auto_channels': auto_channels
         })
     
     return render_template('config.html',
