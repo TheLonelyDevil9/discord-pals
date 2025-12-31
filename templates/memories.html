@@ -7,7 +7,10 @@
 {% if memories %}
 {% for file_name, data in memories.items() %}
 <div class="card">
-    <h3 class="card-title">📁 {{ file_name }}</h3>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h3 class="card-title" style="margin: 0;">📁 {{ file_name }}</h3>
+        <a href="/memories/{{ file_name }}/edit" class="btn btn-primary">Edit Raw JSON</a>
+    </div>
 
     {% if data.error %}
     <div class="empty">Error: {{ data.error }}</div>
@@ -28,7 +31,7 @@
                     {% if value is string %}
                     {{ value[:200] }}{% if value|length > 200 %}...{% endif %}
                     {% else %}
-                    <pre>{{ value | tojson(indent=2) }}</pre>
+                    <pre style="max-height: 150px; overflow: auto;">{{ value | tojson(indent=2) }}</pre>
                     {% endif %}
                 </td>
                 <td>

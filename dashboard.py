@@ -105,6 +105,39 @@ def delete_memory(name):
     return redirect(url_for('memories'))
 
 
+@app.route('/memories/<name>/edit')
+def edit_memory(name):
+    """Edit a memory file."""
+    file_path = DATA_DIR / f"{name}.json"
+    content = "{}"
+    
+    if file_path.exists():
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except:
+            pass
+    
+    return render_template('memory_edit.html', name=name, content=content)
+
+
+@app.route('/memories/<name>/save', methods=['POST'])
+def save_memory(name):
+    """Save memory file changes."""
+    file_path = DATA_DIR / f"{name}.json"
+    content = request.form.get('content', '{}')
+    
+    try:
+        json.loads(content)  # Validate JSON
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except:
+        pass
+    
+    return redirect(url_for('memories'))
+
+
 # --- Characters ---
 
 @app.route('/characters')
