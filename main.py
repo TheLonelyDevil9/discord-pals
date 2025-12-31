@@ -67,6 +67,7 @@ class BotInstance:
         self.request_queue = RequestQueue()
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
+        self._message_batches: Dict[tuple, dict] = {}  # (channel_id, user_id) -> {messages, timer_task}
         
         # Set up events and commands
         self._setup_events()
@@ -127,8 +128,19 @@ class BotInstance:
                     return
             
             mentioned = self.client.user in message.mentions if not is_dm else True
-            is_autonomous = not mentioned and not is_dm and autonomous_manager.should_respond(message.channel.id)
-            should_respond = mentioned or is_autonomous
+            
+            # Reply chain detection - treat reply to bot's message as implicit mention
+            is_reply_to_bot = False
+            if message.reference and message.reference.message_id:
+                try:
+                    ref_msg = message.reference.cached_message
+                    if ref_msg and ref_msg.author == self.client.user:
+                        is_reply_to_bot = True
+                except:
+                    pass
+            
+            is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
+            should_respond = mentioned or is_reply_to_bot or is_autonomous
             
             if should_respond:
                 # Track if responding to a bot
@@ -147,7 +159,8 @@ class BotInstance:
                     if not content and not message.attachments:
                         content = "Hello!"
                 
-                await self.request_queue.add_request(
+                # Use batching for this user
+                await self._add_to_batch(
                     channel_id=message.channel.id,
                     message=message,
                     content=content,
@@ -186,7 +199,9 @@ class BotInstance:
                 remove_assistant_from_history(message.channel.id, 1)
     
     async def _send_organic_response(self, message: discord.Message, response: str) -> list:
-        """Send response organically - split by lines and send separately."""
+        """Send response organically - split by lines and send separately with delays."""
+        import random
+        
         lines = []
         for para in response.split('\n\n'):
             para = para.strip()
@@ -217,6 +232,8 @@ class BotInstance:
                     sent_msg = await message.reply(line)
                     sent_messages.append(sent_msg)
                 else:
+                    # Add delay between lines (0.5-1 second)
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
                     sent_msg = await message.channel.send(line)
                     sent_messages.append(sent_msg)
             except discord.HTTPException as e:
@@ -231,6 +248,85 @@ class BotInstance:
                 await add_reactions(message, [reaction], guild)
             except:
                 pass
+    
+    async def _add_to_batch(self, channel_id: int, message: discord.Message, content: str, 
+                            guild, attachments, user_name: str, is_dm: bool, user_id: int,
+                            reply_to_name: str, sticker_info: str):
+        """Add message to batch and start/reset 10-second timer for this user."""
+        batch_key = (channel_id, user_id)
+        
+        if batch_key in self._message_batches:
+            # Add to existing batch and cancel old timer
+            batch = self._message_batches[batch_key]
+            batch['messages'].append({
+                'message': message,
+                'content': content,
+                'attachments': attachments,
+                'reply_to_name': reply_to_name,
+                'sticker_info': sticker_info
+            })
+            # Cancel existing timer and start new one
+            if batch['timer_task']:
+                batch['timer_task'].cancel()
+            batch['timer_task'] = asyncio.create_task(
+                self._batch_timer(batch_key, channel_id, guild, user_name, is_dm, user_id)
+            )
+        else:
+            # Create new batch
+            self._message_batches[batch_key] = {
+                'messages': [{
+                    'message': message,
+                    'content': content,
+                    'attachments': attachments,
+                    'reply_to_name': reply_to_name,
+                    'sticker_info': sticker_info
+                }],
+                'timer_task': asyncio.create_task(
+                    self._batch_timer(batch_key, channel_id, guild, user_name, is_dm, user_id)
+                )
+            }
+    
+    async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str, 
+                           is_dm: bool, user_id: int):
+        """Wait 10 seconds then process the batch."""
+        await asyncio.sleep(10)
+        
+        if batch_key not in self._message_batches:
+            return
+        
+        batch = self._message_batches.pop(batch_key)
+        messages = batch['messages']
+        
+        if not messages:
+            return
+        
+        # Combine all messages into one content block
+        combined_content = "\n".join([m['content'] for m in messages])
+        first_message = messages[0]['message']
+        last_message = messages[-1]['message']
+        
+        # Collect all attachments
+        all_attachments = []
+        for m in messages:
+            all_attachments.extend(m['attachments'])
+        
+        # Use the last message for replying, first for reply context
+        reply_to_name = messages[0].get('reply_to_name', '')
+        sticker_info = messages[-1].get('sticker_info', '')
+        
+        # Add to request queue with combined content
+        await self.request_queue.add_request(
+            channel_id=channel_id,
+            message=last_message,
+            content=combined_content,
+            guild=guild,
+            attachments=all_attachments,
+            user_name=user_name,
+            is_dm=is_dm,
+            user_id=user_id,
+            reply_to_name=reply_to_name,
+            sticker_info=sticker_info
+        )
     
     async def _process_request(self, request: dict):
         """Process a single queued request."""
