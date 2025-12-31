@@ -286,8 +286,20 @@ class BotInstance:
     
     async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str, 
                            is_dm: bool, user_id: int):
-        """Wait 10 seconds then process the batch."""
-        await asyncio.sleep(10)
+        """Wait 15 seconds while showing typing, then process the batch."""
+        # Get channel to show typing indicator
+        if batch_key in self._message_batches:
+            first_msg = self._message_batches[batch_key]['messages'][0]['message']
+            channel = first_msg.channel
+            
+            # Show typing indicator for 15 seconds while collecting
+            try:
+                async with channel.typing():
+                    await asyncio.sleep(15)
+            except Exception:
+                await asyncio.sleep(15)
+        else:
+            await asyncio.sleep(15)
         
         if batch_key not in self._message_batches:
             return
