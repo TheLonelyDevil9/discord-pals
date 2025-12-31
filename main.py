@@ -200,8 +200,6 @@ class BotInstance:
     
     async def _send_organic_response(self, message: discord.Message, response: str) -> list:
         """Send response organically - split by lines and send separately with delays."""
-        import random
-        
         lines = []
         for para in response.split('\n\n'):
             para = para.strip()
@@ -302,7 +300,6 @@ class BotInstance:
         
         # Combine all messages into one content block
         combined_content = "\n".join([m['content'] for m in messages])
-        first_message = messages[0]['message']
         last_message = messages[-1]['message']
         
         # Collect all attachments
