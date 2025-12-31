@@ -251,6 +251,59 @@ class BotInstance:
             except:
                 pass
     
+    async def _gather_mentioned_user_context(self, message: discord.Message, char_name: str) -> str:
+        """Gather ephemeral context about mentioned users from recent channel messages.
+        
+        Only gathers info about users who:
+        1. Are mentioned in the message
+        2. Don't have existing memories with this character
+        
+        Returns a context string (not stored anywhere).
+        """
+        if not message.mentions:
+            return ""
+        
+        mentioned_contexts = []
+        
+        for mentioned_user in message.mentions:
+            # Skip bots and the message author
+            if mentioned_user.bot or mentioned_user.id == message.author.id:
+                continue
+            
+            # Skip if we already have memories about this user
+            from memory import memory_manager
+            existing_memories = ""
+            if message.guild:
+                existing_memories = memory_manager.get_user_memories(
+                    message.guild.id, mentioned_user.id, character_name=char_name
+                )
+            else:
+                existing_memories = memory_manager.get_dm_memories(
+                    mentioned_user.id, character_name=char_name
+                )
+            
+            if existing_memories:
+                continue  # We already know this user
+            
+            # Gather recent messages from this user in the channel (last 50 messages)
+            try:
+                user_messages = []
+                async for hist_msg in message.channel.history(limit=50):
+                    if hist_msg.author.id == mentioned_user.id and hist_msg.content:
+                        user_messages.append(hist_msg.content[:200])
+                        if len(user_messages) >= 5:
+                            break
+                
+                if user_messages:
+                    display_name = mentioned_user.display_name
+                    context = f"About {display_name} (from recent messages, no stored memories):\n"
+                    context += "\n".join([f"- They said: \"{msg}\"" for msg in user_messages[:3]])
+                    mentioned_contexts.append(context)
+            except Exception as e:
+                log.warn(f"Failed to gather context for {mentioned_user}: {e}", self.name)
+        
+        return "\n\n".join(mentioned_contexts)
+    
     async def _add_to_batch(self, channel_id: int, message: discord.Message, content: str, 
                             guild, attachments, user_name: str, is_dm: bool, user_id: int,
                             reply_to_name: str, sticker_info: str):
@@ -411,6 +464,11 @@ class BotInstance:
                 user_name=user_name,
                 active_users=active_users
             )
+            
+            # Gather ephemeral context about mentioned users (not stored)
+            mentioned_context = await self._gather_mentioned_user_context(message, char_name)
+            if mentioned_context:
+                system_prompt += f"\n\n--- Context about mentioned users ---\n{mentioned_context}"
             
             # Dynamic context limit: reduce chat history when user has more memories
             # This prioritizes "what we remember about you" over "what you just said"
