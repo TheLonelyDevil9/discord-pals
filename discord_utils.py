@@ -243,7 +243,15 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
                 return f"<:{emoji.name}:{emoji.id}>"
         return match.group(0)
     
-    return re.sub(pattern, replace_emoji, text)
+    result = re.sub(pattern, replace_emoji, text)
+    
+    # Final cleanup: remove orphaned angle brackets (not part of valid emoji)
+    # Remove lone < or > or <> pairs that aren't valid emoji format
+    result = re.sub(r'<>', '', result)  # Empty angle brackets
+    result = re.sub(r'<(?![a:])', '', result)  # < not starting valid emoji
+    result = re.sub(r'(?<!\d)>', '', result)  # > not after emoji ID digits
+    
+    return result
 
 
 def parse_reactions(content: str) -> Tuple[str, List[str]]:
