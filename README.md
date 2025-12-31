@@ -17,7 +17,7 @@ This is a modified version of Discord Buddy, called Discord Pals, which is a tem
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
-- **Editable web dashboard** - Web UI at localhost:5000 for editing memories, characters, and settings
+- **Editable web dashboard** - Web UI (localhost:5000) for editing memories, characters, prompts, and settings
 - **Character hot-swap** - Switch characters with `/switch` command without restart
 - **Diagnose script** - Built-in connectivity checker for troubleshooting
 - **Multi-bot support** - Run multiple bots from a single terminal/process
@@ -27,7 +27,7 @@ This is a modified version of Discord Buddy, called Discord Pals, which is a tem
 - **Smart responses** - Tracks who you're replying to with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
-- **Customizable prompts** - Edit prompt templates without touching code
+- **System prompt editor** - Edit prompts via dashboard with placeholder reference sidebar
 - **Autonomous mode** - Bot randomly joins conversations (configurable with recommended defaults set)
 
 ---
@@ -196,14 +196,14 @@ No API key needed! Just point to your local server:
     {
       "name": "Local LLM",
       "url": "http://localhost:8080/v1",
-      "key_env": "LOCAL_API_KEY",
-      "model": "local-model",
-      "requires_key": false
+      "model": "local-model"
     }
   ],
-  "timeout": 120
+  "timeout": 600
 }
 ```
+
+> **Tip:** For local LLMs, you can omit `key_env` entirely - it auto-detects that no key is needed.
 
 Add placeholder to `.env`:
 
