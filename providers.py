@@ -86,44 +86,51 @@ class AIProviderManager:
         temperature: float = 1.0,
         max_tokens: int = 2000
     ) -> str:
-        """Generate response with automatic fallback and retry."""
+        """Generate response with automatic fallback and retry (3 full cycles)."""
         
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         
-        for tier in ["primary", "secondary", "fallback"]:
-            if tier not in self.providers:
-                self.status[tier] = "no key"
-                continue
-            
-            model = PROVIDERS[tier]["model"]
-                
-            try:
-                client = self.providers[tier]
-                result = await self._try_generate(
-                    client, model, full_messages, temperature, max_tokens, tier
-                )
-                
-                if result:
-                    self.status[tier] = "ok"
-                    return result
-                else:
-                    self.status[tier] = "empty response"
+        # Retry all providers up to 3 full cycles
+        for cycle in range(3):
+            for tier in ["primary", "secondary", "fallback"]:
+                if tier not in self.providers:
+                    self.status[tier] = "no key"
                     continue
                 
-            except asyncio.TimeoutError:
-                self.status[tier] = "timeout"
-                log.error(f"[{tier}] Timeout after {API_TIMEOUT}s")
-                continue
-            except RateLimitError:
-                self.status[tier] = "rate limited"
-                continue
-            except Exception as e:
-                self.status[tier] = "error"
-                log.error(f"[{tier}] {str(e)[:100]}")
-                continue
+                model = PROVIDERS[tier]["model"]
+                    
+                try:
+                    client = self.providers[tier]
+                    result = await self._try_generate(
+                        client, model, full_messages, temperature, max_tokens, tier
+                    )
+                    
+                    if result:
+                        self.status[tier] = "ok"
+                        return result
+                    else:
+                        self.status[tier] = "empty response"
+                        continue
+                    
+                except asyncio.TimeoutError:
+                    self.status[tier] = "timeout"
+                    log.error(f"[{tier}] Timeout after {API_TIMEOUT}s")
+                    continue
+                except RateLimitError:
+                    self.status[tier] = "rate limited"
+                    continue
+                except Exception as e:
+                    self.status[tier] = "error"
+                    log.error(f"[{tier}] {str(e)[:100]}")
+                    continue
+            
+            # Wait before next cycle
+            if cycle < 2:
+                await asyncio.sleep(2)
         
-        log.error("All providers failed")
-        return "❌ All providers failed. Please try again later."
+        # Silent fail - no public error message
+        log.error("All providers failed after 3 cycles")
+        return None
     
     def get_status(self) -> str:
         """Get formatted status of all providers."""
