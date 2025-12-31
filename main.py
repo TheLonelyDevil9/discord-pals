@@ -435,7 +435,7 @@ class BotInstance:
             if reactions:
                 asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
             
-            asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content))
+            asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
         
         except Exception as e:
             log.error(f"Error processing: {e}", self.name)
@@ -492,7 +492,7 @@ class BotInstance:
         except:
             pass  # Silently fail - this is optional
     
-    async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = ""):
+    async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
         # Quick pre-filter: skip very short messages
         if len(last_message) < 20:
@@ -514,7 +514,7 @@ class BotInstance:
         
         char_name = self.character.name if self.character else "the character"
         await memory_manager.generate_memory(
-            provider_manager, history[-5:], is_dm, id_key, char_name, user_id=user_id
+            provider_manager, history[-5:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
         )
     
     async def _maybe_respond_to_edit(self, before: discord.Message, after: discord.Message, user_name: str):

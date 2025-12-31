@@ -124,7 +124,7 @@ class MemoryManager:
     
     # --- Per-User Server Memories ---
     
-    def add_user_memory(self, guild_id: int, user_id: int, content: str, auto: bool = False):
+    def add_user_memory(self, guild_id: int, user_id: int, content: str, auto: bool = False, user_name: str = None):
         """Add a memory about a specific user in a server."""
         guild_key = str(guild_id)
         user_key = str(user_id)
@@ -139,6 +139,9 @@ class MemoryManager:
             "timestamp": datetime.now().isoformat(),
             "auto": auto
         }
+        if user_name:
+            memory["user_name"] = user_name
+        
         self.user_memories[guild_key][user_key].append(memory)
         
         # Keep max 20 memories per user per server
@@ -200,7 +203,8 @@ class MemoryManager:
         is_dm: bool,
         id_key: int,
         character_name: str = "the character",
-        user_id: int = None
+        user_id: int = None,
+        user_name: str = None
     ) -> Optional[str]:
         """Generate a memory summary from conversation using AI."""
         if len(messages) < 5:
@@ -260,7 +264,7 @@ Memory (or NOTHING):"""
                     
                     # Also add per-user memory for the current user
                     if user_id:
-                        self.add_user_memory(id_key, user_id, result.strip(), auto=True)
+                        self.add_user_memory(id_key, user_id, result.strip(), auto=True, user_name=user_name)
                 
                 return result.strip()
         except Exception as e:
