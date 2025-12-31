@@ -367,6 +367,98 @@ def api_status():
     return jsonify({'bots': bots_info})
 
 
+# --- Runtime Config ---
+
+@app.route('/config')
+def config_page():
+    """Runtime configuration page."""
+    import runtime_config
+    
+    config = runtime_config.get_all()
+    characters = get_character_files()
+    
+    # Get providers
+    providers = []
+    providers_file = Path("providers.json")
+    if providers_file.exists():
+        try:
+            with open(providers_file, 'r') as f:
+                data = json.load(f)
+                providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
+        except:
+            pass
+    
+    # Get bots and their current characters
+    bots_info = []
+    for bot in bot_instances:
+        bots_info.append({
+            'name': bot.name,
+            'character': bot.character.name if bot.character else 'None',
+            'online': bot.client.is_ready() if hasattr(bot, 'client') else False
+        })
+    
+    return render_template('config.html',
+        config=config,
+        characters=characters,
+        providers=providers,
+        bots=bots_info
+    )
+
+
+@app.route('/api/config', methods=['GET', 'POST'])
+def api_config():
+    """API for runtime config."""
+    import runtime_config
+    
+    if request.method == 'POST':
+        data = request.json
+        for key, value in data.items():
+            runtime_config.set(key, value)
+        return jsonify({'status': 'ok'})
+    
+    return jsonify(runtime_config.get_all())
+
+
+@app.route('/api/switch_character', methods=['POST'])
+def api_switch_character():
+    """Switch character for a bot."""
+    data = request.json
+    bot_name = data.get('bot_name')
+    character_name = data.get('character')
+    
+    for bot in bot_instances:
+        if bot.name == bot_name:
+            try:
+                from character import character_manager
+                bot.character = character_manager.load_character(character_name)
+                return jsonify({'status': 'ok', 'character': bot.character.name})
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 400
+    
+    return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
+
+
+@app.route('/context')
+def context_page():
+    """Context visualization page."""
+    import runtime_config
+    
+    contexts = runtime_config.get_last_context()
+    
+    return render_template('context.html', contexts=contexts, bots=bot_instances)
+
+
+@app.route('/api/context/<bot_name>')
+def api_context(bot_name):
+    """Get last context for a specific bot."""
+    import runtime_config
+    
+    context = runtime_config.get_last_context(bot_name)
+    if context:
+        return jsonify(context)
+    return jsonify({'status': 'no context stored'})
+
+
 # --- Dashboard Runner ---
 
 def start_dashboard(bots=None, host='127.0.0.1', port=5000):

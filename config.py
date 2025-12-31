@@ -110,6 +110,9 @@ USER_MEMORIES_DIR = os.path.join(DATA_DIR, "user_memories")
 # Global user profiles (cross-server, per-user facts that follow users everywhere)
 GLOBAL_USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 
+# Runtime config (live-adjustable settings via dashboard)
+RUNTIME_CONFIG_FILE = os.path.join(DATA_DIR, "runtime_config.json")
+
 # Timing
 ERROR_DELETE_AFTER = 10.0
 

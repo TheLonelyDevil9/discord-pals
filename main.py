@@ -290,20 +290,23 @@ class BotInstance:
     
     async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str, 
                            is_dm: bool, user_id: int):
-        """Wait 15 seconds while showing typing, then process the batch."""
+        """Wait for batch timeout while showing typing, then process the batch."""
+        import runtime_config
+        timeout = runtime_config.get('batch_timeout', 15)
+        
         # Get channel to show typing indicator
         if batch_key in self._message_batches:
             first_msg = self._message_batches[batch_key]['messages'][0]['message']
             channel = first_msg.channel
             
-            # Show typing indicator for 15 seconds while collecting
+            # Show typing indicator while collecting
             try:
                 async with channel.typing():
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(timeout)
             except Exception:
-                await asyncio.sleep(15)
+                await asyncio.sleep(timeout)
         else:
-            await asyncio.sleep(15)
+            await asyncio.sleep(timeout)
         
         if batch_key not in self._message_batches:
             return
@@ -426,6 +429,11 @@ class BotInstance:
             
             # Show typing indicator while generating
             async with message.channel.typing():
+                # Store context for dashboard visualization
+                import runtime_config
+                token_estimate = len(system_prompt) // 4 + sum(len(m.get('content', '')) for m in history) // 4
+                runtime_config.store_last_context(self.name, system_prompt, history, token_estimate)
+                
                 response = await provider_manager.generate(
                     messages=history,
                     system_prompt=system_prompt,

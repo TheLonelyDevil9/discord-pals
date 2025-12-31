@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Runtime Config - Discord Pals{% endblock %}
+
+{% block content %}
+<h1>⚙️ Runtime Configuration</h1>
+
+<div class="card">
+    <h2>Settings</h2>
+    <form id="config-form">
+        <div class="form-group">
+            <label for="history_limit">History Limit (messages sent to LLM)</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
+                    value="{{ config.history_limit }}"
+                    oninput="document.getElementById('history_val').textContent = this.value">
+                <span id="history_val" style="min-width: 40px;">{{ config.history_limit }}</span>
+            </div>
+            <small>Current: {{ config.history_limit }} messages</small>
+        </div>
+
+        <div class="form-group">
+            <label for="batch_timeout">Batch Collection Time (seconds)</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="batch_timeout" name="batch_timeout" min="5" max="30" step="1"
+                    value="{{ config.batch_timeout }}"
+                    oninput="document.getElementById('batch_val').textContent = this.value + 's'">
+                <span id="batch_val" style="min-width: 40px;">{{ config.batch_timeout }}s</span>
+            </div>
+            <small>Time to wait for follow-up messages before responding</small>
+        </div>
+
+        {% if providers %}
+        <div class="form-group">
+            <label for="active_provider">Active Provider</label>
+            <select id="active_provider" name="active_provider">
+                <option value="">Auto (use first available)</option>
+                {% for provider in providers %}
+                <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider
+                    }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+</div>
+
+{% if bots %}
+<div class="card">
+    <h2>Character Switcher</h2>
+    {% for bot in bots %}
+    <div
+        style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px; padding: 10px; background: var(--bg); border-radius: 8px;">
+        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+        <strong>{{ bot.name }}</strong>
+        <span style="color: var(--text-muted);">currently:</span>
+        <span>{{ bot.character }}</span>
+        <select id="char-{{ bot.name }}" style="margin-left: auto;">
+            {% for char in characters %}
+            <option value="{{ char }}" {% if bot.character==char %}selected{% endif %}>{{ char }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-small"
+            onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value)">Switch</button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<style>
+    .form-group {
+        margin-bottom: 20px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 500;
+    }
+
+    .form-group small {
+        color: var(--text-muted);
+        margin-top: 5px;
+        display: block;
+    }
+
+    input[type="range"] {
+        flex: 1;
+        max-width: 300px;
+    }
+
+    select {
+        padding: 8px 12px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+    }
+
+    .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+    }
+
+    .status-dot.online {
+        background: var(--success);
+    }
+
+    .status-dot.offline {
+        background: var(--danger);
+    }
+
+    .btn-small {
+        padding: 6px 12px;
+        font-size: 0.9em;
+    }
+</style>
+
+<script>
+    document.getElementById('config-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = {
+            history_limit: parseInt(document.getElementById('history_limit').value),
+            batch_timeout: parseInt(document.getElementById('batch_timeout').value),
+            active_provider: document.getElementById('active_provider')?.value || null
+        };
+
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            alert('Settings saved!');
+        } else {
+            alert('Failed to save settings');
+        }
+    });
+
+    async function switchCharacter(botName, character) {
+        const response = await fetch('/api/switch_character', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bot_name: botName, character: character })
+        });
+
+        const result = await response.json();
+        if (result.status === 'ok') {
+            alert(`Switched to ${result.character}`);
+            location.reload();
+        } else {
+            alert('Error: ' + (result.message || 'Unknown error'));
+        }
+    }
+</script>
+{% endblock %}
