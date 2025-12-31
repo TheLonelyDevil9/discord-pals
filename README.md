@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="images/banner.jpg" alt="Discord Pals" width="1200">
-</p>
-
 # Discord Pals
 
 Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo.
@@ -11,6 +7,10 @@ Her tool was so easy to make work, it was amazing.
 This is a modified version of Discord Buddy, called Discord Pals, which is a templatized Discord bot that can roleplay as any character loaded from simple markdown files. Supports cloud AI providers (OpenAI-compatible APIs work, DeepSeek, etc.) or your own local LLM.
 
 The system instructions were authored by legendary chef @Geechan.
+
+<p align="center">
+  <img src="images/banner.jpg" alt="Discord Pals" width="1200">
+</p>
 
 ## Features
 
