@@ -181,21 +181,38 @@ def remove_thinking_tags(text: str) -> str:
 
 
 def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
-    """Remove bot persona name prefix from output."""
-    if not character_name:
+    """
+    Remove bot persona name prefix and other LLM artifacts from output.
+    
+    Strips:
+    - [Name]: prefixes (learned from history format)
+    - (replying to X's message: "...") prefixes
+    - CharacterName: prefixes
+    - *CharacterName*: prefixes
+    """
+    if not text:
         return text
     
-    # Remove patterns like "Firefly:" or "Firefly :" at the start
-    patterns = [
-        rf'^{re.escape(character_name)}:\s*',
-        rf'^{re.escape(character_name)}\s*:\s*',
-        rf'^\*{re.escape(character_name)}\*:\s*',
-    ]
+    # Strip [Name]: prefix pattern (any name in brackets at start)
+    text = re.sub(r'^\s*\[[^\]]+\]:\s*', '', text)
     
-    for pattern in patterns:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    # Strip (replying to X's message: "...") pattern at start
+    text = re.sub(r'^\s*\(replying to [^)]+\)\s*', '', text, flags=re.IGNORECASE)
     
-    return text
+    # Strip (RE: ...) or (RE ...) patterns at start
+    text = re.sub(r'^\s*\(RE:?\s+[^)]+\)\s*', '', text, flags=re.IGNORECASE)
+    
+    # Strip character-specific patterns if provided
+    if character_name:
+        patterns = [
+            rf'^{re.escape(character_name)}:\s*',
+            rf'^{re.escape(character_name)}\s*:\s*',
+            rf'^\*{re.escape(character_name)}\*:\s*',
+        ]
+        for pattern in patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    return text.strip()
 
 
 def clean_em_dashes(text: str) -> str:
