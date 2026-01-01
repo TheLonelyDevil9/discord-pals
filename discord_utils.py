@@ -193,14 +193,14 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     if not text:
         return text
     
-    # Strip [Name]: prefix pattern (any name in brackets at start)
-    text = re.sub(r'^\s*\[[^\]]+\]:\s*', '', text)
+    # Strip [Name]: prefix pattern (any name in brackets at start of line)
+    text = re.sub(r'^\s*\[[^\]]+\]:\s*', '', text, flags=re.MULTILINE)
     
-    # Strip (replying to X's message: "...") pattern at start
-    text = re.sub(r'^\s*\(replying to [^)]+\)\s*', '', text, flags=re.IGNORECASE)
+    # Strip (replying to X's message: "...") pattern at start of line
+    text = re.sub(r'^\s*\(replying to [^)]+\)\s*', '', text, flags=re.IGNORECASE | re.MULTILINE)
     
-    # Strip (RE: ...) or (RE ...) patterns at start
-    text = re.sub(r'^\s*\(RE:?\s+[^)]+\)\s*', '', text, flags=re.IGNORECASE)
+    # Strip (RE: ...) or (RE ...) patterns at start of line
+    text = re.sub(r'^\s*\(RE:?\s+[^)]+\)\s*', '', text, flags=re.IGNORECASE | re.MULTILINE)
     
     # Strip character-specific patterns if provided
     if character_name:
