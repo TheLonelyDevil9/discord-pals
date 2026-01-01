@@ -2,22 +2,111 @@
 {% block title %}Characters - Discord Pals{% endblock %}
 
 {% block content %}
+<style>
+    .character-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+        gap: 20px;
+    }
+
+    .character-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        transition: border-color 0.2s;
+    }
+
+    .character-card:hover {
+        border-color: var(--accent);
+    }
+
+    .character-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+
+    .character-name {
+        font-size: 1.3em;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    .character-meta {
+        color: var(--text-muted);
+        font-size: 0.85em;
+    }
+
+    .character-preview {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        max-height: 120px;
+        overflow: hidden;
+        font-size: 0.85em;
+        line-height: 1.5;
+        color: var(--text-muted);
+        position: relative;
+    }
+
+    .character-preview::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 40px;
+        background: linear-gradient(transparent, var(--bg));
+    }
+
+    .character-actions {
+        margin-top: 15px;
+        display: flex;
+        gap: 10px;
+    }
+
+    .new-character-form {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .new-character-form input {
+        flex: 1;
+        max-width: 250px;
+        padding: 10px 14px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        font-size: 0.95em;
+    }
+
+    .new-character-form input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+</style>
+
 <h1 style="margin-bottom: 30px;">Characters</h1>
 
 {% if characters %}
-<div class="grid">
+<div class="character-grid">
     {% for name, data in characters.items() %}
-    <div class="card">
-        <h3 class="card-title">🎭 {{ name }}</h3>
+    <div class="character-card">
+        <div class="character-header">
+            <span class="character-name">🎭 {{ name }}</span>
+            <span class="character-meta">{{ data.size }} chars</span>
+        </div>
 
         {% if data.error %}
         <div class="empty">Error: {{ data.error }}</div>
         {% else %}
-        <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
-            {{ data.size }} characters
-        </p>
-        <pre style="font-size: 0.8em; max-height: 200px;">{{ data.preview }}</pre>
-        <div style="margin-top: 15px;">
+        <div class="character-preview">{{ data.preview }}</div>
+        <div class="character-actions">
             <a href="/characters/{{ name }}/edit" class="btn btn-primary">Edit</a>
         </div>
         {% endif %}
@@ -25,11 +114,10 @@
     {% endfor %}
 </div>
 
-<div class="card" style="margin-top: 20px;">
-    <h3 class="card-title">➕ New Character</h3>
-    <form action="/characters/new" method="post">
-        <input type="text" name="name" placeholder="Character name" required
-            style="width: 200px; padding: 8px; margin-right: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); border-radius: 4px;">
+<div class="card" style="margin-top: 25px;">
+    <h3 style="margin-bottom: 15px;">➕ New Character</h3>
+    <form action="/characters/new" method="post" class="new-character-form">
+        <input type="text" name="name" placeholder="Character name" required>
         <button type="submit" class="btn btn-primary">Create</button>
     </form>
 </div>
