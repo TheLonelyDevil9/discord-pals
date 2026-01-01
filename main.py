@@ -476,6 +476,9 @@ class BotInstance:
                 active_users=active_users
             )
             
+            # Add explicit reply target to help weaker LLMs
+            system_prompt += f"\n\n--- CURRENT REPLY TARGET ---\nYou are replying to: {user_name}\nDo NOT confuse {user_name} with other people in the chat history."
+            
             # Gather ephemeral context about mentioned users (not stored)
             mentioned_context = await self._gather_mentioned_user_context(message, char_name)
             if mentioned_context:
