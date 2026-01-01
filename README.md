@@ -14,23 +14,29 @@ The system instructions were authored by legendary chef @Geechan.
 
 ## Features
 
-- **Any character** - Load characters from markdown files
+- **Any character** - Load characters from markdown files with persona, example dialogue, and special user contexts
 - **Plug-and-play AI providers** - Configure via JSON, no code changes
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
-- **Editable web dashboard** - Web UI (localhost:5000) for editing memories, characters, prompts, and settings
-- **Character hot-swap** - Switch characters with `/switch` command without restart
-- **Diagnose script** - Built-in connectivity checker for troubleshooting
+- **Web dashboard** - Full web UI for managing:
+  - Memories and lore editing
+  - Character files
+  - System prompts with placeholder reference
+  - Runtime config (history limit, batch timeout, provider switching)
+  - Context visualization (see exactly what's sent to LLM)
+  - Autonomous channel monitoring
+- **Character hot-swap** - Switch characters via dashboard or `/switch` command
 - **Multi-bot support** - Run multiple bots from a single terminal/process
-- **Memory system** - Intelligent memory with per-character isolation and cross-server user profiles
-- **Context-aware commands** - Slash commands use chat history and memories for personalized responses
+- **Memory system** - Per-character isolation with cross-server user profiles
+- **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
+- **Message batching** - Collects follow-up messages before responding (configurable timeout)
+- **Context-aware commands** - Slash commands use chat history and memories
 - **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
-- **Smart responses** - Tracks who you're replying to with full message context
+- **Smart responses** - Tracks reply chains with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
-- **History recall** - Recover context after clearing with `/recall` (up to 200 messages in one go)
-- **System prompt editor** - Edit prompts via dashboard with placeholder reference sidebar
-- **Autonomous mode** - Bot randomly joins conversations (configurable with recommended defaults set)
+- **History recall** - Recover context with `/recall` (up to 200 messages)
+- **Autonomous mode** - Bot randomly joins conversations (configurable)
 
 ---
 
