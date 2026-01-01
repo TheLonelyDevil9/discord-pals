@@ -39,6 +39,7 @@ from discord_utils import (
     update_history_on_edit, remove_assistant_from_history, store_multipart_response
 )
 from request_queue import RequestQueue
+from stats import stats_manager
 import logger as log
 
 
@@ -418,6 +419,10 @@ class BotInstance:
             
             add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
             
+            # Track stats
+            channel_name = getattr(message.channel, 'name', 'DM')
+            stats_manager.record_message(user_id, user_name, channel_id, channel_name)
+            
             attachment_content = await process_attachments(message) if attachments else None
             
             emojis = get_guild_emojis(guild) if guild else ""
@@ -492,12 +497,16 @@ class BotInstance:
                 token_estimate = len(system_prompt) // 4 + sum(len(m.get('content', '')) for m in history) // 4
                 runtime_config.store_last_context(self.name, system_prompt, history, token_estimate)
                 
+                # Track response time
+                start_time = time.time()
                 response = await provider_manager.generate(
                     messages=history,
                     system_prompt=system_prompt,
                     temperature=DEFAULT_TEMPERATURE,
                     max_tokens=DEFAULT_MAX_TOKENS
                 )
+                response_time_ms = int((time.time() - start_time) * 1000)
+                stats_manager.record_response(response_time_ms)
             
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)

@@ -31,6 +31,16 @@ def _timestamp():
     return datetime.now().strftime("%H:%M:%S")
 
 
+# In-memory log buffer for dashboard
+_log_buffer = []
+MAX_LOG_BUFFER = 200
+
+
+def get_logs(limit: int = 100) -> list:
+    """Get recent logs for dashboard."""
+    return _log_buffer[-limit:]
+
+
 def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NORMAL):
     """Internal logging function."""
     if level > LOG_LEVEL:
@@ -39,6 +49,18 @@ def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NOR
     ts = f"{Colors.DIM}{_timestamp()}{Colors.END}"
     prefix = f"[{bot_name}] " if bot_name else ""
     print(f"{ts} {color}{icon}{Colors.END} {prefix}{msg}")
+    
+    # Store in buffer for dashboard (without ANSI codes)
+    log_entry = {
+        "time": _timestamp(),
+        "icon": icon,
+        "level": "ok" if icon == "✓" else "warn" if icon == "⚠" else "error" if icon == "✗" else "info",
+        "bot": bot_name,
+        "message": msg
+    }
+    _log_buffer.append(log_entry)
+    if len(_log_buffer) > MAX_LOG_BUFFER:
+        _log_buffer.pop(0)
 
 
 # Public logging functions

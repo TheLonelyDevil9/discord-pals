@@ -254,13 +254,16 @@
     <nav>
         <div class="container">
             <a href="/" class="logo">🤖 Discord Pals</a>
-            <a href="/" {% if request.path=='/' %}class="active"{% endif %}>Dashboard</a>
-            <a href="/memories" {% if request.path=='/memories' %}class="active"{% endif %}>Memories</a>
-            <a href="/characters" {% if request.path=='/characters' %}class="active"{% endif %}>Characters</a>
-            <a href="/prompts" {% if '/prompts' in request.path %}class="active"{% endif %}>Prompts</a>
-            <a href="/config" {% if request.path=='/config' %}class="active"{% endif %}>Config</a>
-            <a href="/context" {% if request.path=='/context' %}class="active"{% endif %}>Context</a>
-            <a href="/settings" {% if request.path=='/settings' %}class="active"{% endif %}>Settings</a>
+            <a href="/" {% if request.path=='/' %}class="active" {% endif %}>Dashboard</a>
+            <a href="/memories" {% if request.path=='/memories' %}class="active" {% endif %}>Memories</a>
+            <a href="/characters" {% if request.path=='/characters' %}class="active" {% endif %}>Characters</a>
+            <a href="/preview" {% if request.path=='/preview' %}class="active" {% endif %}>Preview</a>
+            <a href="/prompts" {% if '/prompts' in request.path %}class="active" {% endif %}>Prompts</a>
+            <a href="/config" {% if request.path=='/config' %}class="active" {% endif %}>Config</a>
+            <a href="/context" {% if request.path=='/context' %}class="active" {% endif %}>Context</a>
+            <a href="/stats" {% if request.path=='/stats' %}class="active" {% endif %}>Stats</a>
+            <a href="/logs" {% if request.path=='/logs' %}class="active" {% endif %}>Logs</a>
+            <a href="/settings" {% if request.path=='/settings' %}class="active" {% endif %}>Settings</a>
         </div>
     </nav>
 

@@ -69,6 +69,8 @@ def dashboard():
 @app.route('/memories')
 def memories():
     """Memories management page."""
+    from stats import stats_manager
+    
     files = get_memory_files()
     memories_data = {}
     
@@ -80,7 +82,8 @@ def memories():
         except Exception as e:
             memories_data[name] = {"error": str(e)}
     
-    return render_template('memories.html', memories=memories_data)
+    user_names = stats_manager.get_all_user_names()
+    return render_template('memories.html', memories=memories_data, user_names=user_names)
 
 
 @app.route('/memories/<name>/delete', methods=['POST'])
@@ -472,6 +475,73 @@ def api_context(bot_name):
     if context:
         return jsonify(context)
     return jsonify({'status': 'no context stored'})
+
+
+# --- Stats ---
+
+@app.route('/stats')
+def stats_page():
+    """Message statistics page."""
+    from stats import stats_manager
+    
+    stats = stats_manager.get_summary()
+    return render_template('stats.html', stats=stats)
+
+
+# --- Character Preview ---
+
+@app.route('/preview')
+def preview_page():
+    """Character preview page."""
+    from character import character_manager
+    
+    characters = character_manager.list_available()
+    return render_template('preview.html', characters=characters)
+
+
+@app.route('/api/preview/<name>')
+def api_preview(name):
+    """Generate preview for a character."""
+    from character import character_manager
+    
+    character = character_manager.load(name)
+    if not character:
+        return jsonify({'error': f'Character "{name}" not found'})
+    
+    # Build prompt with mock values
+    prompt = character_manager.build_system_prompt(
+        character=character,
+        guild_name="Example Server",
+        emojis=":wave: :heart: :fire:",
+        lore="This is example lore text that would be loaded from the server.",
+        memories="User loves cats and hates rainy days.\nUser mentioned they work as a developer.",
+        user_name="ExampleUser",
+        active_users=["Alice", "Bob", "Charlie"]
+    )
+    
+    token_estimate = len(prompt) // 4
+    
+    return jsonify({
+        'character': character.name,
+        'prompt': prompt,
+        'token_estimate': token_estimate
+    })
+
+
+# --- Live Logs ---
+
+@app.route('/logs')
+def logs_page():
+    """Live logs page."""
+    return render_template('logs.html')
+
+
+@app.route('/api/logs')
+def api_logs():
+    """Get recent logs."""
+    import logger
+    logs = logger.get_logs(100)
+    return jsonify(logs)
 
 
 # --- Dashboard Runner ---

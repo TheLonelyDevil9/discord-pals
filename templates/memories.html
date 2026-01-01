@@ -7,17 +7,21 @@
         table-layout: fixed;
         width: 100%;
     }
+
     .memories-table th:first-child,
     .memories-table td:first-child {
         width: 150px;
     }
+
     .memories-table th:last-child,
     .memories-table td:last-child {
         width: 80px;
     }
+
     .memories-table td {
         vertical-align: top;
     }
+
     .memory-content {
         max-height: 150px;
         overflow: auto;
@@ -55,7 +59,12 @@
         <tbody>
             {% for key, value in data.items() %}
             <tr>
-                <td><code>{{ key }}</code></td>
+                <td>
+                    <code>{{ key }}</code>
+                    {% if key in user_names %}
+                    <div style="color: var(--accent); font-size: 0.85em; margin-top: 4px;">{{ user_names[key] }}</div>
+                    {% endif %}
+                </td>
                 <td>
                     {% if value is string %}
                     {{ value[:200] }}{% if value|length > 200 %}...{% endif %}

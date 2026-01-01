@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}Stats - Discord Pals{% endblock %}
+
+{% block content %}
+<style>
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+
+    .stat-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 2.5em;
+        font-weight: 700;
+        color: var(--accent);
+        line-height: 1;
+    }
+
+    .stat-label {
+        color: var(--text-muted);
+        font-size: 0.9em;
+        margin-top: 8px;
+    }
+
+    .table-container {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    .table-container h3 {
+        padding: 15px 20px;
+        margin: 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .stats-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .stats-table th,
+    .stats-table td {
+        padding: 12px 20px;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .stats-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .stats-table th {
+        background: var(--bg);
+        font-weight: 500;
+        color: var(--text-muted);
+    }
+
+    .rank {
+        color: var(--accent);
+        font-weight: 600;
+    }
+
+    .chart-container {
+        margin-bottom: 30px;
+    }
+
+    .chart-bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        height: 150px;
+        padding: 20px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+    }
+
+    .chart-bar {
+        flex: 1;
+        background: var(--accent);
+        border-radius: 4px 4px 0 0;
+        min-height: 4px;
+        position: relative;
+    }
+
+    .chart-bar::after {
+        content: attr(data-label);
+        position: absolute;
+        bottom: -25px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 0.75em;
+        color: var(--text-muted);
+        white-space: nowrap;
+    }
+
+    .chart-bar::before {
+        content: attr(data-value);
+        position: absolute;
+        top: -20px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 0.8em;
+        color: var(--text);
+    }
+
+    .section-title {
+        margin-bottom: 15px;
+        color: var(--text);
+    }
+
+    .meta-info {
+        color: var(--text-muted);
+        font-size: 0.9em;
+        margin-bottom: 20px;
+    }
+</style>
+
+<h1>📊 Message Stats</h1>
+
+{% if stats.created_at %}
+<p class="meta-info">Tracking since: {{ stats.created_at[:10] }}</p>
+{% endif %}
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_messages }}</div>
+        <div class="stat-label">Messages Received</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_responses }}</div>
+        <div class="stat-label">Responses Sent</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ (stats.avg_response_time_ms / 1000) | round(1) }}s</div>
+        <div class="stat-label">Avg Response Time</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.top_users | length }}</div>
+        <div class="stat-label">Active Users</div>
+    </div>
+</div>
+
+{% if stats.recent_days %}
+<div class="chart-container">
+    <h3 class="section-title">Last 7 Days</h3>
+    <div class="chart-bars">
+        {% set max_msgs = stats.recent_days | map(attribute='messages') | max %}
+        {% for day in stats.recent_days %}
+        <div class="chart-bar" style="height: {{ (day.messages / max_msgs * 100) if max_msgs > 0 else 0 }}%;"
+            data-label="{{ day.date[-5:] }}" data-value="{{ day.messages }}">
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <div class="table-container">
+        <h3>🏆 Top Users</h3>
+        <table class="stats-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>User</th>
+                    <th>Messages</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user_id, data in stats.top_users %}
+                <tr>
+                    <td class="rank">{{ loop.index }}</td>
+                    <td>{{ data.name }}</td>
+                    <td>{{ data.messages }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" style="text-align: center; color: var(--text-muted);">No data yet</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="table-container">
+        <h3>📢 Top Channels</h3>
+        <table class="stats-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Channel</th>
+                    <th>Messages</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for channel_id, data in stats.top_channels %}
+                <tr>
+                    <td class="rank">{{ loop.index }}</td>
+                    <td>#{{ data.name }}</td>
+                    <td>{{ data.messages }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" style="text-align: center; color: var(--text-muted);">No data yet</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
