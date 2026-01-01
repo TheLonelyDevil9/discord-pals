@@ -2,6 +2,35 @@
 {% block title %}Memories - Discord Pals{% endblock %}
 
 {% block content %}
+<style>
+    .memories-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .memories-table th:first-child,
+    .memories-table td:first-child {
+        width: 150px;
+    }
+    .memories-table th:last-child,
+    .memories-table td:last-child {
+        width: 80px;
+    }
+    .memories-table td {
+        vertical-align: top;
+    }
+    .memory-content {
+        max-height: 150px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        word-break: break-all;
+        font-size: 0.85em;
+        background: var(--bg);
+        padding: 8px;
+        border-radius: 4px;
+    }
+</style>
+
 <h1 style="margin-bottom: 30px;">Memories</h1>
 
 {% if memories %}
@@ -15,7 +44,7 @@
     {% if data.error %}
     <div class="empty">Error: {{ data.error }}</div>
     {% elif data %}
-    <table>
+    <table class="memories-table">
         <thead>
             <tr>
                 <th>Key / Type</th>
@@ -31,7 +60,7 @@
                     {% if value is string %}
                     {{ value[:200] }}{% if value|length > 200 %}...{% endif %}
                     {% else %}
-                    <pre style="max-height: 150px; overflow: auto;">{{ value | tojson(indent=2) }}</pre>
+                    <pre class="memory-content">{{ value | tojson(indent=2) }}</pre>
                     {% endif %}
                 </td>
                 <td>
