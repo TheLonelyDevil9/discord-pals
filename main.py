@@ -123,6 +123,12 @@ class BotInstance:
             
             # Bot chain prevention - don't respond to bots if we recently responded to a bot
             if is_other_bot:
+                # Global stop for bot-bot interactions
+                import runtime_config
+                if runtime_config.get("bot_interactions_paused", False):
+                    add_to_history(message.channel.id, "user", message.content, author_name=user_name)
+                    return
+                
                 last_bot_response = self._last_bot_response.get(message.channel.id, 0)
                 if time.time() - last_bot_response < 60:  # 60 second cooldown for bot chains
                     add_to_history(message.channel.id, "user", message.content, author_name=user_name)
@@ -826,6 +832,16 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
             else:
                 autonomous_manager.set_channel(interaction.channel_id, False)
                 await interaction.response.send_message("✅ Autonomous mode OFF", ephemeral=True)
+        
+        @self.tree.command(name="stop", description="Stop/resume bot-to-bot conversations globally")
+        async def cmd_stop(interaction: discord.Interaction):
+            import runtime_config
+            current = runtime_config.get("bot_interactions_paused", False)
+            runtime_config.set("bot_interactions_paused", not current)
+            if not current:
+                await interaction.response.send_message("🛑 Bot-to-bot interactions **PAUSED** globally", ephemeral=True)
+            else:
+                await interaction.response.send_message("▶️ Bot-to-bot interactions **RESUMED**", ephemeral=True)
         
         @self.tree.command(name="delete_messages", description="Delete bot's last N messages")
         @app_commands.describe(count="Number of messages to delete (1-20)")

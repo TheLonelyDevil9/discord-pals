@@ -43,6 +43,15 @@
         </div>
         {% endif %}
 
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="bot_interactions_paused" name="bot_interactions_paused" {% if
+                    config.bot_interactions_paused %}checked{% endif %}>
+                Pause Bot-to-Bot Interactions
+            </label>
+            <small>When checked, bots won't respond to each other. Use /stop command to toggle from Discord.</small>
+        </div>
+
         <button type="submit" class="btn btn-primary">Save Settings</button>
     </form>
 </div>
@@ -197,7 +206,8 @@
         const data = {
             history_limit: parseInt(document.getElementById('history_limit').value),
             batch_timeout: parseInt(document.getElementById('batch_timeout').value),
-            active_provider: document.getElementById('active_provider')?.value || null
+            active_provider: document.getElementById('active_provider')?.value || null,
+            bot_interactions_paused: document.getElementById('bot_interactions_paused').checked
         };
 
         const response = await fetch('/api/config', {

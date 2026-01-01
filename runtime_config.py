@@ -12,6 +12,7 @@ DEFAULTS = {
     "history_limit": 50,
     "batch_timeout": 15,
     "active_provider": None,  # None = use first provider
+    "bot_interactions_paused": False,  # Global stop for bot-bot conversations
 }
 
 
