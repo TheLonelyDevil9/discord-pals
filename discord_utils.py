@@ -24,10 +24,25 @@ def get_history(channel_id: int) -> List[dict]:
     return conversation_history.get(channel_id, [])
 
 
+def strip_character_prefix(content: str) -> str:
+    """
+    Strip character name prefixes from messages to prevent identity leakage.
+    Removes patterns like '[CharacterName]: ' or 'CharacterName: ' at the start.
+    """
+    import re
+    # Match [Name]: or Name: at the start of the message
+    content = re.sub(r'^\s*\[[^\]]+\]:\s*', '', content)
+    return content
+
+
 def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None):
     """Add a message to conversation history."""
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
+    
+    # Strip character name prefixes from bot/assistant messages
+    if role == "user" and author_name:
+        content = strip_character_prefix(content)
     
     # Format content with reply context (author, replied_content)
     if reply_to and role == "user":
