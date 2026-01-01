@@ -41,6 +41,12 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     if author_name:
         msg["author"] = author_name
     
+    # Prevent duplicate entries (from multiple bot instances seeing same message)
+    recent_messages = conversation_history[channel_id][-5:] if conversation_history[channel_id] else []
+    for recent in recent_messages:
+        if recent.get("content") == content and recent.get("role") == role:
+            return  # Already added
+    
     conversation_history[channel_id].append(msg)
     
     if len(conversation_history[channel_id]) > MAX_HISTORY_MESSAGES:

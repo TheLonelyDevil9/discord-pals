@@ -43,7 +43,8 @@ class PromptManager:
         memories: str = "",
         special_user_context: str = "",
         user_name: str = "",
-        active_users: str = ""
+        active_users: str = "",
+        example_dialogue: str = ""
     ) -> str:
         """Build system prompt from template with substitutions."""
         
@@ -60,7 +61,8 @@ class PromptManager:
             "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
             "{{SPECIAL_USER_CONTEXT}}": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
             "{{USER_NAME}}": user_name,
-            "{{ACTIVE_USERS}}": active_users
+            "{{ACTIVE_USERS}}": active_users,
+            "{{EXAMPLE_DIALOGUE}}": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else ""
         }
         
         for key, value in replacements.items():
@@ -75,10 +77,11 @@ class PromptManager:
 class Character:
     """Represents a loaded character definition."""
     
-    def __init__(self, name: str, persona: str, special_users: Dict[str, str] = None):
+    def __init__(self, name: str, persona: str, special_users: Dict[str, str] = None, example_dialogue: str = ""):
         self.name = name
         self.persona = persona
         self.special_users = special_users or {}
+        self.example_dialogue = example_dialogue
     
     def get_special_user_context(self, user_name: str) -> str:
         """Get special context for a user if it exists."""
@@ -124,6 +127,7 @@ class CharacterManager:
         # Parse sections
         char_name = name.title()
         persona = ""
+        example_dialogue = ""
         special_users = {}
         
         # Extract character name from title
@@ -135,6 +139,11 @@ class CharacterManager:
         persona_match = re.search(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
         if persona_match:
             persona = persona_match.group(1).strip()
+        
+        # Extract Example Dialogue section
+        dialogue_match = re.search(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
+        if dialogue_match:
+            example_dialogue = dialogue_match.group(1).strip()
         
         # Extract Special Users section
         special_match = re.search(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
@@ -155,7 +164,7 @@ class CharacterManager:
             if current_user:
                 special_users[current_user] = '\n'.join(current_context).strip()
         
-        character = Character(char_name, persona, special_users)
+        character = Character(char_name, persona, special_users, example_dialogue)
         self.characters[name] = character
         return character
     
@@ -218,7 +227,8 @@ class CharacterManager:
             memories=memories,
             special_user_context=special_context,
             user_name=user_name,
-            active_users=active_users_context
+            active_users=active_users_context,
+            example_dialogue=character.example_dialogue
         )
 
 
