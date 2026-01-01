@@ -20,17 +20,20 @@ The system instructions were authored by legendary chef @Geechan.
 - **Provider fallback** - Auto-retry with backup providers if one fails
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
 - **Web dashboard** - Full web UI for managing:
-  - Memories and lore editing
-  - Character files
+  - Memories and lore editing (with user name resolution)
+  - Character files and live preview
   - System prompts with placeholder reference
   - Runtime config (history limit, batch timeout, provider switching)
-  - Context visualization (see exactly what's sent to LLM)
+  - Context visualization with token estimates
+  - Message stats (daily counts, response times, top users)
+  - Live log streaming
   - Autonomous channel monitoring
 - **Character hot-swap** - Switch characters via dashboard or `/switch` command
 - **Multi-bot support** - Run multiple bots from a single terminal/process
 - **Memory system** - Per-character isolation with cross-server user profiles
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Message batching** - Collects follow-up messages before responding (configurable timeout)
+- **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
 - **Context-aware commands** - Slash commands use chat history and memories
 - **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
 - **Smart responses** - Tracks reply chains with full message context
