@@ -21,8 +21,7 @@
 
     <div class="context-section">
         <h3>System Prompt</h3>
-        <pre
-            class="context-box">{{ ctx.system_prompt[:3000] }}{% if ctx.system_prompt|length > 3000 %}... (truncated){% endif %}</pre>
+        <pre class="context-box">{{ ctx.system_prompt }}</pre>
     </div>
 
     <div class="context-section">
