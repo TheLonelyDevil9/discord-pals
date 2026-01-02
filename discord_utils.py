@@ -35,6 +35,66 @@ def strip_character_prefix(content: str) -> str:
     return content
 
 
+def resolve_discord_formatting(content: str, guild=None) -> str:
+    """
+    Convert Discord formatting to readable format for LLMs.
+    
+    Resolves:
+    - <:emoji_name:123> → :emoji_name:
+    - <a:animated:123> → :animated:
+    - <@123456> → @Username (if guild provided)
+    - <@!123456> → @Username (nickname format)
+    - <#123456> → #channel-name (if guild provided)
+    - <@&123456> → @RoleName (if guild provided)
+    - <t:123:R> → readable timestamp
+    """
+    import re
+    from datetime import datetime
+    
+    # Custom emojis: <:name:id> or <a:name:id> → :name:
+    content = re.sub(r'<a?:([a-zA-Z0-9_]+):\d+>', r':\1:', content)
+    
+    # User mentions: <@123> or <@!123> → @Username
+    if guild:
+        def resolve_user_mention(match):
+            user_id = int(match.group(1))
+            member = guild.get_member(user_id)
+            if member:
+                return f"@{member.display_name}"
+            return match.group(0)  # Keep original if not found
+        content = re.sub(r'<@!?(\d+)>', resolve_user_mention, content)
+        
+        # Channel mentions: <#123> → #channel-name
+        def resolve_channel_mention(match):
+            channel_id = int(match.group(1))
+            channel = guild.get_channel(channel_id)
+            if channel:
+                return f"#{channel.name}"
+            return match.group(0)
+        content = re.sub(r'<#(\d+)>', resolve_channel_mention, content)
+        
+        # Role mentions: <@&123> → @RoleName
+        def resolve_role_mention(match):
+            role_id = int(match.group(1))
+            role = guild.get_role(role_id)
+            if role:
+                return f"@{role.name}"
+            return match.group(0)
+        content = re.sub(r'<@&(\d+)>', resolve_role_mention, content)
+    
+    # Timestamps: <t:123:R> → readable date
+    def resolve_timestamp(match):
+        try:
+            timestamp = int(match.group(1))
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except:
+            return match.group(0)
+    content = re.sub(r'<t:(\d+)(?::[tTdDfFR])?>', resolve_timestamp, content)
+    
+    return content
+
+
 def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None):
     """Add a message to conversation history."""
     if channel_id not in conversation_history:

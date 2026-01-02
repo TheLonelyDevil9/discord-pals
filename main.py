@@ -36,7 +36,8 @@ from discord_utils import (
     process_attachments, autonomous_manager, get_active_users,
     get_reply_context, get_user_display_name, get_sticker_info,
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes,
-    update_history_on_edit, remove_assistant_from_history, store_multipart_response
+    update_history_on_edit, remove_assistant_from_history, store_multipart_response,
+    resolve_discord_formatting
 )
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -174,16 +175,15 @@ class BotInstance:
                         # Replace THIS bot's mention with its name
                         bot_name = guild.me.display_name if guild else self.client.user.display_name
                         content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
-                        
-                        # For autonomous responses, resolve OTHER mentions so bot sees the full context
-                        # e.g., "Hey <@12345>" becomes "Hey @Fly" so Nahida knows Fly was mentioned
-                        if is_autonomous and message.mentions:
-                            for mentioned_user in message.mentions:
-                                if mentioned_user != self.client.user:
-                                    display_name = get_user_display_name(mentioned_user)
-                                    content = content.replace(f'<@{mentioned_user.id}>', f'@{display_name}')
-                                    content = content.replace(f'<@!{mentioned_user.id}>', f'@{display_name}')
-                            # Prefix to indicate this is autonomous (not directly addressed)
+                    
+                    # Resolve all Discord formatting (emojis, mentions, channels, timestamps)
+                    content = resolve_discord_formatting(content, guild)
+                    
+                    # For autonomous responses, prefix to indicate bot is chiming in
+                    if is_autonomous and message.mentions:
+                        # Check if someone ELSE was mentioned (not this bot)
+                        other_mentions = [m for m in message.mentions if m != self.client.user]
+                        if other_mentions:
                             content = f"[Someone else was mentioned, you're chiming in] {content}"
                     
                     if not content and not message.attachments:
