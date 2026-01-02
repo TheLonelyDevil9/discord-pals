@@ -665,28 +665,39 @@ def api_preview(name):
     """Generate preview for a character."""
     from character import character_manager
     
-    character = character_manager.load(name)
-    if not character:
-        return jsonify({'error': f'Character "{name}" not found'})
-    
-    # Build prompt with mock values
-    prompt = character_manager.build_system_prompt(
-        character=character,
-        guild_name="Example Server",
-        emojis=":wave: :heart: :fire:",
-        lore="This is example lore text that would be loaded from the server.",
-        memories="User loves cats and hates rainy days.\nUser mentioned they work as a developer.",
-        user_name="ExampleUser",
-        active_users=["Alice", "Bob", "Charlie"]
-    )
-    
-    token_estimate = len(prompt) // 4
-    
-    return jsonify({
-        'character': character.name,
-        'prompt': prompt,
-        'token_estimate': token_estimate
-    })
+    try:
+        character = character_manager.load(name)
+        if not character:
+            return jsonify({'error': f'Character "{name}" not found'})
+        
+        # Build system prompt (character section only)
+        system_prompt = character_manager.build_system_prompt(
+            character=character,
+            user_name="ExampleUser"
+        )
+        
+        # Build chatroom context with mock values
+        chatroom_context = character_manager.build_chatroom_context(
+            guild_name="Example Server",
+            emojis=":wave: :heart: :fire:",
+            lore="This is example lore text that would be loaded from the server.",
+            memories="User loves cats and hates rainy days.\nUser mentioned they work as a developer.",
+            user_name="ExampleUser",
+            active_users=["Alice", "Bob", "Charlie"]
+        )
+        
+        # Combine both sections for full preview
+        full_prompt = f"{system_prompt}\n\n---\n\n{chatroom_context}"
+        
+        token_estimate = len(full_prompt) // 4
+        
+        return jsonify({
+            'character': character.name,
+            'prompt': full_prompt,
+            'token_estimate': token_estimate
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 
 # --- Test Provider ---
