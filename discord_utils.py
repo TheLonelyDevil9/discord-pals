@@ -123,11 +123,15 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
-def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5) -> Tuple[List[dict], List[dict]]:
+def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5, 
+                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
     """
     Split history into two parts for the new context structure:
     - history: older messages (background context)
     - immediate: recent messages (placed after chatroom context for focused response)
+    
+    If current_bot_name is provided, other bots' messages will be tagged with their name
+    (like user messages) to prevent personality bleed.
     
     Returns: (history_messages, immediate_messages)
     """
@@ -141,7 +145,16 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
         author = msg.get("author")
         
         if role == "user" and author:
+            # User messages get [Author]: prefix
             content = f"[{author}]: {content}"
+        elif role == "assistant" and author:
+            # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
+            if current_bot_name and author.lower() != current_bot_name.lower():
+                # Different bot - treat as "user" role with name prefix to prevent personality bleed
+                # This makes the LLM see it as another person's speech, not an example to follow
+                role = "user"
+                content = f"[{author}]: {content}"
+            # If same bot or no current_bot_name specified, keep as assistant (no prefix)
         
         formatted.append({"role": role, "content": content})
     

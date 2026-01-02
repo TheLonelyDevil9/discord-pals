@@ -483,10 +483,12 @@ class BotInstance:
             immediate_count = runtime_config.get('immediate_message_count', 5)
             
             # SECTION 2 & 4: Split history into older context and immediate messages
+            # Pass current bot name so other bots' messages are tagged to prevent personality bleed
             history, immediate = format_history_split(
                 channel_id, 
                 total_limit=total_limit,
-                immediate_count=immediate_count
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
             )
             
             # SECTION 3: Chatroom Context (injected between history and immediate)
@@ -547,7 +549,7 @@ class BotInstance:
             # Update mood based on response sentiment
             self._update_mood(channel_id, content, response)
             
-            add_to_history(channel_id, "assistant", response)
+            add_to_history(channel_id, "assistant", response, author_name=self.character.name)
             
             sent_messages = await self._send_organic_response(message, response)
             
@@ -703,7 +705,7 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
                 response = convert_emojis_in_text(response, after.guild)
             
             await after.reply(response)
-            add_to_history(after.channel.id, "assistant", response)
+            add_to_history(after.channel.id, "assistant", response, author_name=self.character.name)
             
         except Exception as e:
             log.debug(f"Edit response failed: {e}", self.name)
