@@ -25,6 +25,8 @@ This is a conversational chatroom on Discord between multiple users, including {
 
 ## {{CHARACTER_NAME}}'s Character
 
+Use the information below as a reference point on how {{CHARACTER_NAME}} should act in the chatroom:
+
 {{PERSONA}}
 
 {{EXAMPLE_DIALOGUE}}
