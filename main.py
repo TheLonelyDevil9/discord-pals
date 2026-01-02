@@ -31,7 +31,7 @@ from providers import provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir
 from discord_utils import (
-    get_history, add_to_history, clear_history, format_history_for_ai,
+    get_history, add_to_history, clear_history, format_history_for_ai, format_history_split,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_reply_context, get_user_display_name, get_sticker_info,
@@ -465,51 +465,64 @@ class BotInstance:
             # Get active users for social awareness
             active_users = get_active_users(channel_id) if not is_dm else []
             
-            # Build system prompt from templates
+            # Gather ephemeral context about mentioned users (not stored)
+            mentioned_context = await self._gather_mentioned_user_context(message, char_name)
+            
+            # === BUILD 4-SECTION CONTEXT STRUCTURE ===
+            
+            # SECTION 1: Character Section (system prompt)
+            # Contains: Guidelines, Character Persona, Example Dialogue, Special User Context
             system_prompt = character_manager.build_system_prompt(
                 character=self.character,
+                user_name=user_name
+            )
+            
+            # Get runtime config for context limits
+            import runtime_config
+            total_limit = runtime_config.get('history_limit', 200)
+            immediate_count = runtime_config.get('immediate_message_count', 5)
+            
+            # SECTION 2 & 4: Split history into older context and immediate messages
+            history, immediate = format_history_split(
+                channel_id, 
+                total_limit=total_limit,
+                immediate_count=immediate_count
+            )
+            
+            # SECTION 3: Chatroom Context (injected between history and immediate)
+            # Contains: Lore, Memories, Emojis, Active Users, Reply Target, Mentioned Context
+            chatroom_context = character_manager.build_chatroom_context(
                 guild_name=guild.name if guild else "DM",
                 emojis=emojis,
                 lore=lore,
                 memories=memories,
                 user_name=user_name,
-                active_users=active_users
+                active_users=active_users,
+                mentioned_context=mentioned_context
             )
             
-            # Add explicit reply target to help weaker LLMs
-            system_prompt += f"\n\n--- CURRENT REPLY TARGET ---\nYou are replying to: {user_name}\nDo NOT confuse {user_name} with other people in the chat history."
+            # Handle attachment content in the last immediate message
+            if attachment_content and immediate:
+                immediate[-1]["content"] = attachment_content
             
-            # Gather ephemeral context about mentioned users (not stored)
-            mentioned_context = await self._gather_mentioned_user_context(message, char_name)
-            if mentioned_context:
-                system_prompt += f"\n\n--- Context about mentioned users ---\n{mentioned_context}"
-            
-            # Dynamic context limit: reduce chat history when user has more memories
-            # This prioritizes "what we remember about you" over "what you just said"
-            user_memory_count = len(user_memories.split('\n')) if user_memories else 0
-            if user_memory_count >= 10:
-                history_limit = 10  # Lots of memories = minimal recent context needed
-            elif user_memory_count >= 5:
-                history_limit = 20
-            else:
-                history_limit = 50  # New user = more recent context
-            
-            history = format_history_for_ai(channel_id, limit=history_limit)
-            
-            if attachment_content:
-                history[-1]["content"] = attachment_content
+            # Build the complete message list for the API
+            # Order: [system] + [history] + [chatroom context as system] + [immediate]
+            messages_for_api = []
+            messages_for_api.extend(history)
+            if chatroom_context:
+                messages_for_api.append({"role": "system", "content": chatroom_context})
+            messages_for_api.extend(immediate)
             
             # Show typing indicator while generating
             async with message.channel.typing():
                 # Store context for dashboard visualization
-                import runtime_config
-                token_estimate = len(system_prompt) // 4 + sum(len(m.get('content', '')) for m in history) // 4
-                runtime_config.store_last_context(self.name, system_prompt, history, token_estimate)
+                token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(len(m.get('content', '')) for m in messages_for_api) // 4
+                runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
                 
                 # Track response time
                 start_time = time.time()
                 response = await provider_manager.generate(
-                    messages=history,
+                    messages=messages_for_api,
                     system_prompt=system_prompt,
                     temperature=DEFAULT_TEMPERATURE,
                     max_tokens=DEFAULT_MAX_TOKENS

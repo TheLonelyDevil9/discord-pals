@@ -123,6 +123,39 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
+def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5) -> Tuple[List[dict], List[dict]]:
+    """
+    Split history into two parts for the new context structure:
+    - history: older messages (background context)
+    - immediate: recent messages (placed after chatroom context for focused response)
+    
+    Returns: (history_messages, immediate_messages)
+    """
+    all_history = get_history(channel_id)[-total_limit:]  # Apply total limit
+    
+    # Format all messages
+    formatted = []
+    for msg in all_history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        author = msg.get("author")
+        
+        if role == "user" and author:
+            content = f"[{author}]: {content}"
+        
+        formatted.append({"role": role, "content": content})
+    
+    # Split into history and immediate
+    if len(formatted) <= immediate_count:
+        # Not enough messages - everything goes to immediate
+        return [], formatted
+    
+    history = formatted[:-immediate_count]
+    immediate = formatted[-immediate_count:]
+    
+    return history, immediate
+
+
 def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
     """Get list of unique users who have participated recently."""
     history = get_history(channel_id)[-limit:]

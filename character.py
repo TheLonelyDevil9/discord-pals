@@ -17,17 +17,24 @@ class PromptManager:
     
     def __init__(self):
         self.system_template = ""
+        self.chatroom_context_template = ""
         self._load_templates()
     
     def _load_templates(self):
         """Load prompt templates from files."""
         prompts_path = os.path.join(os.path.dirname(__file__), PROMPTS_DIR)
         
-        # Load system template (now contains everything)
+        # Load system template (character section only)
         system_path = os.path.join(prompts_path, "system.md")
         if os.path.exists(system_path):
             with open(system_path, 'r', encoding='utf-8') as f:
                 self.system_template = f.read()
+        
+        # Load chatroom context template (injected between history and immediate)
+        context_path = os.path.join(prompts_path, "chatroom_context.md")
+        if os.path.exists(context_path):
+            with open(context_path, 'r', encoding='utf-8') as f:
+                self.chatroom_context_template = f.read()
     
     def reload(self):
         """Reload templates from disk."""
@@ -37,31 +44,19 @@ class PromptManager:
         self,
         character_name: str,
         persona: str,
-        guild_name: str = "DM",
-        emojis: str = "",
-        lore: str = "",
-        memories: str = "",
         special_user_context: str = "",
-        user_name: str = "",
-        active_users: str = "",
         example_dialogue: str = ""
     ) -> str:
-        """Build system prompt from template with substitutions."""
+        """Build system prompt (character section) from template."""
         
         # Start with template
         prompt = self.system_template
         
-        # Make substitutions
+        # Make substitutions (character section only)
         replacements = {
             "{{CHARACTER_NAME}}": character_name,
             "{{PERSONA}}": persona,
-            "{{GUILD_NAME}}": guild_name,
-            "{{EMOJIS}}": f"Available server emojis (use :emoji_name: format):\n{emojis}" if emojis else "",
-            "{{LORE}}": f"<lore>\n{lore}\n</lore>" if lore else "",
-            "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
             "{{SPECIAL_USER_CONTEXT}}": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
-            "{{USER_NAME}}": user_name,
-            "{{ACTIVE_USERS}}": active_users,
             "{{EXAMPLE_DIALOGUE}}": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else ""
         }
         
@@ -72,6 +67,40 @@ class PromptManager:
         prompt = re.sub(r'\n{3,}', '\n\n', prompt)
         
         return prompt.strip()
+    
+    def build_chatroom_context(
+        self,
+        guild_name: str = "DM",
+        emojis: str = "",
+        lore: str = "",
+        memories: str = "",
+        user_name: str = "",
+        active_users: str = "",
+        mentioned_context: str = ""
+    ) -> str:
+        """Build chatroom context (injected between history and immediate messages)."""
+        
+        # Start with template
+        context = self.chatroom_context_template
+        
+        # Make substitutions
+        replacements = {
+            "{{GUILD_NAME}}": guild_name,
+            "{{EMOJIS}}": f"Available server emojis (use :emoji_name: format):\n{emojis}" if emojis else "",
+            "{{LORE}}": f"<lore>\n{lore}\n</lore>" if lore else "",
+            "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
+            "{{USER_NAME}}": user_name,
+            "{{ACTIVE_USERS}}": active_users,
+            "{{MENTIONED_CONTEXT}}": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else ""
+        }
+        
+        for key, value in replacements.items():
+            context = context.replace(key, value)
+        
+        # Clean up empty lines from unused placeholders
+        context = re.sub(r'\n{3,}', '\n\n', context)
+        
+        return context.strip()
 
 
 class Character:
@@ -201,15 +230,29 @@ class CharacterManager:
     def build_system_prompt(
         self,
         character: Character,
+        user_name: str = ""
+    ) -> str:
+        """Build system prompt (character section only)."""
+        special_context = character.get_special_user_context(user_name)
+        
+        return self.prompt_manager.build_prompt(
+            character_name=character.name,
+            persona=character.persona,
+            special_user_context=special_context,
+            example_dialogue=character.example_dialogue
+        )
+    
+    def build_chatroom_context(
+        self,
         guild_name: str = "DM",
         emojis: str = "",
         lore: str = "",
         memories: str = "",
         user_name: str = "",
-        active_users: list = None
+        active_users: list = None,
+        mentioned_context: str = ""
     ) -> str:
-        """Build complete system prompt for a character."""
-        special_context = character.get_special_user_context(user_name)
+        """Build chatroom context (injected between history and immediate)."""
         
         # Add active users for social awareness
         active_users_context = ""
@@ -218,17 +261,14 @@ class CharacterManager:
             if others:
                 active_users_context = f"Other active participants: {', '.join(others)}"
         
-        return self.prompt_manager.build_prompt(
-            character_name=character.name,
-            persona=character.persona,
+        return self.prompt_manager.build_chatroom_context(
             guild_name=guild_name,
             emojis=emojis,
             lore=lore,
             memories=memories,
-            special_user_context=special_context,
             user_name=user_name,
             active_users=active_users_context,
-            example_dialogue=character.example_dialogue
+            mentioned_context=mentioned_context
         )
 
 

@@ -9,14 +9,25 @@
     <h2>Settings</h2>
     <form id="config-form">
         <div class="form-group">
-            <label for="history_limit">History Limit (messages sent to LLM)</label>
+            <label for="history_limit">Total History Limit (messages sent to LLM)</label>
             <div style="display: flex; align-items: center; gap: 10px;">
                 <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
                     value="{{ config.history_limit }}"
                     oninput="document.getElementById('history_val').textContent = this.value">
                 <span id="history_val" style="min-width: 40px;">{{ config.history_limit }}</span>
             </div>
-            <small>Current: {{ config.history_limit }} messages</small>
+            <small>Current: {{ config.history_limit }} messages (includes history + immediate)</small>
+        </div>
+
+        <div class="form-group">
+            <label for="immediate_message_count">Immediate Messages (priority focus)</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20" step="1"
+                    value="{{ config.immediate_message_count or 5 }}"
+                    oninput="document.getElementById('immediate_val').textContent = this.value">
+                <span id="immediate_val" style="min-width: 40px;">{{ config.immediate_message_count or 5 }}</span>
+            </div>
+            <small>Last N messages placed after chatroom context for maximum LLM attention</small>
         </div>
 
         <div class="form-group">
@@ -205,6 +216,7 @@
         e.preventDefault();
         const data = {
             history_limit: parseInt(document.getElementById('history_limit').value),
+            immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
             batch_timeout: parseInt(document.getElementById('batch_timeout').value),
             active_provider: document.getElementById('active_provider')?.value || null,
             bot_interactions_paused: document.getElementById('bot_interactions_paused').checked
