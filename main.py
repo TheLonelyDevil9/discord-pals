@@ -37,7 +37,7 @@ from discord_utils import (
     get_reply_context, get_user_display_name, get_sticker_info,
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
-    resolve_discord_formatting
+    resolve_discord_formatting, save_history, load_history
 )
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -81,7 +81,7 @@ class BotInstance:
         @self.client.event
         async def on_ready():
             ensure_data_dir()
-            
+            load_history()  # Restore history from previous session
             # Load character
             self.character = character_manager.load(self.character_name)
             if self.character:
@@ -615,57 +615,30 @@ class BotInstance:
         new_mood *= 0.95
         self._channel_mood[channel_id] = new_mood
     
-    async def _delayed_followup(self, message: discord.Message, user_name: str, guild: discord.Guild):
-        """Feature 13: Occasionally send a delayed follow-up."""
-        await asyncio.sleep(random.uniform(15, 45))
-        
-        followups = [
-            f"Oh, {user_name}, one more thing...",
-            f"Wait, {user_name}—",
-            f"Actually, {user_name}...",
-            "Oh! I just remembered—",
-            "Hmm, also..."
-        ]
-        
-        try:
-            # Generate a small follow-up using AI
-            followup_prompt = f"Generate a very brief (1 sentence) follow-up thought related to the conversation. Start with one of these: {', '.join(followups[:3])}"
-            
-            response = await provider_manager.generate(
-                messages=[{"role": "user", "content": f"[Context: You just finished talking to {user_name}. Add a brief afterthought.]"}],
-                system_prompt=f"You are {self.character.name}. Send a very brief follow-up (10 words max).",
-                temperature=1.0,
-                max_tokens=50
-            )
-            
-            if response and len(response) < 200:
-                await message.channel.send(response)
-        except:
-            pass  # Silently fail - this is optional
-    
     async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
-        # Quick pre-filter: skip very short messages
-        if len(last_message) < 20:
+        # Quick pre-filter: skip very short messages (reduced from 20 to 10)
+        if len(last_message) < 10:
             return
         
-        # Cooldown: don't check for memories too frequently (once per 3 messages min)
+        # Cooldown: don't check for memories too frequently
         history = get_history(channel_id)
-        if len(history) < 3:
+        if len(history) < 2:  # Reduced from 3 to 2
             return
         
-        # Check if we recently saved a memory (within last 5 messages)
+        # Check if we recently analyzed for memories (every 2 messages instead of 3)
         last_memory_check = getattr(self, '_last_memory_check', {})
         msg_count = len(history)
         last_checked = last_memory_check.get(channel_id, 0)
-        if msg_count - last_checked < 3:
+        if msg_count - last_checked < 2:  # Reduced from 3 to 2
             return
         last_memory_check[channel_id] = msg_count
         self._last_memory_check = last_memory_check
         
         char_name = self.character.name if self.character else "the character"
+        # Send more context to LLM (last 10 messages instead of 5)
         await memory_manager.generate_memory(
-            provider_manager, history[-5:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
+            provider_manager, history[-10:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
         )
     
     async def _maybe_respond_to_edit(self, before: discord.Message, after: discord.Message, user_name: str):
@@ -1194,6 +1167,8 @@ async def run_bots():
         await asyncio.gather(*[bot.start() for bot in instances])
     except KeyboardInterrupt:
         log.info("Shutting down...")
+        save_history()  # Persist conversation history
+        memory_manager.save_all()  # Persist memories
         for bot in instances:
             await bot.close()
 

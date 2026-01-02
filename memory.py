@@ -420,26 +420,27 @@ class MemoryManager:
             for m in messages[-20:]
         ])
         
-        prompt = f"""Analyze this conversation and determine if there's anything TRULY SIGNIFICANT that {character_name} should remember long-term.
+        prompt = f"""Analyze this conversation and extract anything worth remembering about the user(s).
 
-ONLY save memories about:
-- Personal facts revealed (name, job, relationships, preferences, life events)
-- Emotional breakthroughs or deep bonding moments
-- Explicit promises, commitments, or agreements
-- Conflicts, disagreements, or resolutions
-- Shared secrets or confidential information
+SAVE memories about:
+- Personal facts (name, job, hobbies, pets, relationships, location)
+- Preferences and opinions (likes, dislikes, favorites)
+- Life events or experiences mentioned
+- Emotional moments or bonding
+- Quirks, habits, or recurring behaviors
+- Promises, plans, or commitments
 
-DO NOT save memories about:
-- Casual greetings or small talk
-- Generic questions and answers
-- Temporary moods or passing comments
-- Things already covered in previous memories
+SKIP if the conversation is only:
+- Generic greetings ("hi", "how are you")
+- Very short exchanges with no substance
+- Pure roleplay actions with no personal info
 
-If nothing truly significant happened, respond with just "NOTHING".
-If significant, write a concise memory (1 sentence max) in third person about the USER, not {character_name}.
+If nothing memorable, respond with just "NOTHING".
+Otherwise, write ONE concise sentence about the USER (not {character_name}).
 
-Example good memory: "User revealed they work as a software engineer and have a cat named Mochi"
-Example bad memory: "User said hello and asked about the weather"
+Example: "User works as a nurse and has two cats named Luna and Mochi"
+Example: "User mentioned they love cooking Italian food"
+Example: "User gets anxious about job interviews"
 
 Conversation:
 {context}
