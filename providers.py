@@ -191,8 +191,8 @@ class AIProviderManager:
         self,
         messages: List[dict],
         system_prompt: str,
-        temperature: float = 1.0,
-        max_tokens: int = 2000,
+        temperature: float = None,
+        max_tokens: int = None,
         use_single_user: bool = True  # SillyTavern-style by default
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
@@ -200,8 +200,8 @@ class AIProviderManager:
         Args:
             messages: Conversation messages
             system_prompt: System prompt / character definition
-            temperature: Response randomness (0-2)
-            max_tokens: Max response length
+            temperature: Response randomness (0-2). If None, uses per-provider config.
+            max_tokens: Max response length. If None, uses per-provider config.
             use_single_user: If True (default), format as single user message
                              like SillyTavern's "Single user message (no tools)"
         """
@@ -224,11 +224,19 @@ class AIProviderManager:
                 
                 model = PROVIDERS[tier]["model"]
                 extra_body = PROVIDERS[tier].get("extra_body", {})
+                
+                # Use per-provider settings, with fallback to function args or defaults
+                provider_max_tokens = PROVIDERS[tier].get("max_tokens", 8192)
+                provider_temperature = PROVIDERS[tier].get("temperature", 1.0)
+                
+                # Allow function args to override provider config
+                effective_max_tokens = max_tokens if max_tokens is not None else provider_max_tokens
+                effective_temperature = temperature if temperature is not None else provider_temperature
                     
                 try:
                     client = self.providers[tier]
                     result = await self._try_generate(
-                        client, model, full_messages, temperature, max_tokens, tier,
+                        client, model, full_messages, effective_temperature, effective_max_tokens, tier,
                         extra_body=extra_body if extra_body else None
                     )
                     

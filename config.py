@@ -13,6 +13,10 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 
+# AI Settings (defined before load_providers so they can be used as defaults)
+DEFAULT_TEMPERATURE = 1.0
+DEFAULT_MAX_TOKENS = 8192
+
 # --- Provider Configuration ---
 
 def load_providers() -> tuple[dict, int]:
@@ -63,6 +67,8 @@ def load_providers() -> tuple[dict, int]:
                 "url": p.get("url"),
                 "key": key,
                 "model": p.get("model", "gpt-4o"),
+                "max_tokens": p.get("max_tokens", DEFAULT_MAX_TOKENS),  # Per-provider max tokens
+                "temperature": p.get("temperature", DEFAULT_TEMPERATURE),  # Per-provider temperature
                 "extra_body": p.get("extra_body", {})  # Custom request body options
             }
         
@@ -87,10 +93,6 @@ def load_providers() -> tuple[dict, int]:
 
 
 PROVIDERS, API_TIMEOUT = load_providers()
-
-# AI Settings
-DEFAULT_TEMPERATURE = 1.0
-DEFAULT_MAX_TOKENS = 8192
 
 # Character Settings
 CHARACTERS_DIR = "characters"
