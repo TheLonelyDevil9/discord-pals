@@ -82,6 +82,9 @@ class AIProviderManager:
                 # Add extra_body if provided (for provider-specific options)
                 if extra_body:
                     request_kwargs["extra_body"] = extra_body
+                    log.debug(f"[{tier}] Using extra_body: {extra_body}")
+                
+                log.debug(f"[{tier}] Requesting {model} with {len(messages)} messages, max_tokens={max_tokens}")
                 
                 response = await asyncio.wait_for(
                     client.chat.completions.create(**request_kwargs),
@@ -90,11 +93,20 @@ class AIProviderManager:
                 
                 # Check for valid response
                 if response and response.choices and len(response.choices) > 0:
-                    content = response.choices[0].message.content
+                    choice = response.choices[0]
+                    content = choice.message.content
+                    
                     if not content or content.strip() == "":
-                        log.warn(f"[{tier}] Empty content received from {model}")
-                        log.warn(f"[{tier}] Response object: finish_reason={response.choices[0].finish_reason}")
+                        # Detailed logging for empty responses
+                        log.warn(f"[{tier}] Empty content from {model}")
+                        log.warn(f"[{tier}] finish_reason={choice.finish_reason}")
+                        if hasattr(choice.message, 'refusal') and choice.message.refusal:
+                            log.warn(f"[{tier}] Refusal: {choice.message.refusal}")
+                        if extra_body:
+                            log.warn(f"[{tier}] extra_body was: {extra_body}")
                         return "..."
+                    
+                    log.ok(f"[{tier}] Got {len(content)} chars from {model}")
                     return content
                 else:
                     log.warn(f"[{tier}] No choices in response from {model}")

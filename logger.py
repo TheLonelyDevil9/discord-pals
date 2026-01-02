@@ -11,8 +11,9 @@ QUIET = 0   # Only errors
 NORMAL = 1  # Errors + important events
 VERBOSE = 2 # Everything
 
-# Set this to control verbosity (QUIET=errors only, NORMAL=+events, VERBOSE=+debug)
-LOG_LEVEL = QUIET
+# Set this to control terminal verbosity (QUIET=errors only, NORMAL=+events, VERBOSE=+debug)
+# NOTE: Dashboard always receives all logs regardless of this setting
+LOG_LEVEL = NORMAL
 
 
 class Colors:
@@ -43,16 +44,11 @@ def get_logs(limit: int = 100) -> list:
 
 def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NORMAL):
     """Internal logging function."""
-    if level > LOG_LEVEL:
-        return
+    ts_str = _timestamp()
     
-    ts = f"{Colors.DIM}{_timestamp()}{Colors.END}"
-    prefix = f"[{bot_name}] " if bot_name else ""
-    print(f"{ts} {color}{icon}{Colors.END} {prefix}{msg}")
-    
-    # Store in buffer for dashboard (without ANSI codes)
+    # Always add to buffer for dashboard (regardless of LOG_LEVEL)
     log_entry = {
-        "time": _timestamp(),
+        "time": ts_str,
         "icon": icon,
         "level": "ok" if icon == "✓" else "warn" if icon == "⚠" else "error" if icon == "✗" else "info",
         "bot": bot_name,
@@ -61,6 +57,12 @@ def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NOR
     _log_buffer.append(log_entry)
     if len(_log_buffer) > MAX_LOG_BUFFER:
         _log_buffer.pop(0)
+    
+    # Only print to terminal if level allows
+    if level <= LOG_LEVEL:
+        ts = f"{Colors.DIM}{ts_str}{Colors.END}"
+        prefix = f"[{bot_name}] " if bot_name else ""
+        print(f"{ts} {color}{icon}{Colors.END} {prefix}{msg}")
 
 
 # Public logging functions

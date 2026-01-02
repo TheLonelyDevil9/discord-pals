@@ -283,7 +283,9 @@ def settings():
     return render_template('settings.html',
         providers_raw=providers_raw,
         bots_raw=bots_raw,
-        autonomous_raw=autonomous_raw
+        autonomous_raw=autonomous_raw,
+        message=request.args.get('message'),
+        error=request.args.get('error')
     )
 
 
@@ -295,9 +297,15 @@ def save_providers():
         json.loads(content)  # Validate JSON
         with open('providers.json', 'w') as f:
             f.write(content)
-    except:
-        pass
-    return redirect(url_for('settings'))
+        return redirect(url_for('settings', message='Providers saved successfully'))
+    except json.JSONDecodeError as e:
+        import logger as log
+        log.error(f"Failed to save providers.json: Invalid JSON - {e}")
+        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+    except Exception as e:
+        import logger as log
+        log.error(f"Failed to save providers.json: {e}")
+        return redirect(url_for('settings', error=f'Save failed: {e}'))
 
 
 @app.route('/settings/bots/save', methods=['POST'])
@@ -308,9 +316,15 @@ def save_bots():
         json.loads(content)  # Validate JSON
         with open('bots.json', 'w') as f:
             f.write(content)
-    except:
-        pass
-    return redirect(url_for('settings'))
+        return redirect(url_for('settings', message='Bots config saved successfully'))
+    except json.JSONDecodeError as e:
+        import logger as log
+        log.error(f"Failed to save bots.json: Invalid JSON - {e}")
+        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+    except Exception as e:
+        import logger as log
+        log.error(f"Failed to save bots.json: {e}")
+        return redirect(url_for('settings', error=f'Save failed: {e}'))
 
 
 @app.route('/settings/autonomous/save', methods=['POST'])
@@ -322,9 +336,15 @@ def save_autonomous():
         DATA_DIR.mkdir(exist_ok=True)
         with open(DATA_DIR / 'autonomous.json', 'w') as f:
             f.write(content)
-    except:
-        pass
-    return redirect(url_for('settings'))
+        return redirect(url_for('settings', message='Autonomous config saved successfully'))
+    except json.JSONDecodeError as e:
+        import logger as log
+        log.error(f"Failed to save autonomous.json: Invalid JSON - {e}")
+        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+    except Exception as e:
+        import logger as log
+        log.error(f"Failed to save autonomous.json: {e}")
+        return redirect(url_for('settings', error=f'Save failed: {e}'))
 
 
 # --- Prompts ---

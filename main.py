@@ -1004,6 +1004,10 @@ interactions. Include a rough affection percentage (0-100%) if it fits your char
                 max_tokens=400
             )
             
+            if not response:
+                await interaction.followup.send("*couldn't think of a response...*")
+                return
+            
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)
             
@@ -1081,6 +1085,10 @@ Respond naturally based on your relationship with {user_name}. Consider the hist
             system_prompt=system_prompt,
             max_tokens=300
         )
+        
+        if not response:
+            await interaction.followup.send("*no response*")
+            return
         
         response = remove_thinking_tags(response)
         response = clean_bot_name_prefix(response, self.character.name)

@@ -30,6 +30,12 @@
 </div>
 {% endif %}
 
+{% if error %}
+<div class="card" style="background: var(--danger); margin-bottom: 20px;">
+    <p style="margin: 0;">✗ {{ error }}</p>
+</div>
+{% endif %}
+
 <!-- Export/Import -->
 <div class="card">
     <h3 class="card-title">📦 Export / Import Configuration</h3>
