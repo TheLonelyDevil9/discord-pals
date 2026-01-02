@@ -71,12 +71,22 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
         if role == "system":
             parts.append(f"[System]\n{content}")
         elif role == "user":
-            # Include author name if present
-            author = msg.get("author_name", "User")
-            parts.append(f"[{author}]\n{content}")
+            # Check if content already has [Author]: prefix (from format_history_split)
+            # to avoid double-prefixing like "[User]\n[Alice]: Hello"
+            if content.startswith("[") and "]: " in content[:50]:
+                # Already prefixed, just add as-is
+                parts.append(content)
+            else:
+                # Add author prefix - use "author" key (not "author_name")
+                author = msg.get("author", "User")
+                parts.append(f"[{author}]: {content}")
         elif role == "assistant":
-            author = msg.get("author_name", "Assistant")
-            parts.append(f"[{author}]\n{content}")
+            # Bot's own messages - check for existing prefix
+            if content.startswith("[") and "]: " in content[:50]:
+                parts.append(content)
+            else:
+                author = msg.get("author", "Assistant")
+                parts.append(f"[{author}]: {content}")
     
     # Combine all parts into a single user message
     combined = "\n\n".join(parts)
