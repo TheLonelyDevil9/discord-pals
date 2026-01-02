@@ -14,6 +14,7 @@ DEFAULTS = {
     "batch_timeout": 15,
     "active_provider": None,  # None = use first provider
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
+    "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
 }
 
 
