@@ -261,8 +261,8 @@ class BotInstance:
         for reaction in reactions:
             try:
                 await add_reactions(message, [reaction], guild)
-            except:
-                pass
+            except Exception as e:
+                log.debug(f"Failed to add reaction: {e}", self.name)
     
     async def _gather_mentioned_user_context(self, message: discord.Message, char_name: str) -> str:
         """Gather ephemeral context about mentioned users from recent channel messages.
@@ -574,8 +574,8 @@ class BotInstance:
             log.error(f"Error processing: {e}", self.name)
             try:
                 await message.channel.send(f"❌ Error: {str(e)[:100]}", delete_after=ERROR_DELETE_AFTER)
-            except:
-                pass
+            except Exception as send_err:
+                log.debug(f"Failed to send error message: {send_err}", self.name)
     
     def _update_mood(self, channel_id: int, user_message: str, bot_response: str):
         """Feature 12: Update channel mood based on conversation sentiment."""
@@ -870,8 +870,8 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
                         remove_assistant_from_history(interaction.channel_id, 1)
                         if deleted >= count:
                             break
-                    except:
-                        pass
+                    except Exception as e:
+                        log.debug(f"Failed to delete message: {e}", self.name)
             
             await interaction.followup.send(f"✅ Deleted {deleted} messages", ephemeral=True)
         

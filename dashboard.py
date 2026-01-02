@@ -121,8 +121,8 @@ def delete_memory(name):
                 
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to delete memory '{memory_key}': {e}")
     
     return redirect(url_for('memories'))
 
@@ -137,8 +137,8 @@ def edit_memory(name):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read memory file: {e}")
     
     return render_template('memory_edit.html', name=name, content=content)
 
@@ -154,8 +154,8 @@ def save_memory(name):
         DATA_DIR.mkdir(exist_ok=True)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
-    except:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to save memory: {e}")
     
     return redirect(url_for('memories'))
 
@@ -194,8 +194,8 @@ def edit_character(name):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read character file: {e}")
     
     return render_template('character_edit.html', name=name, content=content)
 
@@ -211,7 +211,7 @@ def save_character(name):
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
-        pass
+        print(f"Warning: Failed to save character: {e}")
     
     return redirect(url_for('characters'))
 
@@ -224,8 +224,8 @@ def delete_character(name):
     if path.exists():
         try:
             path.unlink()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to delete character: {e}")
     
     return redirect(url_for('characters'))
 
@@ -242,8 +242,8 @@ def new_character():
                 CHARACTERS_DIR.mkdir(exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(f"# {name}\n\n## Personality\n\n## Backstory\n\n## Relationships\n")
-            except:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to create character: {e}")
         return redirect(url_for('edit_character', name=name))
     
     return redirect(url_for('characters'))
@@ -262,23 +262,23 @@ def settings():
         try:
             with open('providers.json', 'r') as f:
                 providers_raw = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read providers.json: {e}")
     
     if os.path.exists('bots.json'):
         try:
             with open('bots.json', 'r') as f:
                 bots_raw = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read bots.json: {e}")
     
     autonomous_file = DATA_DIR / 'autonomous.json'
     if autonomous_file.exists():
         try:
             with open(autonomous_file, 'r') as f:
                 autonomous_raw = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read autonomous.json: {e}")
     
     return render_template('settings.html',
         providers_raw=providers_raw,
@@ -364,15 +364,15 @@ def prompts():
         try:
             with open(system_path, 'r', encoding='utf-8') as f:
                 system_content = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read system.md: {e}")
     
     if rules_path.exists():
         try:
             with open(rules_path, 'r', encoding='utf-8') as f:
                 rules_content = f.read()
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to read response_rules.md: {e}")
     
     return render_template('prompts.html',
         system_content=system_content,
@@ -391,8 +391,8 @@ def save_system_prompt():
         # Reload prompts in character manager
         from character import character_manager
         character_manager.reload_prompts()
-    except:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to save system.md: {e}")
     return redirect(url_for('prompts'))
 
 
@@ -427,8 +427,8 @@ def config_page():
             with open(providers_file, 'r') as f:
                 data = json.load(f)
                 providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
-        except:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to load providers for config page: {e}")
     
     # Get bots and their current characters + autonomous channels
     from discord_utils import autonomous_manager
