@@ -171,8 +171,20 @@ class BotInstance:
                     if is_other_bot:
                         content = message.content.strip()
                     else:
+                        # Replace THIS bot's mention with its name
                         bot_name = guild.me.display_name if guild else self.client.user.display_name
                         content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
+                        
+                        # For autonomous responses, resolve OTHER mentions so bot sees the full context
+                        # e.g., "Hey <@12345>" becomes "Hey @Fly" so Nahida knows Fly was mentioned
+                        if is_autonomous and message.mentions:
+                            for mentioned_user in message.mentions:
+                                if mentioned_user != self.client.user:
+                                    display_name = get_user_display_name(mentioned_user)
+                                    content = content.replace(f'<@{mentioned_user.id}>', f'@{display_name}')
+                                    content = content.replace(f'<@!{mentioned_user.id}>', f'@{display_name}')
+                            # Prefix to indicate this is autonomous (not directly addressed)
+                            content = f"[Someone else was mentioned, you're chiming in] {content}"
                     
                     if not content and not message.attachments:
                         content = "Hello!"
