@@ -58,6 +58,7 @@
     <nav><div class="container">
         <a href="/" class="logo">Discord Pals</a>
         <a href="/" {% if request.path=='/' %}class="active"{% endif %}>Dashboard</a>
+        <a href="/channels" {% if request.path=='/channels' %}class="active"{% endif %}>Channels</a>
         <a href="/memories" {% if request.path=='/memories' %}class="active"{% endif %}>Memories</a>
         <a href="/characters" {% if request.path=='/characters' %}class="active"{% endif %}>Characters</a>
         <a href="/preview" {% if request.path=='/preview' %}class="active"{% endif %}>Preview</a>

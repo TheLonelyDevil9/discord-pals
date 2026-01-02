@@ -4,6 +4,37 @@
 {% block content %}
 <h1 style="margin-bottom: 30px;">Dashboard</h1>
 
+<!-- Control Panel -->
+<div class="card control-panel">
+    <h3 class="card-title">🎛️ Control Panel</h3>
+    <div class="controls-grid">
+        <div class="control-item">
+            <div class="control-label">
+                <span class="control-icon">🛑</span>
+                <div>
+                    <strong>Global Killswitch</strong>
+                    <small>Stops ALL bot responses</small>
+                </div>
+            </div>
+            <button id="killswitch-btn" class="btn toggle-btn {% if global_paused %}active danger{% else %}inactive{% endif %}" onclick="toggleKillswitch()">
+                <span class="toggle-status">{{ 'ACTIVE' if global_paused else 'INACTIVE' }}</span>
+            </button>
+        </div>
+        <div class="control-item">
+            <div class="control-label">
+                <span class="control-icon">🤖</span>
+                <div>
+                    <strong>Bot-to-Bot Chat</strong>
+                    <small>Allow bots to respond to each other</small>
+                </div>
+            </div>
+            <button id="bot-interactions-btn" class="btn toggle-btn {% if bot_interactions_paused %}inactive{% else %}active success{% endif %}" onclick="toggleBotInteractions()">
+                <span class="toggle-status">{{ 'PAUSED' if bot_interactions_paused else 'ENABLED' }}</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="grid">
     <div class="card stat">
         <div class="stat-value">{{ bots|length }}</div>
@@ -24,7 +55,7 @@
 </div>
 
 <div class="card">
-    <h3 class="card-title">Bot Status</h3>
+    <h3 class="card-title">Bot Status <span id="refresh-indicator" style="font-size: 0.7em; color: var(--text-muted);">● Live</span></h3>
     {% if bots %}
     <table>
         <thead>
@@ -35,7 +66,7 @@
                 <th>Last Activity</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="bot-status-table">
             {% for bot in bots %}
             <tr>
                 <td><strong>{{ bot.name }}</strong></td>
@@ -56,4 +87,202 @@
     <div class="empty">No bots running</div>
     {% endif %}
 </div>
+
+<style>
+.control-panel {
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(88, 166, 255, 0.05) 100%);
+    border: 1px solid var(--accent);
+}
+
+.controls-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.control-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.control-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.control-icon {
+    font-size: 1.5em;
+}
+
+.control-label small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.85em;
+}
+
+.toggle-btn {
+    min-width: 100px;
+    padding: 10px 20px;
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 0.85em;
+    transition: all 0.3s ease;
+}
+
+.toggle-btn.active.danger {
+    background: var(--danger);
+    color: white;
+    animation: pulse-danger 2s infinite;
+}
+
+.toggle-btn.active.success {
+    background: var(--success);
+    color: white;
+}
+
+.toggle-btn.inactive {
+    background: var(--border);
+    color: var(--text-muted);
+}
+
+@keyframes pulse-danger {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4); }
+    50% { box-shadow: 0 0 0 10px rgba(248, 81, 73, 0); }
+}
+
+#refresh-indicator {
+    animation: blink 2s infinite;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+</style>
+
+<script>
+// Toggle killswitch
+async function toggleKillswitch() {
+    const btn = document.getElementById('killswitch-btn');
+    btn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/killswitch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await response.json();
+        
+        if (data.status === 'ok') {
+            updateKillswitchUI(data.global_paused);
+            showToast(data.global_paused ? 'Killswitch ACTIVATED - All bots paused' : 'Killswitch released - Bots resumed', 
+                      data.global_paused ? 'warning' : 'success');
+        }
+    } catch (e) {
+        showToast('Failed to toggle killswitch', 'error');
+    }
+    
+    btn.disabled = false;
+}
+
+// Toggle bot-to-bot interactions
+async function toggleBotInteractions() {
+    const btn = document.getElementById('bot-interactions-btn');
+    btn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/bot-interactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await response.json();
+        
+        if (data.status === 'ok') {
+            updateBotInteractionsUI(data.bot_interactions_paused);
+            showToast(data.bot_interactions_paused ? 'Bot-to-bot chat PAUSED' : 'Bot-to-bot chat ENABLED', 'success');
+        }
+    } catch (e) {
+        showToast('Failed to toggle bot interactions', 'error');
+    }
+    
+    btn.disabled = false;
+}
+
+// Update UI for killswitch state
+function updateKillswitchUI(isPaused) {
+    const btn = document.getElementById('killswitch-btn');
+    const status = btn.querySelector('.toggle-status');
+    
+    if (isPaused) {
+        btn.className = 'btn toggle-btn active danger';
+        status.textContent = 'ACTIVE';
+    } else {
+        btn.className = 'btn toggle-btn inactive';
+        status.textContent = 'INACTIVE';
+    }
+}
+
+// Update UI for bot interactions state
+function updateBotInteractionsUI(isPaused) {
+    const btn = document.getElementById('bot-interactions-btn');
+    const status = btn.querySelector('.toggle-status');
+    
+    if (isPaused) {
+        btn.className = 'btn toggle-btn inactive';
+        status.textContent = 'PAUSED';
+    } else {
+        btn.className = 'btn toggle-btn active success';
+        status.textContent = 'ENABLED';
+    }
+}
+
+// Auto-refresh status every 5 seconds
+async function refreshStatus() {
+    try {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        
+        // Update control panel
+        updateKillswitchUI(data.global_paused);
+        updateBotInteractionsUI(data.bot_interactions_paused);
+        
+        // Update bot status table
+        const table = document.getElementById('bot-status-table');
+        if (table && data.bots) {
+            table.innerHTML = data.bots.map(bot => `
+                <tr>
+                    <td><strong>${bot.name}</strong></td>
+                    <td>${bot.character || 'None'}</td>
+                    <td>
+                        ${bot.online 
+                            ? '<span class="badge badge-success">● Online</span>'
+                            : '<span class="badge badge-danger">● Offline</span>'}
+                    </td>
+                    <td style="color: var(--text-muted);">${bot.last_activity}</td>
+                </tr>
+            `).join('');
+        }
+        
+        // Flash the indicator
+        const indicator = document.getElementById('refresh-indicator');
+        if (indicator) {
+            indicator.style.color = 'var(--success)';
+            setTimeout(() => { indicator.style.color = 'var(--text-muted)'; }, 500);
+        }
+    } catch (e) {
+        console.error('Failed to refresh status:', e);
+    }
+}
+
+// Start auto-refresh
+setInterval(refreshStatus, 5000);
+</script>
 {% endblock %}

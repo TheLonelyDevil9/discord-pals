@@ -77,11 +77,17 @@ def dashboard():
     from discord_utils import autonomous_manager
     autonomous_count = len(autonomous_manager.enabled_channels)
     
+    # Get global state for control panel
+    global_paused = runtime_config.get("global_paused", False)
+    bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
+    
     return render_template('dashboard.html',
         bots=bots_info,
         memory_count=memory_count,
         character_count=character_count,
-        autonomous_count=autonomous_count
+        autonomous_count=autonomous_count,
+        global_paused=global_paused,
+        bot_interactions_paused=bot_interactions_paused
     )
 
 
@@ -89,6 +95,7 @@ def dashboard():
 def memories():
     """Memories management page."""
     from stats import stats_manager
+    from memory import memory_manager
     
     files = get_memory_files()
     memories_data = {}
@@ -102,7 +109,32 @@ def memories():
             memories_data[name] = {"error": str(e)}
     
     user_names = stats_manager.get_all_user_names()
-    return render_template('memories.html', memories=memories_data, user_names=user_names)
+    
+    # Get guilds for the dropdown
+    guilds = []
+    seen_ids = set()
+    for bot in bot_instances:
+        if hasattr(bot, 'client') and bot.client.is_ready():
+            for guild in bot.client.guilds:
+                if guild.id not in seen_ids:
+                    seen_ids.add(guild.id)
+                    # Get lore for this guild
+                    lore = memory_manager.get_lore(guild.id)
+                    guilds.append({
+                        'id': guild.id,
+                        'name': guild.name,
+                        'lore': lore
+                    })
+    
+    # Get available characters for memory assignment
+    characters = get_character_files()
+    
+    return render_template('memories.html',
+        memories=memories_data,
+        user_names=user_names,
+        guilds=guilds,
+        characters=characters
+    )
 
 
 @app.route('/memories/<name>/delete', methods=['POST'])
@@ -398,15 +430,105 @@ def save_system_prompt():
 
 @app.route('/api/status')
 def api_status():
-    """API endpoint for bot status."""
+    """API endpoint for bot status with extended info."""
+    import time
+    import runtime_config
+    
+    last_activity = runtime_config.get_last_activity()
     bots_info = []
     for bot in bot_instances:
+        bot_activity = last_activity.get(bot.name)
+        if bot_activity:
+            elapsed = time.time() - bot_activity
+            if elapsed < 60:
+                activity_str = f"{int(elapsed)}s ago"
+            elif elapsed < 3600:
+                activity_str = f"{int(elapsed/60)}m ago"
+            else:
+                activity_str = f"{int(elapsed/3600)}h ago"
+        else:
+            activity_str = "Never"
+        
         bots_info.append({
             'name': bot.name,
             'character': bot.character.name if bot.character else None,
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False
+            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
+            'last_activity': activity_str
         })
-    return jsonify({'bots': bots_info})
+    
+    # Include global state
+    global_paused = runtime_config.get("global_paused", False)
+    bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
+    
+    return jsonify({
+        'bots': bots_info,
+        'global_paused': global_paused,
+        'bot_interactions_paused': bot_interactions_paused
+    })
+
+
+@app.route('/api/killswitch', methods=['GET', 'POST'])
+def api_killswitch():
+    """API endpoint for global killswitch control."""
+    import runtime_config
+    import logger as log
+    
+    if request.method == 'POST':
+        data = request.json or {}
+        new_state = data.get('enabled')
+        
+        # If no explicit state provided, toggle
+        if new_state is None:
+            new_state = not runtime_config.get("global_paused", False)
+        
+        runtime_config.set("global_paused", new_state)
+        
+        if new_state:
+            log.warn("Global killswitch ACTIVATED via dashboard")
+        else:
+            log.ok("Global killswitch RELEASED via dashboard")
+        
+        return jsonify({
+            'status': 'ok',
+            'global_paused': new_state
+        })
+    
+    # GET request
+    return jsonify({
+        'global_paused': runtime_config.get("global_paused", False)
+    })
+
+
+@app.route('/api/bot-interactions', methods=['GET', 'POST'])
+def api_bot_interactions():
+    """API endpoint for bot-to-bot interaction control."""
+    import runtime_config
+    import logger as log
+    
+    if request.method == 'POST':
+        data = request.json or {}
+        new_state = data.get('paused')
+        
+        # If no explicit state provided, toggle
+        if new_state is None:
+            new_state = not runtime_config.get("bot_interactions_paused", False)
+        
+        runtime_config.set("bot_interactions_paused", new_state)
+        
+        if new_state:
+            log.info("Bot-to-bot interactions PAUSED via dashboard")
+        else:
+            log.info("Bot-to-bot interactions RESUMED v")
+        
+        return jsonify({
+            'status': 'ok',
+            'bot_interactions_paused': new_state
+        })
+    
+    # GET request
+    return jsonify({
+        'bot_interactions_paused': runtime_config.get("bot_interactions_paused", False)
+    })
 
 
 # --- Runtime Config ---
@@ -664,6 +786,248 @@ def api_logs():
     import logger
     logs = logger.get_logs(100)
     return jsonify(logs)
+
+
+# --- Channels Management ---
+
+@app.route('/channels')
+def channels_page():
+    """Channel management page."""
+    from discord_utils import autonomous_manager, conversation_history
+    
+    # Collect all channels from all bots
+    channels_data = {}
+    guilds_data = {}
+    
+    for bot in bot_instances:
+        if not hasattr(bot, 'client') or not bot.client.is_ready():
+            continue
+        
+        for guild in bot.client.guilds:
+            if guild.id not in guilds_data:
+                guilds_data[guild.id] = {
+                    'id': guild.id,
+                    'name': guild.name,
+                    'icon': str(guild.icon.url) if guild.icon else None
+                }
+            
+            for channel in guild.text_channels:
+                if channel.id not in channels_data:
+                    # Check if autonomous is enabled
+                    auto_enabled = channel.id in autonomous_manager.enabled_channels
+                    auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
+                    auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
+                    cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+                    
+                    # Check if we have history for this channel
+                    history_count = len(conversation_history.get(channel.id, []))
+                    
+                    channels_data[channel.id] = {
+                        'id': channel.id,
+                        'name': channel.name,
+                        'guild_id': guild.id,
+                        'guild_name': guild.name,
+                        'autonomous': auto_enabled,
+                        'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
+                        'auto_cooldown': cooldown_mins,
+                        'history_count': history_count
+                    }
+    
+    # Sort channels by guild name, then channel name
+    sorted_channels = sorted(channels_data.values(), key=lambda c: (c['guild_name'], c['name']))
+    
+    return render_template('channels.html',
+        channels=sorted_channels,
+        guilds=list(guilds_data.values())
+    )
+
+
+@app.route('/api/channels')
+def api_channels():
+    """API endpoint to list all accessible channels."""
+    from discord_utils import autonomous_manager, conversation_history
+    
+    channels = []
+    
+    for bot in bot_instances:
+        if not hasattr(bot, 'client') or not bot.client.is_ready():
+            continue
+        
+        for guild in bot.client.guilds:
+            for channel in guild.text_channels:
+                # Avoid duplicates
+                if any(c['id'] == channel.id for c in channels):
+                    continue
+                
+                auto_enabled = channel.id in autonomous_manager.enabled_channels
+                auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
+                auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
+                cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+                history_count = len(conversation_history.get(channel.id, []))
+                
+                channels.append({
+                    'id': channel.id,
+                    'name': channel.name,
+                    'guild_id': guild.id,
+                    'guild_name': guild.name,
+                    'autonomous': auto_enabled,
+                    'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
+                    'auto_cooldown': cooldown_mins,
+                    'history_count': history_count
+                })
+    
+    return jsonify({'channels': channels})
+
+
+@app.route('/api/channels/<int:channel_id>/clear', methods=['POST'])
+def api_clear_channel(channel_id):
+    """Clear conversation history for a channel."""
+    from discord_utils import clear_history
+    import logger as log
+    
+    clear_history(channel_id)
+    log.info(f"Channel history cleared via dashboard: {channel_id}")
+    
+    return jsonify({'status': 'ok', 'channel_id': channel_id})
+
+
+@app.route('/api/channels/<int:channel_id>/autonomous', methods=['GET', 'POST'])
+def api_channel_autonomous(channel_id):
+    """Get or set autonomous mode for a channel."""
+    from discord_utils import autonomous_manager
+    import logger as log
+    
+    if request.method == 'POST':
+        data = request.json or {}
+        enabled = data.get('enabled', False)
+        chance = data.get('chance', 5)  # percentage
+        cooldown = data.get('cooldown', 2)  # minutes
+        
+        # Convert percentage to decimal
+        chance_decimal = min(100, max(1, chance)) / 100.0
+        cooldown_mins = min(10, max(1, cooldown))
+        
+        autonomous_manager.set_channel(channel_id, enabled, chance_decimal, cooldown_mins)
+        
+        if enabled:
+            log.info(f"Autonomous mode ENABLED for channel {channel_id} ({chance}%, {cooldown_mins}min cooldown) via dashboard")
+        else:
+            log.info(f"Autonomous mode DISABLED for channel {channel_id} via dashboard")
+        
+        return jsonify({
+            'status': 'ok',
+            'channel_id': channel_id,
+            'enabled': enabled,
+            'chance': chance,
+            'cooldown': cooldown_mins
+        })
+    
+    # GET request
+    auto_enabled = channel_id in autonomous_manager.enabled_channels
+    auto_chance = autonomous_manager.enabled_channels.get(channel_id, 0)
+    auto_cooldown = autonomous_manager.channel_cooldowns.get(channel_id)
+    cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+    
+    return jsonify({
+        'channel_id': channel_id,
+        'enabled': auto_enabled,
+        'chance': int(auto_chance * 100) if auto_enabled else 5,
+        'cooldown': cooldown_mins
+    })
+
+
+# --- Memory Management API ---
+
+@app.route('/api/guilds')
+def api_guilds():
+    """Get list of all guilds the bots are in."""
+    guilds = []
+    seen_ids = set()
+    
+    for bot in bot_instances:
+        if not hasattr(bot, 'client') or not bot.client.is_ready():
+            continue
+        
+        for guild in bot.client.guilds:
+            if guild.id not in seen_ids:
+                seen_ids.add(guild.id)
+                guilds.append({
+                    'id': guild.id,
+                    'name': guild.name,
+                    'icon': str(guild.icon.url) if guild.icon else None,
+                    'member_count': guild.member_count
+                })
+    
+    return jsonify({'guilds': guilds})
+
+
+@app.route('/api/memories/add', methods=['POST'])
+def api_add_memory():
+    """Add a new memory."""
+    from memory import memory_manager
+    import logger as log
+    
+    data = request.json or {}
+    memory_type = data.get('type', 'server')  # server, lore, user
+    guild_id = data.get('guild_id')
+    user_id = data.get('user_id')
+    content = data.get('content', '').strip()
+    character_name = data.get('character_name')
+    
+    if not content:
+        return jsonify({'status': 'error', 'message': 'Content is required'}), 400
+    
+    try:
+        if memory_type == 'server' and guild_id:
+            memory_manager.add_server_memory(int(guild_id), content, auto=False)
+            log.info(f"Server memory added via dashboard for guild {guild_id}")
+        elif memory_type == 'lore' and guild_id:
+            memory_manager.add_lore(int(guild_id), content)
+            log.info(f"Lore added via dashboard for guild {guild_id}")
+        elif memory_type == 'user' and guild_id and user_id:
+            memory_manager.add_user_memory(int(guild_id), int(user_id), content,
+                                           auto=False, character_name=character_name)
+            log.info(f"User memory added via dashboard for user {user_id} in guild {guild_id}")
+        elif memory_type == 'global' and user_id:
+            memory_manager.add_global_user_profile(int(user_id), content, auto=False)
+            log.info(f"Global user profile added via dashboard for user {user_id}")
+        else:
+            return jsonify({'status': 'error', 'message': 'Invalid memory type or missing IDs'}), 400
+        
+        return jsonify({'status': 'ok', 'type': memory_type})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/lore/<int:guild_id>', methods=['GET', 'POST', 'DELETE'])
+def api_lore(guild_id):
+    """Get, set, or delete lore for a guild."""
+    from memory import memory_manager
+    import logger as log
+    
+    if request.method == 'GET':
+        lore = memory_manager.get_lore(guild_id)
+        return jsonify({'guild_id': guild_id, 'lore': lore})
+    
+    elif request.method == 'POST':
+        data = request.json or {}
+        content = data.get('content', '').strip()
+        replace = data.get('replace', False)
+        
+        if replace:
+            # Clear existing lore first
+            memory_manager.clear_lore(guild_id)
+        
+        if content:
+            memory_manager.add_lore(guild_id, content)
+            log.info(f"Lore {'replaced' if replace else 'added'} via dashboard for guild {guild_id}")
+        
+        return jsonify({'status': 'ok', 'guild_id': guild_id})
+    
+    elif request.method == 'DELETE':
+        memory_manager.clear_lore(guild_id)
+        log.info(f"Lore cleared via dashboard for guild {guild_id}")
+        return jsonify({'status': 'ok', 'guild_id': guild_id})
 
 
 # --- Dashboard Runner ---
