@@ -874,12 +874,21 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
                 autonomous_manager.set_channel(interaction.channel_id, False)
                 await interaction.response.send_message("✅ Autonomous mode OFF", ephemeral=True)
         
-        @self.tree.command(name="stop", description="Stop/resume bot-to-bot conversations globally")
-        async def cmd_stop(interaction: discord.Interaction):
+        @self.tree.command(name="stop", description="Pause/resume bot-to-bot conversations globally")
+        @app_commands.describe(enable="True to pause bot interactions, False to resume (omit to toggle)")
+        async def cmd_stop(interaction: discord.Interaction, enable: bool = None):
             import runtime_config
             current = runtime_config.get("bot_interactions_paused", False)
-            runtime_config.set("bot_interactions_paused", not current)
-            if not current:
+            
+            # If no explicit value, toggle
+            if enable is None:
+                new_value = not current
+            else:
+                new_value = enable
+            
+            runtime_config.set("bot_interactions_paused", new_value)
+            
+            if new_value:
                 await interaction.response.send_message("🛑 Bot-to-bot interactions **PAUSED** globally", ephemeral=True)
             else:
                 await interaction.response.send_message("▶️ Bot-to-bot interactions **RESUMED**", ephemeral=True)

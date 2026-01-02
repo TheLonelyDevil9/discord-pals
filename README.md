@@ -249,6 +249,31 @@ Set up multiple providers for redundancy:
 
 The bot tries each provider in order until one succeeds.
 
+### Custom Provider Options (`extra_body`)
+
+Some providers support extra request body parameters. Add `extra_body` to your provider config:
+
+```json
+{
+  "providers": [
+    {
+      "name": "Custom Provider",
+      "url": "https://api.example.com/v1",
+      "key_env": "API_KEY",
+      "model": "model-name",
+      "extra_body": {
+        "thinking": {"type": "disabled"},
+        "top_k": 20,
+        "repetition_penalty": 1.1
+      }
+    }
+  ],
+  "timeout": 60
+}
+```
+
+The `extra_body` object is merged into the API request, useful for provider-specific parameters.
+
 ### Diagnosing Provider Issues
 
 Run the built-in diagnostics script:
@@ -318,6 +343,7 @@ When a user talks to the bot, context is loaded in priority order:
 | Command                  | Description                               |
 | ------------------------ | ----------------------------------------- |
 | `/autonomous <on/off>`   | Toggle random responses (5% default)      |
+| `/stop [enable]`         | Pause/resume bot-to-bot interactions (flag optional) |
 | `/delete_messages <N>`   | Delete bot's last N messages              |
 
 ### Fun Commands (17 total!)
