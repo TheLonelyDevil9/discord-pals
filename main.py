@@ -149,6 +149,17 @@ class BotInstance:
             is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
             should_respond = mentioned or is_reply_to_bot or is_autonomous
             
+            # Debug: log why this bot is responding
+            if should_respond:
+                reason = []
+                if mentioned:
+                    reason.append("mentioned")
+                if is_reply_to_bot:
+                    reason.append("reply_to_bot")
+                if is_autonomous:
+                    reason.append("autonomous")
+                log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
+            
             if should_respond:
                 # Track if responding to a bot
                 if is_other_bot:
