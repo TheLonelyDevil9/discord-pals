@@ -41,6 +41,49 @@ def validate_messages(messages: List[dict]) -> List[dict]:
     return validated
 
 
+def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict]:
+    """
+    Format multi-message array as a single user message (SillyTavern style).
+    
+    Instead of sending:
+        [{"role": "system", ...}, {"role": "user", ...}, {"role": "assistant", ...}]
+    
+    We send everything as one user message:
+        [{"role": "user", "content": "[System]\n...\n[User]\n...\n[Assistant]\n..."}]
+    
+    This improves compatibility with various LLM backends and matches
+    SillyTavern's "Single user message (no tools)" format.
+    """
+    parts = []
+    
+    # Add system prompt first
+    if system_prompt and system_prompt.strip():
+        parts.append(f"[System]\n{system_prompt.strip()}")
+    
+    # Add conversation messages
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "").strip()
+        
+        if not content:
+            continue
+        
+        if role == "system":
+            parts.append(f"[System]\n{content}")
+        elif role == "user":
+            # Include author name if present
+            author = msg.get("author_name", "User")
+            parts.append(f"[{author}]\n{content}")
+        elif role == "assistant":
+            author = msg.get("author_name", "Assistant")
+            parts.append(f"[{author}]\n{content}")
+    
+    # Combine all parts into a single user message
+    combined = "\n\n".join(parts)
+    
+    return [{"role": "user", "content": combined}]
+
+
 class AIProviderManager:
     """Manages 3-tier AI provider fallback with retry logic."""
     
@@ -139,13 +182,28 @@ class AIProviderManager:
         messages: List[dict],
         system_prompt: str,
         temperature: float = 1.0,
-        max_tokens: int = 2000
+        max_tokens: int = 2000,
+        use_single_user: bool = True  # SillyTavern-style by default
     ) -> str:
-        """Generate response with automatic fallback and retry (3 full cycles)."""
+        """Generate response with automatic fallback and retry (3 full cycles).
         
-        # Validate and sanitize all messages before sending
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
-        full_messages = validate_messages(full_messages)
+        Args:
+            messages: Conversation messages
+            system_prompt: System prompt / character definition
+            temperature: Response randomness (0-2)
+            max_tokens: Max response length
+            use_single_user: If True (default), format as single user message
+                             like SillyTavern's "Single user message (no tools)"
+        """
+        
+        # Format messages based on mode
+        if use_single_user:
+            # SillyTavern-style: combine everything into one user message
+            full_messages = format_as_single_user(messages, system_prompt)
+        else:
+            # Legacy multi-message format with roles
+            full_messages = [{"role": "system", "content": system_prompt}] + messages
+            full_messages = validate_messages(full_messages)
         
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
