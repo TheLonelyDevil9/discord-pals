@@ -77,10 +77,37 @@
         gap: 5px;
         color: var(--text-muted);
         font-size: 0.9em;
+        cursor: pointer;
+        padding: 6px 12px;
+        border-radius: 6px;
+        transition: all 0.2s ease;
+        user-select: none;
+    }
+
+    .auto-scroll-indicator:hover {
+        background: var(--border);
     }
 
     .auto-scroll-indicator.active {
         color: var(--success);
+        background: rgba(63, 185, 80, 0.1);
+    }
+
+    .auto-scroll-indicator.active:hover {
+        background: rgba(63, 185, 80, 0.2);
+    }
+
+    #scroll-dot {
+        animation: none;
+    }
+
+    .auto-scroll-indicator.active #scroll-dot {
+        animation: pulse-dot 1.5s infinite;
+    }
+
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
     }
 
     #log-count {
@@ -109,7 +136,7 @@
         <option value="error">✖ Error</option>
     </select>
     <span id="log-count">0 entries</span>
-    <span class="auto-scroll-indicator" id="scroll-indicator">
+    <span class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()" title="Click to toggle auto-scroll">
         <span id="scroll-dot">●</span> Auto-scroll
     </span>
 </div>

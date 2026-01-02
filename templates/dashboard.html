@@ -51,12 +51,29 @@
                 <span class="toggle-status">{{ 'SINGLE-USER' if use_single_user else 'MULTI-ROLE' }}</span>
             </button>
         </div>
+        <div class="control-item">
+            <div class="control-label">
+                <span class="control-icon">🔄</span>
+                <div>
+                    <strong>Restart Bot</strong>
+                    <small>Restart without terminal</small>
+                </div>
+            </div>
+            <button id="restart-btn" class="btn toggle-btn restart-btn" onclick="restartBot()">
+                <span class="toggle-status">RESTART</span>
+            </button>
+        </div>
     </div>
     <div class="control-help">
-        <details>
+        <details open>
             <summary>ℹ️ Message Format Help</summary>
-            <p><strong>Single-User (SillyTavern-style):</strong> All messages combined into one user message with [Author]: prefixes. Better compatibility with most LLMs.</p>
-            <p><strong>Multi-Role:</strong> Traditional system/user/assistant roles. May work better with some APIs that expect this format.</p>
+            <div class="format-disclaimer">
+                <p><strong>🔀 Multi-Role (Default - Recommended):</strong> Uses traditional system/user/assistant roles. This is the standard OpenAI-compatible format that most LLM APIs expect. Each message has a proper role designation.</p>
+                <p><strong>📝 Single-User (SillyTavern-style):</strong> All messages combined into one user message with [Author]: prefixes. Use this only if your LLM provider has issues with multi-role format or you're using a model that works better with combined context.</p>
+                <div class="format-warning">
+                    <span>⚠️</span> Single-User mode is provided for compatibility. Most users should keep Multi-Role enabled for best results with modern LLM APIs.
+                </div>
+            </div>
         </details>
     </div>
 </div>
@@ -267,6 +284,52 @@ padding: 15px 20px;
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
 }
+
+/* Format disclaimer styles */
+.format-disclaimer {
+    padding: 10px 0;
+}
+
+.format-disclaimer p {
+    margin: 10px 0 10px 20px;
+    line-height: 1.5;
+}
+
+.format-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 15px 0 5px 20px;
+    padding: 12px 15px;
+    background: rgba(210, 153, 34, 0.15);
+    border: 1px solid var(--warning);
+    border-radius: 6px;
+    color: var(--warning);
+    font-size: 0.9em;
+}
+
+.format-warning span {
+    font-size: 1.2em;
+}
+
+/* Restart button styles */
+.restart-btn {
+    background: linear-gradient(135deg, var(--warning) 0%, #b45309 100%);
+    color: #0d1117;
+}
+
+.restart-btn:hover {
+    opacity: 0.9;
+}
+
+.restart-btn.restarting {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
 </style>
 
 <script>
@@ -464,5 +527,46 @@ async function refreshStatus() {
 
 // Start auto-refresh
 setInterval(refreshStatus, 5000);
+
+// Restart bot
+async function restartBot() {
+    const btn = document.getElementById('restart-btn');
+    
+    // Confirm restart
+    if (!confirm('Are you sure you want to restart the bot? This will briefly disconnect all bots.')) {
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.querySelector('.toggle-status').textContent = 'RESTARTING...';
+    btn.classList.add('restarting');
+    
+    try {
+        const response = await fetch('/api/restart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+        
+        if (data.status === 'ok') {
+            showToast('🔄 Restart initiated. Page will reload in 5 seconds...', 'warning');
+            
+            // Wait and then reload the page
+            setTimeout(() => {
+                location.reload();
+            }, 5000);
+        } else {
+            showToast('❌ Restart failed: ' + (data.message || 'Unknown error'), 'error');
+            btn.disabled = false;
+            btn.querySelector('.toggle-status').textContent = 'RESTART';
+            btn.classList.remove('restarting');
+        }
+    } catch (e) {
+        showToast('❌ Failed to restart - check connection', 'error');
+        btn.disabled = false;
+        btn.querySelector('.toggle-status').textContent = 'RESTART';
+        btn.classList.remove('restarting');
+    }
+}
 </script>
 {% endblock %}

@@ -11,7 +11,7 @@ import io
 import zipfile
 from pathlib import Path
 
-app = Flask(__name__, template_folder='templates', static_folder='static')
+app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
 app.secret_key = 'discord-pals-local-dashboard'
 
 # Shared state (set by main.py)
@@ -1075,6 +1075,59 @@ def api_lore(guild_id):
         memory_manager.clear_lore(guild_id)
         log.info(f"Lore cleared via dashboard for guild {guild_id}")
         return jsonify({'status': 'ok', 'guild_id': guild_id})
+
+
+# --- Restart API ---
+
+@app.route('/api/restart', methods=['POST'])
+def api_restart():
+    """Restart the bot application without terminal restart."""
+    import logger as log
+    import sys
+    import subprocess
+    
+    log.warn("Application restart requested via dashboard")
+    
+    # Save current state before restart
+    try:
+        from discord_utils import save_history
+        from memory import memory_manager
+        save_history()
+        memory_manager.save_all()
+        log.info("State saved before restart")
+    except Exception as e:
+        log.error(f"Failed to save state before restart: {e}")
+    
+    def do_restart():
+        """Perform the actual restart in a separate thread."""
+        import time
+        time.sleep(1)  # Give time for response to be sent
+        
+        # Get the current Python executable and script
+        python = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        
+        # Close all bot connections gracefully
+        import asyncio
+        for bot in bot_instances:
+            try:
+                asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
+            except Exception:
+                pass
+        
+        time.sleep(2)  # Wait for connections to close
+        
+        # Restart the process
+        os.execv(python, [python, script] + sys.argv[1:])
+    
+    # Start restart in background thread
+    restart_thread = threading.Thread(target=do_restart, daemon=True)
+    restart_thread.start()
+    
+    return jsonify({
+        'status': 'ok',
+        'message': 'Restart initiated. The dashboard will be unavailable for a few seconds.'
+    })
 
 
 # --- Dashboard Runner ---

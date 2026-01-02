@@ -11,7 +11,8 @@
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         nav { background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 15px 0; margin-bottom: 30px; }
         nav .container { display: flex; align-items: center; gap: 30px; }
-        nav .logo { font-size: 1.4em; font-weight: bold; color: var(--accent); text-decoration: none; }
+        nav .logo { font-size: 1.4em; font-weight: bold; color: var(--accent); text-decoration: none; display: flex; align-items: center; }
+        nav .logo .logo-img { height: 40px; width: auto; border-radius: 6px; }
         nav a { color: var(--text-muted); text-decoration: none; padding: 8px 16px; border-radius: 6px; transition: all 0.2s; }
         nav a:hover, nav a.active { color: var(--text); background: var(--border); }
         .card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
@@ -56,7 +57,7 @@
 <body>
     <div class="toast-container" id="toast-container"></div>
     <nav><div class="container">
-        <a href="/" class="logo">Discord Pals</a>
+        <a href="/" class="logo"><img src="/static/banner.jpg" alt="Discord Pals" class="logo-img" onerror="this.style.display='none';this.nextSibling.style.display='inline'"><span style="display:none">Discord Pals</span></a>
         <a href="/" {% if request.path=='/' %}class="active"{% endif %}>Dashboard</a>
         <a href="/channels" {% if request.path=='/channels' %}class="active"{% endif %}>Channels</a>
         <a href="/memories" {% if request.path=='/memories' %}class="active"{% endif %}>Memories</a>

@@ -536,13 +536,13 @@ class BotInstance:
                 start_time = time.time()
                 
                 # Get message format preference from runtime config
-                use_single_user = runtime_config.get("use_single_user", True)
+                use_single_user = runtime_config.get("use_single_user", False)
                 
                 response = await provider_manager.generate(
                     messages=messages_for_api,
                     system_prompt=system_prompt,
-                    temperature=DEFAULT_TEMPERATURE,
-                    max_tokens=DEFAULT_MAX_TOKENS,
+                    temperature=None,  # Use per-provider config
+                    max_tokens=None,   # Use per-provider config (fixes max_tokens issue)
                     use_single_user=use_single_user
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)

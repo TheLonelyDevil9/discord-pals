@@ -69,10 +69,10 @@
                 <td>
                     <div class="auto-status" id="auto-status-{{ channel.id }}">
                         {% if channel.autonomous %}
-                        <span class="badge badge-success">● ON</span>
+                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto({{ channel.id }}, false)" title="Click to disable">● ON</span>
                         <small>{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min</small>
                         {% else %}
-                        <span class="badge badge-danger">● OFF</span>
+                        <span class="badge badge-danger auto-toggle" onclick="quickToggleAuto({{ channel.id }}, true)" title="Click to enable">● OFF</span>
                         {% endif %}
                     </div>
                 </td>
@@ -244,6 +244,27 @@
 tr.hidden {
     display: none;
 }
+
+/* Clickable autonomous toggle badges */
+.auto-toggle {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.auto-toggle:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.badge-success.auto-toggle:hover {
+    background: rgba(248, 81, 73, 0.3);
+    color: var(--danger);
+}
+
+.badge-danger.auto-toggle:hover {
+    background: rgba(63, 185, 80, 0.3);
+    color: var(--success);
+}
 </style>
 
 <script>
@@ -395,5 +416,45 @@ document.getElementById('auto-modal').addEventListener('click', function(e) {
         closeAutoModal();
     }
 });
+
+// Quick toggle autonomous mode (click on badge)
+async function quickToggleAuto(channelId, enable) {
+    try {
+        // Use default values for quick toggle
+        const chance = 5;  // Default 5%
+        const cooldown = 2;  // Default 2 minutes
+        
+        const response = await fetch(`/api/channels/${channelId}/autonomous`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enable, chance, cooldown })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'ok') {
+            // Update the row
+            const row = document.querySelector(`tr[data-channel-id="${channelId}"]`);
+            if (row) {
+                row.dataset.autonomous = enable ? 'enabled' : 'disabled';
+                const statusDiv = document.getElementById(`auto-status-${channelId}`);
+                if (enable) {
+                    statusDiv.innerHTML = `
+                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">● ON</span>
+                        <small>${data.chance}% / ${data.cooldown}min</small>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `<span class="badge badge-danger auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">● OFF</span>`;
+                }
+            }
+            
+            showToast(enable ? '✅ Autonomous mode enabled' : '✅ Autonomous mode disabled', 'success');
+        } else {
+            showToast('Failed to toggle autonomous mode', 'error');
+        }
+    } catch (e) {
+        showToast('Error toggling autonomous mode', 'error');
+    }
+}
 </script>
 {% endblock %}
