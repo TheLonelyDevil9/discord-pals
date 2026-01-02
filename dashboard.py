@@ -3,10 +3,12 @@ Discord Pals - Web Dashboard
 Local web interface for managing bot, memories, and characters.
 """
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
 import threading
 import json
 import os
+import io
+import zipfile
 from pathlib import Path
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -43,12 +45,29 @@ def get_character_files():
 @app.route('/')
 def dashboard():
     """Main dashboard page."""
+    import time
+    import runtime_config
+    
+    last_activity = runtime_config.get_last_activity()
     bots_info = []
     for bot in bot_instances:
+        bot_activity = last_activity.get(bot.name)
+        if bot_activity:
+            elapsed = time.time() - bot_activity
+            if elapsed < 60:
+                activity_str = f"{int(elapsed)}s ago"
+            elif elapsed < 3600:
+                activity_str = f"{int(elapsed/60)}m ago"
+            else:
+                activity_str = f"{int(elapsed/3600)}h ago"
+        else:
+            activity_str = "Never"
+        
         bots_info.append({
             'name': bot.name,
             'character': bot.character.name if bot.character else 'None',
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False
+            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
+            'last_activity': activity_str
         })
     
     memory_count = len(get_memory_files())
@@ -526,6 +545,89 @@ def api_preview(name):
         'prompt': prompt,
         'token_estimate': token_estimate
     })
+
+
+# --- Test Provider ---
+
+@app.route('/api/test-provider/<int:index>')
+def api_test_provider(index):
+    """Test connection to a specific provider."""
+    import asyncio
+    from openai import AsyncOpenAI
+    
+    providers_file = Path("providers.json")
+    if not providers_file.exists():
+        return jsonify({'success': False, 'error': 'providers.json not found'})
+    
+    try:
+        with open(providers_file, 'r') as f:
+            data = json.load(f)
+        providers = data.get('providers', [])
+        if index >= len(providers):
+            return jsonify({'success': False, 'error': 'Provider index out of range'})
+        
+        p = providers[index]
+        key_env = p.get('key_env', '')
+        key = os.getenv(key_env, 'not-needed') if key_env else 'not-needed'
+        
+        client = AsyncOpenAI(base_url=p['url'], api_key=key, timeout=10)
+        
+        async def test():
+            response = await client.models.list()
+            return True
+        
+        asyncio.run(test())
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)[:200]})
+
+
+# --- Export/Import ---
+
+@app.route('/settings/export')
+def export_config():
+    """Export configuration as ZIP."""
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for filename in ['providers.json', 'bots.json']:
+            if os.path.exists(filename):
+                with open(filename, 'r') as f:
+                    zf.writestr(filename, f.read())
+        
+        autonomous_file = DATA_DIR / 'autonomous.json'
+        if autonomous_file.exists():
+            with open(autonomous_file, 'r') as f:
+                zf.writestr('autonomous.json', f.read())
+    
+    zip_buffer.seek(0)
+    return send_file(zip_buffer, mimetype='application/zip', as_attachment=True, download_name='discord-pals-config.zip')
+
+
+@app.route('/settings/import', methods=['POST'])
+def import_config():
+    """Import configuration from ZIP."""
+    if 'config_zip' not in request.files:
+        return redirect(url_for('settings'))
+    
+    file = request.files['config_zip']
+    if file.filename == '':
+        return redirect(url_for('settings'))
+    
+    try:
+        with zipfile.ZipFile(io.BytesIO(file.read()), 'r') as zf:
+            for name in zf.namelist():
+                if name in ['providers.json', 'bots.json']:
+                    with open(name, 'wb') as f:
+                        f.write(zf.read(name))
+                elif name == 'autonomous.json':
+                    DATA_DIR.mkdir(exist_ok=True)
+                    with open(DATA_DIR / 'autonomous.json', 'wb') as f:
+                        f.write(zf.read(name))
+    except Exception as e:
+        pass
+    
+    return redirect(url_for('settings'))
 
 
 # --- Live Logs ---

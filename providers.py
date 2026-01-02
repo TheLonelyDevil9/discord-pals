@@ -91,7 +91,15 @@ class AIProviderManager:
                 # Check for valid response
                 if response and response.choices and len(response.choices) > 0:
                     content = response.choices[0].message.content
-                    return content if content else "..."
+                    if not content or content.strip() == "":
+                        log.warn(f"[{tier}] Empty content received from {model}")
+                        log.warn(f"[{tier}] Response object: finish_reason={response.choices[0].finish_reason}")
+                        return "..."
+                    return content
+                else:
+                    log.warn(f"[{tier}] No choices in response from {model}")
+                    if response:
+                        log.warn(f"[{tier}] Response: {str(response)[:200]}")
                 return None
                 
             except RateLimitError as e:

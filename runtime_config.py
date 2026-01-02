@@ -68,6 +68,9 @@ def get_all() -> dict:
 # Last context storage for visualization
 _last_context = {}
 
+# Last activity tracking
+_last_activity = {}
+
 
 def store_last_context(bot_name: str, system_prompt: str, messages: list, 
                        token_estimate: int = 0):
@@ -85,3 +88,16 @@ def get_last_context(bot_name: str = None) -> dict:
     if bot_name:
         return _last_context.get(bot_name, {})
     return _last_context
+
+
+def update_last_activity(bot_name: str):
+    """Update last activity timestamp for a bot."""
+    import time
+    _last_activity[bot_name] = time.time()
+
+
+def get_last_activity(bot_name: str = None) -> dict:
+    """Get last activity timestamp(s)."""
+    if bot_name:
+        return _last_activity.get(bot_name)
+    return _last_activity

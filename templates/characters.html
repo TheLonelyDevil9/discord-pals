@@ -108,6 +108,7 @@
         <div class="character-preview">{{ data.preview }}</div>
         <div class="character-actions">
             <a href="/characters/{{ name }}/edit" class="btn btn-primary">Edit</a>
+            <button type="button" class="btn btn-danger" onclick="confirmDeleteCharacter('{{ name }}')">Delete</button>
         </div>
         {% endif %}
     </div>
@@ -126,4 +127,16 @@
     <div class="empty">No character files found in <code>characters/</code></div>
 </div>
 {% endif %}
+
+<script>
+function confirmDeleteCharacter(name) {
+    showConfirm('Delete Character', 'Are you sure you want to delete "' + name + '"? This cannot be undone.', function() {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/characters/' + name + '/delete';
+        document.body.appendChild(form);
+        form.submit();
+    });
+}
+</script>
 {% endblock %}

@@ -80,11 +80,7 @@
                     {% endif %}
                 </td>
                 <td>
-                    <form action="/memories/{{ file_name }}/delete" method="post" style="display:inline;">
-                        <input type="hidden" name="key" value="{{ key }}">
-                        <button type="submit" class="btn btn-danger"
-                            onclick="return confirm('Delete this memory?')">Delete</button>
-                    </form>
+                    <button type="button" class="btn btn-danger" onclick="confirmDeleteMemory('{{ file_name }}', '{{ key }}')">Delete</button>
                 </td>
             </tr>
             {% endfor %}
@@ -100,4 +96,21 @@
     <div class="empty">No memory files found in <code>bot_data/</code></div>
 </div>
 {% endif %}
+
+<script>
+function confirmDeleteMemory(fileName, key) {
+    showConfirm('Delete Memory', 'Are you sure you want to delete this memory entry?', function() {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/memories/' + fileName + '/delete';
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'key';
+        input.value = key;
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+    });
+}
+</script>
 {% endblock %}

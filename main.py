@@ -576,6 +576,9 @@ class BotInstance:
             
             sent_messages = await self._send_organic_response(message, response)
             
+            # Update last activity timestamp
+            runtime_config.update_last_activity(self.name)
+            
             if len(sent_messages) > 1:
                 store_multipart_response(channel_id, [m.id for m in sent_messages], response)
             

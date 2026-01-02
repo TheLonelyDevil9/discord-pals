@@ -32,6 +32,7 @@
                 <th>Name</th>
                 <th>Character</th>
                 <th>Status</th>
+                <th>Last Activity</th>
             </tr>
         </thead>
         <tbody>
@@ -46,6 +47,7 @@
                     <span class="badge badge-danger">● Offline</span>
                     {% endif %}
                 </td>
+                <td style="color: var(--text-muted);">{{ bot.last_activity }}</td>
             </tr>
             {% endfor %}
         </tbody>

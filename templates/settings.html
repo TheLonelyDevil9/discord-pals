@@ -2,6 +2,26 @@
 {% block title %}Settings - Discord Pals{% endblock %}
 
 {% block content %}
+<style>
+    .json-error { color: var(--danger); font-size: 0.85em; margin-top: 5px; padding: 8px; background: rgba(248,81,73,0.1); border-radius: 4px; display: none; }
+    .extra-body-editor { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+    .extra-body-row { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+    .extra-body-row input, .extra-body-row select { padding: 6px 10px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 0.9em; }
+    .extra-body-row input[name="eb-key"] { width: 150px; }
+    .extra-body-row input[name="eb-value"] { flex: 1; }
+    .extra-body-row select { width: 100px; }
+    .extra-body-row .btn-sm { padding: 4px 10px; font-size: 0.85em; }
+    .provider-section { border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 15px; }
+    .provider-section:last-child { border-bottom: none; margin-bottom: 0; }
+    .provider-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .provider-name { font-weight: 600; color: var(--accent); }
+    .collapsible { cursor: pointer; user-select: none; }
+    .collapsible::before { content: '▶'; display: inline-block; margin-right: 8px; transition: transform 0.2s; }
+    .collapsible.open::before { transform: rotate(90deg); }
+    .collapse-content { display: none; margin-top: 10px; }
+    .collapse-content.show { display: block; }
+</style>
+
 <h1 style="margin-bottom: 30px;">Settings</h1>
 
 {% if message %}
@@ -10,48 +30,191 @@
 </div>
 {% endif %}
 
+<!-- Export/Import -->
+<div class="card">
+    <h3 class="card-title">📦 Export / Import Configuration</h3>
+    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+        <a href="/settings/export" class="btn btn-primary">⬇️ Export All Config</a>
+        <form id="import-form" action="/settings/import" method="post" enctype="multipart/form-data" style="display: flex; gap: 10px; align-items: center;">
+            <input type="file" name="config_zip" accept=".zip" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px; border-radius: 4px;">
+            <button type="submit" class="btn btn-secondary">⬆️ Import</button>
+        </form>
+        <span style="color: var(--text-muted); font-size: 0.85em;">Export/import providers.json, bots.json, autonomous.json</span>
+    </div>
+</div>
+
+<!-- Extra Body Parameter Editor -->
+<div class="card">
+    <h3 class="card-title">🔧 Provider Extra Body Parameters</h3>
+    <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">Edit provider-specific parameters (e.g., custom sampling options)</p>
+    <div id="extra-body-container"></div>
+    <button type="button" class="btn btn-primary" onclick="saveExtraBodies()">Save Extra Body Parameters</button>
+</div>
+
 <!-- Providers -->
 <div class="card">
-    <h3 class="card-title">⚙️ providers.json</h3>
-    <form action="/settings/providers/save" method="post">
-        <textarea name="content" style="width: 100%; height: 300px; font-family: monospace; font-size: 13px; 
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ providers_raw }}</textarea>
-        <div style="margin-top: 10px;">
-            <button type="submit" class="btn btn-primary">Save Providers</button>
-            <span style="color: var(--text-muted); margin-left: 10px; font-size: 0.9em;">
-                ⚠️ Restart bot after changes
-            </span>
-        </div>
-    </form>
+    <h3 class="card-title collapsible" onclick="toggleCollapse(this)">⚙️ providers.json (Advanced)</h3>
+    <div class="collapse-content">
+        <form id="providers-form" action="/settings/providers/save" method="post" onsubmit="return validateJSON('providers-textarea', 'providers-error')">
+            <textarea id="providers-textarea" name="content" style="width: 100%; height: 300px; font-family: monospace; font-size: 13px; 
+                background: var(--bg); border: 1px solid var(--border); color: var(--text); 
+                padding: 15px; border-radius: 4px; resize: vertical;">{{ providers_raw }}</textarea>
+            <div id="providers-error" class="json-error"></div>
+            <div style="margin-top: 10px;">
+                <button type="submit" class="btn btn-primary">Save Providers</button>
+                <button type="button" class="btn btn-secondary" onclick="testProvider(0)" style="margin-left: 5px;">🔌 Test Primary</button>
+                <span style="color: var(--text-muted); margin-left: 10px; font-size: 0.9em;">⚠️ Restart bot after changes</span>
+            </div>
+        </form>
+    </div>
 </div>
 
 <!-- Bots -->
 <div class="card">
-    <h3 class="card-title">🤖 bots.json</h3>
-    <form action="/settings/bots/save" method="post">
-        <textarea name="content" style="width: 100%; height: 200px; font-family: monospace; font-size: 13px; 
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ bots_raw }}</textarea>
-        <div style="margin-top: 10px;">
-            <button type="submit" class="btn btn-primary">Save Bots</button>
-            <span style="color: var(--text-muted); margin-left: 10px; font-size: 0.9em;">
-                ⚠️ Restart bot after changes
-            </span>
-        </div>
-    </form>
+    <h3 class="card-title collapsible" onclick="toggleCollapse(this)">🤖 bots.json</h3>
+    <div class="collapse-content">
+        <form id="bots-form" action="/settings/bots/save" method="post" onsubmit="return validateJSON('bots-textarea', 'bots-error')">
+            <textarea id="bots-textarea" name="content" style="width: 100%; height: 200px; font-family: monospace; font-size: 13px; 
+                background: var(--bg); border: 1px solid var(--border); color: var(--text); 
+                padding: 15px; border-radius: 4px; resize: vertical;">{{ bots_raw }}</textarea>
+            <div id="bots-error" class="json-error"></div>
+            <div style="margin-top: 10px;">
+                <button type="submit" class="btn btn-primary">Save Bots</button>
+                <span style="color: var(--text-muted); margin-left: 10px; font-size: 0.9em;">⚠️ Restart bot after changes</span>
+            </div>
+        </form>
+    </div>
 </div>
 
 <!-- Autonomous -->
 <div class="card">
-    <h3 class="card-title">🎲 Autonomous Mode</h3>
-    <form action="/settings/autonomous/save" method="post">
-        <textarea name="content" style="width: 100%; height: 150px; font-family: monospace; font-size: 13px; 
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); 
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ autonomous_raw }}</textarea>
-        <div style="margin-top: 10px;">
-            <button type="submit" class="btn btn-primary">Save Autonomous</button>
-        </div>
-    </form>
+    <h3 class="card-title collapsible" onclick="toggleCollapse(this)">🎲 Autonomous Mode</h3>
+    <div class="collapse-content">
+        <form id="autonomous-form" action="/settings/autonomous/save" method="post" onsubmit="return validateJSON('autonomous-textarea', 'autonomous-error')">
+            <textarea id="autonomous-textarea" name="content" style="width: 100%; height: 150px; font-family: monospace; font-size: 13px; 
+                background: var(--bg); border: 1px solid var(--border); color: var(--text); 
+                padding: 15px; border-radius: 4px; resize: vertical;">{{ autonomous_raw }}</textarea>
+            <div id="autonomous-error" class="json-error"></div>
+            <div style="margin-top: 10px;">
+                <button type="submit" class="btn btn-primary">Save Autonomous</button>
+            </div>
+        </form>
+    </div>
 </div>
+
+<script>
+let providersData = null;
+try { providersData = JSON.parse(document.getElementById('providers-textarea').value); } catch(e) {}
+
+function toggleCollapse(el) {
+    el.classList.toggle('open');
+    el.nextElementSibling.classList.toggle('show');
+}
+
+function validateJSON(textareaId, errorId) {
+    const textarea = document.getElementById(textareaId);
+    const errorDiv = document.getElementById(errorId);
+    try {
+        JSON.parse(textarea.value);
+        errorDiv.style.display = 'none';
+        return true;
+    } catch(e) {
+        errorDiv.textContent = '❌ Invalid JSON: ' + e.message;
+        errorDiv.style.display = 'block';
+        return false;
+    }
+}
+
+function renderExtraBodyEditors() {
+    const container = document.getElementById('extra-body-container');
+    if (!providersData || !providersData.providers) {
+        container.innerHTML = '<p style="color: var(--text-muted);">No providers found or invalid providers.json</p>';
+        return;
+    }
+    let html = '';
+    providersData.providers.forEach((p, idx) => {
+        const extraBody = p.extra_body || {};
+        html += `<div class="provider-section" data-idx="${idx}">
+            <div class="provider-header">
+                <span class="provider-name">${p.name || 'Provider ' + (idx+1)}</span>
+                <button type="button" class="btn btn-secondary" onclick="testProvider(${idx})">🔌 Test</button>
+            </div>
+            <div class="extra-body-editor" id="eb-${idx}">`;
+        Object.entries(extraBody).forEach(([k, v]) => {
+            html += createExtraBodyRow(k, v);
+        });
+        html += `<button type="button" class="btn btn-sm btn-secondary" onclick="addExtraBodyRow(${idx})">+ Add Parameter</button>
+            </div></div>`;
+    });
+    container.innerHTML = html;
+}
+
+function createExtraBodyRow(key, value) {
+    const type = typeof value === 'boolean' ? 'boolean' : typeof value === 'number' ? 'number' : value === null ? 'null' : 'string';
+    const displayValue = type === 'null' ? '' : value;
+    return `<div class="extra-body-row">
+        <input type="text" name="eb-key" value="${key}" placeholder="key">
+        <input type="text" name="eb-value" value="${displayValue}" placeholder="value">
+        <select name="eb-type">
+            <option value="string" ${type==='string'?'selected':''}>String</option>
+            <option value="number" ${type==='number'?'selected':''}>Number</option>
+            <option value="boolean" ${type==='boolean'?'selected':''}>Boolean</option>
+            <option value="null" ${type==='null'?'selected':''}>Null</option>
+        </select>
+        <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>
+    </div>`;
+}
+
+function addExtraBodyRow(idx) {
+    const editor = document.getElementById('eb-' + idx);
+    const btn = editor.querySelector('button:last-child');
+    const div = document.createElement('div');
+    div.innerHTML = createExtraBodyRow('', '');
+    editor.insertBefore(div.firstChild, btn);
+}
+
+function saveExtraBodies() {
+    if (!providersData) return showToast('No providers data', 'error');
+    document.querySelectorAll('.provider-section').forEach(section => {
+        const idx = parseInt(section.dataset.idx);
+        const extraBody = {};
+        section.querySelectorAll('.extra-body-row').forEach(row => {
+            const key = row.querySelector('[name="eb-key"]').value.trim();
+            const rawValue = row.querySelector('[name="eb-value"]').value;
+            const type = row.querySelector('[name="eb-type"]').value;
+            if (!key) return;
+            let value;
+            if (type === 'number') value = parseFloat(rawValue) || 0;
+            else if (type === 'boolean') value = rawValue.toLowerCase() === 'true';
+            else if (type === 'null') value = null;
+            else value = rawValue;
+            extraBody[key] = value;
+        });
+        providersData.providers[idx].extra_body = extraBody;
+    });
+    document.getElementById('providers-textarea').value = JSON.stringify(providersData, null, 2);
+    fetch('/settings/providers/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'content=' + encodeURIComponent(JSON.stringify(providersData, null, 2))
+    }).then(r => {
+        if (r.ok) showToast('Extra body parameters saved!', 'success');
+        else showToast('Failed to save', 'error');
+    });
+}
+
+async function testProvider(idx) {
+    showToast('Testing provider...', 'warning');
+    try {
+        const r = await fetch('/api/test-provider/' + idx);
+        const data = await r.json();
+        if (data.success) showToast('✓ Provider ' + (idx+1) + ' connected!', 'success');
+        else showToast('✗ ' + (data.error || 'Connection failed'), 'error');
+    } catch(e) {
+        showToast('✗ Test failed: ' + e.message, 'error');
+    }
+}
+
+renderExtraBodyEditors();
+</script>
 {% endblock %}
