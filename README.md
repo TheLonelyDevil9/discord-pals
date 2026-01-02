@@ -31,6 +31,8 @@ The system instructions were authored by legendary chef @Geechan.
 - **Character hot-swap** - Switch characters via dashboard or `/switch` command
 - **Multi-bot support** - Run multiple bots from a single terminal/process
 - **Memory system** - Per-character isolation with cross-server user profiles
+- **Auto-memory** - Automatically remembers important facts from conversations
+- **History persistence** - Conversation history survives restarts
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Message batching** - Collects follow-up messages before responding (configurable timeout)
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
