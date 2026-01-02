@@ -62,7 +62,8 @@ def load_providers() -> tuple[dict, int]:
                 "name": p.get("name", f"Provider {i+1}"),
                 "url": p.get("url"),
                 "key": key,
-                "model": p.get("model", "gpt-4o")
+                "model": p.get("model", "gpt-4o"),
+                "extra_body": p.get("extra_body", {})  # Custom request body options
             }
         
         timeout = data.get("timeout", 60)

@@ -4,7 +4,7 @@ Discord Pals - AI Providers
 """
 
 from openai import AsyncOpenAI, RateLimitError, APIError
-from typing import List, Dict
+from typing import List, Dict, Optional
 from config import PROVIDERS, API_TIMEOUT
 import asyncio
 import logger as log
@@ -12,6 +12,33 @@ import logger as log
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
+
+
+def validate_messages(messages: List[dict]) -> List[dict]:
+    """
+    Validate and sanitize messages before sending to API.
+    Ensures no malformed JSON or None values are sent.
+    """
+    validated = []
+    for msg in messages:
+        # Ensure role exists and is valid
+        role = msg.get("role", "user")
+        if role not in ("system", "user", "assistant"):
+            role = "user"
+        
+        # Ensure content is a string, never None
+        content = msg.get("content")
+        if content is None:
+            content = ""
+        elif not isinstance(content, str):
+            content = str(content)
+        
+        # Remove any null bytes or invalid characters
+        content = content.replace("\x00", "")
+        
+        validated.append({"role": role, "content": content})
+    
+    return validated
 
 
 class AIProviderManager:
@@ -37,19 +64,27 @@ class AIProviderManager:
         messages: List[dict],
         temperature: float,
         max_tokens: int,
-        tier: str
+        tier: str,
+        extra_body: Optional[dict] = None
     ) -> str | None:
         """Try to generate with retries on rate limit."""
         
         for attempt in range(MAX_RETRIES):
             try:
+                # Build request kwargs
+                request_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                }
+                
+                # Add extra_body if provided (for provider-specific options)
+                if extra_body:
+                    request_kwargs["extra_body"] = extra_body
+                
                 response = await asyncio.wait_for(
-                    client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    ),
+                    client.chat.completions.create(**request_kwargs),
                     timeout=API_TIMEOUT
                 )
                 
@@ -88,7 +123,9 @@ class AIProviderManager:
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles)."""
         
+        # Validate and sanitize all messages before sending
         full_messages = [{"role": "system", "content": system_prompt}] + messages
+        full_messages = validate_messages(full_messages)
         
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
@@ -98,11 +135,13 @@ class AIProviderManager:
                     continue
                 
                 model = PROVIDERS[tier]["model"]
+                extra_body = PROVIDERS[tier].get("extra_body", {})
                     
                 try:
                     client = self.providers[tier]
                     result = await self._try_generate(
-                        client, model, full_messages, temperature, max_tokens, tier
+                        client, model, full_messages, temperature, max_tokens, tier,
+                        extra_body=extra_body if extra_body else None
                     )
                     
                     if result:
