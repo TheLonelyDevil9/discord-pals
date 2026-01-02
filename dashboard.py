@@ -80,6 +80,7 @@ def dashboard():
     # Get global state for control panel
     global_paused = runtime_config.get("global_paused", False)
     bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
+    use_single_user = runtime_config.get("use_single_user", True)
     
     return render_template('dashboard.html',
         bots=bots_info,
@@ -87,7 +88,8 @@ def dashboard():
         character_count=character_count,
         autonomous_count=autonomous_count,
         global_paused=global_paused,
-        bot_interactions_paused=bot_interactions_paused
+        bot_interactions_paused=bot_interactions_paused,
+        use_single_user=use_single_user
     )
 
 
@@ -459,11 +461,13 @@ def api_status():
     # Include global state
     global_paused = runtime_config.get("global_paused", False)
     bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
+    use_single_user = runtime_config.get("use_single_user", True)
     
     return jsonify({
         'bots': bots_info,
         'global_paused': global_paused,
-        'bot_interactions_paused': bot_interactions_paused
+        'bot_interactions_paused': bot_interactions_paused,
+        'use_single_user': use_single_user
     })
 
 
@@ -518,7 +522,7 @@ def api_bot_interactions():
         if new_state:
             log.info("Bot-to-bot interactions PAUSED via dashboard")
         else:
-            log.info("Bot-to-bot interactions RESUMED v")
+            log.info("Bot-to-bot interactions RESUMED via dashboard")
         
         return jsonify({
             'status': 'ok',
@@ -528,6 +532,38 @@ def api_bot_interactions():
     # GET request
     return jsonify({
         'bot_interactions_paused': runtime_config.get("bot_interactions_paused", False)
+    })
+
+
+@app.route('/api/message-format', methods=['GET', 'POST'])
+def api_message_format():
+    """API endpoint for message format control (single-user vs multi-role)."""
+    import runtime_config
+    import logger as log
+    
+    if request.method == 'POST':
+        data = request.json or {}
+        new_state = data.get('use_single_user')
+        
+        # If no explicit state provided, toggle
+        if new_state is None:
+            new_state = not runtime_config.get("use_single_user", True)
+        
+        runtime_config.set("use_single_user", new_state)
+        
+        if new_state:
+            log.info("Message format set to SINGLE-USER (SillyTavern-style) via dashboard")
+        else:
+            log.info("Message format set to MULTI-ROLE (system/user/assistant) via dashboard")
+        
+        return jsonify({
+            'status': 'ok',
+            'use_single_user': new_state
+        })
+    
+    # GET request
+    return jsonify({
+        'use_single_user': runtime_config.get("use_single_user", True)
     })
 
 

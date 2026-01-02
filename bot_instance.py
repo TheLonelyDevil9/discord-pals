@@ -534,11 +534,16 @@ class BotInstance:
                 
                 # Track response time
                 start_time = time.time()
+                
+                # Get message format preference from runtime config
+                use_single_user = runtime_config.get("use_single_user", True)
+                
                 response = await provider_manager.generate(
                     messages=messages_for_api,
                     system_prompt=system_prompt,
                     temperature=DEFAULT_TEMPERATURE,
-                    max_tokens=DEFAULT_MAX_TOKENS
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                    use_single_user=use_single_user
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)

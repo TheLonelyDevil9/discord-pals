@@ -15,6 +15,7 @@ DEFAULTS = {
     "active_provider": None,  # None = use first provider
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
+    "use_single_user": True,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
 }
 
 
