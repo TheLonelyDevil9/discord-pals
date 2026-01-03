@@ -884,6 +884,7 @@ def channels_page():
                     auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
                     auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
                     cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+                    allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel.id, False)
                     
                     # Check if we have history for this channel
                     history_count = len(conversation_history.get(channel.id, []))
@@ -896,6 +897,7 @@ def channels_page():
                         'autonomous': auto_enabled,
                         'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
                         'auto_cooldown': cooldown_mins,
+                        'allow_bot_triggers': allow_bot_triggers,
                         'history_count': history_count
                     }
     
@@ -929,6 +931,7 @@ def api_channels():
                 auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
                 auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
                 cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+                allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel.id, False)
                 history_count = len(conversation_history.get(channel.id, []))
                 
                 channels.append({
@@ -939,6 +942,7 @@ def api_channels():
                     'autonomous': auto_enabled,
                     'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
                     'auto_cooldown': cooldown_mins,
+                    'allow_bot_triggers': allow_bot_triggers,
                     'history_count': history_count
                 })
     
@@ -968,15 +972,17 @@ def api_channel_autonomous(channel_id):
         enabled = data.get('enabled', False)
         chance = data.get('chance', 5)  # percentage
         cooldown = data.get('cooldown', 2)  # minutes
+        allow_bot_triggers = data.get('allow_bot_triggers', False)
         
         # Convert percentage to decimal
         chance_decimal = min(100, max(1, chance)) / 100.0
         cooldown_mins = min(10, max(1, cooldown))
         
-        autonomous_manager.set_channel(channel_id, enabled, chance_decimal, cooldown_mins)
+        autonomous_manager.set_channel(channel_id, enabled, chance_decimal, cooldown_mins, allow_bot_triggers)
         
         if enabled:
-            log.info(f"Autonomous mode ENABLED for channel {channel_id} ({chance}%, {cooldown_mins}min cooldown) via dashboard")
+            bot_trigger_str = " (bots can trigger)" if allow_bot_triggers else " (humans only)"
+            log.info(f"Autonomous mode ENABLED for channel {channel_id} ({chance}%, {cooldown_mins}min cooldown{bot_trigger_str}) via dashboard")
         else:
             log.info(f"Autonomous mode DISABLED for channel {channel_id} via dashboard")
         
@@ -985,7 +991,8 @@ def api_channel_autonomous(channel_id):
             'channel_id': channel_id,
             'enabled': enabled,
             'chance': chance,
-            'cooldown': cooldown_mins
+            'cooldown': cooldown_mins,
+            'allow_bot_triggers': allow_bot_triggers
         })
     
     # GET request
@@ -993,12 +1000,14 @@ def api_channel_autonomous(channel_id):
     auto_chance = autonomous_manager.enabled_channels.get(channel_id, 0)
     auto_cooldown = autonomous_manager.channel_cooldowns.get(channel_id)
     cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+    allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel_id, False)
     
     return jsonify({
         'channel_id': channel_id,
         'enabled': auto_enabled,
         'chance': int(auto_chance * 100) if auto_enabled else 5,
-        'cooldown': cooldown_mins
+        'cooldown': cooldown_mins,
+        'allow_bot_triggers': allow_bot_triggers
     })
 
 

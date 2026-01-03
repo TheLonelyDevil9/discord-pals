@@ -70,15 +70,15 @@
                     <div class="auto-status" id="auto-status-{{ channel.id }}">
                         {% if channel.autonomous %}
                         <span class="badge badge-success auto-toggle" onclick="quickToggleAuto({{ channel.id }}, false)" title="Click to disable">● ON</span>
-                        <small>{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min</small>
+                        <small>{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min{% if channel.allow_bot_triggers %} 🤖{% endif %}</small>
                         {% else %}
                         <span class="badge badge-danger auto-toggle" onclick="quickToggleAuto({{ channel.id }}, true)" title="Click to enable">● OFF</span>
                         {% endif %}
                     </div>
                 </td>
-                <td>
+              <td>
                     <div class="action-buttons">
-                        <button class="btn btn-small btn-secondary" onclick="openAutoModal({{ channel.id }}, '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }})">
+                        <button class="btn btn-small btn-secondary" onclick="openAutoModal({{ channel.id }}, '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }}, {{ 'true' if channel.allow_bot_triggers else 'false' }})">
                             ⚙️ Configure
                         </button>
                         <button class="btn btn-small btn-danger" onclick="clearHistory({{ channel.id }}, '{{ channel.name }}')" {% if channel.history_count == 0 %}disabled{% endif %}>
@@ -108,17 +108,25 @@
                 <input type="checkbox" id="auto-enabled">
                 Enable Autonomous Responses
             </label>
-            <small>Bot will occasionally respond without being mentioned</small>
+            <small>Bot will occasionally respond without being mentioned (includes name triggers)</small>
         </div>
         
         <div class="form-group" id="auto-settings">
             <label for="auto-chance">Response Chance: <span id="chance-val">5</span>%</label>
-            <input type="range" id="auto-chance" min="1" max="50" value="5" 
+            <input type="range" id="auto-chance" min="1" max="50" value="5"
                    oninput="document.getElementById('chance-val').textContent = this.value">
             
             <label for="auto-cooldown" style="margin-top: 15px;">Cooldown: <span id="cooldown-val">2</span> minutes</label>
             <input type="range" id="auto-cooldown" min="1" max="10" value="2"
                    oninput="document.getElementById('cooldown-val').textContent = this.value">
+            
+            <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+                <label>
+                    <input type="checkbox" id="auto-allow-bots">
+                    🤖 Allow Bot Triggers
+                </label>
+                <small>When enabled, other bots/apps can trigger autonomous responses (not just humans)</small>
+            </div>
         </div>
         
         <div class="modal-buttons">
@@ -302,7 +310,7 @@ function filterChannels() {
 }
 
 // Open autonomous configuration modal
-function openAutoModal(channelId, channelName, enabled, chance, cooldown) {
+function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowBots) {
     currentChannelId = channelId;
     document.getElementById('auto-modal-channel').textContent = `#${channelName}`;
     document.getElementById('auto-channel-id').value = channelId;
@@ -311,6 +319,7 @@ function openAutoModal(channelId, channelName, enabled, chance, cooldown) {
     document.getElementById('chance-val').textContent = chance;
     document.getElementById('auto-cooldown').value = cooldown;
     document.getElementById('cooldown-val').textContent = cooldown;
+    document.getElementById('auto-allow-bots').checked = allowBots || false;
     document.getElementById('auto-modal').style.display = 'flex';
     
     // Toggle settings visibility based on enabled state
@@ -335,12 +344,13 @@ async function saveAutoConfig() {
     const enabled = document.getElementById('auto-enabled').checked;
     const chance = parseInt(document.getElementById('auto-chance').value);
     const cooldown = parseInt(document.getElementById('auto-cooldown').value);
+    const allowBotTriggers = document.getElementById('auto-allow-bots').checked;
     
     try {
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled, chance, cooldown })
+            body: JSON.stringify({ enabled, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
         
         const data = await response.json();
@@ -351,13 +361,14 @@ async function saveAutoConfig() {
             if (row) {
                 row.dataset.autonomous = enabled ? 'enabled' : 'disabled';
                 const statusDiv = document.getElementById(`auto-status-${channelId}`);
+                const botIcon = allowBotTriggers ? ' 🤖' : '';
                 if (enabled) {
                     statusDiv.innerHTML = `
-                        <span class="badge badge-success">● ON</span>
-                        <small>${chance}% / ${cooldown}min</small>
+                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">● ON</span>
+                        <small>${chance}% / ${cooldown}min${botIcon}</small>
                     `;
                 } else {
-                    statusDiv.innerHTML = `<span class="badge badge-danger">● OFF</span>`;
+                    statusDiv.innerHTML = `<span class="badge badge-danger auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">● OFF</span>`;
                 }
             }
             
@@ -420,14 +431,19 @@ document.getElementById('auto-modal').addEventListener('click', function(e) {
 // Quick toggle autonomous mode (click on badge)
 async function quickToggleAuto(channelId, enable) {
     try {
-        // Use default values for quick toggle
-        const chance = 5;  // Default 5%
-        const cooldown = 2;  // Default 2 minutes
+        // First get current settings to preserve them
+        const getResponse = await fetch(`/api/channels/${channelId}/autonomous`);
+        const currentSettings = await getResponse.json();
+        
+        // Use current values or defaults for quick toggle
+        const chance = currentSettings.chance || 5;
+        const cooldown = currentSettings.cooldown || 2;
+        const allowBotTriggers = currentSettings.allow_bot_triggers || false;
         
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enable, chance, cooldown })
+            body: JSON.stringify({ enabled: enable, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
         
         const data = await response.json();
@@ -438,10 +454,11 @@ async function quickToggleAuto(channelId, enable) {
             if (row) {
                 row.dataset.autonomous = enable ? 'enabled' : 'disabled';
                 const statusDiv = document.getElementById(`auto-status-${channelId}`);
+                const botIcon = data.allow_bot_triggers ? ' 🤖' : '';
                 if (enable) {
                     statusDiv.innerHTML = `
                         <span class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">● ON</span>
-                        <small>${data.chance}% / ${data.cooldown}min</small>
+                        <small>${data.chance}% / ${data.cooldown}min${botIcon}</small>
                     `;
                 } else {
                     statusDiv.innerHTML = `<span class="badge badge-danger auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">● OFF</span>`;

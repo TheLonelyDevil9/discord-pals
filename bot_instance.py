@@ -134,32 +134,42 @@ class BotInstance:
             is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
             
             # Name/nickname trigger - respond when bot's name is mentioned (chance-based)
+            # NOTE: Name trigger is now a SUBSET of autonomous mode - only works if autonomous is enabled
             name_triggered = False
             import runtime_config
             name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
-            if name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm:
-                bot_display_name = guild.me.display_name if guild else self.client.user.display_name
-                bot_username = self.client.user.name
-                char_name = self.character.name if self.character else ""
+            channel_id = message.channel.id
+            
+            # Name trigger requires: autonomous enabled for channel + not already triggered by other means
+            if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
+                and channel_id in autonomous_manager.enabled_channels):
                 
-                content_lower = message.content.lower()
-                names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
-                if char_name:
-                    names_to_check.append(char_name.lower())
-                
-                # Add custom nicknames from per-bot config
-                if self.nicknames:
-                    for nick in self.nicknames.split(','):
-                        nick = nick.strip().lower()
-                        if nick and len(nick) >= 2:
-                            names_to_check.append(nick)
-                
-                # Check if any name appears in message
-                for name in names_to_check:
-                    if name and len(name) >= 2 and name in content_lower:
-                        if random.random() < name_trigger_chance:
-                            name_triggered = True
-                            break
+                # Check if bot triggers are allowed for this channel when message is from a bot
+                if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
+                    pass  # Skip name trigger for bots when not allowed
+                else:
+                    bot_display_name = guild.me.display_name if guild else self.client.user.display_name
+                    bot_username = self.client.user.name
+                    char_name = self.character.name if self.character else ""
+                    
+                    content_lower = message.content.lower()
+                    names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
+                    if char_name:
+                        names_to_check.append(char_name.lower())
+                    
+                    # Add custom nicknames from per-bot config
+                    if self.nicknames:
+                        for nick in self.nicknames.split(','):
+                            nick = nick.strip().lower()
+                            if nick and len(nick) >= 2:
+                                names_to_check.append(nick)
+                    
+                    # Check if any name appears in message
+                    for name in names_to_check:
+                        if name and len(name) >= 2 and name in content_lower:
+                            if random.random() < name_trigger_chance:
+                                name_triggered = True
+                                break
             
             should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
             
@@ -707,8 +717,8 @@ Reply with ONLY "A" or "B"."""
         try:
             result = await provider_manager.generate(
                 messages=[{"role": "user", "content": eval_prompt}],
-                system_prompt="You evaluate message edits. Reply with only A or B.",
-                max_tokens=5
+                system_prompt="You evaluate message edits. Reply with only A or B."
+                # max_tokens removed - uses provider config
             )
             
             if "B" not in result.upper():
@@ -723,8 +733,8 @@ React naturally and briefly (1-2 sentences) to catching them editing their messa
 
             response = await provider_manager.generate(
                 messages=[{"role": "user", "content": react_prompt}],
-                system_prompt=f"You are {self.character.name}. React organically to message edits.",
-                max_tokens=200
+                system_prompt=f"You are {self.character.name}. React organically to message edits."
+                # max_tokens removed - uses provider config
             )
             
             response = remove_thinking_tags(response)

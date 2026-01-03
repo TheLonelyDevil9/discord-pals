@@ -596,6 +596,7 @@ class AutonomousManager:
     def __init__(self):
         self.enabled_channels: Dict[int, float] = {}
         self.channel_cooldowns: Dict[int, timedelta] = {}
+        self.allow_bot_triggers: Dict[int, bool] = {}  # Per-channel bot trigger control
         self.last_autonomous: Dict[int, datetime] = {}
         self.default_cooldown = timedelta(minutes=2)
         self._load()
@@ -610,6 +611,7 @@ class AutonomousManager:
                     ch_id = int(ch_id)
                     self.enabled_channels[ch_id] = settings.get('chance', 0.05)
                     self.channel_cooldowns[ch_id] = timedelta(minutes=settings.get('cooldown', 2))
+                    self.allow_bot_triggers[ch_id] = settings.get('allow_bot_triggers', False)
         except Exception:
             pass  # Fail silently, use defaults
     
@@ -622,22 +624,40 @@ class AutonomousManager:
                 cooldown = self.channel_cooldowns.get(ch_id, self.default_cooldown)
                 data[str(ch_id)] = {
                     'chance': chance,
-                    'cooldown': int(cooldown.total_seconds() // 60)
+                    'cooldown': int(cooldown.total_seconds() // 60),
+                    'allow_bot_triggers': self.allow_bot_triggers.get(ch_id, False)
                 }
             with open(AUTONOMOUS_FILE, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception:
             pass  # Fail silently
     
-    def set_channel(self, channel_id: int, enabled: bool, chance: float = 0.05, cooldown_mins: int = 2):
+    def set_channel(self, channel_id: int, enabled: bool, chance: float = 0.05,
+                    cooldown_mins: int = 2, allow_bot_triggers: bool = False):
+        """Set autonomous mode settings for a channel.
+        
+        Args:
+            channel_id: Discord channel ID
+            enabled: Whether autonomous mode is enabled
+            chance: Probability of responding (0.0-1.0)
+            cooldown_mins: Minimum minutes between autonomous responses
+            allow_bot_triggers: Whether bots/apps can trigger name-based responses
+        """
         if enabled:
             self.enabled_channels[channel_id] = min(max(chance, 0.0), 1.0)
             self.channel_cooldowns[channel_id] = timedelta(minutes=min(max(cooldown_mins, 0), 10))
+            self.allow_bot_triggers[channel_id] = allow_bot_triggers
         elif channel_id in self.enabled_channels:
             del self.enabled_channels[channel_id]
             if channel_id in self.channel_cooldowns:
                 del self.channel_cooldowns[channel_id]
+            if channel_id in self.allow_bot_triggers:
+                del self.allow_bot_triggers[channel_id]
         self._save()
+    
+    def can_bot_trigger(self, channel_id: int) -> bool:
+        """Check if bots can trigger name-based responses in this channel."""
+        return self.allow_bot_triggers.get(channel_id, False)
     
     def should_respond(self, channel_id: int) -> bool:
         import random
@@ -655,7 +675,8 @@ class AutonomousManager:
     def get_status(self, channel_id: int) -> str:
         if channel_id in self.enabled_channels:
             cooldown = self.channel_cooldowns.get(channel_id, self.default_cooldown)
-            return f"✅ Enabled ({self.enabled_channels[channel_id]*100:.0f}% chance, {int(cooldown.total_seconds()//60)}min cooldown)"
+            bot_status = "bots: ✓" if self.allow_bot_triggers.get(channel_id, False) else "bots: ✗"
+            return f"✅ Enabled ({self.enabled_channels[channel_id]*100:.0f}% chance, {int(cooldown.total_seconds()//60)}min cooldown, {bot_status})"
         return "❌ Disabled"
 
 

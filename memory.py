@@ -450,8 +450,8 @@ Memory (or NOTHING):"""
         try:
             result = await provider_manager.generate(
                 messages=[{"role": "user", "content": prompt}],
-                system_prompt="You are a memory analyzer. Create brief, factual summaries.",
-                max_tokens=200
+                system_prompt="You are a memory analyzer. Create brief, factual summaries."
+                # max_tokens removed - uses provider config
             )
             
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):

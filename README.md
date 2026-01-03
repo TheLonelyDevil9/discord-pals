@@ -41,7 +41,10 @@ The system instructions were authored by legendary chef @Geechan.
 - **Smart responses** - Tracks reply chains with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context with `/recall` (up to 200 messages)
-- **Autonomous mode** - Bot randomly joins conversations (configurable)
+- **Autonomous mode** - Bot randomly joins conversations (configurable per-channel)
+  - Name triggers (responding to nickname mentions) are now a subset of autonomous mode
+  - Per-channel control over whether bots/apps can trigger responses
+  - Configurable response chance and cooldown per channel
 
 ---
 
@@ -347,6 +350,43 @@ When a user talks to the bot, context is loaded in priority order:
 | `/autonomous <on/off>`   | Toggle random responses (5% default)      |
 | `/stop [enable]`         | Pause/resume bot-to-bot interactions (flag optional) |
 | `/delete_messages <N>`   | Delete bot's last N messages              |
+
+---
+
+## 🤖 Autonomous Mode
+
+Autonomous mode allows bots to randomly join conversations without being explicitly mentioned. This feature is highly configurable per-channel via the web dashboard.
+
+### How It Works
+
+1. **Per-Channel Configuration**: Enable/disable autonomous mode for specific channels
+2. **Response Chance**: Set the probability (1-50%) that the bot will respond to any message
+3. **Cooldown**: Set minimum time between autonomous responses (1-10 minutes)
+4. **Bot Triggers**: Control whether other bots/apps can trigger autonomous responses
+
+### Name Triggers
+
+Name triggers (responding when the bot's name/nickname is mentioned without @) are now a **subset of autonomous mode**:
+
+- Name triggers only work in channels where autonomous mode is enabled
+- The `name_trigger_chance` runtime config controls the probability of responding to name mentions
+- If `allow_bot_triggers` is disabled for a channel, bots cannot trigger name-based responses
+
+### Dashboard Configuration
+
+Access the Channels page in the web dashboard to configure:
+
+1. Click **⚙️ Configure** on any channel
+2. Toggle **Enable Autonomous Responses**
+3. Adjust **Response Chance** slider (1-50%)
+4. Adjust **Cooldown** slider (1-10 minutes)
+5. Toggle **🤖 Allow Bot Triggers** to control whether other bots can trigger responses
+
+Channels with bot triggers enabled show a 🤖 icon in the status column.
+
+### Quick Toggle
+
+Click the ON/OFF badge in the Autonomous column to quickly enable/disable autonomous mode while preserving other settings.
 
 ### Fun Commands (17 total!)
 
