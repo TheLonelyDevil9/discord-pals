@@ -95,6 +95,33 @@
     </div>
     {% endfor %}
 </div>
+
+<div class="card">
+    <h2>🏷️ Name Trigger Settings</h2>
+    <p class="text-muted" style="margin-bottom: 15px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
+    
+    <div class="form-group">
+        <label for="name_trigger_chance">Response Chance</label>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
+                value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
+                oninput="document.getElementById('name_chance_val').textContent = this.value + '%'">
+            <span id="name_chance_val" style="min-width: 50px;">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+        </div>
+        <small>Chance to respond when bot name, username, or character name is mentioned</small>
+    </div>
+    
+    <div class="form-group">
+        <label for="custom_nicknames">Custom Nicknames</label>
+        <input type="text" id="custom_nicknames" name="custom_nicknames" 
+            value="{{ config.custom_nicknames or '' }}"
+            placeholder="e.g., bestie, buddy, pal"
+            style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+        <small>Comma-separated list of additional names the bot should respond to</small>
+    </div>
+    
+    <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Name Settings</button>
+</div>
 {% endif %}
 
 <style>
@@ -238,6 +265,25 @@
             location.reload();
         } else {
             alert('Error: ' + (result.message || 'Unknown error'));
+        }
+    }
+
+    async function saveNameTriggerSettings() {
+        const data = {
+            name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100,
+            custom_nicknames: document.getElementById('custom_nicknames').value.trim()
+        };
+
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            showToast('Name trigger settings saved!', 'success');
+        } else {
+            showToast('Failed to save settings', 'error');
         }
     }
 </script>

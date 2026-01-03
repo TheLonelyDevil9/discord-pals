@@ -16,7 +16,8 @@ DEFAULTS = {
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
-    "name_trigger_chance": 0.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
+    "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
+    "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
 }
 

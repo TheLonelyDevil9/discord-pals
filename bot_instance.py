@@ -135,7 +135,7 @@ class BotInstance:
             # Name/nickname trigger - respond when bot's name is mentioned (chance-based)
             name_triggered = False
             import runtime_config
-            name_trigger_chance = runtime_config.get('name_trigger_chance', 0.0)
+            name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
             if name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm:
                 bot_display_name = guild.me.display_name if guild else self.client.user.display_name
                 bot_username = self.client.user.name
@@ -146,7 +146,15 @@ class BotInstance:
                 if char_name:
                     names_to_check.append(char_name.lower())
                 
-                # Check if any name appears in message (word boundary aware)
+                # Add custom nicknames from config
+                custom_nicknames = runtime_config.get('custom_nicknames', '')
+                if custom_nicknames:
+                    for nick in custom_nicknames.split(','):
+                        nick = nick.strip().lower()
+                        if nick and len(nick) >= 2:
+                            names_to_check.append(nick)
+                
+                # Check if any name appears in message
                 for name in names_to_check:
                     if name and len(name) >= 2 and name in content_lower:
                         if random.random() < name_trigger_chance:
