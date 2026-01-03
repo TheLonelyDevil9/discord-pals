@@ -23,32 +23,57 @@ multipart_responses: Dict[int, Dict[int, str]] = {}
 # History persistence file
 HISTORY_CACHE_FILE = os.path.join(DATA_DIR, "history_cache.json")
 
+# Channel name mapping (channel_id -> name) for readable storage
+channel_names: Dict[int, str] = {}
+
 
 def save_history():
     """Save conversation history to disk for persistence across restarts."""
     try:
-        # Convert int keys to strings for JSON
-        serializable = {str(k): v for k, v in conversation_history.items()}
+        # Build data structure with channel names for readability
+        serializable = {}
+        for channel_id, messages in conversation_history.items():
+            key = str(channel_id)
+            # Store both the channel name (if known) and messages
+            name = channel_names.get(channel_id, str(channel_id))
+            serializable[key] = {
+                "name": name,
+                "messages": messages
+            }
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(serializable, f, ensure_ascii=False)
+            json.dump(serializable, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"Failed to save history: {e}")
 
 
 def load_history():
     """Load conversation history from disk on startup."""
-    global conversation_history
+    global conversation_history, channel_names
     try:
         if os.path.exists(HISTORY_CACHE_FILE):
             with open(HISTORY_CACHE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Convert string keys back to ints
-                conversation_history = {int(k): v for k, v in data.items()}
+                # Handle both old format (list) and new format (dict with name/messages)
+                for k, v in data.items():
+                    channel_id = int(k)
+                    if isinstance(v, dict) and "messages" in v:
+                        # New format with name
+                        conversation_history[channel_id] = v["messages"]
+                        if "name" in v:
+                            channel_names[channel_id] = v["name"]
+                    else:
+                        # Old format - just list of messages
+                        conversation_history[channel_id] = v
                 print(f"Loaded history for {len(conversation_history)} channels")
     except Exception as e:
         print(f"Failed to load history: {e}")
         conversation_history = {}
+
+
+def set_channel_name(channel_id: int, name: str):
+    """Store channel name for readable history display."""
+    channel_names[channel_id] = name
 
 
 def get_history(channel_id: int) -> List[dict]:

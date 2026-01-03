@@ -22,7 +22,7 @@ from discord_utils import (
     get_reply_context, get_user_display_name, get_sticker_info,
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
-    resolve_discord_formatting, load_history
+    resolve_discord_formatting, load_history, set_channel_name
 )
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -468,8 +468,13 @@ class BotInstance:
             
             add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
             
-            # Track stats
+            # Store channel name for readable history display
             channel_name = getattr(message.channel, 'name', 'DM')
+            if guild:
+                channel_name = f"#{channel_name} ({guild.name})"
+            set_channel_name(channel_id, channel_name)
+            
+            # Track stats
             stats_manager.record_message(user_id, user_name, channel_id, channel_name)
             
             attachment_content = await process_attachments(message) if attachments else None
