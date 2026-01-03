@@ -654,6 +654,24 @@ def api_switch_character():
     return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
 
 
+@app.route('/api/nicknames', methods=['POST'])
+def api_nicknames():
+    """Update nicknames for a bot at runtime."""
+    import logger as log
+    
+    data = request.json or {}
+    bot_name = data.get('bot_name')
+    nicknames = data.get('nicknames', '')
+    
+    for bot in bot_instances:
+        if bot.name == bot_name:
+            bot.nicknames = nicknames
+            log.info(f"Updated nicknames for {bot_name}: {nicknames or '(none)'}")
+            return jsonify({'status': 'ok', 'nicknames': nicknames})
+    
+    return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
+
+
 @app.route('/context')
 def context_page():
     """Context visualization page."""

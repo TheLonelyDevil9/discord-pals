@@ -112,13 +112,16 @@
     </div>
     
     <h3 style="margin-top: 20px;">Per-Bot Nicknames</h3>
-    <small class="text-muted">Custom nicknames are set in bots.json for each bot</small>
+    <small class="text-muted">Comma-separated list of additional names each bot responds to</small>
     {% for bot in bots %}
     <div class="bot-row" style="margin-top: 10px;">
         <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
         <strong>{{ bot.name }}</strong>
-        <span class="text-muted">nicknames:</span>
-        <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px;">{{ bot.nicknames or '(none)' }}</code>
+        <input type="text" id="nicknames-{{ bot.name }}" 
+            value="{{ bot.nicknames or '' }}"
+            placeholder="e.g., bestie, buddy"
+            style="flex: 1; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); margin-left: 10px;">
+        <button class="btn btn-small" onclick="saveNicknames('{{ bot.name }}')">Save</button>
     </div>
     {% endfor %}
     
@@ -313,6 +316,22 @@
             showToast(enabled ? 'Raw generation logging enabled' : 'Raw generation logging disabled', 'success');
         } else {
             showToast('Failed to toggle setting', 'error');
+        }
+    }
+
+    async function saveNicknames(botName) {
+        const nicknames = document.getElementById('nicknames-' + botName).value.trim();
+        
+        const response = await fetch('/api/nicknames', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
+        });
+
+        if (response.ok) {
+            showToast('Nicknames saved for ' + botName + '!', 'success');
+        } else {
+            showToast('Failed to save nicknames', 'error');
         }
     }
 </script>
