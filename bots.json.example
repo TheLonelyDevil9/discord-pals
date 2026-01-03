@@ -3,12 +3,14 @@
     {
       "name": "Firefly",
       "token_env": "FIREFLY_DISCORD_TOKEN",
-      "character": "firefly"
+      "character": "firefly",
+      "nicknames": "fly, bestie"
     },
     {
       "name": "George",
       "token_env": "GEORGE_DISCORD_TOKEN",
-      "character": "george"
+      "character": "george",
+      "nicknames": ""
     }
   ]
 }

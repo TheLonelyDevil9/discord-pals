@@ -47,7 +47,8 @@ def load_bot_configs() -> List[dict]:
             bots.append({
                 "name": bot_cfg["name"],
                 "token": token,
-                "character_name": bot_cfg["character"]
+                "character_name": bot_cfg["character"],
+                "nicknames": bot_cfg.get("nicknames", "")  # Custom nicknames for this bot
             })
         
         if bots:

@@ -101,7 +101,7 @@
     <p class="text-muted" style="margin-bottom: 15px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
     
     <div class="form-group">
-        <label for="name_trigger_chance">Response Chance</label>
+        <label for="name_trigger_chance">Response Chance (All Bots)</label>
         <div style="display: flex; align-items: center; gap: 10px;">
             <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
                 value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
@@ -111,16 +111,32 @@
         <small>Chance to respond when bot name, username, or character name is mentioned</small>
     </div>
     
-    <div class="form-group">
-        <label for="custom_nicknames">Custom Nicknames</label>
-        <input type="text" id="custom_nicknames" name="custom_nicknames" 
-            value="{{ config.custom_nicknames or '' }}"
-            placeholder="e.g., bestie, buddy, pal"
-            style="width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
-        <small>Comma-separated list of additional names the bot should respond to</small>
+    <h3 style="margin-top: 20px;">Per-Bot Nicknames</h3>
+    <small class="text-muted">Custom nicknames are set in bots.json for each bot</small>
+    {% for bot in bots %}
+    <div class="bot-row" style="margin-top: 10px;">
+        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+        <strong>{{ bot.name }}</strong>
+        <span class="text-muted">nicknames:</span>
+        <code style="background: var(--bg); padding: 4px 8px; border-radius: 4px;">{{ bot.nicknames or '(none)' }}</code>
     </div>
+    {% endfor %}
     
-    <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Name Settings</button>
+    <button type="button" class="btn btn-primary" style="margin-top: 15px;" onclick="saveNameTriggerSettings()">Save Chance</button>
+</div>
+
+<div class="card">
+    <h2>🔧 Debug Settings</h2>
+    
+    <div class="form-group">
+        <label>
+            <input type="checkbox" id="raw_generation_logging" 
+                {% if config.raw_generation_logging %}checked{% endif %}
+                onchange="toggleRawLogging(this.checked)">
+            Enable Raw Generation Logging
+        </label>
+        <small>Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</small>
+    </div>
 </div>
 {% endif %}
 
@@ -270,8 +286,7 @@
 
     async function saveNameTriggerSettings() {
         const data = {
-            name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100,
-            custom_nicknames: document.getElementById('custom_nicknames').value.trim()
+            name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100
         };
 
         const response = await fetch('/api/config', {
@@ -281,9 +296,23 @@
         });
 
         if (response.ok) {
-            showToast('Name trigger settings saved!', 'success');
+            showToast('Name trigger chance saved!', 'success');
         } else {
             showToast('Failed to save settings', 'error');
+        }
+    }
+
+    async function toggleRawLogging(enabled) {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ raw_generation_logging: enabled })
+        });
+
+        if (response.ok) {
+            showToast(enabled ? 'Raw generation logging enabled' : 'Raw generation logging disabled', 'success');
+        } else {
+            showToast('Failed to toggle setting', 'error');
         }
     }
 </script>

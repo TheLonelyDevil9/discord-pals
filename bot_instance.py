@@ -32,10 +32,11 @@ import logger as log
 class BotInstance:
     """Encapsulates a single Discord bot with its own client, character, and state."""
     
-    def __init__(self, name: str, token: str, character_name: str):
+    def __init__(self, name: str, token: str, character_name: str, nicknames: str = ""):
         self.name = name
         self.token = token
         self.character_name = character_name
+        self.nicknames = nicknames  # Comma-separated custom nicknames for this bot
         self.character: Optional[Character] = None
         
         # Create intents
@@ -146,10 +147,9 @@ class BotInstance:
                 if char_name:
                     names_to_check.append(char_name.lower())
                 
-                # Add custom nicknames from config
-                custom_nicknames = runtime_config.get('custom_nicknames', '')
-                if custom_nicknames:
-                    for nick in custom_nicknames.split(','):
+                # Add custom nicknames from per-bot config
+                if self.nicknames:
+                    for nick in self.nicknames.split(','):
                         nick = nick.strip().lower()
                         if nick and len(nick) >= 2:
                             names_to_check.append(nick)

@@ -609,7 +609,8 @@ def config_page():
             'name': bot.name,
             'character': bot.character.name if bot.character else 'None',
             'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
-            'auto_channels': auto_channels
+            'auto_channels': auto_channels,
+            'nicknames': getattr(bot, 'nicknames', '')  # Per-bot custom nicknames
         })
     
     return render_template('config.html',
