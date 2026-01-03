@@ -100,32 +100,50 @@
 <!-- Autonomous Configuration Modal -->
 <div id="auto-modal" class="modal" style="display: none;">
     <div class="modal-content">
-        <h3>⚙️ Configure Autonomous Mode</h3>
+        <h3>⚙️ Configure Channel</h3>
         <p id="auto-modal-channel" style="color: var(--text-muted); margin-bottom: 20px;"></p>
         
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="auto-enabled">
-                Enable Autonomous Responses
-            </label>
-            <small>Bot will occasionally respond without being mentioned (includes name triggers)</small>
+        <!-- Autonomous Mode Section -->
+        <div class="config-section">
+            <h4>🎲 Autonomous Mode</h4>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="auto-enabled">
+                    Enable Autonomous Responses
+                </label>
+                <small>Bot will occasionally respond without being mentioned (includes name triggers)</small>
+            </div>
+            
+            <div class="form-group" id="auto-settings">
+                <label for="auto-chance">Response Chance: <span id="chance-val">5</span>%</label>
+                <input type="range" id="auto-chance" min="1" max="50" value="5"
+                       oninput="document.getElementById('chance-val').textContent = this.value">
+                
+                <label for="auto-cooldown" style="margin-top: 15px;">Cooldown: <span id="cooldown-val">2</span> minutes</label>
+                <input type="range" id="auto-cooldown" min="1" max="10" value="2"
+                       oninput="document.getElementById('cooldown-val').textContent = this.value">
+            </div>
         </div>
         
-        <div class="form-group" id="auto-settings">
-            <label for="auto-chance">Response Chance: <span id="chance-val">5</span>%</label>
-            <input type="range" id="auto-chance" min="1" max="50" value="5"
-                   oninput="document.getElementById('chance-val').textContent = this.value">
+        <!-- Name Trigger Section -->
+        <div class="config-section">
+            <h4>🏷️ Name Triggers</h4>
+            <small class="section-desc">Bot responds when its name/nickname is mentioned (requires autonomous mode)</small>
             
-            <label for="auto-cooldown" style="margin-top: 15px;">Cooldown: <span id="cooldown-val">2</span> minutes</label>
-            <input type="range" id="auto-cooldown" min="1" max="10" value="2"
-                   oninput="document.getElementById('cooldown-val').textContent = this.value">
-            
-            <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+            <div class="form-group">
                 <label>
                     <input type="checkbox" id="auto-allow-bots">
-                    🤖 Allow Bot Triggers
+                    🤖 Allow Bot/App Triggers
                 </label>
-                <small>When enabled, other bots/apps can trigger autonomous responses (not just humans)</small>
+                <small>When enabled, other Discord bots/apps can trigger name-based responses (not just humans)</small>
+            </div>
+            
+            <div class="form-group" id="nickname-settings">
+                <label>Bot Nicknames</label>
+                <small>Comma-separated list of additional names the bot responds to</small>
+                <div id="bot-nicknames-container">
+                    <!-- Populated by JavaScript -->
+                </div>
             </div>
         </div>
         
@@ -273,10 +291,86 @@ tr.hidden {
     background: rgba(63, 185, 80, 0.3);
     color: var(--success);
 }
+
+/* Config sections in modal */
+.config-section {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border);
+}
+
+.config-section:last-of-type {
+    border-bottom: none;
+}
+
+.config-section h4 {
+    margin-bottom: 12px;
+    color: var(--accent);
+    font-size: 1em;
+}
+
+.section-desc {
+    display: block;
+    color: var(--text-muted);
+    margin-bottom: 15px;
+    font-size: 0.85em;
+}
+
+/* Nickname input rows */
+.nickname-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 8px;
+    background: var(--bg);
+    border-radius: 6px;
+}
+
+.nickname-row .bot-name {
+    min-width: 100px;
+    font-weight: 500;
+    color: var(--accent);
+}
+
+.nickname-row input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+}
+
+.nickname-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.modal-content {
+    max-width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
 </style>
 
 <script>
 let currentChannelId = null;
+let botNicknames = {};  // Cache for bot nicknames
+
+// Load bot nicknames on page load
+async function loadBotNicknames() {
+    try {
+        const response = await fetch('/api/nicknames');
+        const data = await response.json();
+        botNicknames = data.nicknames || {};
+    } catch (e) {
+        console.error('Failed to load bot nicknames:', e);
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', loadBotNicknames);
 
 // Filter channels
 function filterChannels() {
@@ -320,6 +414,36 @@ function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowB
     document.getElementById('auto-cooldown').value = cooldown;
     document.getElementById('cooldown-val').textContent = cooldown;
     document.getElementById('auto-allow-bots').checked = allowBots || false;
+    
+    // Populate nickname inputs for each bot
+    const container = document.getElementById('bot-nicknames-container');
+    container.innerHTML = '';
+    
+    for (const [botName, nicknames] of Object.entries(botNicknames)) {
+        const row = document.createElement('div');
+        row.className = 'nickname-row';
+        row.innerHTML = `
+            <span class="bot-name">${botName}</span>
+            <input type="text"
+                   id="nickname-${botName.replace(/\s+/g, '-')}"
+                   data-bot-name="${botName}"
+                   value="${nicknames || ''}"
+                   placeholder="e.g., bestie, buddy">
+        `;
+        container.appendChild(row);
+    }
+    
+    // If no bots loaded yet, show a message
+    if (Object.keys(botNicknames).length === 0) {
+        container.innerHTML = '<small style="color: var(--text-muted);">Loading bot info...</small>';
+        // Try to reload
+        loadBotNicknames().then(() => {
+            if (Object.keys(botNicknames).length > 0) {
+                openAutoModal(channelId, channelName, enabled, chance, cooldown, allowBots);
+            }
+        });
+    }
+    
     document.getElementById('auto-modal').style.display = 'flex';
     
     // Toggle settings visibility based on enabled state
@@ -338,7 +462,7 @@ function toggleAutoSettings() {
 
 document.getElementById('auto-enabled').addEventListener('change', toggleAutoSettings);
 
-// Save autonomous configuration
+// Save autonomous configuration and nicknames
 async function saveAutoConfig() {
     const channelId = document.getElementById('auto-channel-id').value;
     const enabled = document.getElementById('auto-enabled').checked;
@@ -346,6 +470,36 @@ async function saveAutoConfig() {
     const cooldown = parseInt(document.getElementById('auto-cooldown').value);
     const allowBotTriggers = document.getElementById('auto-allow-bots').checked;
     
+    let hasErrors = false;
+    
+    // Save nicknames for each bot
+    const nicknameInputs = document.querySelectorAll('#bot-nicknames-container input[data-bot-name]');
+    for (const input of nicknameInputs) {
+        const botName = input.dataset.botName;
+        const nicknames = input.value.trim();
+        
+        // Only save if changed
+        if (botNicknames[botName] !== nicknames) {
+            try {
+                const response = await fetch('/api/nicknames', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    botNicknames[botName] = nicknames;  // Update cache
+                } else {
+                    hasErrors = true;
+                }
+            } catch (e) {
+                hasErrors = true;
+            }
+        }
+    }
+    
+    // Save autonomous settings
     try {
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
@@ -372,7 +526,11 @@ async function saveAutoConfig() {
                 }
             }
             
-            showToast(enabled ? `Autonomous mode enabled (${chance}%)` : 'Autonomous mode disabled', 'success');
+            if (hasErrors) {
+                showToast('Settings saved (some nickname updates failed)', 'warning');
+            } else {
+                showToast('All settings saved!', 'success');
+            }
             closeAutoModal();
         } else {
             showToast('Failed to save configuration', 'error');

@@ -29,6 +29,7 @@ def load_bot_configs() -> List[dict]:
     """Load bot configurations from bots.json or fall back to single-bot mode."""
     import json
     import os
+    import runtime_config
     
     if os.path.exists('bots.json'):
         try:
@@ -60,10 +61,15 @@ def load_bot_configs() -> List[dict]:
         log.error("DISCORD_TOKEN not set!")
         return []
     
+    # Load nicknames from runtime_config for single-bot mode persistence
+    bot_nicknames = runtime_config.get('bot_nicknames', {})
+    default_nicknames = bot_nicknames.get('Default', '')
+    
     return [{
         "name": "Default",
         "token": DISCORD_TOKEN,
-        "character_name": DEFAULT_CHARACTER
+        "character_name": DEFAULT_CHARACTER,
+        "nicknames": default_nicknames
     }]
 
 

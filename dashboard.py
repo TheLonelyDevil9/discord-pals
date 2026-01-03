@@ -654,11 +654,20 @@ def api_switch_character():
     return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
 
 
-@app.route('/api/nicknames', methods=['POST'])
+@app.route('/api/nicknames', methods=['GET', 'POST'])
 def api_nicknames():
-    """Update nicknames for a bot at runtime."""
+    """Get or update nicknames for bots. Persists to bots.json or runtime_config.json."""
     import logger as log
+    import runtime_config
     
+    if request.method == 'GET':
+        # Return all bot nicknames
+        nicknames_data = {}
+        for bot in bot_instances:
+            nicknames_data[bot.name] = getattr(bot, 'nicknames', '')
+        return jsonify({'nicknames': nicknames_data})
+    
+    # POST request
     data = request.json or {}
     bot_name = data.get('bot_name')
     nicknames = data.get('nicknames', '')
@@ -666,8 +675,39 @@ def api_nicknames():
     for bot in bot_instances:
         if bot.name == bot_name:
             bot.nicknames = nicknames
-            log.info(f"Updated nicknames for {bot_name}: {nicknames or '(none)'}")
-            return jsonify({'status': 'ok', 'nicknames': nicknames})
+            
+            # Persist to bots.json if it exists (multi-bot mode)
+            bots_file = Path('bots.json')
+            persisted = False
+            
+            if bots_file.exists():
+                try:
+                    with open(bots_file, 'r') as f:
+                        bots_config = json.load(f)
+                    
+                    # Find and update the bot's nicknames in config
+                    for bot_cfg in bots_config.get('bots', []):
+                        if bot_cfg.get('name') == bot_name:
+                            bot_cfg['nicknames'] = nicknames
+                            persisted = True
+                            break
+                    
+                    if persisted:
+                        with open(bots_file, 'w') as f:
+                            json.dump(bots_config, f, indent=2)
+                        log.info(f"Updated and persisted nicknames for {bot_name} to bots.json: {nicknames or '(none)'}")
+                except Exception as e:
+                    log.warn(f"Failed to persist nicknames to bots.json: {e}")
+            
+            # For single-bot mode or as fallback, also store in runtime_config
+            if not persisted:
+                # Store in runtime_config for single-bot mode persistence
+                bot_nicknames = runtime_config.get('bot_nicknames', {})
+                bot_nicknames[bot_name] = nicknames
+                runtime_config.set('bot_nicknames', bot_nicknames)
+                log.info(f"Updated and persisted nicknames for {bot_name} to runtime_config: {nicknames or '(none)'}")
+            
+            return jsonify({'status': 'ok', 'nicknames': nicknames, 'bot_name': bot_name})
     
     return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
 
