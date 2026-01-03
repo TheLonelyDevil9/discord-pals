@@ -23,7 +23,9 @@
       "model": "local-model",
       "max_tokens": 2048,
       "temperature": 0.8,
-      "requires_key": false
+      "requires_key": false,
+      "include_body": "min_p: 0.1\ntop_k: 40\nrepetition_penalty: 1.1",
+      "exclude_body": "- frequency_penalty\n- presence_penalty"
     }
   ],
   "timeout": 60

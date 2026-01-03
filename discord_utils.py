@@ -137,12 +137,15 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         content = strip_character_prefix(content)
     
     # Format content with reply context (author, replied_content)
+    # Fix personality bleed: clearly separate quoted author from current speaker
     if reply_to and role == "user":
         reply_author, reply_content = reply_to
         if reply_content:
-            content = f"(replying to {reply_author}'s message: \"{reply_content[:100]}...\") {content}"
+            # Use explicit attribution to prevent LLM from confusing who said what
+            # Format: ↩️ marks this as a reply, clearly states who was quoted
+            content = f'↩️ [quoting {reply_author}: "{reply_content[:100]}..."] {content}'
         else:
-            content = f"(replying to {reply_author}) {content}"
+            content = f"↩️ [replying to {reply_author}] {content}"
     
     msg = {"role": role, "content": content}
     if author_name:

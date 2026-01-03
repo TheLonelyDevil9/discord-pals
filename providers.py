@@ -14,6 +14,62 @@ MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 
 
+def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
+    """
+    Merge YAML-formatted string into target dict (SillyTavern style).
+    Supports both object notation and array of objects.
+    
+    Example YAML:
+        min_p: 0.1
+        top_k: 40
+    Or:
+        - min_p: 0.1
+        - top_k: 40
+    """
+    if not yaml_string or not yaml_string.strip():
+        return
+    try:
+        import yaml
+        parsed = yaml.safe_load(yaml_string)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict):
+                    target.update(item)
+        elif isinstance(parsed, dict):
+            target.update(parsed)
+    except Exception as e:
+        log.debug(f"Failed to parse include_body YAML: {e}")
+
+
+def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
+    """
+    Remove keys from dict based on YAML list or object keys (SillyTavern style).
+    
+    Example YAML:
+        - frequency_penalty
+        - presence_penalty
+    Or as object:
+        frequency_penalty: true
+        presence_penalty: true
+    """
+    if not yaml_string or not yaml_string.strip():
+        return
+    try:
+        import yaml
+        parsed = yaml.safe_load(yaml_string)
+        if isinstance(parsed, list):
+            for key in parsed:
+                if isinstance(key, str):
+                    target.pop(key, None)
+        elif isinstance(parsed, dict):
+            for key in parsed.keys():
+                target.pop(key, None)
+        elif isinstance(parsed, str):
+            target.pop(parsed, None)
+    except Exception as e:
+        log.debug(f"Failed to parse exclude_body YAML: {e}")
+
+
 def validate_messages(messages: List[dict]) -> List[dict]:
     """
     Validate and sanitize messages before sending to API.
@@ -118,7 +174,9 @@ class AIProviderManager:
         temperature: float,
         max_tokens: int,
         tier: str,
-        extra_body: Optional[dict] = None
+        extra_body: Optional[dict] = None,
+        include_body: str = "",
+        exclude_body: str = ""
     ) -> str | None:
         """Try to generate with retries on rate limit."""
         
@@ -132,7 +190,17 @@ class AIProviderManager:
                     "max_tokens": max_tokens
                 }
                 
-                # Add extra_body if provided (for provider-specific options)
+                # Apply SillyTavern-style YAML parameters (preferred)
+                if include_body:
+                    merge_yaml_to_dict(request_kwargs, include_body)
+                    log.debug(f"[{tier}] Applied include_body YAML")
+                
+                # Remove keys specified in exclude_body
+                if exclude_body:
+                    exclude_keys_by_yaml(request_kwargs, exclude_body)
+                    log.debug(f"[{tier}] Applied exclude_body YAML")
+                
+                # Legacy: Add extra_body if provided (for backward compatibility)
                 if extra_body:
                     request_kwargs["extra_body"] = extra_body
                     log.debug(f"[{tier}] Using extra_body: {extra_body}")
@@ -160,6 +228,17 @@ class AIProviderManager:
                         return "..."
                     
                     log.ok(f"[{tier}] Got {len(content)} chars from {model}")
+                    
+                    # Raw generation logging (when enabled)
+                    import runtime_config
+                    if runtime_config.get("raw_generation_logging", False):
+                        # Log in chunks to avoid overwhelming logs
+                        preview_len = 1000
+                        if len(content) <= preview_len:
+                            log.info(f"[RAW-GEN] {content}")
+                        else:
+                            log.info(f"[RAW-GEN] {content[:preview_len]}... ({len(content)} chars total)")
+                    
                     return content
                 else:
                     log.warn(f"[{tier}] No choices in response from {model}")
@@ -224,6 +303,8 @@ class AIProviderManager:
                 
                 model = PROVIDERS[tier]["model"]
                 extra_body = PROVIDERS[tier].get("extra_body", {})
+                include_body = PROVIDERS[tier].get("include_body", "")
+                exclude_body = PROVIDERS[tier].get("exclude_body", "")
                 
                 # Use per-provider settings, with fallback to function args or defaults
                 provider_max_tokens = PROVIDERS[tier].get("max_tokens", 8192)
@@ -237,7 +318,9 @@ class AIProviderManager:
                     client = self.providers[tier]
                     result = await self._try_generate(
                         client, model, full_messages, effective_temperature, effective_max_tokens, tier,
-                        extra_body=extra_body if extra_body else None
+                        extra_body=extra_body if extra_body else None,
+                        include_body=include_body,
+                        exclude_body=exclude_body
                     )
                     
                     if result:

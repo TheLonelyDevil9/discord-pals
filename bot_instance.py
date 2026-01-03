@@ -131,7 +131,29 @@ class BotInstance:
                     pass
             
             is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
-            should_respond = mentioned or is_reply_to_bot or is_autonomous
+            
+            # Name/nickname trigger - respond when bot's name is mentioned (chance-based)
+            name_triggered = False
+            import runtime_config
+            name_trigger_chance = runtime_config.get('name_trigger_chance', 0.0)
+            if name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm:
+                bot_display_name = guild.me.display_name if guild else self.client.user.display_name
+                bot_username = self.client.user.name
+                char_name = self.character.name if self.character else ""
+                
+                content_lower = message.content.lower()
+                names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
+                if char_name:
+                    names_to_check.append(char_name.lower())
+                
+                # Check if any name appears in message (word boundary aware)
+                for name in names_to_check:
+                    if name and len(name) >= 2 and name in content_lower:
+                        if random.random() < name_trigger_chance:
+                            name_triggered = True
+                            break
+            
+            should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
             
             # Debug: log why this bot is responding
             if should_respond:
@@ -142,6 +164,8 @@ class BotInstance:
                     reason.append("reply_to_bot")
                 if is_autonomous:
                     reason.append("autonomous")
+                if name_triggered:
+                    reason.append("name_triggered")
                 log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
             
             if should_respond:

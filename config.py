@@ -15,7 +15,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 # AI Settings (defined before load_providers so they can be used as defaults)
 DEFAULT_TEMPERATURE = 1.0
-DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_TOKENS = 2048
 
 # --- Provider Configuration ---
 
@@ -69,7 +69,11 @@ def load_providers() -> tuple[dict, int]:
                 "model": p.get("model", "gpt-4o"),
                 "max_tokens": p.get("max_tokens", DEFAULT_MAX_TOKENS),  # Per-provider max tokens
                 "temperature": p.get("temperature", DEFAULT_TEMPERATURE),  # Per-provider temperature
-                "extra_body": p.get("extra_body", {})  # Custom request body options
+                "extra_body": p.get("extra_body", {}),  # Legacy: dict of custom request body options
+                # SillyTavern-style YAML parameters (preferred)
+                "include_body": p.get("include_body", ""),  # YAML string to merge into request body
+                "exclude_body": p.get("exclude_body", ""),  # YAML string of keys to remove from request
+                "include_headers": p.get("include_headers", ""),  # YAML string to merge into headers
             }
         
         timeout = data.get("timeout", 60)
