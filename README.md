@@ -12,6 +12,26 @@ The system instructions were authored by legendary chef @Geechan.
   <img src="images/banner.jpg" alt="Discord Pals" width="1200">
 </p>
 
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [AI Provider Setup](#ai-provider-setup)
+- [Web Dashboard](#️-web-dashboard)
+- [Memory Architecture](#-memory-architecture)
+- [Commands](#-commands)
+- [Autonomous Mode](#-autonomous-mode)
+- [Creating Characters](#creating-characters)
+- [Running Multiple Bots](#running-multiple-bots)
+- [Runtime Configuration](#️-runtime-configuration)
+- [Deployment & Production](#-deployment--production)
+- [File Structure](#file-structure)
+- [Troubleshooting](#troubleshooting)
+- [Tips](#tips)
+
+---
+
 ## Features
 
 - **Any character** - Load characters from markdown files with persona, example dialogue, and special user contexts
@@ -324,6 +344,92 @@ This checks:
 
 ---
 
+## 🖥️ Web Dashboard
+
+Discord Pals includes a full web dashboard for managing your bot without touching config files or restarting.
+
+### Accessing the Dashboard
+
+The dashboard starts automatically when you run the bot:
+
+```bash
+python main.py
+```
+
+Open your browser to: **<http://localhost:5000>**
+
+> **Note:** The dashboard only accepts connections from localhost by default for security. See [Deployment & Production](#-deployment--production) for remote access options.
+
+### Dashboard Home
+
+The main dashboard shows:
+
+- **Bot Status** - Online/offline state for each bot instance
+- **Quick Controls** - Pause/resume bot responses
+- **Killswitch** - Emergency stop for all bot activity (sets `global_paused: true`)
+- **Bot Interactions Toggle** - Pause bot-to-bot conversations globally
+
+### Characters Page
+
+Manage your character files directly from the browser:
+
+- **View/Edit Characters** - Edit `.md` files in `characters/` folder
+- **Live Preview** - See how your character will be parsed
+- **System Prompts** - Edit `prompts/system.md` and `prompts/chatroom_context.md`
+- **Placeholder Reference** - Quick reference for available placeholders (`{{char}}`, `{{user}}`, etc.)
+
+Changes are saved immediately. Use `/reload` in Discord or click the reload button to apply changes.
+
+### Memories & Lore Page
+
+Manage all memory types:
+
+- **Server Memories** - Shared events and facts for the server
+- **User Memories** - Per-user facts (with Discord username resolution)
+- **DM Memories** - Private conversation memories per character
+- **Global User Profiles** - Cross-server facts that follow users
+- **Lore** - World-building information shared across characters
+
+Features:
+
+- Add, edit, and delete memories
+- Filter by server, user, or character
+- User ID to username resolution for readability
+
+### Channels Page
+
+Configure autonomous mode per channel:
+
+- **Enable/Disable** - Toggle autonomous responses for each channel
+- **Response Chance** - Set probability (1-50%) of responding to messages
+- **Cooldown** - Minimum time between autonomous responses (1-10 minutes)
+- **Bot Triggers** - Allow/disallow other bots from triggering responses
+
+Click the channel name to expand settings, or use the quick toggle to enable/disable.
+
+### Config Page
+
+Adjust runtime settings without restarting:
+
+- **History Limit** - Messages included in context (default: 200)
+- **Batch Timeout** - Seconds to wait for follow-up messages (default: 15)
+- **Name Trigger Chance** - Probability of responding to name mentions
+- **Provider Selection** - Switch between configured providers
+- **Single User Mode** - SillyTavern-style message formatting
+
+See [Runtime Configuration](#️-runtime-configuration) for details on each setting.
+
+### Logs & Stats Page
+
+Monitor your bot in real-time:
+
+- **Live Log Stream** - Watch bot activity as it happens
+- **Message Stats** - Daily message counts, response times, top users
+- **Context Visualization** - See exactly what context is sent to the AI (with token estimates)
+- **Error Tracking** - View recent errors and provider failures
+
+---
+
 ## 🧠 Memory Architecture
 
 The bot uses a layered memory system for intelligent context management:
@@ -546,6 +652,192 @@ Starting 3 bot(s)...
 
 ---
 
+## ⚙️ Runtime Configuration
+
+These settings can be adjusted via the web dashboard or by editing `bot_data/runtime_config.json`. Changes take effect immediately without restarting.
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `history_limit` | 200 | Maximum messages included in AI context. Higher = more memory, slower responses |
+| `immediate_message_count` | 5 | Recent messages placed after the chatroom context block |
+| `batch_timeout` | 15 | Seconds to wait for follow-up messages before responding |
+| `bot_interactions_paused` | false | Pause all bot-to-bot conversations |
+| `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
+| `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
+| `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
+| `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
+
+### When to Adjust Settings
+
+**Slow responses?**
+
+- Lower `history_limit` (try 100)
+- Lower `batch_timeout` (try 5-10)
+
+**Bot missing context?**
+
+- Increase `history_limit`
+- Increase `immediate_message_count`
+
+**Too many responses?**
+
+- Lower `name_trigger_chance`
+- Disable autonomous mode in specific channels
+
+**Debugging issues?**
+
+- Enable `raw_generation_logging` temporarily
+
+---
+
+## 🚀 Deployment & Production
+
+Run your bot 24/7 on a server or VPS.
+
+### Windows (Task Scheduler)
+
+1. Open Task Scheduler (`taskschd.msc`)
+2. Click **Create Basic Task**
+3. Name: "Discord Pals Bot"
+4. Trigger: **When the computer starts**
+5. Action: **Start a program**
+6. Program: `C:\path\to\discord-pals\run.bat`
+7. Check **Open Properties dialog** → Finish
+8. In Properties, check **Run whether user is logged on or not**
+
+To run hidden (no console window), create a VBS wrapper:
+
+```vbs
+' run_hidden.vbs
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "cmd /c cd /d C:\path\to\discord-pals && venv\Scripts\python.exe main.py", 0
+Set WshShell = Nothing
+```
+
+### Linux (systemd)
+
+1. Create service file:
+
+```bash
+sudo nano /etc/systemd/system/discord-pals.service
+```
+
+2. Add this content:
+
+```ini
+[Unit]
+Description=Discord Pals Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/opt/discord-pals
+ExecStart=/opt/discord-pals/venv/bin/python main.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+3. Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable discord-pals
+sudo systemctl start discord-pals
+```
+
+4. Check status:
+
+```bash
+sudo systemctl status discord-pals
+sudo journalctl -u discord-pals -f  # Live logs
+```
+
+### Docker
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "main.py"]
+```
+
+Create `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+services:
+  discord-pals:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./bot_data:/app/bot_data
+      - ./characters:/app/characters
+      - ./prompts:/app/prompts
+      - ./.env:/app/.env:ro
+      - ./providers.json:/app/providers.json:ro
+      - ./bots.json:/app/bots.json:ro
+    ports:
+      - "5000:5000"  # Dashboard (optional, remove for security)
+```
+
+Run with:
+
+```bash
+docker-compose up -d
+docker-compose logs -f  # View logs
+```
+
+### VPS/Cloud Hosting Tips
+
+**Recommended specs:**
+
+- 1 GB RAM minimum (2 GB for multiple bots)
+- 1 vCPU
+- 10 GB storage
+
+**Security considerations:**
+
+- Dashboard binds to `localhost:5000` by default - this is intentional
+- To access remotely, use SSH tunneling: `ssh -L 5000:localhost:5000 user@your-server`
+- Or set up a reverse proxy with authentication (nginx example below)
+
+**Nginx reverse proxy with basic auth:**
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name dashboard.yourdomain.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    auth_basic "Discord Pals Dashboard";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+Create password file: `sudo htpasswd -c /etc/nginx/.htpasswd admin`
+
+---
+
 ## File Structure
 
 ```text
@@ -600,6 +892,51 @@ discord-pals/
 ### Provider timeout
 
 → Increase timeout in `providers.json` (try 120+ for local LLMs)
+
+### Bot responds very slowly
+
+→ This is usually the `batch_timeout` setting (default 15 seconds). The bot waits for follow-up messages before responding. Lower it in the dashboard Config page or set `batch_timeout` to 5-10.
+
+### Character changes not taking effect
+
+→ Use `/reload` command or click reload in the dashboard. Character files are cached until reloaded.
+
+### Dashboard not accessible
+
+→ Dashboard only binds to localhost for security. Access via `http://localhost:5000` on the same machine. For remote access, use SSH tunneling or set up a reverse proxy (see [Deployment & Production](#-deployment--production)).
+
+### Memories not saving
+
+→ Check that `bot_data/` folder exists and is writable. The bot creates it automatically, but permissions issues can prevent writes.
+
+### Multiple bots responding to each other endlessly
+
+→ Use `/stop` to pause bot-to-bot interactions, or enable the "Bot Interactions Paused" toggle in the dashboard. You can also disable "Allow Bot Triggers" per-channel in autonomous settings.
+
+### Bot responds to everything (too chatty)
+
+→ Disable autonomous mode in specific channels via the dashboard Channels page. Also check `name_trigger_chance` in runtime config.
+
+### "Rate limited" or 429 errors
+
+→ The bot handles these automatically with exponential backoff. If persistent, you're hitting API limits - consider adding a fallback provider or reducing usage.
+
+### Provider fallback not working
+
+→ Check that multiple providers are configured in `providers.json`. The bot tries them in order. Run `python diagnose.py` to verify all providers are reachable.
+
+### History/context seems wrong
+
+→ Use `/clear` to reset conversation history. Check `history_limit` in runtime config - very high values can cause issues with some providers.
+
+### Bot crashes on startup
+
+→ Common causes:
+
+- Invalid JSON in `providers.json` or `bots.json` (use a JSON validator)
+- Missing required environment variables
+- Python version too old (need 3.10+)
+- Missing dependencies (run `pip install -r requirements.txt`)
 
 ---
 
