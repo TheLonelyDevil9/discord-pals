@@ -100,10 +100,22 @@ class BotInstance:
                 return
             if message.content.startswith('/'):  # Slash commands and // OOC messages
                 return
-            
+
             is_dm = isinstance(message.channel, discord.DMChannel)
             is_other_bot = message.author.bot
-            
+
+            # Prevent self-loop: Don't respond to messages from bots with same character name
+            # This catches multi-instance scenarios where different bot clients share a character
+            if is_other_bot and self.character:
+                # Check if the bot's display name matches our character name
+                bot_display = message.author.display_name.lower() if hasattr(message.author, 'display_name') else ""
+                bot_name = message.author.name.lower()
+                char_name = self.character.name.lower()
+                if char_name in bot_display or char_name in bot_name or bot_display in char_name:
+                    log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
+                    add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author))
+                    return
+
             user_name = get_user_display_name(message.author)
             reply_to_name = get_reply_context(message)
             sticker_info = get_sticker_info(message) if not is_other_bot else None
@@ -148,7 +160,7 @@ class BotInstance:
             # Name trigger requires: autonomous enabled for channel + not already triggered by other means
             if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
                 and channel_id in autonomous_manager.enabled_channels):
-                
+
                 # Check if bot triggers are allowed for this channel when message is from a bot
                 if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
                     pass  # Skip name trigger for bots when not allowed
@@ -156,25 +168,33 @@ class BotInstance:
                     bot_display_name = guild.me.display_name if guild else self.client.user.display_name
                     bot_username = self.client.user.name
                     char_name = self.character.name if self.character else ""
-                    
+
                     content_lower = message.content.lower()
-                    names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
-                    if char_name:
-                        names_to_check.append(char_name.lower())
-                    
-                    # Add custom nicknames from per-bot config
-                    if self.nicknames:
-                        for nick in self.nicknames.split(','):
-                            nick = nick.strip().lower()
-                            if nick and len(nick) >= 2:
-                                names_to_check.append(nick)
-                    
-                    # Check if any name appears in message
-                    for name in names_to_check:
-                        if name and len(name) >= 2 and name in content_lower:
-                            if random.random() < name_trigger_chance:
-                                name_triggered = True
-                                break
+
+                    # Skip name trigger if message is quoting the bot itself
+                    # Pattern: ↩️ [quoting CharName: or ↩️ [ CharName's message:
+                    if char_name and (f"[quoting {char_name.lower()}" in content_lower
+                                      or f"[ {char_name.lower()}'s message" in content_lower
+                                      or f"[{char_name.lower()}'s message" in content_lower):
+                        log.debug(f"Skipping name trigger - message quotes self: {char_name}", self.name)
+                    else:
+                        names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
+                        if char_name:
+                            names_to_check.append(char_name.lower())
+
+                        # Add custom nicknames from per-bot config
+                        if self.nicknames:
+                            for nick in self.nicknames.split(','):
+                                nick = nick.strip().lower()
+                                if nick and len(nick) >= 2:
+                                    names_to_check.append(nick)
+
+                        # Check if any name appears in message
+                        for name in names_to_check:
+                            if name and len(name) >= 2 and name in content_lower:
+                                if random.random() < name_trigger_chance:
+                                    name_triggered = True
+                                    break
             
             should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
             
