@@ -22,8 +22,8 @@
         <div class="form-group">
             <label for="immediate_message_count">Immediate Messages (priority focus)</label>
             <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20" step="1"
-                    value="{{ config.immediate_message_count or 5 }}"
+                <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
+                    step="1" value="{{ config.immediate_message_count or 5 }}"
                     oninput="document.getElementById('immediate_val').textContent = this.value">
                 <span id="immediate_val" style="min-width: 40px;">{{ config.immediate_message_count or 5 }}</span>
             </div>
@@ -98,49 +98,103 @@
 
 <div class="card">
     <h2>🏷️ Name Trigger Settings</h2>
-    <p class="text-muted" style="margin-bottom: 15px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
-    
+    <p class="text-muted" style="margin-bottom: 15px;">Bot responds when its name/nickname is mentioned (without
+        @mention)</p>
+
     <div class="form-group">
         <label for="name_trigger_chance">Response Chance (All Bots)</label>
         <div style="display: flex; align-items: center; gap: 10px;">
             <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
                 value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
                 oninput="document.getElementById('name_chance_val').textContent = this.value + '%'">
-            <span id="name_chance_val" style="min-width: 50px;">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+            <span id="name_chance_val" style="min-width: 50px;">{{ ((config.name_trigger_chance or 1.0) * 100) | int
+                }}%</span>
         </div>
         <small>Chance to respond when bot name, username, or character name is mentioned</small>
     </div>
-    
+
     <h3 style="margin-top: 20px;">Per-Bot Nicknames</h3>
     <small class="text-muted">Comma-separated list of additional names each bot responds to</small>
     {% for bot in bots %}
     <div class="bot-row" style="margin-top: 10px;">
         <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
         <strong>{{ bot.name }}</strong>
-        <input type="text" id="nicknames-{{ bot.name }}" 
-            value="{{ bot.nicknames or '' }}"
+        <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
             placeholder="e.g., bestie, buddy"
             style="flex: 1; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); margin-left: 10px;">
         <button class="btn btn-small" onclick="saveNicknames('{{ bot.name }}')">Save</button>
     </div>
     {% endfor %}
-    
-    <button type="button" class="btn btn-primary" style="margin-top: 15px;" onclick="saveNameTriggerSettings()">Save Chance</button>
+
+    <button type="button" class="btn btn-primary" style="margin-top: 15px;" onclick="saveNameTriggerSettings()">Save
+        Chance</button>
 </div>
 
 <div class="card">
     <h2>🔧 Debug Settings</h2>
-    
+
     <div class="form-group">
         <label>
-            <input type="checkbox" id="raw_generation_logging" 
-                {% if config.raw_generation_logging %}checked{% endif %}
+            <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
                 onchange="toggleRawLogging(this.checked)">
             Enable Raw Generation Logging
         </label>
         <small>Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</small>
     </div>
 </div>
+{% endif %}
+
+<!-- JSON Configuration Editors -->
+<div class="card">
+    <h2>📝 Configuration Files</h2>
+    <p style="color: var(--text-muted); margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a
+        restart to take effect.</p>
+
+    <!-- Providers Tab -->
+    <details class="config-editor">
+        <summary>providers.json - AI Provider Settings</summary>
+        <form action="/settings/providers/save" method="POST">
+            <textarea name="content" class="json-editor" spellcheck="false">{{ providers_raw }}</textarea>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Providers</button>
+                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
+                    JSON</button>
+            </div>
+        </form>
+    </details>
+
+    <!-- Bots Tab -->
+    <details class="config-editor">
+        <summary>bots.json - Multi-Bot Configuration</summary>
+        <form action="/settings/bots/save" method="POST">
+            <textarea name="content" class="json-editor" spellcheck="false">{{ bots_raw }}</textarea>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Bots</button>
+                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
+                    JSON</button>
+            </div>
+        </form>
+    </details>
+
+    <!-- Autonomous Tab -->
+    <details class="config-editor">
+        <summary>autonomous.json - Autonomous Mode Settings</summary>
+        <form action="/settings/autonomous/save" method="POST">
+            <textarea name="content" class="json-editor" spellcheck="false">{{ autonomous_raw }}</textarea>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Autonomous</button>
+                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
+                    JSON</button>
+            </div>
+        </form>
+    </details>
+</div>
+
+{% if message %}
+<div class="toast success" style="position: static; margin-bottom: 20px;">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="toast error" style="position: static; margin-bottom: 20px;">{{ error }}</div>
 {% endif %}
 
 <style>
@@ -246,9 +300,105 @@
     .slider-val {
         min-width: 40px;
     }
+
+    /* JSON Editor Styles */
+    .config-editor {
+        margin-bottom: 15px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .config-editor summary {
+        cursor: pointer;
+        padding: 12px 15px;
+        background: var(--bg);
+        font-weight: 500;
+        -webkit-user-select: none;
+        user-select: none;
+        transition: background 0.2s;
+    }
+
+    .config-editor summary:hover {
+        background: var(--bg-hover, rgba(255,255,255,0.05));
+    }
+
+    .config-editor[open] summary {
+        border-bottom: 1px solid var(--border);
+    }
+
+    .config-editor form {
+        padding: 15px;
+    }
+
+    .json-editor {
+        width: 100%;
+        min-height: 300px;
+        max-height: 500px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px;
+        resize: vertical;
+        tab-size: 2;
+        white-space: pre;
+        overflow-wrap: normal;
+        overflow-x: auto;
+    }
+
+    .json-editor:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 99, 102, 241), 0.2);
+    }
+
+    .editor-actions {
+        margin-top: 12px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .btn-secondary {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+    }
+
+    .btn-secondary:hover {
+        background: var(--bg-hover, rgba(255,255,255,0.1));
+    }
 </style>
 
 <script>
+    // Format JSON in textarea with proper indentation
+    function formatJSON(textarea) {
+        try {
+            const obj = JSON.parse(textarea.value);
+            textarea.value = JSON.stringify(obj, null, 2);
+            showToast('JSON formatted successfully', 'success');
+        } catch (e) {
+            showToast('Invalid JSON: ' + e.message, 'error');
+        }
+    }
+
+    // Handle tab key in JSON editors for indentation
+    document.querySelectorAll('.json-editor').forEach(textarea => {
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
+                textarea.selectionStart = textarea.selectionEnd = start + 2;
+            }
+        });
+    });
+
     document.getElementById('config-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const data = {
@@ -321,7 +471,7 @@
 
     async function saveNicknames(botName) {
         const nicknames = document.getElementById('nicknames-' + botName).value.trim();
-        
+
         const response = await fetch('/api/nicknames', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
