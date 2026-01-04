@@ -343,5 +343,46 @@
             margin-top: 20px;
         }
     }
+
+    @media (max-width: 768px) {
+        .tab-container {
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 8px 12px;
+            font-size: 0.85em;
+            flex: 1;
+            text-align: center;
+        }
+
+        .character-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .character-card {
+            padding: 15px;
+        }
+
+        .character-name {
+            font-size: 1.1em;
+        }
+
+        .preview-controls {
+            flex-direction: column;
+        }
+
+        .preview-controls select {
+            width: 100%;
+        }
+
+        .new-character-form {
+            flex-direction: column;
+        }
+
+        .new-character-form input {
+            max-width: 100%;
+        }
+    }
 </style>
 {% endblock %}

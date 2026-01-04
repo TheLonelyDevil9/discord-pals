@@ -549,4 +549,47 @@
     fetchLogs();
     setInterval(fetchLogs, 2000);
 </script>
+
+<style>
+    @media (max-width: 768px) {
+        .tab-container {
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 8px 12px;
+            font-size: 0.85em;
+        }
+
+        .logs-controls {
+            gap: 10px;
+        }
+
+        .logs-controls input,
+        .logs-controls select {
+            width: 100%;
+        }
+
+        .log-time {
+            display: none;
+        }
+
+        .log-bot {
+            min-width: 60px;
+            font-size: 0.8em;
+        }
+
+        .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        div[style*="grid-template-columns: 1fr 1fr"] {
+            display: block !important;
+        }
+
+        .table-container {
+            margin-bottom: 15px;
+        }
+    }
+</style>
 {% endblock %}

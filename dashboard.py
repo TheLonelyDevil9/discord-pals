@@ -368,31 +368,8 @@ PROMPTS_DIR = Path("prompts")
 
 @app.route('/prompts')
 def prompts():
-    """Prompts editor page."""
-    system_content = ""
-    rules_content = ""
-    
-    system_path = PROMPTS_DIR / "system.md"
-    rules_path = PROMPTS_DIR / "response_rules.md"
-    
-    if system_path.exists():
-        try:
-            with open(system_path, 'r', encoding='utf-8') as f:
-                system_content = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read system.md: {e}")
-    
-    if rules_path.exists():
-        try:
-            with open(rules_path, 'r', encoding='utf-8') as f:
-                rules_content = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read response_rules.md: {e}")
-    
-    return render_template('prompts.html',
-        system_content=system_content,
-        rules_content=rules_content
-    )
+    """Redirect to characters page (prompts merged into characters)."""
+    return redirect(url_for('characters'))
 
 
 @app.route('/prompts/system/save', methods=['POST'])
@@ -408,7 +385,7 @@ def save_system_prompt():
         character_manager.reload_prompts()
     except Exception as e:
         print(f"Warning: Failed to save system.md: {e}")
-    return redirect(url_for('prompts'))
+    return redirect(url_for('characters'))
 
 
 @app.route('/api/status')
