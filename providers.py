@@ -14,10 +14,20 @@ MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 
 
+def deep_merge_dict(base: dict, override: dict) -> None:
+    """Deep merge override dict into base dict in-place."""
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            deep_merge_dict(base[key], value)
+        else:
+            base[key] = value
+
+
 def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
     """
     Merge YAML-formatted string into target dict (SillyTavern style).
     Supports both object notation and array of objects.
+    Uses deep merge for nested objects (e.g., GLM thinking config).
     
     Example YAML:
         min_p: 0.1
@@ -25,6 +35,9 @@ def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
     Or:
         - min_p: 0.1
         - top_k: 40
+    Or nested:
+        thinking:
+          type: disabled
     """
     if not yaml_string or not yaml_string.strip():
         return
@@ -34,9 +47,9 @@ def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict):
-                    target.update(item)
+                    deep_merge_dict(target, item)
         elif isinstance(parsed, dict):
-            target.update(parsed)
+            deep_merge_dict(target, parsed)
     except Exception as e:
         log.debug(f"Failed to parse include_body YAML: {e}")
 
@@ -217,6 +230,10 @@ class AIProviderManager:
                     choice = response.choices[0]
                     content = choice.message.content
                     
+                    # Strip reasoning_content if present (GLM thinking mode leaks)
+                    if hasattr(choice.message, 'reasoning_content') and choice.message.reasoning_content:
+                        log.debug(f"[{tier}] Stripped {len(choice.message.reasoning_content)} chars of reasoning_content")
+                    
                     if not content or content.strip() == "":
                         # Detailed logging for empty responses
                         log.warn(f"[{tier}] Empty content from {model}")
@@ -225,7 +242,7 @@ class AIProviderManager:
                             log.warn(f"[{tier}] Refusal: {choice.message.refusal}")
                         if extra_body:
                             log.warn(f"[{tier}] extra_body was: {extra_body}")
-                        return "..."
+                        return None  # Return None to trigger fallback to next provider
                     
                     log.ok(f"[{tier}] Got {len(content)} chars from {model}")
                     

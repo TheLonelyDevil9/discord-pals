@@ -26,6 +26,15 @@
       "requires_key": false,
       "include_body": "min_p: 0.1\ntop_k: 40\nrepetition_penalty: 1.1",
       "exclude_body": "- frequency_penalty\n- presence_penalty"
+    },
+    {
+      "name": "GLM-4.7 (Z.AI) - Reasoning Disabled",
+      "url": "https://api.z.ai/api/paas/v4",
+      "key_env": "ZAI_API_KEY",
+      "model": "glm-4.7",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "include_body": "thinking:\n  type: disabled"
     }
   ],
   "timeout": 60

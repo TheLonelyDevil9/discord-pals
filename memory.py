@@ -415,37 +415,51 @@ class MemoryManager:
         if len(messages) < 5:
             return None
         
-        context = "\n".join([
-            f"{m.get('role', 'user')}: {m.get('content', '')[:200]}"
-            for m in messages[-20:]
-        ])
+        # Build context with explicit user attribution (using author_name from history)
+        context_lines = []
+        for m in messages[-20:]:
+            author = m.get('author_name', 'Unknown')
+            role = m.get('role', 'user')
+            content = m.get('content', '')[:200]
+            if role == 'assistant':
+                context_lines.append(f"[{character_name}]: {content}")
+            else:
+                context_lines.append(f"[{author}]: {content}")
+        context = "\n".join(context_lines)
         
-        prompt = f"""Analyze this conversation and extract anything worth remembering about the user(s).
+        # Use specific user name in prompt to ensure correct attribution
+        target_user = user_name if user_name else "the user"
+        
+        prompt = f"""Analyze this conversation and extract anything worth remembering about {target_user}.
+
+IMPORTANT: Only save facts specifically about {target_user}, NOT about other users in the conversation.
+If multiple users are chatting, focus ONLY on what {target_user} says and reveals about themselves.
 
 SAVE memories about:
 - Personal facts (name, job, hobbies, pets, relationships, location)
 - Preferences and opinions (likes, dislikes, favorites)
 - Life events or experiences mentioned
-- Emotional moments or bonding
+- Emotional moments or significant statements
 - Quirks, habits, or recurring behaviors
-- Promises, plans, or commitments
+- Promises, plans, or commitments they made
 
-SKIP if the conversation is only:
+SKIP if:
 - Generic greetings ("hi", "how are you")
 - Very short exchanges with no substance
 - Pure roleplay actions with no personal info
+- The info is about someone OTHER than {target_user}
 
-If nothing memorable, respond with just "NOTHING".
-Otherwise, write ONE concise sentence about the USER (not {character_name}).
+If nothing memorable about {target_user}, respond with just "NOTHING".
+Otherwise, write ONE concise sentence starting with "{target_user}" (use their actual name).
 
-Example: "User works as a nurse and has two cats named Luna and Mochi"
-Example: "User mentioned they love cooking Italian food"
-Example: "User gets anxious about job interviews"
+Example: "{target_user} works as a nurse and has two cats named Luna and Mochi"
+Example: "{target_user} mentioned they love cooking Italian food"
+Example: "{target_user} gets anxious about job interviews"
 
 Conversation:
 {context}
 
-Memory (or NOTHING):"""
+Memory about {target_user} (or NOTHING):"""
         
         try:
             result = await provider_manager.generate(

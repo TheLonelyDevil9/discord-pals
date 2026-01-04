@@ -339,10 +339,34 @@ def get_user_display_name(user: discord.User | discord.Member) -> str:
 # --- Text Cleanup ---
 
 def remove_thinking_tags(text: str) -> str:
-    """Remove <thinking>...</thinking> and <think>...</think> blocks from AI output."""
-    # Remove everything up to and including closing think/thinking tags
-    text = re.sub(r'.*?</\s*thinking\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'.*?</\s*think\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    """Remove all reasoning/thinking blocks from AI output.
+    
+    Handles:
+    - <thinking>...</thinking> (Gemini)
+    - <think>...</think> (Claude)
+    - <|begin_of_box|>...<|end_of_box|> (GLM-4.5V)
+    - Partial/unclosed tags at start or end of response
+    """
+    if not text:
+        return text
+    
+    # Remove standard thinking tags (non-greedy to handle multiple blocks)
+    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove GLM box tags
+    text = re.sub(r'<\|begin_of_box\|>.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
+    
+    # Remove partial/unclosed tags at START of response (response started mid-thinking)
+    text = re.sub(r'^.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'^.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
+    
+    # Remove orphaned opening tags at END (thinking started but never closed)
+    text = re.sub(r'<thinking>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<\|begin_of_box\|>.*$', '', text, flags=re.DOTALL)
+    
     return text.strip()
 
 
@@ -427,14 +451,7 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     
     cache = _emoji_cache[guild.id]
     
-    # Clean up broken emoji codes
-    text = re.sub(r'<[^\s:<>]*\d{15,25}>?', '', text)
-    text = re.sub(r'<a?:?[^>]*$', '', text)
-    text = re.sub(r'<a[^:>]+>', '', text)
-    text = re.sub(r'<[^>]*\d{18,}[^>]*(?!>)', '', text)
-    text = re.sub(r'\s*\d{1,5}>', '', text)
-    text = re.sub(r'<[^>]{0,3}$', '', text)
-    
+    # First, convert valid :emoji_name: patterns to Discord format
     pattern = r':([a-zA-Z0-9_]+):'
     
     def replace_emoji(match):
@@ -449,13 +466,23 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     
     result = re.sub(pattern, replace_emoji, text)
     
-    # Final cleanup: remove orphaned angle brackets (not part of valid emoji)
-    # Remove lone < or > or <> pairs that aren't valid emoji format
-    result = re.sub(r'<>', '', result)  # Empty angle brackets
-    result = re.sub(r'<(?![a:])', '', result)  # < not starting valid emoji
-    result = re.sub(r'(?<!\d)>', '', result)  # > not after emoji ID digits
+    # AFTER conversion, clean up malformed emoji-like tags that LLMs sometimes generate
+    # These patterns target clearly broken outputs, not valid emoji codes
     
-    return result
+    # Remove incomplete emoji tags at end of string (e.g., "<:emoji" or "<a:")
+    result = re.sub(r'<a?:[a-zA-Z0-9_]*$', '', result)
+    
+    # Remove orphaned emoji IDs without proper format (e.g., "12345678901234567890>")
+    result = re.sub(r'(?<![:\d])\d{17,21}>(?!\S)', '', result)
+    
+    # Remove empty angle bracket pairs
+    result = re.sub(r'<>', '', result)
+    
+    # Remove malformed tags that have colons but no valid emoji structure
+    # Valid: <:name:123> or <a:name:123>  Invalid: <:123> or <name:123>
+    result = re.sub(r'<(?!a?:[a-zA-Z0-9_]+:\d{17,21}>)[^>]{0,50}>', '', result)
+    
+    return result.strip()
 
 
 def parse_reactions(content: str) -> Tuple[str, List[str]]:

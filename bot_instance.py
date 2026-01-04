@@ -244,13 +244,10 @@ class BotInstance:
             if before.content == after.content:
                 return
             
+            # Update history with the edited content (for context), but don't trigger a response
             user_name = get_user_display_name(after.author)
             update_history_on_edit(after.channel.id, before.content, after.content, user_name)
-            
-            if self.client.user in after.mentions:
-                return
-            
-            asyncio.create_task(self._maybe_respond_to_edit(before, after, user_name))
+            # Note: Removed _maybe_respond_to_edit - edits no longer trigger bot responses
         
         @self.client.event
         async def on_message_delete(message: discord.Message):
