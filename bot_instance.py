@@ -54,6 +54,11 @@ class BotInstance:
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
         self._message_batches: Dict[tuple, dict] = {}  # (channel_id, user_id) -> {messages, timer_task}
+
+        # Anti-looping state
+        self._recent_responses: Dict[int, list] = {}  # channel_id -> list of recent response hashes
+        self._consecutive_failures: Dict[int, int] = {}  # channel_id -> failure count
+        self._response_timestamps: Dict[int, list] = {}  # channel_id -> list of response timestamps
         
         # Set up events and commands
         self._setup_events()
@@ -595,16 +600,42 @@ class BotInstance:
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)
             response = clean_em_dashes(response)
-            
+
             response, reactions = parse_reactions(response)
-            
+
             if guild:
                 response = convert_emojis_in_text(response, guild)
-            
+
+            # Anti-looping: Check rate limit before responding
+            if self._check_rate_limit(channel_id):
+                log.warn("Skipping response due to rate limit", self.name)
+                return
+
+            # Anti-looping: Check circuit breaker
+            if self._check_circuit_breaker(channel_id):
+                log.warn("Skipping response due to circuit breaker", self.name)
+                # Decay the failure count slowly to allow recovery
+                self._consecutive_failures[channel_id] = max(0, self._consecutive_failures.get(channel_id, 0) - 1)
+                return
+
             # Handle empty response
             if not response or not response.strip():
                 log.warn("Empty response after processing", self.name)
-                response = "*tilts head*"
+                self._record_failure(channel_id)
+                # Use varied fallback responses to avoid repetition
+                fallbacks = ["*tilts head*", "*blinks*", "*pauses thoughtfully*", "...", "*hums softly*"]
+                response = random.choice(fallbacks)
+            else:
+                # Check for duplicate/repetitive responses
+                if self._is_duplicate_response(channel_id, response):
+                    log.warn("Skipping duplicate response", self.name)
+                    self._record_failure(channel_id)
+                    return
+                # Valid unique response - reset failure counter
+                self._reset_failures(channel_id)
+
+            # Record this response for rate limiting
+            self._record_response(channel_id)
             
             # Update mood based on response sentiment
             self._update_mood(channel_id, content, response)
@@ -651,6 +682,74 @@ class BotInstance:
         # Decay toward neutral
         new_mood *= 0.95
         self._channel_mood[channel_id] = new_mood
+
+    def _check_rate_limit(self, channel_id: int) -> bool:
+        """Check if we're responding too frequently (anti-loop measure).
+
+        Returns True if rate limit exceeded (should skip response).
+        """
+        now = time.time()
+        timestamps = self._response_timestamps.get(channel_id, [])
+
+        # Remove timestamps older than 60 seconds
+        timestamps = [t for t in timestamps if now - t < 60]
+        self._response_timestamps[channel_id] = timestamps
+
+        # Allow max 5 responses per minute per channel
+        if len(timestamps) >= 5:
+            log.warn(f"Rate limit exceeded for channel {channel_id} (5/min)", self.name)
+            return True
+        return False
+
+    def _record_response(self, channel_id: int):
+        """Record a response timestamp for rate limiting."""
+        now = time.time()
+        if channel_id not in self._response_timestamps:
+            self._response_timestamps[channel_id] = []
+        self._response_timestamps[channel_id].append(now)
+
+    def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
+        """Check if response is too similar to recent responses (anti-loop measure).
+
+        Returns True if duplicate detected (should skip or vary response).
+        """
+        if not response:
+            return False
+
+        # Use first 100 chars as signature to detect repetition
+        sig = response[:100].lower().strip()
+        recent = self._recent_responses.get(channel_id, [])
+
+        # Check against last 5 responses
+        if sig in recent:
+            log.warn(f"Duplicate response detected in channel {channel_id}", self.name)
+            return True
+
+        # Update recent responses (keep last 5)
+        recent.append(sig)
+        if len(recent) > 5:
+            recent = recent[-5:]
+        self._recent_responses[channel_id] = recent
+        return False
+
+    def _check_circuit_breaker(self, channel_id: int) -> bool:
+        """Check if circuit breaker is tripped due to consecutive failures.
+
+        Returns True if circuit breaker is active (should skip response).
+        """
+        failures = self._consecutive_failures.get(channel_id, 0)
+        if failures >= 3:
+            log.warn(f"Circuit breaker active for channel {channel_id} ({failures} consecutive failures)", self.name)
+            return True
+        return False
+
+    def _record_failure(self, channel_id: int):
+        """Record a failure (empty/fallback response)."""
+        self._consecutive_failures[channel_id] = self._consecutive_failures.get(channel_id, 0) + 1
+
+    def _reset_failures(self, channel_id: int):
+        """Reset failure counter on successful response."""
+        self._consecutive_failures[channel_id] = 0
     
     async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""

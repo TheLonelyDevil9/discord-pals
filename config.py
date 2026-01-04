@@ -6,6 +6,7 @@ API keys, provider URLs, and bot settings.
 import os
 import json
 from dotenv import load_dotenv
+import logger as log
 
 load_dotenv()
 
@@ -33,14 +34,14 @@ def load_providers() -> tuple[dict, int]:
             with open(config_path, 'r') as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"⚠️ Invalid providers.json: {e}")
+            log.warn(f"Invalid providers.json: {e}")
             return {}, timeout
         
         providers = {}
         provider_list = data.get("providers", [])
         
         if not provider_list:
-            print("⚠️ providers.json has no providers defined")
+            log.warn("providers.json has no providers defined")
             return {}, timeout
         
         for i, p in enumerate(provider_list):
@@ -48,7 +49,7 @@ def load_providers() -> tuple[dict, int]:
             
             # Validate required fields
             if not p.get("url"):
-                print(f"⚠️ Provider {i+1} missing 'url', skipping")
+                log.warn(f"Provider {i+1} missing 'url', skipping")
                 continue
             
             # Support requires_key=false for local LLMs

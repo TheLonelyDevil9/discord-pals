@@ -41,6 +41,33 @@ RE_NAME_PREFIX = re.compile(r'^\s*\[[^\]]+\]:\s*', re.MULTILINE)
 RE_REPLY_PREFIX = re.compile(r'^\s*\(replying to [^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
 RE_RE_PREFIX = re.compile(r'^\s*\(RE:?\s+[^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
 
+# Additional pre-compiled patterns for resolve_discord_formatting
+RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
+RE_USER_MENTION = re.compile(r'<@!?(\d+)>')
+RE_CHANNEL_MENTION = re.compile(r'<#(\d+)>')
+RE_ROLE_MENTION = re.compile(r'<@&(\d+)>')
+RE_TIMESTAMP = re.compile(r'<t:(\d+)(?::[tTdDfFR])?>')
+
+# Pre-compiled patterns for clean_em_dashes
+RE_EM_DASH_BETWEEN_WORDS = re.compile(r'(\w)\s*—\s*(\w)')
+RE_EM_DASH_END = re.compile(r'—\s*$')
+
+# Pre-compiled patterns for convert_emojis_in_text
+RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
+RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*$')
+RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
+RE_EMPTY_ANGLE = re.compile(r'<>')
+RE_MALFORMED_EMOJI = re.compile(r'<(?!a?:[a-zA-Z0-9_]+:\d{17,21}>)[^>]{0,50}>')
+
+# Pre-compiled patterns for parse_reactions
+RE_REACTION_TAG = re.compile(r'\[REACT:\s*([^\]]+)\]', re.IGNORECASE)
+
+# Pre-compiled pattern for word extraction
+RE_WORD = re.compile(r'\w+')
+
+# Pre-compiled pattern for sentence splitting
+RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
+
 
 def save_history():
     """Save conversation history to disk for persistence across restarts."""
@@ -101,9 +128,8 @@ def strip_character_prefix(content: str) -> str:
     Strip character name prefixes from messages to prevent identity leakage.
     Removes patterns like '[CharacterName]: ' or 'CharacterName: ' at the start.
     """
-    import re
     # Match [Name]: or Name: at the start of the message
-    content = re.sub(r'^\s*\[[^\]]+\]:\s*', '', content)
+    content = RE_NAME_PREFIX.sub('', content)
     return content
 
 
@@ -120,12 +146,9 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
     - <@&123456> → @RoleName (if guild provided)
     - <t:123:R> → readable timestamp
     """
-    import re
-    from datetime import datetime
-    
     # Custom emojis: <:name:id> or <a:name:id> → :name:
-    content = re.sub(r'<a?:([a-zA-Z0-9_]+):\d+>', r':\1:', content)
-    
+    content = RE_CUSTOM_EMOJI.sub(r':\1:', content)
+
     # User mentions: <@123> or <@!123> → @Username
     if guild:
         def resolve_user_mention(match):
@@ -134,8 +157,8 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
             if member:
                 return f"@{member.display_name}"
             return match.group(0)  # Keep original if not found
-        content = re.sub(r'<@!?(\d+)>', resolve_user_mention, content)
-        
+        content = RE_USER_MENTION.sub(resolve_user_mention, content)
+
         # Channel mentions: <#123> → #channel-name
         def resolve_channel_mention(match):
             channel_id = int(match.group(1))
@@ -143,8 +166,8 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
             if channel:
                 return f"#{channel.name}"
             return match.group(0)
-        content = re.sub(r'<#(\d+)>', resolve_channel_mention, content)
-        
+        content = RE_CHANNEL_MENTION.sub(resolve_channel_mention, content)
+
         # Role mentions: <@&123> → @RoleName
         def resolve_role_mention(match):
             role_id = int(match.group(1))
@@ -152,8 +175,8 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
             if role:
                 return f"@{role.name}"
             return match.group(0)
-        content = re.sub(r'<@&(\d+)>', resolve_role_mention, content)
-    
+        content = RE_ROLE_MENTION.sub(resolve_role_mention, content)
+
     # Timestamps: <t:123:R> → readable date
     def resolve_timestamp(match):
         try:
@@ -162,8 +185,8 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
             return dt.strftime("%Y-%m-%d %H:%M")
         except:
             return match.group(0)
-    content = re.sub(r'<t:(\d+)(?::[tTdDfFR])?>', resolve_timestamp, content)
-    
+    content = RE_TIMESTAMP.sub(resolve_timestamp, content)
+
     return content
 
 
@@ -355,42 +378,56 @@ def get_user_display_name(user: discord.User | discord.Member) -> str:
 
 def remove_thinking_tags(text: str) -> str:
     """Remove all reasoning/thinking blocks from AI output.
-    
+
     Handles:
     - <thinking>...</thinking>
     - <think>...</think>
+    - <|begin_of_box|>...<|end_of_box|> (GLM)
     - Partial/unclosed tags at start or end of response
+    - Various other reasoning formats from local LLMs
     """
     if not text:
         return text
-    
+
     # Remove standard thinking tags (using pre-compiled patterns)
     text = RE_THINKING_OPEN.sub('', text)
     text = RE_THINK_OPEN.sub('', text)
-    
-<<<<<<< HEAD
+
     # Remove GLM box tags
     text = RE_GLM_BOX.sub('', text)
-    
+
     # Remove partial/unclosed tags at START of response
     text = RE_THINKING_PARTIAL_START.sub('', text)
     text = RE_THINK_PARTIAL_START.sub('', text)
     text = RE_GLM_PARTIAL_START.sub('', text)
-    
+
     # Remove orphaned opening tags at END
     text = RE_THINKING_ORPHAN_END.sub('', text)
     text = RE_THINK_ORPHAN_END.sub('', text)
     text = RE_GLM_ORPHAN_END.sub('', text)
-=======
-    # Remove partial/unclosed tags at START of response (response started mid-thinking)
-    text = re.sub(r'^.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    
-    # Remove orphaned opening tags at END (thinking started but never closed)
-    text = re.sub(r'<thinking>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
->>>>>>> 6b66c5b9590263845463d80730baf781ec71cee4
-    
+
+    # Additional patterns for local LLMs that may use different formats
+    # Remove <reasoning>...</reasoning> tags
+    text = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<reason>.*?</reason>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove [thinking]...[/thinking] or [think]...[/think] (bracket style)
+    text = re.sub(r'\[thinking\].*?\[/thinking\]', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'\[think\].*?\[/think\]', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove **Thinking:** or **Reasoning:** blocks (markdown style)
+    text = re.sub(r'\*\*(?:Thinking|Reasoning|Internal|Analysis):\*\*.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove lines that start with common reasoning prefixes
+    text = re.sub(r'^(?:Thinking:|Reasoning:|Let me think|I need to think|First, I should).*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+
+    # Remove <output> wrapper if present (some models wrap actual response)
+    text = re.sub(r'<output>(.*?)</output>', r'\1', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<response>(.*?)</response>', r'\1', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Clean up multiple newlines left behind
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
     return text.strip()
 
 
@@ -472,12 +509,9 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     """Convert :emoji_name: to proper Discord format (including animated)."""
     if not guild or guild.id not in _emoji_cache:
         return text
-    
+
     cache = _emoji_cache[guild.id]
-    
-    # First, convert valid :emoji_name: patterns to Discord format
-    pattern = r':([a-zA-Z0-9_]+):'
-    
+
     def replace_emoji(match):
         name = match.group(1)
         if name in cache:
@@ -487,33 +521,29 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
             else:
                 return f"<:{emoji.name}:{emoji.id}>"
         return match.group(0)
-    
-    result = re.sub(pattern, replace_emoji, text)
-    
+
+    result = RE_EMOJI_SHORTCODE.sub(replace_emoji, text)
+
     # AFTER conversion, clean up malformed emoji-like tags that LLMs sometimes generate
-    # These patterns target clearly broken outputs, not valid emoji codes
-    
     # Remove incomplete emoji tags at end of string (e.g., "<:emoji" or "<a:")
-    result = re.sub(r'<a?:[a-zA-Z0-9_]*$', '', result)
-    
+    result = RE_BROKEN_EMOJI_END.sub('', result)
+
     # Remove orphaned emoji IDs without proper format (e.g., "12345678901234567890>")
-    result = re.sub(r'(?<![:\d])\d{17,21}>(?!\S)', '', result)
-    
+    result = RE_ORPHAN_SNOWFLAKE.sub('', result)
+
     # Remove empty angle bracket pairs
-    result = re.sub(r'<>', '', result)
-    
+    result = RE_EMPTY_ANGLE.sub('', result)
+
     # Remove malformed tags that have colons but no valid emoji structure
-    # Valid: <:name:123> or <a:name:123>  Invalid: <:123> or <name:123>
-    result = re.sub(r'<(?!a?:[a-zA-Z0-9_]+:\d{17,21}>)[^>]{0,50}>', '', result)
-    
+    result = RE_MALFORMED_EMOJI.sub('', result)
+
     return result.strip()
 
 
 def parse_reactions(content: str) -> Tuple[str, List[str]]:
     """Parse [REACT: emoji] tags from response."""
-    pattern = r'\[REACT:\s*([^\]]+)\]'
-    reactions = re.findall(pattern, content, re.IGNORECASE)
-    cleaned = re.sub(pattern, '', content, flags=re.IGNORECASE).strip()
+    reactions = RE_REACTION_TAG.findall(content)
+    cleaned = RE_REACTION_TAG.sub('', content).strip()
     return cleaned, [r.strip() for r in reactions]
 
 

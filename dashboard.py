@@ -10,6 +10,7 @@ import os
 import io
 import zipfile
 from pathlib import Path
+import logger as log
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
 app.secret_key = 'discord-pals-local-dashboard'
@@ -156,7 +157,7 @@ def delete_memory(name):
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
         except Exception as e:
-            print(f"Warning: Failed to delete memory '{memory_key}': {e}")
+            log.warn(f"Failed to delete memory '{memory_key}': {e}")
     
     return redirect(url_for('memories'))
 
@@ -172,7 +173,7 @@ def edit_memory(name):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            print(f"Warning: Failed to read memory file: {e}")
+            log.warn(f"Failed to read memory file: {e}")
     
     return render_template('memory_edit.html', name=name, content=content)
 
@@ -189,7 +190,7 @@ def save_memory(name):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
-        print(f"Warning: Failed to save memory: {e}")
+        log.warn(f"Failed to save memory: {e}")
     
     return redirect(url_for('memories'))
 
@@ -242,7 +243,7 @@ def edit_character(name):
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            print(f"Warning: Failed to read character file: {e}")
+            log.warn(f"Failed to read character file: {e}")
     
     return render_template('character_edit.html', name=name, content=content)
 
@@ -258,7 +259,7 @@ def save_character(name):
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
-        print(f"Warning: Failed to save character: {e}")
+        log.warn(f"Failed to save character: {e}")
     
     return redirect(url_for('characters'))
 
@@ -272,7 +273,7 @@ def delete_character(name):
         try:
             path.unlink()
         except Exception as e:
-            print(f"Warning: Failed to delete character: {e}")
+            log.warn(f"Failed to delete character: {e}")
     
     return redirect(url_for('characters'))
 
@@ -290,7 +291,7 @@ def new_character():
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(f"# {name}\n\n## Personality\n\n## Backstory\n\n## Relationships\n")
             except Exception as e:
-                print(f"Warning: Failed to create character: {e}")
+                log.warn(f"Failed to create character: {e}")
         return redirect(url_for('edit_character', name=name))
     
     return redirect(url_for('characters'))
@@ -314,11 +315,9 @@ def save_providers():
             f.write(content)
         return redirect(url_for('config_page', message='Providers saved successfully'))
     except json.JSONDecodeError as e:
-        import logger as log
         log.error(f"Failed to save providers.json: Invalid JSON - {e}")
         return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
-        import logger as log
         log.error(f"Failed to save providers.json: {e}")
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
@@ -333,11 +332,9 @@ def save_bots():
             f.write(content)
         return redirect(url_for('config_page', message='Bots config saved successfully'))
     except json.JSONDecodeError as e:
-        import logger as log
         log.error(f"Failed to save bots.json: Invalid JSON - {e}")
         return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
-        import logger as log
         log.error(f"Failed to save bots.json: {e}")
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
@@ -353,11 +350,9 @@ def save_autonomous():
             f.write(content)
         return redirect(url_for('config_page', message='Autonomous config saved successfully'))
     except json.JSONDecodeError as e:
-        import logger as log
         log.error(f"Failed to save autonomous.json: Invalid JSON - {e}")
         return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
-        import logger as log
         log.error(f"Failed to save autonomous.json: {e}")
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
@@ -384,7 +379,7 @@ def save_system_prompt():
         from character import character_manager
         character_manager.reload_prompts()
     except Exception as e:
-        print(f"Warning: Failed to save system.md: {e}")
+        log.warn(f"Failed to save system.md: {e}")
     return redirect(url_for('characters'))
 
 
@@ -433,7 +428,6 @@ def api_status():
 def api_killswitch():
     """API endpoint for global killswitch control."""
     import runtime_config
-    import logger as log
     
     if request.method == 'POST':
         data = request.json or {}
@@ -465,7 +459,6 @@ def api_killswitch():
 def api_bot_interactions():
     """API endpoint for bot-to-bot interaction control."""
     import runtime_config
-    import logger as log
     
     if request.method == 'POST':
         data = request.json or {}
@@ -497,7 +490,6 @@ def api_bot_interactions():
 def api_message_format():
     """API endpoint for message format control (single-user vs multi-role)."""
     import runtime_config
-    import logger as log
     
     if request.method == 'POST':
         data = request.json or {}
@@ -546,7 +538,7 @@ def config_page():
             data = json.loads(providers_raw)
             providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
         except Exception as e:
-            print(f"Warning: Failed to load providers for config page: {e}")
+            log.warn(f"Failed to load providers for config page: {e}")
     
     # Load bots.json
     bots_raw = "{}"
@@ -641,7 +633,6 @@ def api_switch_character():
 @app.route('/api/nicknames', methods=['GET', 'POST'])
 def api_nicknames():
     """Get or update nicknames for bots. Persists to bots.json or runtime_config.json."""
-    import logger as log
     import runtime_config
     
     if request.method == 'GET':
@@ -983,7 +974,6 @@ def api_channels():
 def api_clear_channel(channel_id):
     """Clear conversation history for a channel."""
     from discord_utils import clear_history
-    import logger as log
     
     clear_history(channel_id)
     log.info(f"Channel history cleared via dashboard: {channel_id}")
@@ -995,7 +985,6 @@ def api_clear_channel(channel_id):
 def api_channel_autonomous(channel_id):
     """Get or set autonomous mode for a channel."""
     from discord_utils import autonomous_manager
-    import logger as log
     
     if request.method == 'POST':
         data = request.json or {}
@@ -1070,7 +1059,6 @@ def api_guilds():
 def api_add_memory():
     """Add a new memory."""
     from memory import memory_manager
-    import logger as log
     
     data = request.json or {}
     memory_type = data.get('type', 'server')  # server, lore, user
@@ -1108,7 +1096,6 @@ def api_add_memory():
 def api_lore(guild_id):
     """Get, set, or delete lore for a guild."""
     from memory import memory_manager
-    import logger as log
     
     if request.method == 'GET':
         lore = memory_manager.get_lore(guild_id)
@@ -1140,7 +1127,6 @@ def api_lore(guild_id):
 @app.route('/api/restart', methods=['POST'])
 def api_restart():
     """Restart the bot application without terminal restart."""
-    import logger as log
     import sys
     import subprocess
     
