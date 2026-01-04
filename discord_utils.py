@@ -342,9 +342,8 @@ def remove_thinking_tags(text: str) -> str:
     """Remove all reasoning/thinking blocks from AI output.
     
     Handles:
-    - <thinking>...</thinking> (Gemini)
-    - <think>...</think> (Claude)
-    - <|begin_of_box|>...<|end_of_box|> (GLM-4.5V)
+    - <thinking>...</thinking>
+    - <think>...</think>
     - Partial/unclosed tags at start or end of response
     """
     if not text:
@@ -354,18 +353,13 @@ def remove_thinking_tags(text: str) -> str:
     text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
     
-    # Remove GLM box tags
-    text = re.sub(r'<\|begin_of_box\|>.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
-    
     # Remove partial/unclosed tags at START of response (response started mid-thinking)
     text = re.sub(r'^.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'^.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
     
     # Remove orphaned opening tags at END (thinking started but never closed)
     text = re.sub(r'<thinking>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<\|begin_of_box\|>.*$', '', text, flags=re.DOTALL)
     
     return text.strip()
 
