@@ -195,7 +195,7 @@ Discord Pals supports any OpenAI-compatible API. Choose your provider:
          "name": "OpenAI",
          "url": "https://api.openai.com/v1",
          "key_env": "OPENAI_API_KEY",
-         "model": "gpt-5.2"
+         "model": "gpt-4o"
        }
      ],
      "timeout": 60
@@ -278,6 +278,34 @@ Some providers support extra request body parameters. Add `extra_body` to your p
 ```
 
 The `extra_body` object is merged into the API request, useful for provider-specific parameters.
+
+### SillyTavern-Style YAML Parameters (`include_body` / `exclude_body`)
+
+For more flexible configuration, use YAML strings:
+
+```json
+{
+  "providers": [
+    {
+      "name": "GLM-4.7 (Reasoning Disabled)",
+      "url": "https://api.z.ai/api/paas/v4",
+      "key_env": "ZAI_API_KEY",
+      "model": "glm-4.7",
+      "include_body": "thinking:\n  type: disabled",
+      "exclude_body": "- frequency_penalty\n- presence_penalty"
+    }
+  ]
+}
+```
+
+- `include_body`: YAML string merged into the request (supports nested objects)
+- `exclude_body`: YAML list of keys to remove from the request
+
+This is useful for:
+
+- Disabling reasoning/thinking mode on GLM models
+- Adding sampler parameters for local LLMs
+- Removing unsupported parameters for specific providers
 
 ### Diagnosing Provider Issues
 
