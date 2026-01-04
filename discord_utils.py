@@ -12,6 +12,7 @@ import aiohttp
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
+import logger as log
 
 
 # Conversation history storage (in-memory, per channel/DM)
@@ -25,6 +26,20 @@ HISTORY_CACHE_FILE = os.path.join(DATA_DIR, "history_cache.json")
 
 # Channel name mapping (channel_id -> name) for readable storage
 channel_names: Dict[int, str] = {}
+
+# Pre-compiled regex patterns for performance
+RE_THINKING_OPEN = re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE)
+RE_THINK_OPEN = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+RE_GLM_BOX = re.compile(r'<\|begin_of_box\|>.*?<\|end_of_box\|>', re.DOTALL)
+RE_THINKING_PARTIAL_START = re.compile(r'^.*?</thinking>', re.DOTALL | re.IGNORECASE)
+RE_THINK_PARTIAL_START = re.compile(r'^.*?</think>', re.DOTALL | re.IGNORECASE)
+RE_GLM_PARTIAL_START = re.compile(r'^.*?<\|end_of_box\|>', re.DOTALL)
+RE_THINKING_ORPHAN_END = re.compile(r'<thinking>.*$', re.DOTALL | re.IGNORECASE)
+RE_THINK_ORPHAN_END = re.compile(r'<think>.*$', re.DOTALL | re.IGNORECASE)
+RE_GLM_ORPHAN_END = re.compile(r'<\|begin_of_box\|>.*$', re.DOTALL)
+RE_NAME_PREFIX = re.compile(r'^\s*\[[^\]]+\]:\s*', re.MULTILINE)
+RE_REPLY_PREFIX = re.compile(r'^\s*\(replying to [^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
+RE_RE_PREFIX = re.compile(r'^\s*\(RE:?\s+[^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
 
 
 def save_history():
@@ -44,7 +59,7 @@ def save_history():
         with open(HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(serializable, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Failed to save history: {e}")
+        log.warn(f"Failed to save history: {e}")
 
 
 def load_history():
@@ -65,9 +80,9 @@ def load_history():
                     else:
                         # Old format - just list of messages
                         conversation_history[channel_id] = v
-                print(f"Loaded history for {len(conversation_history)} channels")
+                log.info(f"Loaded history for {len(conversation_history)} channels")
     except Exception as e:
-        print(f"Failed to load history: {e}")
+        log.warn(f"Failed to load history: {e}")
         conversation_history = {}
 
 
@@ -350,22 +365,22 @@ def remove_thinking_tags(text: str) -> str:
     if not text:
         return text
     
-    # Remove standard thinking tags (non-greedy to handle multiple blocks)
-    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove standard thinking tags (using pre-compiled patterns)
+    text = RE_THINKING_OPEN.sub('', text)
+    text = RE_THINK_OPEN.sub('', text)
     
     # Remove GLM box tags
-    text = re.sub(r'<\|begin_of_box\|>.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
+    text = RE_GLM_BOX.sub('', text)
     
-    # Remove partial/unclosed tags at START of response (response started mid-thinking)
-    text = re.sub(r'^.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'^.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'^.*?<\|end_of_box\|>', '', text, flags=re.DOTALL)
+    # Remove partial/unclosed tags at START of response
+    text = RE_THINKING_PARTIAL_START.sub('', text)
+    text = RE_THINK_PARTIAL_START.sub('', text)
+    text = RE_GLM_PARTIAL_START.sub('', text)
     
-    # Remove orphaned opening tags at END (thinking started but never closed)
-    text = re.sub(r'<thinking>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<\|begin_of_box\|>.*$', '', text, flags=re.DOTALL)
+    # Remove orphaned opening tags at END
+    text = RE_THINKING_ORPHAN_END.sub('', text)
+    text = RE_THINK_ORPHAN_END.sub('', text)
+    text = RE_GLM_ORPHAN_END.sub('', text)
     
     return text.strip()
 
@@ -383,16 +398,16 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     if not text:
         return text
     
-    # Strip [Name]: prefix pattern (any name in brackets at start of line)
-    text = re.sub(r'^\s*\[[^\]]+\]:\s*', '', text, flags=re.MULTILINE)
+    # Strip [Name]: prefix pattern (using pre-compiled regex)
+    text = RE_NAME_PREFIX.sub('', text)
     
-    # Strip (replying to X's message: "...") pattern at start of line
-    text = re.sub(r'^\s*\(replying to [^)]+\)\s*', '', text, flags=re.IGNORECASE | re.MULTILINE)
+    # Strip (replying to X's message: "...") pattern
+    text = RE_REPLY_PREFIX.sub('', text)
     
-    # Strip (RE: ...) or (RE ...) patterns at start of line
-    text = re.sub(r'^\s*\(RE:?\s+[^)]+\)\s*', '', text, flags=re.IGNORECASE | re.MULTILINE)
+    # Strip (RE: ...) or (RE ...) patterns
+    text = RE_RE_PREFIX.sub('', text)
     
-    # Strip character-specific patterns if provided
+    # Strip character-specific patterns if provided (dynamic, must compile at runtime)
     if character_name:
         patterns = [
             rf'^{re.escape(character_name)}:\s*',
@@ -532,7 +547,7 @@ async def download_image_as_base64(url: str) -> Optional[str]:
                 data = await response.read()
                 return base64.b64encode(data).decode('utf-8')
     except Exception as e:
-        print(f"Failed to download image: {e}")
+        log.warn(f"Failed to download image: {e}")
     return None
 
 

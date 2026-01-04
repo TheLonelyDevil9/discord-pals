@@ -12,6 +12,7 @@ from config import (
     DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE, 
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
 )
+import logger as log
 
 
 def ensure_data_dir():
@@ -489,7 +490,7 @@ Memory about {target_user} (or NOTHING):"""
                 
                 return result.strip()
         except Exception as e:
-            print(f"Memory generation failed: {e}")
+            log.warn(f"Memory generation failed: {e}")
         
         return None
 
