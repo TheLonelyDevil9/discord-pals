@@ -340,11 +340,10 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     if reply_to and role == "user":
         reply_author, reply_content = reply_to
         if reply_content:
-            # Use explicit attribution to prevent LLM from confusing who said what
-            # Format: ↩️ marks this as a reply, clearly states who was quoted
-            content = f'↩️ [quoting {reply_author}: "{reply_content[:100]}..."] {content}'
+            # Use parentheses (not brackets) to prevent LLM from learning bracket patterns
+            content = f'(replying to {reply_author}) {content}'
         else:
-            content = f"↩️ [replying to {reply_author}] {content}"
+            content = f"(replying to {reply_author}) {content}"
     
     msg = {"role": role, "content": content}
     if author_name:
@@ -403,17 +402,17 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     """Format history for AI consumption with optional limit."""
     history = get_history(channel_id)[-limit:]  # Apply limit
     formatted = []
-    
+
     for msg in history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
-        
+
         if role == "user" and author:
-            content = f"[{author}]: {content}"
-        
+            content = f"{author}: {content}"
+
         formatted.append({"role": role, "content": content})
-    
+
     return formatted
 
 
@@ -437,19 +436,19 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
-        
+
         if role == "user" and author:
-            # User messages get [Author]: prefix
-            content = f"[{author}]: {content}"
+            # User messages get Author: prefix (no brackets)
+            content = f"{author}: {content}"
         elif role == "assistant" and author:
             # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
             if current_bot_name and author.lower() != current_bot_name.lower():
                 # Different bot - treat as "user" role with name prefix to prevent personality bleed
                 # This makes the LLM see it as another person's speech, not an example to follow
                 role = "user"
-                content = f"[{author}]: {content}"
+                content = f"{author}: {content}"
             # If same bot or no current_bot_name specified, keep as assistant (no prefix)
-        
+
         formatted.append({"role": role, "content": content})
     
     # Split into history and immediate

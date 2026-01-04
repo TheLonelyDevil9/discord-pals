@@ -122,49 +122,59 @@ def validate_messages(messages: List[dict]) -> List[dict]:
 def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict]:
     """
     Format multi-message array as a single user message (SillyTavern style).
-    
+
     Instead of sending:
         [{"role": "system", ...}, {"role": "user", ...}, {"role": "assistant", ...}]
-    
+
     We send everything as one user message:
-        [{"role": "user", "content": "[System]\n...\n[User]\n...\n[Assistant]\n..."}]
-    
+        [{"role": "user", "content": "### Instructions\n...\nUser: ...\nAssistant: ..."}]
+
     This improves compatibility with various LLM backends and matches
     SillyTavern's "Single user message (no tools)" format.
+
+    Note: Uses "Author: message" format (no brackets) to prevent LLMs from
+    learning and outputting bracket patterns in their responses.
     """
     parts = []
-    
+
     # Add system prompt first
     if system_prompt and system_prompt.strip():
-        parts.append(f"[System]\n{system_prompt.strip()}")
-    
+        parts.append(f"### Instructions\n{system_prompt.strip()}")
+
     # Add conversation messages
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "").strip()
-        
+
         if not content:
             continue
-        
+
         if role == "system":
-            parts.append(f"[System]\n{content}")
+            parts.append(f"### Instructions\n{content}")
         elif role == "user":
-            # Check if content already has [Author]: prefix (from format_history_split)
-            # to avoid double-prefixing like "[User]\n[Alice]: Hello"
-            if content.startswith("[") and "]: " in content[:50]:
-                # Already prefixed, just add as-is
-                parts.append(content)
-            else:
-                # Add author prefix - use "author" key (not "author_name")
-                author = msg.get("author", "User")
-                parts.append(f"[{author}]: {content}")
+            # Check if content already has Author: prefix (from format_history_split)
+            # to avoid double-prefixing
+            # Look for pattern like "Name: " at start (not brackets)
+            if ": " in content[:50] and not content.startswith("("):
+                first_colon = content.find(": ")
+                prefix = content[:first_colon]
+                # If prefix looks like a name (no special chars except spaces), it's already formatted
+                if first_colon < 30 and prefix.replace(" ", "").isalnum():
+                    parts.append(content)
+                    continue
+            # Add author prefix - use "author" key (not "author_name")
+            author = msg.get("author", "User")
+            parts.append(f"{author}: {content}")
         elif role == "assistant":
             # Bot's own messages - check for existing prefix
-            if content.startswith("[") and "]: " in content[:50]:
-                parts.append(content)
-            else:
-                author = msg.get("author", "Assistant")
-                parts.append(f"[{author}]: {content}")
+            if ": " in content[:50] and not content.startswith("("):
+                first_colon = content.find(": ")
+                prefix = content[:first_colon]
+                if first_colon < 30 and prefix.replace(" ", "").isalnum():
+                    parts.append(content)
+                    continue
+            author = msg.get("author", "Assistant")
+            parts.append(f"{author}: {content}")
     
     # Combine all parts into a single user message
     combined = "\n\n".join(parts)
