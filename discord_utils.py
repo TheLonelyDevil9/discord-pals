@@ -9,10 +9,109 @@ import base64
 import json
 import os
 import aiohttp
+import threading
+import time
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
+
+
+# --- Thread-safe JSON utilities ---
+
+_file_locks: Dict[str, threading.Lock] = {}
+_locks_lock = threading.Lock()
+
+
+def _get_file_lock(filepath: str) -> threading.Lock:
+    """Get or create a lock for a specific file path."""
+    with _locks_lock:
+        if filepath not in _file_locks:
+            _file_locks[filepath] = threading.Lock()
+        return _file_locks[filepath]
+
+
+def safe_json_load(filepath: str, default=None) -> dict | list:
+    """Thread-safe JSON loading with validation.
+
+    Args:
+        filepath: Path to JSON file
+        default: Default value if file doesn't exist or is invalid (default: {})
+
+    Returns:
+        Parsed JSON data or default value
+    """
+    if default is None:
+        default = {}
+
+    if not os.path.exists(filepath):
+        return default
+
+    lock = _get_file_lock(filepath)
+    with lock:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            log.warn(f"JSON decode error in {filepath}: {e}")
+            return default
+        except IOError as e:
+            log.warn(f"IO error reading {filepath}: {e}")
+            return default
+
+
+def safe_json_save(filepath: str, data, indent: int = 2) -> bool:
+    """Thread-safe JSON saving with validation and atomic write.
+
+    Args:
+        filepath: Path to JSON file
+        data: Data to save (must be JSON-serializable)
+        indent: JSON indentation (default: 2)
+
+    Returns:
+        True if save succeeded, False otherwise
+    """
+    # Validate JSON is serializable before writing
+    try:
+        json_str = json.dumps(data, indent=indent, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        log.warn(f"JSON serialization error for {filepath}: {e}")
+        return False
+
+    lock = _get_file_lock(filepath)
+    with lock:
+        try:
+            # Ensure parent directory exists
+            parent_dir = os.path.dirname(filepath)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir)
+
+            # Write to temp file first, then rename (atomic on most systems)
+            temp_path = filepath + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(json_str)
+
+            # Atomic rename
+            os.replace(temp_path, filepath)
+            return True
+        except IOError as e:
+            log.warn(f"IO error writing {filepath}: {e}")
+            # Clean up temp file if it exists
+            temp_path = filepath + '.tmp'
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            return False
+
+
+# --- Debounced history saving ---
+
+_history_save_pending = False
+_history_save_lock = threading.Lock()
+_history_last_save = 0.0
+HISTORY_SAVE_DEBOUNCE = 5.0  # Minimum seconds between saves
 
 
 # Conversation history storage (in-memory, per channel/DM)
@@ -68,49 +167,86 @@ RE_WORD = re.compile(r'\w+')
 # Pre-compiled pattern for sentence splitting
 RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
 
+# Pre-compiled patterns for remove_thinking_tags (additional local LLM formats)
+RE_REASONING_TAG = re.compile(r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE)
+RE_REASON_TAG = re.compile(r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE)
+RE_BRACKET_THINKING = re.compile(r'\[thinking\].*?\[/thinking\]', re.DOTALL | re.IGNORECASE)
+RE_BRACKET_THINK = re.compile(r'\[think\].*?\[/think\]', re.DOTALL | re.IGNORECASE)
+RE_MARKDOWN_THINKING = re.compile(r'\*\*(?:Thinking|Reasoning|Internal|Analysis):\*\*.*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE)
+RE_REASONING_PREFIX = re.compile(r'^(?:Thinking:|Reasoning:|Let me think|I need to think|First, I should).*$', re.MULTILINE | re.IGNORECASE)
+RE_OUTPUT_WRAPPER = re.compile(r'<output>(.*?)</output>', re.DOTALL | re.IGNORECASE)
+RE_RESPONSE_WRAPPER = re.compile(r'<response>(.*?)</response>', re.DOTALL | re.IGNORECASE)
+RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
 
-def save_history():
-    """Save conversation history to disk for persistence across restarts."""
-    try:
-        # Build data structure with channel names for readability
-        serializable = {}
-        for channel_id, messages in conversation_history.items():
-            key = str(channel_id)
-            # Store both the channel name (if known) and messages
-            name = channel_names.get(channel_id, str(channel_id))
-            serializable[key] = {
-                "name": name,
-                "messages": messages
-            }
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(serializable, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log.warn(f"Failed to save history: {e}")
+
+def save_history(force: bool = False):
+    """Save conversation history to disk for persistence across restarts.
+
+    Uses debouncing to avoid excessive disk writes during high activity.
+
+    Args:
+        force: If True, save immediately regardless of debounce timer
+    """
+    global _history_save_pending, _history_last_save
+
+    now = time.time()
+
+    with _history_save_lock:
+        # Check if we should debounce
+        if not force and (now - _history_last_save) < HISTORY_SAVE_DEBOUNCE:
+            _history_save_pending = True
+            return
+
+        _history_save_pending = False
+        _history_last_save = now
+
+    # Build data structure with channel names for readability
+    serializable = {}
+    for channel_id, messages in conversation_history.items():
+        key = str(channel_id)
+        # Store both the channel name (if known) and messages
+        name = channel_names.get(channel_id, str(channel_id))
+        serializable[key] = {
+            "name": name,
+            "messages": messages
+        }
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not safe_json_save(HISTORY_CACHE_FILE, serializable):
+        log.warn("Failed to save history")
+
+
+def flush_pending_history():
+    """Force save any pending history changes. Call on shutdown."""
+    global _history_save_pending
+    with _history_save_lock:
+        if _history_save_pending:
+            _history_save_pending = False
+    save_history(force=True)
 
 
 def load_history():
     """Load conversation history from disk on startup."""
     global conversation_history, channel_names
-    try:
-        if os.path.exists(HISTORY_CACHE_FILE):
-            with open(HISTORY_CACHE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Handle both old format (list) and new format (dict with name/messages)
-                for k, v in data.items():
-                    channel_id = int(k)
-                    if isinstance(v, dict) and "messages" in v:
-                        # New format with name
-                        conversation_history[channel_id] = v["messages"]
-                        if "name" in v:
-                            channel_names[channel_id] = v["name"]
-                    else:
-                        # Old format - just list of messages
-                        conversation_history[channel_id] = v
-                log.info(f"Loaded history for {len(conversation_history)} channels")
-    except Exception as e:
-        log.warn(f"Failed to load history: {e}")
+
+    data = safe_json_load(HISTORY_CACHE_FILE, default={})
+    if not data:
         conversation_history = {}
+        return
+
+    # Handle both old format (list) and new format (dict with name/messages)
+    for k, v in data.items():
+        channel_id = int(k)
+        if isinstance(v, dict) and "messages" in v:
+            # New format with name
+            conversation_history[channel_id] = v["messages"]
+            if "name" in v:
+                channel_names[channel_id] = v["name"]
+        else:
+            # Old format - just list of messages
+            conversation_history[channel_id] = v
+
+    log.info(f"Loaded history for {len(conversation_history)} channels")
 
 
 def set_channel_name(channel_id: int, name: str):
@@ -408,25 +544,25 @@ def remove_thinking_tags(text: str) -> str:
 
     # Additional patterns for local LLMs that may use different formats
     # Remove <reasoning>...</reasoning> tags
-    text = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<reason>.*?</reason>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = RE_REASONING_TAG.sub('', text)
+    text = RE_REASON_TAG.sub('', text)
 
     # Remove [thinking]...[/thinking] or [think]...[/think] (bracket style)
-    text = re.sub(r'\[thinking\].*?\[/thinking\]', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'\[think\].*?\[/think\]', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = RE_BRACKET_THINKING.sub('', text)
+    text = RE_BRACKET_THINK.sub('', text)
 
     # Remove **Thinking:** or **Reasoning:** blocks (markdown style)
-    text = re.sub(r'\*\*(?:Thinking|Reasoning|Internal|Analysis):\*\*.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.IGNORECASE)
+    text = RE_MARKDOWN_THINKING.sub('', text)
 
     # Remove lines that start with common reasoning prefixes
-    text = re.sub(r'^(?:Thinking:|Reasoning:|Let me think|I need to think|First, I should).*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    text = RE_REASONING_PREFIX.sub('', text)
 
     # Remove <output> wrapper if present (some models wrap actual response)
-    text = re.sub(r'<output>(.*?)</output>', r'\1', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<response>(.*?)</response>', r'\1', text, flags=re.DOTALL | re.IGNORECASE)
+    text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
+    text = RE_RESPONSE_WRAPPER.sub(r'\1', text)
 
     # Clean up multiple newlines left behind
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
 
     return text.strip()
 
@@ -665,9 +801,6 @@ def store_multipart_response(channel_id: int, message_ids: List[int], full_conte
 
 # --- Autonomous Response ---
 
-import json
-import os
-
 AUTONOMOUS_FILE = "bot_data/autonomous.json"
 
 
@@ -684,34 +817,25 @@ class AutonomousManager:
     
     def _load(self):
         """Load settings from disk."""
-        try:
-            if os.path.exists(AUTONOMOUS_FILE):
-                with open(AUTONOMOUS_FILE, 'r') as f:
-                    data = json.load(f)
-                for ch_id, settings in data.items():
-                    ch_id = int(ch_id)
-                    self.enabled_channels[ch_id] = settings.get('chance', 0.05)
-                    self.channel_cooldowns[ch_id] = timedelta(minutes=settings.get('cooldown', 2))
-                    self.allow_bot_triggers[ch_id] = settings.get('allow_bot_triggers', False)
-        except Exception:
-            pass  # Fail silently, use defaults
-    
+        data = safe_json_load(AUTONOMOUS_FILE, default={})
+        for ch_id, settings in data.items():
+            ch_id = int(ch_id)
+            self.enabled_channels[ch_id] = settings.get('chance', 0.05)
+            self.channel_cooldowns[ch_id] = timedelta(minutes=settings.get('cooldown', 2))
+            self.allow_bot_triggers[ch_id] = settings.get('allow_bot_triggers', False)
+
     def _save(self):
         """Save settings to disk."""
-        try:
-            os.makedirs(os.path.dirname(AUTONOMOUS_FILE), exist_ok=True)
-            data = {}
-            for ch_id, chance in self.enabled_channels.items():
-                cooldown = self.channel_cooldowns.get(ch_id, self.default_cooldown)
-                data[str(ch_id)] = {
-                    'chance': chance,
-                    'cooldown': int(cooldown.total_seconds() // 60),
-                    'allow_bot_triggers': self.allow_bot_triggers.get(ch_id, False)
-                }
-            with open(AUTONOMOUS_FILE, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass  # Fail silently
+        data = {}
+        for ch_id, chance in self.enabled_channels.items():
+            cooldown = self.channel_cooldowns.get(ch_id, self.default_cooldown)
+            data[str(ch_id)] = {
+                'chance': chance,
+                'cooldown': int(cooldown.total_seconds() // 60),
+                'allow_bot_triggers': self.allow_bot_triggers.get(ch_id, False)
+            }
+        os.makedirs(os.path.dirname(AUTONOMOUS_FILE), exist_ok=True)
+        safe_json_save(AUTONOMOUS_FILE, data)
     
     def set_channel(self, channel_id: int, enabled: bool, chance: float = 0.05,
                     cooldown_mins: int = 2, allow_bot_triggers: bool = False):

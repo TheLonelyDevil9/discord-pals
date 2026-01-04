@@ -6,13 +6,26 @@ Per-character memory isolation: each character has its own DM and user memory fi
 
 import json
 import os
+import threading
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
-    DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE, 
+    DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE,
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
 )
 import logger as log
+
+# File locks for thread-safe writes (one lock per file path)
+_file_locks: Dict[str, threading.Lock] = {}
+_locks_lock = threading.Lock()  # Lock for accessing _file_locks dict
+
+
+def _get_file_lock(filepath: str) -> threading.Lock:
+    """Get or create a lock for a specific file path."""
+    with _locks_lock:
+        if filepath not in _file_locks:
+            _file_locks[filepath] = threading.Lock()
+        return _file_locks[filepath]
 
 
 def ensure_data_dir():
@@ -23,24 +36,65 @@ def ensure_data_dir():
 
 
 def load_json(filepath: str) -> dict:
-    """Load JSON file, return empty dict if not exists."""
-    if os.path.exists(filepath):
+    """Load JSON file with thread-safe locking, return empty dict if not exists."""
+    if not os.path.exists(filepath):
+        return {}
+
+    lock = _get_file_lock(filepath)
+    with lock:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
+                data = json.load(f)
+                # Validate that we got a dict
+                if not isinstance(data, dict):
+                    log.warn(f"Invalid JSON structure in {filepath}: expected dict, got {type(data).__name__}")
+                    return {}
+                return data
+        except json.JSONDecodeError as e:
+            log.warn(f"JSON decode error in {filepath}: {e}")
             return {}
-    return {}
+        except IOError as e:
+            log.warn(f"IO error reading {filepath}: {e}")
+            return {}
 
 
 def save_json(filepath: str, data: dict):
-    """Save dict to JSON file."""
-    # Ensure parent directory exists
-    parent_dir = os.path.dirname(filepath)
-    if parent_dir and not os.path.exists(parent_dir):
-        os.makedirs(parent_dir)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Save dict to JSON file with thread-safe locking and validation."""
+    # Validate data is a dict before saving
+    if not isinstance(data, dict):
+        log.warn(f"Refusing to save non-dict data to {filepath}: got {type(data).__name__}")
+        return
+
+    # Validate JSON is serializable before writing
+    try:
+        json_str = json.dumps(data, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        log.warn(f"JSON serialization error for {filepath}: {e}")
+        return
+
+    lock = _get_file_lock(filepath)
+    with lock:
+        try:
+            # Ensure parent directory exists
+            parent_dir = os.path.dirname(filepath)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir)
+
+            # Write to temp file first, then rename (atomic on most systems)
+            temp_path = filepath + '.tmp'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(json_str)
+
+            # Atomic rename (safer than direct overwrite)
+            os.replace(temp_path, filepath)
+        except IOError as e:
+            log.warn(f"IO error writing {filepath}: {e}")
+            # Clean up temp file if it exists
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
 
 
 def get_character_dm_file(character_name: str) -> str:

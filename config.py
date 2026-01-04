@@ -20,6 +20,51 @@ DEFAULT_MAX_TOKENS = 2048
 
 # --- Provider Configuration ---
 
+
+def _validate_provider_value(value, expected_type, default, min_val=None, max_val=None, name="value"):
+    """Validate and coerce a provider config value.
+
+    Args:
+        value: The value to validate
+        expected_type: Expected type (int, float, str, dict)
+        default: Default value if validation fails
+        min_val: Minimum value for numeric types
+        max_val: Maximum value for numeric types
+        name: Name for logging
+
+    Returns:
+        Validated value or default
+    """
+    if value is None:
+        return default
+
+    # Type coercion
+    try:
+        if expected_type == int:
+            value = int(value)
+        elif expected_type == float:
+            value = float(value)
+        elif expected_type == str:
+            value = str(value)
+        elif expected_type == dict:
+            if not isinstance(value, dict):
+                log.warn(f"Provider {name} expected dict, got {type(value).__name__}, using default")
+                return default
+    except (ValueError, TypeError):
+        log.warn(f"Provider {name} invalid type, using default: {default}")
+        return default
+
+    # Range validation for numeric types
+    if expected_type in (int, float):
+        if min_val is not None and value < min_val:
+            log.warn(f"Provider {name}={value} below minimum {min_val}, clamping")
+            value = min_val
+        if max_val is not None and value > max_val:
+            log.warn(f"Provider {name}={value} above maximum {max_val}, clamping")
+            value = max_val
+
+    return value
+
 def load_providers() -> tuple[dict, int]:
     """Load providers from providers.json or use defaults.
     
@@ -64,20 +109,20 @@ def load_providers() -> tuple[dict, int]:
                 key = os.getenv(key_env, "") if key_env else "not-needed"
             
             providers[tier] = {
-                "name": p.get("name", f"Provider {i+1}"),
-                "url": p.get("url"),
+                "name": _validate_provider_value(p.get("name"), str, f"Provider {i+1}", name="name"),
+                "url": p.get("url"),  # Already validated above
                 "key": key,
-                "model": p.get("model", "gpt-4o"),
-                "max_tokens": p.get("max_tokens", DEFAULT_MAX_TOKENS),  # Per-provider max tokens
-                "temperature": p.get("temperature", DEFAULT_TEMPERATURE),  # Per-provider temperature
-                "extra_body": p.get("extra_body", {}),  # Legacy: dict of custom request body options
+                "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
+                "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
+                "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
+                "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
                 # SillyTavern-style YAML parameters (preferred)
-                "include_body": p.get("include_body", ""),  # YAML string to merge into request body
-                "exclude_body": p.get("exclude_body", ""),  # YAML string of keys to remove from request
-                "include_headers": p.get("include_headers", ""),  # YAML string to merge into headers
+                "include_body": _validate_provider_value(p.get("include_body"), str, "", name="include_body"),
+                "exclude_body": _validate_provider_value(p.get("exclude_body"), str, "", name="exclude_body"),
+                "include_headers": _validate_provider_value(p.get("include_headers"), str, "", name="include_headers"),
             }
-        
-        timeout = data.get("timeout", 60)
+
+        timeout = _validate_provider_value(data.get("timeout"), int, 60, min_val=5, max_val=3600, name="timeout")
         return providers, timeout
     
     # Default fallback (original hardcoded config)
