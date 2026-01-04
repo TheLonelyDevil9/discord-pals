@@ -59,16 +59,11 @@
     <nav><div class="container">
         <a href="/" class="logo"><img src="/static/banner.jpg" alt="Discord Pals" class="logo-img" onerror="this.style.display='none';this.nextSibling.style.display='inline'"><span style="display:none">Discord Pals</span></a>
         <a href="/" {% if request.path=='/' %}class="active"{% endif %}>Dashboard</a>
-        <a href="/channels" {% if request.path=='/channels' %}class="active"{% endif %}>Channels</a>
+        <a href="/characters" {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}class="active"{% endif %}>Characters</a>
         <a href="/memories" {% if request.path=='/memories' %}class="active"{% endif %}>Memories</a>
-        <a href="/characters" {% if request.path=='/characters' %}class="active"{% endif %}>Characters</a>
-        <a href="/preview" {% if request.path=='/preview' %}class="active"{% endif %}>Preview</a>
-        <a href="/prompts" {% if '/prompts' in request.path %}class="active"{% endif %}>Prompts</a>
-        <a href="/config" {% if request.path=='/config' %}class="active"{% endif %}>Config</a>
-        <a href="/context" {% if request.path=='/context' %}class="active"{% endif %}>Context</a>
-        <a href="/stats" {% if request.path=='/stats' %}class="active"{% endif %}>Stats</a>
-        <a href="/logs" {% if request.path=='/logs' %}class="active"{% endif %}>Logs</a>
-        <a href="/settings" {% if request.path=='/settings' %}class="active"{% endif %}>Settings</a>
+        <a href="/channels" {% if request.path=='/channels' %}class="active"{% endif %}>Channels</a>
+        <a href="/config" {% if request.path=='/config' or request.path=='/settings' %}class="active"{% endif %}>Config</a>
+        <a href="/logs" {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}class="active"{% endif %}>Logs</a>
     </div></nav>
     <main class="container">{% block content %}{% endblock %}</main>
     <script>

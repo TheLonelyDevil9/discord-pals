@@ -198,7 +198,7 @@ def save_memory(name):
 
 @app.route('/characters')
 def characters():
-    """Characters viewer page."""
+    """Characters viewer page (merged with Preview and Prompts)."""
     char_files = get_character_files()
     chars_data = {}
     
@@ -215,7 +215,20 @@ def characters():
         except Exception as e:
             chars_data[name] = {'error': str(e)}
     
-    return render_template('characters.html', characters=chars_data)
+    # Load system prompt for Prompts tab
+    system_content = ""
+    system_path = PROMPTS_DIR / "system.md"
+    if system_path.exists():
+        try:
+            with open(system_path, 'r', encoding='utf-8') as f:
+                system_content = f.read()
+        except Exception:
+            pass
+    
+    return render_template('characters.html', 
+                           characters=chars_data, 
+                           character_list=char_files,
+                           system_content=system_content)
 
 
 @app.route('/characters/<name>/edit')
@@ -287,40 +300,8 @@ def new_character():
 
 @app.route('/settings')
 def settings():
-    """Settings editor page."""
-    providers_raw = "{}"
-    bots_raw = "{}"
-    autonomous_raw = "{}"
-    
-    if os.path.exists('providers.json'):
-        try:
-            with open('providers.json', 'r') as f:
-                providers_raw = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read providers.json: {e}")
-    
-    if os.path.exists('bots.json'):
-        try:
-            with open('bots.json', 'r') as f:
-                bots_raw = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read bots.json: {e}")
-    
-    autonomous_file = DATA_DIR / 'autonomous.json'
-    if autonomous_file.exists():
-        try:
-            with open(autonomous_file, 'r') as f:
-                autonomous_raw = f.read()
-        except Exception as e:
-            print(f"Warning: Failed to read autonomous.json: {e}")
-    
-    return render_template('settings.html',
-        providers_raw=providers_raw,
-        bots_raw=bots_raw,
-        autonomous_raw=autonomous_raw,
-        message=request.args.get('message'),
-        error=request.args.get('error')
-    )
+    """Redirect to config page (settings merged into config)."""
+    return redirect(url_for('config_page'))
 
 
 @app.route('/settings/providers/save', methods=['POST'])
@@ -331,15 +312,15 @@ def save_providers():
         json.loads(content)  # Validate JSON
         with open('providers.json', 'w') as f:
             f.write(content)
-        return redirect(url_for('settings', message='Providers saved successfully'))
+        return redirect(url_for('config_page', message='Providers saved successfully'))
     except json.JSONDecodeError as e:
         import logger as log
         log.error(f"Failed to save providers.json: Invalid JSON - {e}")
-        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+        return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
         import logger as log
         log.error(f"Failed to save providers.json: {e}")
-        return redirect(url_for('settings', error=f'Save failed: {e}'))
+        return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
 
 @app.route('/settings/bots/save', methods=['POST'])
@@ -350,15 +331,15 @@ def save_bots():
         json.loads(content)  # Validate JSON
         with open('bots.json', 'w') as f:
             f.write(content)
-        return redirect(url_for('settings', message='Bots config saved successfully'))
+        return redirect(url_for('config_page', message='Bots config saved successfully'))
     except json.JSONDecodeError as e:
         import logger as log
         log.error(f"Failed to save bots.json: Invalid JSON - {e}")
-        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+        return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
         import logger as log
         log.error(f"Failed to save bots.json: {e}")
-        return redirect(url_for('settings', error=f'Save failed: {e}'))
+        return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
 
 @app.route('/settings/autonomous/save', methods=['POST'])
@@ -370,15 +351,15 @@ def save_autonomous():
         DATA_DIR.mkdir(exist_ok=True)
         with open(DATA_DIR / 'autonomous.json', 'w') as f:
             f.write(content)
-        return redirect(url_for('settings', message='Autonomous config saved successfully'))
+        return redirect(url_for('config_page', message='Autonomous config saved successfully'))
     except json.JSONDecodeError as e:
         import logger as log
         log.error(f"Failed to save autonomous.json: Invalid JSON - {e}")
-        return redirect(url_for('settings', error=f'Invalid JSON: {e}'))
+        return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
     except Exception as e:
         import logger as log
         log.error(f"Failed to save autonomous.json: {e}")
-        return redirect(url_for('settings', error=f'Save failed: {e}'))
+        return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
 
 # --- Prompts ---
@@ -571,7 +552,7 @@ def api_message_format():
 
 @app.route('/config')
 def config_page():
-    """Runtime configuration page."""
+    """Runtime configuration page (merged with Settings)."""
     import runtime_config
     
     config = runtime_config.get_all()
@@ -580,13 +561,34 @@ def config_page():
     # Get providers
     providers = []
     providers_file = Path("providers.json")
+    providers_raw = "{}"
     if providers_file.exists():
         try:
             with open(providers_file, 'r') as f:
-                data = json.load(f)
-                providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
+                providers_raw = f.read()
+            data = json.loads(providers_raw)
+            providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
         except Exception as e:
             print(f"Warning: Failed to load providers for config page: {e}")
+    
+    # Load bots.json
+    bots_raw = "{}"
+    if os.path.exists('bots.json'):
+        try:
+            with open('bots.json', 'r') as f:
+                bots_raw = f.read()
+        except Exception:
+            pass
+    
+    # Load autonomous.json
+    autonomous_raw = "{}"
+    autonomous_file = DATA_DIR / 'autonomous.json'
+    if autonomous_file.exists():
+        try:
+            with open(autonomous_file, 'r') as f:
+                autonomous_raw = f.read()
+        except Exception:
+            pass
     
     # Get bots and their current characters + autonomous channels
     from discord_utils import autonomous_manager
@@ -617,7 +619,12 @@ def config_page():
         config=config,
         characters=characters,
         providers=providers,
-        bots=bots_info
+        bots=bots_info,
+        providers_raw=providers_raw,
+        bots_raw=bots_raw,
+        autonomous_raw=autonomous_raw,
+        message=request.args.get('message'),
+        error=request.args.get('error')
     )
 
 
@@ -882,8 +889,14 @@ def import_config():
 
 @app.route('/logs')
 def logs_page():
-    """Live logs page."""
-    return render_template('logs.html')
+    """Live logs page (merged with Stats and Context)."""
+    from stats import stats_manager
+    import runtime_config
+    
+    stats = stats_manager.get_summary()
+    contexts = runtime_config.get_last_context()
+    
+    return render_template('logs.html', stats=stats, contexts=contexts)
 
 
 @app.route('/api/logs')

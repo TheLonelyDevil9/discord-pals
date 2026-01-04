@@ -3,6 +3,42 @@
 
 {% block content %}
 <style>
+    .tab-container {
+        display: flex;
+        gap: 5px;
+        margin-bottom: 20px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 10px;
+    }
+
+    .tab-btn {
+        padding: 10px 20px;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 6px 6px 0 0;
+        font-size: 0.95em;
+    }
+
+    .tab-btn:hover {
+        background: var(--bg);
+        color: var(--text);
+    }
+
+    .tab-btn.active {
+        background: var(--accent);
+        color: var(--bg);
+    }
+
+    .tab-content {
+        display: none;
+    }
+
+    .tab-content.active {
+        display: block;
+    }
+
     .character-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
@@ -89,54 +125,223 @@
         outline: none;
         border-color: var(--accent);
     }
+
+    .preview-controls {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .preview-controls select {
+        padding: 10px 15px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        font-size: 1em;
+        min-width: 200px;
+    }
+
+    .preview-box {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+    }
+
+    .preview-content {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+        white-space: pre-wrap;
+        font-family: monospace;
+        font-size: 0.9em;
+        line-height: 1.6;
+        max-height: 500px;
+        overflow-y: auto;
+    }
+
+    .preview-meta {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 15px;
+        color: var(--text-muted);
+        font-size: 0.9em;
+    }
+
+    .loading {
+        text-align: center;
+        padding: 40px;
+        color: var(--text-muted);
+    }
 </style>
 
-<h1 style="margin-bottom: 30px;">Characters</h1>
+<h1 style="margin-bottom: 20px;">🎭 Characters</h1>
 
-{% if characters %}
-<div class="character-grid">
-    {% for name, data in characters.items() %}
-    <div class="character-card">
-        <div class="character-header">
-            <span class="character-name">🎭 {{ name }}</span>
-            <span class="character-meta">{{ data.size }} chars</span>
-        </div>
+<!-- Tab Navigation -->
+<div class="tab-container">
+    <button class="tab-btn active" onclick="switchTab('files')">📁 Files</button>
+    <button class="tab-btn" onclick="switchTab('preview')">🔮 Preview</button>
+    <button class="tab-btn" onclick="switchTab('prompts')">📝 Prompts</button>
+</div>
 
-        {% if data.error %}
-        <div class="empty">Error: {{ data.error }}</div>
-        {% else %}
-        <div class="character-preview">{{ data.preview }}</div>
-        <div class="character-actions">
-            <a href="/characters/{{ name }}/edit" class="btn btn-primary">Edit</a>
-            <button type="button" class="btn btn-danger" onclick="confirmDeleteCharacter('{{ name }}')">Delete</button>
+<!-- Files Tab -->
+<div id="tab-files" class="tab-content active">
+    {% if characters %}
+    <div class="character-grid">
+        {% for name, data in characters.items() %}
+        <div class="character-card">
+            <div class="character-header">
+                <span class="character-name">🎭 {{ name }}</span>
+                <span class="character-meta">{{ data.size }} chars</span>
+            </div>
+            {% if data.error %}
+            <div class="empty">Error: {{ data.error }}</div>
+            {% else %}
+            <div class="character-preview">{{ data.preview }}</div>
+            <div class="character-actions">
+                <a href="/characters/{{ name }}/edit" class="btn btn-primary">Edit</a>
+                <button type="button" class="btn btn-danger"
+                    onclick="confirmDeleteCharacter('{{ name }}')">Delete</button>
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
+        {% endfor %}
     </div>
-    {% endfor %}
+    <div class="card" style="margin-top: 25px;">
+        <h3 style="margin-bottom: 15px;">➕ New Character</h3>
+        <form action="/characters/new" method="post" class="new-character-form">
+            <input type="text" name="name" placeholder="Character name" required>
+            <button type="submit" class="btn btn-primary">Create</button>
+        </form>
+    </div>
+    {% else %}
+    <div class="card">
+        <div class="empty">No character files found in <code>characters/</code></div>
+    </div>
+    {% endif %}
 </div>
 
-<div class="card" style="margin-top: 25px;">
-    <h3 style="margin-bottom: 15px;">➕ New Character</h3>
-    <form action="/characters/new" method="post" class="new-character-form">
-        <input type="text" name="name" placeholder="Character name" required>
-        <button type="submit" class="btn btn-primary">Create</button>
-    </form>
+<!-- Preview Tab -->
+<div id="tab-preview" class="tab-content">
+    <p style="color: var(--text-muted); margin-bottom: 20px;">
+        See how the complete system prompt looks for each character with mock values.
+    </p>
+    <div class="preview-controls">
+        <select id="character-select" onchange="loadPreview()">
+            <option value="">Select a character...</option>
+            {% for char in character_list %}
+            <option value="{{ char }}">{{ char }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-primary" onclick="loadPreview()">Preview</button>
+    </div>
+    <div class="preview-box">
+        <div id="preview-meta" class="preview-meta" style="display: none;">
+            <span>Character: <strong id="preview-char"></strong></span>
+            <span>Est. Tokens: <strong id="preview-tokens"></strong></span>
+        </div>
+        <div id="preview-content" class="preview-content">
+            <div class="loading">Select a character to preview the system prompt</div>
+        </div>
+    </div>
 </div>
-{% else %}
-<div class="card">
-    <div class="empty">No character files found in <code>characters/</code></div>
+
+<!-- Prompts Tab -->
+<div id="tab-prompts" class="tab-content">
+    <p style="color: var(--text-muted); margin-bottom: 20px;">
+        This prompt controls how the AI behaves. Changes take effect on next message (no restart needed).
+    </p>
+    <div style="display: grid; grid-template-columns: 1fr 280px; gap: 20px;">
+        <div class="card" style="margin-bottom: 0;">
+            <h3 class="card-title">📝 prompts/system.md</h3>
+            <form action="/prompts/system/save" method="post">
+                <textarea name="content" style="width: 100%; height: 500px; font-family: monospace; font-size: 13px; 
+                    background: var(--bg); border: 1px solid var(--border); color: var(--text); 
+                    padding: 15px; border-radius: 4px; resize: vertical;">{{ system_content }}</textarea>
+                <div style="margin-top: 10px;">
+                    <button type="submit" class="btn btn-primary">Save Prompt</button>
+                </div>
+            </form>
+        </div>
+        <div class="card" style="margin-bottom: 0; height: fit-content; position: sticky; top: 20px;">
+            <h3 class="card-title">🔧 Placeholders</h3>
+            <p style="color: var(--text-muted); font-size: 0.85em; margin-bottom: 15px;">
+                These get replaced with real values at runtime:
+            </p>
+            <ul style="list-style: none; font-family: monospace; font-size: 0.8em;">
+                <li style="padding: 4px 0;"><code>{% raw %}{{CHARACTER_NAME}}{% endraw %}</code> - Bot's name</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{PERSONA}}{% endraw %}</code> - Personality</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{USER_NAME}}{% endraw %}</code> - Current user</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{GUILD_NAME}}{% endraw %}</code> - Server name</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{MEMORIES}}{% endraw %}</code> - Stored memories</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{LORE}}{% endraw %}</code> - Server lore</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{EMOJIS}}{% endraw %}</code> - Server emojis</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{ACTIVE_USERS}}{% endraw %}</code> - Users in chat</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{EXAMPLE_DIALOGUE}}{% endraw %}</code> - Examples</li>
+                <li style="padding: 4px 0;"><code>{% raw %}{{SPECIAL_USER_CONTEXT}}{% endraw %}</code> - Per-user
+                    context</li>
+            </ul>
+        </div>
+    </div>
 </div>
-{% endif %}
 
 <script>
-function confirmDeleteCharacter(name) {
-    showConfirm('Delete Character', 'Are you sure you want to delete "' + name + '"? This cannot be undone.', function() {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '/characters/' + name + '/delete';
-        document.body.appendChild(form);
-        form.submit();
-    });
-}
+    function switchTab(tabName) {
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+        document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
+        document.getElementById('tab-' + tabName).classList.add('active');
+    }
+
+    function confirmDeleteCharacter(name) {
+        showConfirm('Delete Character', 'Are you sure you want to delete "' + name + '"? This cannot be undone.', function () {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/characters/' + name + '/delete';
+            document.body.appendChild(form);
+            form.submit();
+        });
+    }
+
+    async function loadPreview() {
+        const select = document.getElementById('character-select');
+        const charName = select.value;
+        if (!charName) {
+            document.getElementById('preview-content').innerHTML = '<div class="loading">Select a character to preview the system prompt</div>';
+            document.getElementById('preview-meta').style.display = 'none';
+            return;
+        }
+        document.getElementById('preview-content').innerHTML = '<div class="loading">Loading...</div>';
+        try {
+            const response = await fetch('/api/preview/' + encodeURIComponent(charName));
+            const data = await response.json();
+            if (data.error) {
+                document.getElementById('preview-content').textContent = 'Error: ' + data.error;
+            } else {
+                document.getElementById('preview-content').textContent = data.prompt;
+                document.getElementById('preview-char').textContent = data.character;
+                document.getElementById('preview-tokens').textContent = '~' + data.token_estimate;
+                document.getElementById('preview-meta').style.display = 'flex';
+            }
+        } catch (err) {
+            document.getElementById('preview-content').textContent = 'Error loading preview: ' + err.message;
+        }
+    }
 </script>
+
+<style>
+    @media (max-width: 900px) {
+        div[style*="grid-template-columns: 1fr 280px"] {
+            display: block !important;
+        }
+
+        div[style*="position: sticky"] {
+            position: static !important;
+            margin-top: 20px;
+        }
+    }
+</style>
 {% endblock %}
