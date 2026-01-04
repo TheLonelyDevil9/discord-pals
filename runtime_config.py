@@ -5,6 +5,7 @@ Live-adjustable settings via the web dashboard.
 
 import json
 import os
+import time
 from config import RUNTIME_CONFIG_FILE, DATA_DIR
 
 # Default values
@@ -21,6 +22,11 @@ DEFAULTS = {
     "raw_generation_logging": False,  # Log raw LLM output to live logs
 }
 
+# Config cache to avoid repeated file reads
+_config_cache: dict = None
+_config_cache_time: float = 0.0
+_CONFIG_CACHE_TTL = 2.0  # Seconds before cache expires
+
 
 def ensure_data_dir():
     """Create data directory if it doesn't exist."""
@@ -28,8 +34,8 @@ def ensure_data_dir():
         os.makedirs(DATA_DIR)
 
 
-def load_config() -> dict:
-    """Load runtime config, creating with defaults if not exists."""
+def _load_config_from_disk() -> dict:
+    """Load config from disk (internal, no caching)."""
     ensure_data_dir()
     if os.path.exists(RUNTIME_CONFIG_FILE):
         try:
@@ -45,11 +51,32 @@ def load_config() -> dict:
     return DEFAULTS.copy()
 
 
+def load_config() -> dict:
+    """Load runtime config with caching to avoid repeated disk reads."""
+    global _config_cache, _config_cache_time
+
+    now = time.time()
+    if _config_cache is not None and (now - _config_cache_time) < _CONFIG_CACHE_TTL:
+        return _config_cache.copy()
+
+    _config_cache = _load_config_from_disk()
+    _config_cache_time = now
+    return _config_cache.copy()
+
+
+def invalidate_cache():
+    """Invalidate the config cache (call after writes)."""
+    global _config_cache, _config_cache_time
+    _config_cache = None
+    _config_cache_time = 0.0
+
+
 def save_config(config: dict):
-    """Save runtime config to file."""
+    """Save runtime config to file and invalidate cache."""
     ensure_data_dir()
     with open(RUNTIME_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2)
+    invalidate_cache()
 
 
 def get(key: str, default=None):
@@ -77,7 +104,7 @@ _last_context = {}
 _last_activity = {}
 
 
-def store_last_context(bot_name: str, system_prompt: str, messages: list, 
+def store_last_context(bot_name: str, system_prompt: str, messages: list,
                        token_estimate: int = 0):
     """Store the last context sent to LLM for visualization."""
     _last_context[bot_name] = {
@@ -97,7 +124,6 @@ def get_last_context(bot_name: str = None) -> dict:
 
 def update_last_activity(bot_name: str):
     """Update last activity timestamp for a bot."""
-    import time
     _last_activity[bot_name] = time.time()
 
 

@@ -9,6 +9,13 @@ from config import PROVIDERS, API_TIMEOUT
 import asyncio
 import logger as log
 
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    log.warn("PyYAML not installed - include_body/exclude_body features disabled")
+
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
@@ -28,7 +35,7 @@ def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
     Merge YAML-formatted string into target dict (SillyTavern style).
     Supports both object notation and array of objects.
     Uses deep merge for nested objects (e.g., GLM thinking config).
-    
+
     Example YAML:
         min_p: 0.1
         top_k: 40
@@ -41,8 +48,9 @@ def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
     """
     if not yaml_string or not yaml_string.strip():
         return
+    if not YAML_AVAILABLE:
+        return
     try:
-        import yaml
         parsed = yaml.safe_load(yaml_string)
         if isinstance(parsed, list):
             for item in parsed:
@@ -57,7 +65,7 @@ def merge_yaml_to_dict(target: dict, yaml_string: str) -> None:
 def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
     """
     Remove keys from dict based on YAML list or object keys (SillyTavern style).
-    
+
     Example YAML:
         - frequency_penalty
         - presence_penalty
@@ -67,8 +75,9 @@ def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
     """
     if not yaml_string or not yaml_string.strip():
         return
+    if not YAML_AVAILABLE:
+        return
     try:
-        import yaml
         parsed = yaml.safe_load(yaml_string)
         if isinstance(parsed, list):
             for key in parsed:

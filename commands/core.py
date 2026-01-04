@@ -12,6 +12,15 @@ from character import character_manager
 import logger as log
 
 
+async def is_owner(interaction: discord.Interaction) -> bool:
+    """Check if the user is the application owner."""
+    app_info = await interaction.client.application_info()
+    if app_info.team:
+        # If the bot is owned by a team, check if user is a team member
+        return interaction.user.id in [m.id for m in app_info.team.members]
+    return interaction.user.id == app_info.owner.id
+
+
 def setup_core_commands(bot_instance) -> None:
     """Register core bot management commands."""
     tree = bot_instance.tree
@@ -91,7 +100,7 @@ def setup_core_commands(bot_instance) -> None:
         msg = f"**Bot:** {bot_instance.name}\n**Character:** {char_name}\n\n{provider_status}"
         await interaction.response.send_message(msg, ephemeral=True)
     
-    @tree.command(name="autonomous", description="Toggle autonomous responses")
+    @tree.command(name="autonomous", description="Toggle autonomous responses (owner only)")
     @app_commands.describe(
         enabled="Enable or disable autonomous mode",
         chance="Response chance % (default: 5)",
@@ -103,12 +112,19 @@ def setup_core_commands(bot_instance) -> None:
         chance: int = 5,
         cooldown: int = 2
     ) -> None:
+        # Owner-only check
+        if not await is_owner(interaction):
+            await interaction.response.send_message(
+                "❌ Only the bot owner can use this command", ephemeral=True
+            )
+            return
+
         from discord_utils import autonomous_manager
-        
+
         if isinstance(interaction.channel, discord.DMChannel):
             await interaction.response.send_message("Autonomous mode is server-only", ephemeral=True)
             return
-        
+
         if enabled:
             decimal_chance = min(100, max(1, chance)) / 100.0
             cooldown_mins = min(10, max(1, cooldown))
@@ -138,14 +154,21 @@ def setup_core_commands(bot_instance) -> None:
                 "▶️ Bot-to-bot interactions **RESUMED**", ephemeral=True
             )
     
-    @tree.command(name="pause", description="⚠️ KILLSWITCH: Pause/resume ALL bot activity globally")
+    @tree.command(name="pause", description="⚠️ KILLSWITCH: Pause/resume ALL bot activity globally (owner only)")
     @app_commands.describe(enable="True to pause all activity, False to resume (omit to toggle)")
     async def cmd_pause(interaction: discord.Interaction, enable: Optional[bool] = None) -> None:
+        # Owner-only check
+        if not await is_owner(interaction):
+            await interaction.response.send_message(
+                "❌ Only the bot owner can use this command", ephemeral=True
+            )
+            return
+
         import runtime_config
         current = runtime_config.get("global_paused", False)
         new_value = not current if enable is None else enable
         runtime_config.set("global_paused", new_value)
-        
+
         if new_value:
             await interaction.response.send_message(
                 "🛑 **KILLSWITCH ACTIVE** - All bot responses PAUSED globally", ephemeral=False

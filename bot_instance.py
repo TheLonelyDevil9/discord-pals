@@ -7,7 +7,6 @@ import discord
 from discord import app_commands
 import asyncio
 import random
-import re
 import time
 from typing import Optional, Dict
 
@@ -796,75 +795,7 @@ class BotInstance:
         await memory_manager.generate_memory(
             provider_manager, history[-10:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
         )
-    
-    async def _maybe_respond_to_edit(self, before: discord.Message, after: discord.Message, user_name: str):
-        """Check if an edit is significant and respond."""
-        if not self.character:
-            return
-        
-        # Only respond to edits if autonomous mode is enabled for this channel
-        channel_id = after.channel.id
-        if channel_id not in autonomous_manager.enabled_channels:
-            return
-        
-        old = before.content.lower().strip()
-        new = after.content.lower().strip()
-        
-        old_words = set(re.findall(r'\w+', old))
-        new_words = set(re.findall(r'\w+', new))
-        
-        if old_words == new_words:
-            return
-        
-        if abs(len(old) - len(new)) <= 2 and len(old_words.symmetric_difference(new_words)) <= 1:
-            return
-        
-        eval_prompt = f"""You are evaluating if a message edit is significant enough for {self.character.name} to react to.
 
-ORIGINAL: "{before.content}"
-EDITED TO: "{after.content}"
-
-Is this edit:
-A) A typo fix or minor correction (NO response needed)
-B) A meaningful change in tone, content, or intent (WORTH responding to)
-
-Reply with ONLY "A" or "B"."""
-
-        try:
-            result = await provider_manager.generate(
-                messages=[{"role": "user", "content": eval_prompt}],
-                system_prompt="You evaluate message edits. Reply with only A or B."
-                # max_tokens removed - uses provider config
-            )
-            
-            if "B" not in result.upper():
-                return
-            
-            react_prompt = f"""You are {self.character.name}. You noticed {user_name} sneakily edited their message.
-
-ORIGINAL: "{before.content}"
-CHANGED TO: "{after.content}"
-
-React naturally and briefly (1-2 sentences) to catching them editing their message."""
-
-            response = await provider_manager.generate(
-                messages=[{"role": "user", "content": react_prompt}],
-                system_prompt=f"You are {self.character.name}. React organically to message edits."
-                # max_tokens removed - uses provider config
-            )
-            
-            response = remove_thinking_tags(response)
-            response = clean_bot_name_prefix(response, self.character.name)
-            
-            if after.guild:
-                response = convert_emojis_in_text(response, after.guild)
-            
-            await after.reply(response)
-            add_to_history(after.channel.id, "assistant", response, author_name=self.character.name)
-            
-        except Exception as e:
-            log.debug(f"Edit response failed: {e}", self.name)
-    
     def _setup_commands(self) -> None:
         """Register slash commands from commands module."""
         from commands import setup_all_commands

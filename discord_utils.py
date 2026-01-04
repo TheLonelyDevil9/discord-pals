@@ -101,7 +101,7 @@ def safe_json_save(filepath: str, data, indent: int = 2) -> bool:
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except:
+                except Exception:
                     pass
             return False
 
@@ -711,6 +711,15 @@ async def get_http_session() -> aiohttp.ClientSession:
     if _http_session is None or _http_session.closed:
         _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
     return _http_session
+
+
+async def close_http_session():
+    """Close the HTTP session. Call on shutdown."""
+    global _http_session
+    if _http_session is not None and not _http_session.closed:
+        await _http_session.close()
+        _http_session = None
+        log.debug("HTTP session closed")
 
 
 async def download_image_as_base64(url: str) -> Optional[str]:
