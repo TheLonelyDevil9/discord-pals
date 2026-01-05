@@ -151,8 +151,15 @@ LOCAL_API_KEY=optional
 
 ### Step 6: Run the Bot
 
+**Windows**
+
+Double click `run.bat`.
+
+**Mac/Linux**
+
 ```bash
-python main.py
+chmod +x run.sh
+./run.sh
 ```
 
 You should see:
