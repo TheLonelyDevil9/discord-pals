@@ -25,7 +25,7 @@ DEFAULTS = {
 # Config cache to avoid repeated file reads
 _config_cache: dict = None
 _config_cache_time: float = 0.0
-_CONFIG_CACHE_TTL = 2.0  # Seconds before cache expires
+_CONFIG_CACHE_TTL = 30.0  # Seconds before cache expires (increased from 2.0 for performance)
 
 
 def ensure_data_dir():

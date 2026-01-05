@@ -3,7 +3,7 @@ Discord Pals - Web Dashboard
 Local web interface for managing bot, memories, and characters.
 """
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
+from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file, session
 import threading
 import json
 import os
@@ -11,14 +11,27 @@ import io
 import zipfile
 from pathlib import Path
 import logger as log
+from security import (
+    safe_path, safe_filename, validate_zip_entry,
+    get_or_create_secret_key, requires_auth, requires_csrf,
+    generate_csrf_token
+)
+from constants import ALLOWED_IMPORT_FILES
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
-app.secret_key = 'discord-pals-local-dashboard'
 
 # Shared state (set by main.py)
 bot_instances = []
 DATA_DIR = Path("bot_data")
 CHARACTERS_DIR = Path("characters")
+PROMPTS_DIR = Path("prompts")
+
+# Initialize secret key securely
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+app.secret_key = get_or_create_secret_key(DATA_DIR)
+
+# Make CSRF token available in all templates
+app.jinja_env.globals['csrf_token'] = generate_csrf_token
 
 
 def get_memory_files():
@@ -141,49 +154,66 @@ def memories():
 
 
 @app.route('/memories/<name>/delete', methods=['POST'])
+@requires_csrf
 def delete_memory(name):
     """Delete a specific memory entry."""
-    file_path = DATA_DIR / f"{name}.json"
+    try:
+        file_path = safe_path(DATA_DIR, name, '.json')
+    except ValueError as e:
+        log.warn(f"Invalid memory path: {e}")
+        return redirect(url_for('memories'))
+
     memory_key = request.form.get('key')
-    
+
     if file_path.exists() and memory_key:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             if memory_key in data:
                 del data[memory_key]
-                
+
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
         except Exception as e:
             log.warn(f"Failed to delete memory '{memory_key}': {e}")
-    
+
     return redirect(url_for('memories'))
 
 
 @app.route('/memories/<name>/edit')
 def edit_memory(name):
     """Edit a memory file."""
-    file_path = DATA_DIR / f"{name}.json"
+    try:
+        file_path = safe_path(DATA_DIR, name, '.json')
+    except ValueError as e:
+        log.warn(f"Invalid memory path: {e}")
+        return redirect(url_for('memories'))
+
     content = "{}"
-    
+
     if file_path.exists():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
             log.warn(f"Failed to read memory file: {e}")
-    
+
     return render_template('memory_edit.html', name=name, content=content)
 
 
 @app.route('/memories/<name>/save', methods=['POST'])
+@requires_csrf
 def save_memory(name):
     """Save memory file changes."""
-    file_path = DATA_DIR / f"{name}.json"
+    try:
+        file_path = safe_path(DATA_DIR, name, '.json')
+    except ValueError as e:
+        log.warn(f"Invalid memory path: {e}")
+        return redirect(url_for('memories'))
+
     content = request.form.get('content', '{}')
-    
+
     try:
         json.loads(content)  # Validate JSON
         DATA_DIR.mkdir(exist_ok=True)
@@ -191,7 +221,7 @@ def save_memory(name):
             f.write(content)
     except Exception as e:
         log.warn(f"Failed to save memory: {e}")
-    
+
     return redirect(url_for('memories'))
 
 
@@ -235,65 +265,84 @@ def characters():
 @app.route('/characters/<name>/edit')
 def edit_character(name):
     """Edit a character file."""
-    path = CHARACTERS_DIR / f"{name}.md"
+    try:
+        path = safe_path(CHARACTERS_DIR, name, '.md')
+    except ValueError as e:
+        log.warn(f"Invalid character path: {e}")
+        return redirect(url_for('characters'))
+
     content = ""
-    
+
     if path.exists():
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
             log.warn(f"Failed to read character file: {e}")
-    
+
     return render_template('character_edit.html', name=name, content=content)
 
 
 @app.route('/characters/<name>/save', methods=['POST'])
+@requires_csrf
 def save_character(name):
     """Save character file changes."""
-    path = CHARACTERS_DIR / f"{name}.md"
+    try:
+        path = safe_path(CHARACTERS_DIR, name, '.md')
+    except ValueError as e:
+        log.warn(f"Invalid character path: {e}")
+        return redirect(url_for('characters'))
+
     content = request.form.get('content', '')
-    
+
     try:
         CHARACTERS_DIR.mkdir(exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
         log.warn(f"Failed to save character: {e}")
-    
+
     return redirect(url_for('characters'))
 
 
 @app.route('/characters/<name>/delete', methods=['POST'])
+@requires_csrf
 def delete_character(name):
     """Delete a character file."""
-    path = CHARACTERS_DIR / f"{name}.md"
-    
+    try:
+        path = safe_path(CHARACTERS_DIR, name, '.md')
+    except ValueError as e:
+        log.warn(f"Invalid character path: {e}")
+        return redirect(url_for('characters'))
+
     if path.exists():
         try:
             path.unlink()
         except Exception as e:
             log.warn(f"Failed to delete character: {e}")
-    
+
     return redirect(url_for('characters'))
 
 
 @app.route('/characters/new', methods=['POST'])
+@requires_csrf
 def new_character():
     """Create a new character file."""
     name = request.form.get('name', '').strip()
-    
+
     if name:
-        path = CHARACTERS_DIR / f"{name}.md"
-        if not path.exists():
-            try:
+        try:
+            path = safe_path(CHARACTERS_DIR, name, '.md')
+            if not path.exists():
                 CHARACTERS_DIR.mkdir(exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f:
-                    f.write(f"# {name}\n\n## Personality\n\n## Backstory\n\n## Relationships\n")
-            except Exception as e:
-                log.warn(f"Failed to create character: {e}")
-        return redirect(url_for('edit_character', name=name))
-    
+                    f.write(f"# {name}\n\n## Persona\n\nDescribe your character here.\n\n## Special Users\n\n")
+            return redirect(url_for('edit_character', name=name))
+        except ValueError as e:
+            log.warn(f"Invalid character name: {e}")
+        except Exception as e:
+            log.warn(f"Failed to create character: {e}")
+
     return redirect(url_for('characters'))
 
 
@@ -306,6 +355,7 @@ def settings():
 
 
 @app.route('/settings/providers/save', methods=['POST'])
+@requires_csrf
 def save_providers():
     """Save providers.json."""
     content = request.form.get('content', '')
@@ -323,6 +373,7 @@ def save_providers():
 
 
 @app.route('/settings/bots/save', methods=['POST'])
+@requires_csrf
 def save_bots():
     """Save bots.json."""
     content = request.form.get('content', '')
@@ -340,6 +391,7 @@ def save_bots():
 
 
 @app.route('/settings/autonomous/save', methods=['POST'])
+@requires_csrf
 def save_autonomous():
     """Save autonomous.json."""
     content = request.form.get('content', '')
@@ -368,6 +420,7 @@ def prompts():
 
 
 @app.route('/prompts/system/save', methods=['POST'])
+@requires_csrf
 def save_system_prompt():
     """Save system.md prompt."""
     content = request.form.get('content', '')
@@ -612,6 +665,7 @@ def api_config():
 
 
 @app.route('/api/switch_character', methods=['POST'])
+@requires_csrf
 def api_switch_character():
     """Switch character for a bot."""
     data = request.json
@@ -828,27 +882,33 @@ def export_config():
 
 
 @app.route('/settings/import', methods=['POST'])
+@requires_csrf
 def import_config():
-    """Import configuration from ZIP."""
+    """Import configuration from ZIP with path traversal protection."""
     if 'config_zip' not in request.files:
         return redirect(url_for('settings'))
-    
+
     file = request.files['config_zip']
     if file.filename == '':
         return redirect(url_for('settings'))
-    
+
     try:
         with zipfile.ZipFile(io.BytesIO(file.read()), 'r') as zf:
-            for name in zf.namelist():
-                if name in ['providers.json', 'bots.json']:
-                    with open(name, 'wb') as f:
-                        f.write(zf.read(name))
-                elif name == 'autonomous.json':
+            for entry_name in zf.namelist():
+                # Validate entry name against whitelist (prevents path traversal)
+                safe_name = validate_zip_entry(entry_name, ALLOWED_IMPORT_FILES)
+                if not safe_name:
+                    continue  # Skip invalid/disallowed entries
+
+                if safe_name in ['providers.json', 'bots.json']:
+                    with open(safe_name, 'wb') as f:
+                        f.write(zf.read(entry_name))
+                elif safe_name == 'autonomous.json':
                     DATA_DIR.mkdir(exist_ok=True)
                     with open(DATA_DIR / 'autonomous.json', 'wb') as f:
-                        f.write(zf.read(name))
+                        f.write(zf.read(entry_name))
     except Exception as e:
-        pass
+        log.warn(f"Failed to import config: {e}")
     
     return redirect(url_for('settings'))
 
@@ -971,6 +1031,7 @@ def api_channels():
 
 
 @app.route('/api/channels/<int:channel_id>/clear', methods=['POST'])
+@requires_csrf
 def api_clear_channel(channel_id):
     """Clear conversation history for a channel."""
     from discord_utils import clear_history
@@ -1056,6 +1117,7 @@ def api_guilds():
 
 
 @app.route('/api/memories/add', methods=['POST'])
+@requires_csrf
 def api_add_memory():
     """Add a new memory."""
     from memory import memory_manager
@@ -1125,6 +1187,8 @@ def api_lore(guild_id):
 # --- Restart API ---
 
 @app.route('/api/restart', methods=['POST'])
+@requires_csrf
+@requires_auth
 def api_restart():
     """Restart the bot application without terminal restart."""
     import sys

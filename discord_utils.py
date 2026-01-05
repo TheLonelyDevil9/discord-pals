@@ -356,9 +356,12 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
             return  # Already added
     
     conversation_history[channel_id].append(msg)
-    
+
     if len(conversation_history[channel_id]) > MAX_HISTORY_MESSAGES:
         conversation_history[channel_id] = conversation_history[channel_id][-MAX_HISTORY_MESSAGES:]
+
+    # Trigger debounced save to prevent data loss on crash
+    save_history()
 
 
 def update_history_on_edit(channel_id: int, old_content: str, new_content: str, user_name: str = None):

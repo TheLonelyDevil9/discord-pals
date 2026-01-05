@@ -2,9 +2,11 @@
 Discord Pals - Memory System
 Stores and retrieves memories for the bot.
 Per-character memory isolation: each character has its own DM and user memory files.
+With debounced saving to reduce disk I/O.
 """
 
 import os
+import time
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
@@ -12,6 +14,7 @@ from config import (
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
 )
 from discord_utils import safe_json_load, safe_json_save
+from constants import MEMORY_SAVE_INTERVAL
 import logger as log
 
 
@@ -43,6 +46,8 @@ class MemoryManager:
     - Global user profiles: Cross-server facts about users (follows users everywhere)
     - DM memories: Per-character (each character remembers their own DM conversations)
     - User memories: Per-character, per-server (each character has their own memories about users)
+
+    Uses debounced saving to reduce disk I/O.
     """
 
     def __init__(self):
@@ -61,6 +66,50 @@ class MemoryManager:
         # Legacy shared memories (for backwards compatibility)
         self._legacy_dm_memories: Dict[str, List[dict]] = safe_json_load(DM_MEMORIES_FILE)
         self._legacy_user_memories: Dict[str, Dict[str, List[dict]]] = safe_json_load(USER_MEMORIES_FILE)
+
+        # Debounce tracking
+        self._dirty_files: set = set()  # Track which files need saving
+        self._last_save = time.time()
+
+    def _mark_dirty(self, file_type: str):
+        """Mark a file type as needing to be saved."""
+        self._dirty_files.add(file_type)
+        self._maybe_save()
+
+    def _maybe_save(self):
+        """Save dirty files if enough time has passed (debounced)."""
+        if self._dirty_files and (time.time() - self._last_save) >= MEMORY_SAVE_INTERVAL:
+            self._save_dirty_files()
+
+    def _save_dirty_files(self):
+        """Save all files marked as dirty."""
+        if 'server' in self._dirty_files:
+            safe_json_save(MEMORIES_FILE, self.server_memories)
+        if 'lore' in self._dirty_files:
+            safe_json_save(LORE_FILE, self.lore)
+        if 'global_profiles' in self._dirty_files:
+            safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
+        if 'legacy_dm' in self._dirty_files:
+            safe_json_save(DM_MEMORIES_FILE, self._legacy_dm_memories)
+        if 'legacy_user' in self._dirty_files:
+            safe_json_save(USER_MEMORIES_FILE, self._legacy_user_memories)
+
+        # Save character-specific files
+        for file_type in list(self._dirty_files):
+            if file_type.startswith('dm:'):
+                char_name = file_type[3:]
+                self._save_character_dm_memories(char_name)
+            elif file_type.startswith('user:'):
+                char_name = file_type[5:]
+                self._save_character_user_memories(char_name)
+
+        self._dirty_files.clear()
+        self._last_save = time.time()
+
+    def flush(self):
+        """Force save all dirty files - call on shutdown."""
+        if self._dirty_files:
+            self._save_dirty_files()
 
     def _get_dm_memories_for_character(self, character_name: str) -> Dict[str, List[dict]]:
         """Load DM memories for a character (with caching)."""
@@ -92,12 +141,17 @@ class MemoryManager:
         """Save all memories to disk."""
         safe_json_save(MEMORIES_FILE, self.server_memories)
         safe_json_save(LORE_FILE, self.lore)
+        safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
 
         # Save all cached character memories
         for character_name in self._dm_memory_cache:
             self._save_character_dm_memories(character_name)
         for character_name in self._user_memory_cache:
             self._save_character_user_memories(character_name)
+
+        # Clear dirty tracking since we saved everything
+        self._dirty_files.clear()
+        self._last_save = time.time()
 
     # --- Server Memories (shared) ---
 
@@ -118,7 +172,7 @@ class MemoryManager:
         if len(self.server_memories[key]) > 50:
             self.server_memories[key] = self.server_memories[key][-50:]
 
-        safe_json_save(MEMORIES_FILE, self.server_memories)
+        self._mark_dirty('server')
 
     def get_server_memories(self, guild_id: int, limit: int = 10) -> str:
         """Get formatted memories for a server."""
@@ -133,7 +187,7 @@ class MemoryManager:
         key = str(guild_id)
         if key in self.server_memories:
             del self.server_memories[key]
-            safe_json_save(MEMORIES_FILE, self.server_memories)
+            self._mark_dirty('server')
 
     # --- DM Memories (per-character) ---
 
@@ -165,7 +219,7 @@ class MemoryManager:
         if len(dm_memories[key]) > 30:
             dm_memories[key] = dm_memories[key][-30:]
 
-        self._save_character_dm_memories(character_name)
+        self._mark_dirty(f'dm:{character_name}')
 
     def _add_legacy_dm_memory(self, user_id: int, content: str, auto: bool = False):
         """Add to legacy shared DM memories (backwards compatibility)."""
@@ -182,7 +236,7 @@ class MemoryManager:
         if len(self._legacy_dm_memories[key]) > 30:
             self._legacy_dm_memories[key] = self._legacy_dm_memories[key][-30:]
 
-        safe_json_save(DM_MEMORIES_FILE, self._legacy_dm_memories)
+        self._mark_dirty('legacy_dm')
 
     def get_dm_memories(self, user_id: int, limit: int = 10, character_name: str = None) -> str:
         """Get formatted memories for a DM."""
@@ -210,11 +264,11 @@ class MemoryManager:
             dm_memories = self._get_dm_memories_for_character(character_name)
             if key in dm_memories:
                 del dm_memories[key]
-                self._save_character_dm_memories(character_name)
+                self._mark_dirty(f'dm:{character_name}')
         else:
             if key in self._legacy_dm_memories:
                 del self._legacy_dm_memories[key]
-                safe_json_save(DM_MEMORIES_FILE, self._legacy_dm_memories)
+                self._mark_dirty('legacy_dm')
 
     # --- Per-User Server Memories (per-character) ---
 
@@ -249,7 +303,7 @@ class MemoryManager:
         if len(user_memories[guild_key][user_key]) > 20:
             user_memories[guild_key][user_key] = user_memories[guild_key][user_key][-20:]
 
-        self._save_character_user_memories(character_name)
+        self._mark_dirty(f'user:{character_name}')
 
     def _add_legacy_user_memory(self, guild_id: int, user_id: int, content: str,
                                  auto: bool = False, user_name: str = None):
@@ -275,7 +329,7 @@ class MemoryManager:
         if len(self._legacy_user_memories[guild_key][user_key]) > 20:
             self._legacy_user_memories[guild_key][user_key] = self._legacy_user_memories[guild_key][user_key][-20:]
 
-        safe_json_save(USER_MEMORIES_FILE, self._legacy_user_memories)
+        self._mark_dirty('legacy_user')
 
     def get_user_memories(self, guild_id: int, user_id: int, limit: int = 5,
                           character_name: str = None) -> str:
@@ -308,11 +362,11 @@ class MemoryManager:
             user_memories = self._get_user_memories_for_character(character_name)
             if guild_key in user_memories and user_key in user_memories[guild_key]:
                 del user_memories[guild_key][user_key]
-                self._save_character_user_memories(character_name)
+                self._mark_dirty(f'user:{character_name}')
         else:
             if guild_key in self._legacy_user_memories and user_key in self._legacy_user_memories[guild_key]:
                 del self._legacy_user_memories[guild_key][user_key]
-                safe_json_save(USER_MEMORIES_FILE, self._legacy_user_memories)
+                self._mark_dirty('legacy_user')
 
     # --- Global User Profiles (cross-server) ---
 
@@ -339,7 +393,7 @@ class MemoryManager:
         if len(self.global_user_profiles[key]) > 20:
             self.global_user_profiles[key] = self.global_user_profiles[key][-20:]
 
-        safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
+        self._mark_dirty('global_profiles')
 
     def get_global_user_profile(self, user_id: int, limit: int = 5) -> str:
         """Get cross-server facts about a user."""
@@ -354,7 +408,7 @@ class MemoryManager:
         key = str(user_id)
         if key in self.global_user_profiles:
             del self.global_user_profiles[key]
-            safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
+            self._mark_dirty('global_profiles')
 
     # --- Lore (shared) ---
 
@@ -366,7 +420,7 @@ class MemoryManager:
             self.lore[key] = existing + "\n" + lore_text
         else:
             self.lore[key] = lore_text
-        safe_json_save(LORE_FILE, self.lore)
+        self._mark_dirty('lore')
 
     def get_lore(self, guild_id: int) -> str:
         """Get lore for a server."""
@@ -377,7 +431,7 @@ class MemoryManager:
         key = str(guild_id)
         if key in self.lore:
             del self.lore[key]
-            safe_json_save(LORE_FILE, self.lore)
+            self._mark_dirty('lore')
 
     # --- Memory Generation ---
 

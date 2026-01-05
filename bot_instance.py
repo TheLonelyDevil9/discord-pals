@@ -58,6 +58,7 @@ class BotInstance:
         self._recent_responses: Dict[int, list] = {}  # channel_id -> list of recent response hashes
         self._consecutive_failures: Dict[int, int] = {}  # channel_id -> failure count
         self._response_timestamps: Dict[int, list] = {}  # channel_id -> list of response timestamps
+        self._user_timestamps: Dict[int, list] = {}  # user_id -> list of message timestamps (per-user rate limit)
         
         # Set up events and commands
         self._setup_events()
@@ -674,13 +675,25 @@ class BotInstance:
                 asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
             
             asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
-        
+
+        except asyncio.TimeoutError:
+            log.warn("Request timed out", self.name)
+            await self._send_user_error(message.channel, "timeout")
+        except discord.HTTPException as e:
+            log.error(f"Discord API error: {e}", self.name)
+            await self._send_user_error(message.channel, "provider_error")
         except Exception as e:
-            log.error(f"Error processing: {e}", self.name)
-            try:
-                await message.channel.send(f"❌ Error: {str(e)[:100]}", delete_after=ERROR_DELETE_AFTER)
-            except Exception as send_err:
-                log.debug(f"Failed to send error message: {send_err}", self.name)
+            log.error(f"Error processing ({type(e).__name__}): {e}", self.name)
+            await self._send_user_error(message.channel, "default")
+
+    async def _send_user_error(self, channel, error_type: str):
+        """Send a user-friendly error message."""
+        from constants import USER_FRIENDLY_ERRORS, ERROR_DELETE_AFTER
+        msg = USER_FRIENDLY_ERRORS.get(error_type, USER_FRIENDLY_ERRORS["default"])
+        try:
+            await channel.send(f"❌ {msg}", delete_after=ERROR_DELETE_AFTER)
+        except Exception:
+            pass  # Can't send error message, silently fail
     
     def _update_mood(self, channel_id: int, user_message: str, bot_response: str):
         """Feature 12: Update channel mood based on conversation sentiment."""
@@ -726,6 +739,51 @@ class BotInstance:
         if channel_id not in self._response_timestamps:
             self._response_timestamps[channel_id] = []
         self._response_timestamps[channel_id].append(now)
+
+    def _check_user_rate_limit(self, user_id: int) -> bool:
+        """Check if a user is sending too many messages (spam protection).
+
+        Returns True if rate limit exceeded (should skip response).
+        """
+        from constants import MAX_USER_MESSAGES_PER_MINUTE
+        now = time.time()
+        timestamps = self._user_timestamps.get(user_id, [])
+
+        # Remove timestamps older than 60 seconds
+        timestamps = [t for t in timestamps if now - t < 60]
+        self._user_timestamps[user_id] = timestamps
+
+        if len(timestamps) >= MAX_USER_MESSAGES_PER_MINUTE:
+            log.debug(f"User {user_id} rate limited ({MAX_USER_MESSAGES_PER_MINUTE}/min)", self.name)
+            return True
+        return False
+
+    def _record_user_message(self, user_id: int):
+        """Record a user message timestamp for rate limiting."""
+        now = time.time()
+        if user_id not in self._user_timestamps:
+            self._user_timestamps[user_id] = []
+        self._user_timestamps[user_id].append(now)
+
+    def _cleanup_stale_state(self):
+        """Remove state for channels/users with no recent activity."""
+        from constants import STALE_STATE_THRESHOLD
+        now = time.time()
+
+        # Cleanup channel state
+        for channel_id in list(self._response_timestamps.keys()):
+            timestamps = self._response_timestamps[channel_id]
+            if not timestamps or now - max(timestamps) > STALE_STATE_THRESHOLD:
+                del self._response_timestamps[channel_id]
+                self._recent_responses.pop(channel_id, None)
+                self._consecutive_failures.pop(channel_id, None)
+                self._channel_mood.pop(channel_id, None)
+
+        # Cleanup user state
+        for user_id in list(self._user_timestamps.keys()):
+            timestamps = self._user_timestamps[user_id]
+            if not timestamps or now - max(timestamps) > STALE_STATE_THRESHOLD:
+                del self._user_timestamps[user_id]
 
     def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
         """Check if response is too similar to recent responses (anti-loop measure).
