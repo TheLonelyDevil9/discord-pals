@@ -609,7 +609,15 @@ class BotInstance:
             # Show typing indicator while generating
             async with message.channel.typing():
                 # Store context for dashboard visualization
-                token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(len(m.get('content', '')) for m in messages_for_api) // 4
+                def _get_content_len(msg):
+                    content = msg.get('content', '')
+                    if isinstance(content, str):
+                        return len(content)
+                    elif isinstance(content, list):
+                        # Multimodal content - only count text parts
+                        return sum(len(p.get('text', '')) for p in content if p.get('type') == 'text')
+                    return 0
+                token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
                 runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
                 
                 # Track response time

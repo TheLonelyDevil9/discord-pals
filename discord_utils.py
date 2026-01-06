@@ -809,10 +809,10 @@ async def download_image_as_base64(url: str) -> Optional[str]:
 async def process_attachments(message: discord.Message) -> List[dict]:
     """Process message attachments into AI-consumable format."""
     content_parts = []
-    
+
     if message.content:
         content_parts.append({"type": "text", "text": message.content})
-    
+
     for attachment in message.attachments:
         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
             base64_data = await download_image_as_base64(attachment.url)
@@ -821,8 +821,10 @@ async def process_attachments(message: discord.Message) -> List[dict]:
                     "type": "image_url",
                     "image_url": {"url": f"data:image/{attachment.filename.split('.')[-1]};base64,{base64_data}"}
                 })
-    
-    return content_parts if len(content_parts) > 1 else None
+
+    # Return multimodal content if we have any images (with or without text)
+    has_images = any(p.get("type") == "image_url" for p in content_parts)
+    return content_parts if has_images else None
 
 
 # --- Message Splitting ---
