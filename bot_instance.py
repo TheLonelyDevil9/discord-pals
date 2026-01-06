@@ -520,8 +520,10 @@ class BotInstance:
             
             # Track stats
             stats_manager.record_message(user_id, user_name, channel_id, channel_name)
-            
+
             attachment_content = await process_attachments(message) if attachments else None
+            if attachment_content:
+                log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
             
             emojis = get_guild_emojis(guild) if guild else ""
             lore = memory_manager.get_lore(guild_id) if guild_id else ""
@@ -596,7 +598,10 @@ class BotInstance:
             
             # Handle attachment content in the last immediate message
             if attachment_content and immediate:
+                log.info(f"[DEBUG] Attaching multimodal content to last immediate message")
                 immediate[-1]["content"] = attachment_content
+            elif attachment_content and not immediate:
+                log.warn(f"[DEBUG] Have attachment_content but immediate is empty!")
             
             # Build the complete message list for the API
             # Order: [system] + [history] + [chatroom context as system] + [immediate]
@@ -635,7 +640,13 @@ class BotInstance:
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)
-            
+
+            # Handle failed generation
+            if not response:
+                log.error("All providers failed to generate response")
+                await message.channel.send("Something went wrong - all providers failed.")
+                return
+
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)
             response = clean_em_dashes(response)

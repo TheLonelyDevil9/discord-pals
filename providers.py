@@ -153,6 +153,27 @@ def has_multimodal_message(messages: List[dict]) -> bool:
     return any(is_multimodal_content(msg.get("content")) for msg in messages)
 
 
+def strip_images_from_messages(messages: List[dict]) -> List[dict]:
+    """Convert multimodal messages to text-only for non-vision providers."""
+    stripped = []
+    for msg in messages:
+        content = msg.get("content")
+        if is_multimodal_content(content):
+            # Extract only text parts
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text", "")
+                    if text:
+                        text_parts.append(text)
+            # Add note about image
+            text_parts.append("[User sent an image that this model cannot see]")
+            stripped.append({"role": msg.get("role", "user"), "content": "\n".join(text_parts)})
+        else:
+            stripped.append(msg)
+    return stripped
+
+
 def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict]:
     """
     Format multi-message array as a single user message (SillyTavern style).
@@ -367,6 +388,9 @@ class AIProviderManager:
                              like SillyTavern's "Single user message (no tools)"
         """
 
+        # Check if we have multimodal content
+        has_images = has_multimodal_message(messages)
+
         # Format messages based on mode
         if use_single_user:
             # SillyTavern-style: combine everything into one user message
@@ -381,31 +405,45 @@ class AIProviderManager:
             # Legacy multi-message format with roles
             full_messages = [{"role": "system", "content": system_prompt}] + messages
             full_messages = validate_messages(full_messages)
-        
+
+        # Prepare text-only version for non-vision providers
+        text_only_messages = None
+        if has_images:
+            text_only_messages = strip_images_from_messages(full_messages)
+
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
             for tier in ["primary", "secondary", "fallback"]:
                 if tier not in self.providers:
                     self.status[tier] = "no key"
                     continue
-                
+
                 model = PROVIDERS[tier]["model"]
                 extra_body = PROVIDERS[tier].get("extra_body", {})
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
-                
+
+                # Check if provider supports vision (default True, set false for text-only models)
+                supports_vision = PROVIDERS[tier].get("supports_vision", True)
+
+                # Use text-only messages for non-vision providers
+                messages_to_send = full_messages
+                if has_images and not supports_vision:
+                    log.info(f"[{tier}] Provider doesn't support vision, using text-only")
+                    messages_to_send = text_only_messages
+
                 # Use per-provider settings, with fallback to function args or defaults
                 provider_max_tokens = PROVIDERS[tier].get("max_tokens", 8192)
                 provider_temperature = PROVIDERS[tier].get("temperature", 1.0)
-                
+
                 # Allow function args to override provider config
                 effective_max_tokens = max_tokens if max_tokens is not None else provider_max_tokens
                 effective_temperature = temperature if temperature is not None else provider_temperature
-                    
+
                 try:
                     client = self.providers[tier]
                     result = await self._try_generate(
-                        client, model, full_messages, effective_temperature, effective_max_tokens, tier,
+                        client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
                         extra_body=extra_body if extra_body else None,
                         include_body=include_body,
                         exclude_body=exclude_body
