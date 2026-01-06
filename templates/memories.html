@@ -330,7 +330,10 @@ async function addMemory() {
     try {
         const response = await fetch('/api/memories/add', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({
                 type: type,
                 guild_id: guildId,
@@ -458,6 +461,11 @@ function confirmDeleteMemory(fileName, key) {
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = '/memories/' + fileName + '/delete';
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = '{{ csrf_token() }}';
+        form.appendChild(csrfInput);
         const input = document.createElement('input');
         input.type = 'hidden';
         input.name = 'key';

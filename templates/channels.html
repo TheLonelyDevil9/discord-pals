@@ -549,7 +549,10 @@ function clearHistory(channelId, channelName) {
             try {
                 const response = await fetch(`/api/channels/${channelId}/clear`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': '{{ csrf_token() }}'
+                    }
                 });
                 
                 const data = await response.json();
