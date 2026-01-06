@@ -810,8 +810,9 @@ async def process_attachments(message: discord.Message) -> List[dict]:
     """Process message attachments into AI-consumable format."""
     content_parts = []
 
-    if message.content:
-        content_parts.append({"type": "text", "text": message.content})
+    # Add text content if present
+    if message.content and message.content.strip():
+        content_parts.append({"type": "text", "text": message.content.strip()})
 
     for attachment in message.attachments:
         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
@@ -822,9 +823,14 @@ async def process_attachments(message: discord.Message) -> List[dict]:
                     "image_url": {"url": f"data:image/{attachment.filename.split('.')[-1]};base64,{base64_data}"}
                 })
 
-    # Return multimodal content if we have any images (with or without text)
+    # Return multimodal content if we have any images
     has_images = any(p.get("type") == "image_url" for p in content_parts)
-    return content_parts if has_images else None
+    if has_images:
+        # Ensure there's always a text part (required by some APIs)
+        if not any(p.get("type") == "text" for p in content_parts):
+            content_parts.insert(0, {"type": "text", "text": "(user sent an image)"})
+        return content_parts
+    return None
 
 
 # --- Message Splitting ---

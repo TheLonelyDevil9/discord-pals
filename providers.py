@@ -126,10 +126,13 @@ def validate_messages(messages: List[dict]) -> List[dict]:
                 if isinstance(part, dict):
                     if part.get("type") == "text":
                         text = part.get("text", "")
-                        if text:
-                            validated_parts.append({"type": "text", "text": text.replace("\x00", "")})
+                        # Keep text parts even if empty (some APIs need them)
+                        validated_parts.append({"type": "text", "text": text.replace("\x00", "") if text else ""})
                     elif part.get("type") == "image_url":
                         validated_parts.append(part)
+            # Ensure we have at least one text part
+            if not any(p.get("type") == "text" for p in validated_parts):
+                validated_parts.insert(0, {"type": "text", "text": ""})
             validated.append({"role": role, "content": validated_parts})
         else:
             # Standard string content
