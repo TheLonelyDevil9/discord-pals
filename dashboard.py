@@ -14,7 +14,8 @@ import logger as log
 from security import (
     safe_path, safe_filename, validate_zip_entry,
     get_or_create_secret_key, requires_auth, requires_csrf,
-    generate_csrf_token
+    generate_csrf_token, requires_login, check_dashboard_auth,
+    login_user, logout_user, is_auth_enabled
 )
 from constants import ALLOWED_IMPORT_FILES
 
@@ -32,6 +33,33 @@ app.secret_key = get_or_create_secret_key(DATA_DIR)
 
 # Make CSRF token available in all templates
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
+
+
+# Make auth status available in all templates
+@app.context_processor
+def inject_auth_status():
+    """Inject authentication status into all templates."""
+    return {
+        'auth_enabled': is_auth_enabled(),
+        'is_logged_in': is_auth_enabled() and session.get('logged_in', False)
+    }
+
+
+# Global authentication check - protects all routes except login/logout/static
+@app.before_request
+def check_login():
+    """Check authentication for all routes (if enabled)."""
+    # Skip auth check for login/logout routes and static files
+    if request.endpoint in ('login', 'logout', 'static'):
+        return None
+    if request.path.startswith('/static/'):
+        return None
+
+    # If auth is enabled and not logged in, redirect to login
+    if is_auth_enabled():
+        from security import is_logged_in
+        if not is_logged_in():
+            return redirect(url_for('login', next=request.path))
 
 
 def get_memory_files():
@@ -52,6 +80,39 @@ def get_character_files():
             if f.name != "template.md":
                 files.append(f.name.replace(".md", ""))
     return files
+
+
+# --- Login/Logout Routes ---
+
+@app.route('/login', methods=['GET', 'POST'])
+@requires_csrf
+def login():
+    """Login page and authentication handler."""
+    error = None
+
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+
+        if check_dashboard_auth(username, password):
+            login_user()
+            next_page = request.args.get('next', '/')
+            return redirect(next_page)
+        else:
+            error = "Invalid username or password"
+
+    # If already logged in, redirect to dashboard
+    if not is_auth_enabled():
+        return redirect('/')
+
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout')
+def logout():
+    """Log out and redirect to login page."""
+    logout_user()
+    return redirect('/login')
 
 
 # --- Routes ---

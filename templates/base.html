@@ -347,6 +347,9 @@
                 %}>Config</a>
             <a href="/logs" {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context'
                 %}class="active" {% endif %}>Logs</a>
+            {% if is_logged_in %}
+            <a href="/logout" style="margin-left: auto; color: var(--text-muted);">Logout</a>
+            {% endif %}
         </div>
     </nav>
     <main class="container">{% block content %}{% endblock %}</main>

@@ -213,6 +213,7 @@
     <div class="card" style="margin-top: 25px;">
         <h3 style="margin-bottom: 15px;">➕ New Character</h3>
         <form action="/characters/new" method="post" class="new-character-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="text" name="name" placeholder="Character name" required>
             <button type="submit" class="btn btn-primary">Create</button>
         </form>
@@ -258,6 +259,7 @@
         <div class="card" style="margin-bottom: 0;">
             <h3 class="card-title">📝 prompts/system.md</h3>
             <form action="/prompts/system/save" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea name="content" style="width: 100%; height: 500px; font-family: monospace; font-size: 13px; 
                     background: var(--bg); border: 1px solid var(--border); color: var(--text); 
                     padding: 15px; border-radius: 4px; resize: vertical;">{{ system_content }}</textarea>

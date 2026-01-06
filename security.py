@@ -8,7 +8,7 @@ import re
 import secrets
 from pathlib import Path
 from functools import wraps
-from flask import request, Response, session, jsonify
+from flask import request, Response, session, jsonify, redirect, url_for
 from typing import Optional
 
 
@@ -265,3 +265,49 @@ def csrf_exempt(f):
     """
     f._csrf_exempt = True
     return f
+
+
+# =============================================================================
+# SESSION-BASED LOGIN
+# =============================================================================
+
+def is_auth_enabled() -> bool:
+    """Check if authentication is enabled (DASHBOARD_PASS is set)."""
+    return bool(os.getenv('DASHBOARD_PASS'))
+
+
+def is_logged_in() -> bool:
+    """Check if the current session is logged in."""
+    if not is_auth_enabled():
+        return True  # No auth required
+    return session.get('logged_in', False)
+
+
+def login_user():
+    """Mark the current session as logged in."""
+    session['logged_in'] = True
+    session.permanent = True  # Use permanent session
+
+
+def logout_user():
+    """Log out the current session."""
+    session.pop('logged_in', None)
+
+
+def requires_login(f):
+    """
+    Decorator to require login on a route.
+
+    If DASHBOARD_PASS is not set, authentication is disabled.
+    Otherwise, redirects to login page if not logged in.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not is_auth_enabled():
+            return f(*args, **kwargs)  # No auth required
+
+        if not is_logged_in():
+            return redirect(url_for('login', next=request.path))
+
+        return f(*args, **kwargs)
+    return decorated

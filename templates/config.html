@@ -154,6 +154,7 @@
     <details class="config-editor">
         <summary>providers.json - AI Provider Settings</summary>
         <form action="/settings/providers/save" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <textarea name="content" class="json-editor" spellcheck="false">{{ providers_raw }}</textarea>
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Providers</button>
@@ -167,6 +168,7 @@
     <details class="config-editor">
         <summary>bots.json - Multi-Bot Configuration</summary>
         <form action="/settings/bots/save" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <textarea name="content" class="json-editor" spellcheck="false">{{ bots_raw }}</textarea>
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Bots</button>
@@ -180,6 +182,7 @@
     <details class="config-editor">
         <summary>autonomous.json - Autonomous Mode Settings</summary>
         <form action="/settings/autonomous/save" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <textarea name="content" class="json-editor" spellcheck="false">{{ autonomous_raw }}</textarea>
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Autonomous</button>

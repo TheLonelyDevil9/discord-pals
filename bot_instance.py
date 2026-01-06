@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 import asyncio
 import random
+import re
 import time
 from typing import Optional, Dict
 
@@ -189,9 +190,13 @@ class BotInstance:
                                 if nick and len(nick) >= 2:
                                     names_to_check.append(nick)
 
-                        # Check if any name appears in message
+                        # Strip Discord emoji shortcodes before checking names
+                        # This prevents :nahida_happy: from triggering "nahida" nickname
+                        content_for_name_check = re.sub(r':[a-zA-Z0-9_]+:', '', content_lower)
+
+                        # Check if any name appears in message (excluding emoji names)
                         for name in names_to_check:
-                            if name and len(name) >= 2 and name in content_lower:
+                            if name and len(name) >= 2 and name in content_for_name_check:
                                 if random.random() < name_trigger_chance:
                                     name_triggered = True
                                     break

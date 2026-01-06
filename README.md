@@ -367,6 +367,30 @@ Open your browser to: **<http://localhost:5000>**
 
 > **Note:** The dashboard only accepts connections from localhost by default for security. See [Deployment & Production](#-deployment--production) for remote access options.
 
+### Dashboard Security
+
+The dashboard supports optional password protection via environment variables:
+
+```env
+DASHBOARD_USER=admin
+DASHBOARD_PASS=your_secure_password
+```
+
+When `DASHBOARD_PASS` is set:
+
+- All dashboard pages require login
+- A login page appears at `/login`
+- Sessions persist until logout or browser close
+- A "Logout" link appears in the navigation bar
+
+When `DASHBOARD_PASS` is **not set**:
+
+- Authentication is disabled (local-only mode)
+- Dashboard is fully accessible without login
+- Recommended only for localhost access
+
+**CSRF Protection:** All forms include CSRF tokens to prevent cross-site request forgery attacks.
+
 ### Dashboard Home
 
 The main dashboard shows:
@@ -512,6 +536,7 @@ Name triggers (responding when the bot's name/nickname is mentioned without @) a
 - Name triggers only work in channels where autonomous mode is enabled
 - The `name_trigger_chance` runtime config controls the probability of responding to name mentions
 - If `allow_bot_triggers` is disabled for a channel, bots cannot trigger name-based responses
+- **Emoji-safe:** Discord emojis like `:nahida_happy:` won't accidentally trigger nicknames (e.g., "nahida")
 
 ### Dashboard Configuration
 

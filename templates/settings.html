@@ -2,6 +2,7 @@
 {% block title %}Settings - Discord Pals{% endblock %}
 
 {% block content %}
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <style>
     .json-error { color: var(--danger); font-size: 0.85em; margin-top: 5px; padding: 8px; background: rgba(248,81,73,0.1); border-radius: 4px; display: none; }
     .extra-body-editor { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; margin-top: 10px; }
@@ -61,6 +62,7 @@
     <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
         <a href="/settings/export" class="btn btn-primary">⬇️ Export All Config</a>
         <form id="import-form" action="/settings/import" method="post" enctype="multipart/form-data" style="display: flex; gap: 10px; align-items: center;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="config_zip" accept=".zip" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px; border-radius: 4px;">
             <button type="submit" class="btn btn-secondary">⬆️ Import</button>
         </form>
@@ -110,6 +112,7 @@
         <div style="margin-bottom: 20px;">
             <h4 style="margin-bottom: 10px;">providers.json</h4>
             <form id="providers-form" action="/settings/providers/save" method="post" onsubmit="return validateJSON('providers-textarea', 'providers-error')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea id="providers-textarea" name="content" style="width: 100%; height: 250px; font-family: monospace; font-size: 13px; 
                     background: var(--bg); border: 1px solid var(--border); color: var(--text); 
                     padding: 15px; border-radius: 4px; resize: vertical;">{{ providers_raw }}</textarea>
@@ -125,6 +128,7 @@
         <div style="margin-bottom: 20px;">
             <h4 style="margin-bottom: 10px;">bots.json</h4>
             <form id="bots-form" action="/settings/bots/save" method="post" onsubmit="return validateJSON('bots-textarea', 'bots-error')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea id="bots-textarea" name="content" style="width: 100%; height: 150px; font-family: monospace; font-size: 13px; 
                     background: var(--bg); border: 1px solid var(--border); color: var(--text); 
                     padding: 15px; border-radius: 4px; resize: vertical;">{{ bots_raw }}</textarea>
@@ -139,6 +143,7 @@
         <div>
             <h4 style="margin-bottom: 10px;">autonomous.json</h4>
             <form id="autonomous-form" action="/settings/autonomous/save" method="post" onsubmit="return validateJSON('autonomous-textarea', 'autonomous-error')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <textarea id="autonomous-textarea" name="content" style="width: 100%; height: 120px; font-family: monospace; font-size: 13px; 
                     background: var(--bg); border: 1px solid var(--border); color: var(--text); 
                     padding: 15px; border-radius: 4px; resize: vertical;">{{ autonomous_raw }}</textarea>
@@ -337,11 +342,12 @@ function collectExtraBodies() {
 function saveProviders() {
     collectExtraBodies();
     document.getElementById('providers-textarea').value = JSON.stringify(providersData, null, 2);
-    
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
     fetch('/settings/providers/save', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'content=' + encodeURIComponent(JSON.stringify(providersData, null, 2))
+        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&content=' + encodeURIComponent(JSON.stringify(providersData, null, 2))
     }).then(r => {
         if (r.ok) showToast('Providers saved! Restart bot to apply changes.', 'success');
         else showToast('Failed to save providers', 'error');
@@ -411,11 +417,12 @@ function deleteBot(idx) {
 
 function saveBots() {
     document.getElementById('bots-textarea').value = JSON.stringify(botsData, null, 2);
-    
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
     fetch('/settings/bots/save', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'content=' + encodeURIComponent(JSON.stringify(botsData, null, 2))
+        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&content=' + encodeURIComponent(JSON.stringify(botsData, null, 2))
     }).then(r => {
         if (r.ok) showToast('Bots saved! Restart bot to apply changes.', 'success');
         else showToast('Failed to save bots', 'error');
