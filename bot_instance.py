@@ -26,6 +26,7 @@ from discord_utils import (
 )
 from request_queue import RequestQueue
 from stats import stats_manager
+import runtime_config
 import logger as log
 
 
@@ -127,7 +128,6 @@ class BotInstance:
             # Bot chain prevention - don't respond to bots if we recently responded to a bot
             if is_other_bot:
                 # Global stop for bot-bot interactions
-                import runtime_config
                 if runtime_config.get("bot_interactions_paused", False):
                     add_to_history(message.channel.id, "user", message.content, author_name=user_name)
                     return
@@ -154,7 +154,6 @@ class BotInstance:
             # Name/nickname trigger - respond when bot's name is mentioned (chance-based)
             # NOTE: Name trigger is now a SUBSET of autonomous mode - only works if autonomous is enabled
             name_triggered = False
-            import runtime_config
             name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
             channel_id = message.channel.id
             
@@ -344,16 +343,19 @@ class BotInstance:
         """
         if not message.mentions:
             return ""
-        
-        mentioned_contexts = []
-        
-        for mentioned_user in message.mentions:
-            # Skip bots and the message author
-            if mentioned_user.bot or mentioned_user.id == message.author.id:
-                continue
-            
-            # Skip if we already have memories about this user
-            existing_memories = ""
+
+        # Filter out bots and message author first
+        users_to_check = [
+            u for u in message.mentions
+            if not u.bot and u.id != message.author.id
+        ]
+
+        if not users_to_check:
+            return ""
+
+        # Check which users need context (don't have existing memories)
+        users_needing_context = []
+        for mentioned_user in users_to_check:
             if message.guild:
                 existing_memories = memory_manager.get_user_memories(
                     message.guild.id, mentioned_user.id, character_name=char_name
@@ -362,27 +364,34 @@ class BotInstance:
                 existing_memories = memory_manager.get_dm_memories(
                     mentioned_user.id, character_name=char_name
                 )
-            
-            if existing_memories:
-                continue  # We already know this user
-            
-            # Gather recent messages from this user in the channel (last 50 messages)
-            try:
-                user_messages = []
-                async for hist_msg in message.channel.history(limit=50):
-                    if hist_msg.author.id == mentioned_user.id and hist_msg.content:
-                        user_messages.append(hist_msg.content[:200])
-                        if len(user_messages) >= 5:
-                            break
-                
-                if user_messages:
-                    display_name = mentioned_user.display_name
-                    context = f"About {display_name} (from recent messages, no stored memories):\n"
-                    context += "\n".join([f"- They said: \"{msg}\"" for msg in user_messages[:3]])
-                    mentioned_contexts.append(context)
-            except Exception as e:
-                log.warn(f"Failed to gather context for {mentioned_user}: {e}", self.name)
-        
+
+            if not existing_memories:
+                users_needing_context.append(mentioned_user)
+
+        if not users_needing_context:
+            return ""
+
+        # Fetch history ONCE for all users (instead of once per user)
+        try:
+            history_messages = [msg async for msg in message.channel.history(limit=50)]
+        except Exception as e:
+            log.warn(f"Failed to fetch channel history for mentioned users: {e}", self.name)
+            return ""
+
+        # Build context for each user from the cached history
+        mentioned_contexts = []
+        for mentioned_user in users_needing_context:
+            user_messages = [
+                msg.content[:200] for msg in history_messages
+                if msg.author.id == mentioned_user.id and msg.content
+            ][:5]
+
+            if user_messages:
+                display_name = mentioned_user.display_name
+                context = f"About {display_name} (from recent messages, no stored memories):\n"
+                context += "\n".join([f"- They said: \"{msg}\"" for msg in user_messages[:3]])
+                mentioned_contexts.append(context)
+
         return "\n\n".join(mentioned_contexts)
     
     async def _add_to_batch(self, channel_id: int, message: discord.Message, content: str, 
@@ -422,10 +431,9 @@ class BotInstance:
                 )
             }
     
-    async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str, 
+    async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str,
                            is_dm: bool, user_id: int):
         """Wait for batch timeout while showing typing, then process the batch."""
-        import runtime_config
         timeout = runtime_config.get('batch_timeout', 15)
         
         # Get channel to show typing indicator
@@ -481,7 +489,6 @@ class BotInstance:
     async def _process_request(self, request: dict):
         """Process a single queued request."""
         # GLOBAL KILLSWITCH: Skip all processing when paused
-        import runtime_config
         if runtime_config.get("global_paused", False):
             log.debug("Request skipped - global killswitch active", self.name)
             return
@@ -561,9 +568,8 @@ class BotInstance:
                 character=self.character,
                 user_name=user_name
             )
-            
+
             # Get runtime config for context limits
-            import runtime_config
             total_limit = runtime_config.get('history_limit', 200)
             immediate_count = runtime_config.get('immediate_message_count', 5)
             

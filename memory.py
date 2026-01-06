@@ -63,13 +63,21 @@ class MemoryManager:
         self._dm_memory_cache: Dict[str, Dict[str, List[dict]]] = {}
         self._user_memory_cache: Dict[str, Dict[str, Dict[str, List[dict]]]] = {}
 
-        # Legacy shared memories (for backwards compatibility)
-        self._legacy_dm_memories: Dict[str, List[dict]] = safe_json_load(DM_MEMORIES_FILE)
-        self._legacy_user_memories: Dict[str, Dict[str, List[dict]]] = safe_json_load(USER_MEMORIES_FILE)
+        # Legacy shared memories (lazy-loaded for backwards compatibility)
+        self._legacy_dm_memories: Optional[Dict[str, List[dict]]] = None
+        self._legacy_user_memories: Optional[Dict[str, Dict[str, List[dict]]]] = None
+        self._legacy_loaded = False
 
         # Debounce tracking
         self._dirty_files: set = set()  # Track which files need saving
         self._last_save = time.time()
+
+    def _ensure_legacy_loaded(self):
+        """Lazy-load legacy memory files only when needed."""
+        if not self._legacy_loaded:
+            self._legacy_dm_memories = safe_json_load(DM_MEMORIES_FILE)
+            self._legacy_user_memories = safe_json_load(USER_MEMORIES_FILE)
+            self._legacy_loaded = True
 
     def _mark_dirty(self, file_type: str):
         """Mark a file type as needing to be saved."""
@@ -89,9 +97,9 @@ class MemoryManager:
             safe_json_save(LORE_FILE, self.lore)
         if 'global_profiles' in self._dirty_files:
             safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
-        if 'legacy_dm' in self._dirty_files:
+        if 'legacy_dm' in self._dirty_files and self._legacy_loaded:
             safe_json_save(DM_MEMORIES_FILE, self._legacy_dm_memories)
-        if 'legacy_user' in self._dirty_files:
+        if 'legacy_user' in self._dirty_files and self._legacy_loaded:
             safe_json_save(USER_MEMORIES_FILE, self._legacy_user_memories)
 
         # Save character-specific files
@@ -223,6 +231,7 @@ class MemoryManager:
 
     def _add_legacy_dm_memory(self, user_id: int, content: str, auto: bool = False):
         """Add to legacy shared DM memories (backwards compatibility)."""
+        self._ensure_legacy_loaded()
         key = str(user_id)
         if key not in self._legacy_dm_memories:
             self._legacy_dm_memories[key] = []
@@ -250,6 +259,7 @@ class MemoryManager:
 
         # Fallback to legacy if no character-specific memories found
         if not memories:
+            self._ensure_legacy_loaded()
             memories = self._legacy_dm_memories.get(key, [])[-limit:]
 
         if not memories:
@@ -266,6 +276,7 @@ class MemoryManager:
                 del dm_memories[key]
                 self._mark_dirty(f'dm:{character_name}')
         else:
+            self._ensure_legacy_loaded()
             if key in self._legacy_dm_memories:
                 del self._legacy_dm_memories[key]
                 self._mark_dirty('legacy_dm')
@@ -308,6 +319,7 @@ class MemoryManager:
     def _add_legacy_user_memory(self, guild_id: int, user_id: int, content: str,
                                  auto: bool = False, user_name: str = None):
         """Add to legacy shared user memories (backwards compatibility)."""
+        self._ensure_legacy_loaded()
         guild_key = str(guild_id)
         user_key = str(user_id)
 
@@ -346,6 +358,7 @@ class MemoryManager:
 
         # Fallback to legacy if no character-specific memories found
         if not memories:
+            self._ensure_legacy_loaded()
             if guild_key in self._legacy_user_memories:
                 memories = self._legacy_user_memories[guild_key].get(user_key, [])[-limit:]
 
@@ -364,6 +377,7 @@ class MemoryManager:
                 del user_memories[guild_key][user_key]
                 self._mark_dirty(f'user:{character_name}')
         else:
+            self._ensure_legacy_loaded()
             if guild_key in self._legacy_user_memories and user_key in self._legacy_user_memories[guild_key]:
                 del self._legacy_user_memories[guild_key][user_key]
                 self._mark_dirty('legacy_user')

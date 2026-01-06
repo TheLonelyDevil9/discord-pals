@@ -11,6 +11,7 @@ import os
 import aiohttp
 import threading
 import time
+import functools
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
@@ -116,6 +117,10 @@ HISTORY_SAVE_DEBOUNCE = 5.0  # Minimum seconds between saves
 
 # Conversation history storage (in-memory, per channel/DM)
 conversation_history: Dict[int, List[dict]] = {}
+
+# Recent message hashes for fast duplicate detection (channel_id -> set of hashes)
+_recent_message_hashes: Dict[int, set] = {}
+_RECENT_HASH_LIMIT = 10  # Number of recent hashes to track per channel
 
 # Multi-part response tracking (message_id -> full_content)
 multipart_responses: Dict[int, Dict[int, str]] = {}
@@ -354,13 +359,22 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     msg = {"role": role, "content": content}
     if author_name:
         msg["author"] = author_name
-    
-    # Prevent duplicate entries (from multiple bot instances seeing same message)
-    recent_messages = conversation_history[channel_id][-5:] if conversation_history[channel_id] else []
-    for recent in recent_messages:
-        if recent.get("content") == content and recent.get("role") == role:
-            return  # Already added
-    
+
+    # Fast hash-based duplicate detection (O(1) instead of O(n))
+    msg_hash = hash((role, content))
+    if channel_id not in _recent_message_hashes:
+        _recent_message_hashes[channel_id] = set()
+
+    if msg_hash in _recent_message_hashes[channel_id]:
+        return  # Already added
+
+    # Add hash and maintain limit
+    _recent_message_hashes[channel_id].add(msg_hash)
+    if len(_recent_message_hashes[channel_id]) > _RECENT_HASH_LIMIT:
+        # Remove oldest (convert to list, remove first, convert back)
+        hash_list = list(_recent_message_hashes[channel_id])
+        _recent_message_hashes[channel_id] = set(hash_list[-_RECENT_HASH_LIMIT:])
+
     conversation_history[channel_id].append(msg)
 
     if len(conversation_history[channel_id]) > MAX_HISTORY_MESSAGES:
@@ -605,10 +619,20 @@ def remove_thinking_tags(text: str) -> str:
     return text.strip()
 
 
+@functools.lru_cache(maxsize=32)
+def _get_character_name_patterns(character_name: str) -> tuple:
+    """Cache compiled regex patterns for character name prefixes."""
+    return (
+        re.compile(rf'^{re.escape(character_name)}:\s*', re.IGNORECASE),
+        re.compile(rf'^{re.escape(character_name)}\s*:\s*', re.IGNORECASE),
+        re.compile(rf'^\*{re.escape(character_name)}\*:\s*', re.IGNORECASE),
+    )
+
+
 def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     """
     Remove bot persona name prefix and other LLM artifacts from output.
-    
+
     Strips:
     - [Name]: prefixes (learned from history format)
     - (replying to X's message: "...") prefixes
@@ -617,25 +641,20 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     """
     if not text:
         return text
-    
+
     # Strip [Name]: prefix pattern (using pre-compiled regex)
     text = RE_NAME_PREFIX.sub('', text)
-    
+
     # Strip (replying to X's message: "...") pattern
     text = RE_REPLY_PREFIX.sub('', text)
-    
+
     # Strip (RE: ...) or (RE ...) patterns
     text = RE_RE_PREFIX.sub('', text)
-    
-    # Strip character-specific patterns if provided (dynamic, must compile at runtime)
+
+    # Strip character-specific patterns if provided (using cached compiled patterns)
     if character_name:
-        patterns = [
-            rf'^{re.escape(character_name)}:\s*',
-            rf'^{re.escape(character_name)}\s*:\s*',
-            rf'^\*{re.escape(character_name)}\*:\s*',
-        ]
-        for pattern in patterns:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        for pattern in _get_character_name_patterns(character_name):
+            text = pattern.sub('', text)
     
     return text.strip()
 
@@ -643,10 +662,9 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
 def clean_em_dashes(text: str) -> str:
     """Replace em-dashes with appropriate punctuation."""
     # Mid-sentence em-dashes become ", "
-    text = re.sub(r'(\w)\s*—\s*(\w)', r'\1, \2', text)
+    text = RE_EM_DASH_BETWEEN_WORDS.sub(r'\1, \2', text)
     # End-sentence em-dashes become "-"
-    text = re.sub(r'—$', '-', text)
-    text = re.sub(r'—\s*$', '-', text)
+    text = RE_EM_DASH_END.sub('-', text)
     return text
 
 
@@ -662,19 +680,37 @@ def get_sticker_info(message: discord.Message) -> Optional[str]:
 
 # --- Emoji Handling ---
 
+# LRU-style emoji cache with max size
 _emoji_cache: Dict[int, Dict[str, discord.Emoji]] = {}
+_emoji_cache_order: List[int] = []  # Track access order for LRU eviction
+_EMOJI_CACHE_MAX_SIZE = 50  # Max number of guilds to cache
+
+
+def _update_emoji_cache_lru(guild_id: int):
+    """Update LRU order and evict oldest if needed."""
+    global _emoji_cache_order
+    # Remove if already in list (will re-add at end)
+    if guild_id in _emoji_cache_order:
+        _emoji_cache_order.remove(guild_id)
+    _emoji_cache_order.append(guild_id)
+
+    # Evict oldest entries if over limit
+    while len(_emoji_cache_order) > _EMOJI_CACHE_MAX_SIZE:
+        oldest = _emoji_cache_order.pop(0)
+        _emoji_cache.pop(oldest, None)
 
 
 def get_guild_emojis(guild: discord.Guild, max_count: int = MAX_EMOJIS_IN_PROMPT) -> str:
     """Get formatted emoji list for a guild and cache for later use."""
     if not guild:
         return ""
-    
+
     emojis = list(guild.emojis)[:max_count]
     if not emojis:
         return ""
-    
+
     _emoji_cache[guild.id] = {e.name: e for e in guild.emojis}
+    _update_emoji_cache_lru(guild.id)
     emoji_list = [f":{e.name}:" for e in emojis]
     return ", ".join(emoji_list)
 
@@ -830,20 +866,45 @@ def split_message(content: str, max_length: int = 2000) -> List[str]:
 
 # --- Multi-part Response Tracking ---
 
+_MULTIPART_MAX_PER_CHANNEL = 500
+_MULTIPART_MAX_GLOBAL = 5000  # Total entries across all channels
+
+
 def store_multipart_response(channel_id: int, message_ids: List[int], full_content: str):
     """Store a multi-part response for tracking."""
     if channel_id not in multipart_responses:
         multipart_responses[channel_id] = {}
-    
+
     for msg_id in message_ids:
         multipart_responses[channel_id][msg_id] = full_content
-    
-    # Cleanup: limit to 500 entries per channel to prevent memory leaks
-    if len(multipart_responses[channel_id]) > 500:
+
+    # Per-channel cleanup: limit to 500 entries per channel
+    if len(multipart_responses[channel_id]) > _MULTIPART_MAX_PER_CHANNEL:
         # Remove oldest entries (lowest message IDs)
         sorted_ids = sorted(multipart_responses[channel_id].keys())
-        for old_id in sorted_ids[:-500]:
+        for old_id in sorted_ids[:-_MULTIPART_MAX_PER_CHANNEL]:
             del multipart_responses[channel_id][old_id]
+
+    # Global cleanup: limit total entries across all channels
+    total_entries = sum(len(ch) for ch in multipart_responses.values())
+    if total_entries > _MULTIPART_MAX_GLOBAL:
+        # Collect all entries with channel info, sort by message ID (oldest first)
+        all_entries = []
+        for ch_id, msgs in multipart_responses.items():
+            for msg_id in msgs:
+                all_entries.append((msg_id, ch_id))
+        all_entries.sort()
+
+        # Remove oldest entries until under limit
+        entries_to_remove = total_entries - _MULTIPART_MAX_GLOBAL
+        for msg_id, ch_id in all_entries[:entries_to_remove]:
+            if ch_id in multipart_responses and msg_id in multipart_responses[ch_id]:
+                del multipart_responses[ch_id][msg_id]
+
+        # Clean up empty channel dicts
+        empty_channels = [ch_id for ch_id, msgs in multipart_responses.items() if not msgs]
+        for ch_id in empty_channels:
+            del multipart_responses[ch_id]
 
 
 # --- Autonomous Response ---
