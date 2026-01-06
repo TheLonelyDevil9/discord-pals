@@ -35,9 +35,11 @@ The system instructions were authored by legendary chef @Geechan.
 ## Features
 
 - **Any character** - Load characters from markdown files with persona, example dialogue, and special user contexts
+- **Image recognition** - Send images to the bot and it will see and respond to them (requires vision-capable model)
 - **Plug-and-play AI providers** - Configure via JSON, no code changes
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
+- **Vision-aware fallback** - Non-vision providers automatically receive text-only messages
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
 - **Web dashboard** - Full web UI for managing:
   - Memories and lore editing (with user name resolution)
@@ -305,6 +307,38 @@ Some providers support extra request body parameters. Add `extra_body` to your p
 ```
 
 The `extra_body` object is merged into the API request, useful for provider-specific parameters.
+
+### Vision Support (`supports_vision`)
+
+By default, all providers are assumed to support vision/image recognition. For text-only models (like DeepSeek Reasoner), add `"supports_vision": false`:
+
+```json
+{
+  "providers": [
+    {
+      "name": "Claude (Vision)",
+      "url": "https://api.anthropic.com/v1",
+      "key_env": "ANTHROPIC_API_KEY",
+      "model": "claude-sonnet-4-20250514"
+    },
+    {
+      "name": "DeepSeek (Text Only)",
+      "url": "https://api.deepseek.com/v1",
+      "key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-reasoner",
+      "supports_vision": false
+    }
+  ],
+  "timeout": 60
+}
+```
+
+When a user sends an image:
+
+- **Vision providers** receive the full multimodal content (text + image)
+- **Non-vision providers** receive text-only with a note: "[User sent an image that this model cannot see]"
+
+This allows graceful fallback - if your primary vision provider fails, a text-only fallback can still respond (without seeing the image).
 
 ### SillyTavern-Style YAML Parameters (`include_body` / `exclude_body`)
 
