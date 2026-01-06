@@ -144,6 +144,20 @@
 </div>
 {% endif %}
 
+<!-- Export/Import -->
+<div class="card">
+    <h2>📦 Export / Import Configuration</h2>
+    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+        <a href="/settings/export" class="btn btn-primary">⬇️ Export All Config</a>
+        <form action="/settings/import" method="post" enctype="multipart/form-data" style="display: flex; gap: 10px; align-items: center;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="file" name="config_zip" accept=".zip" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px; border-radius: 4px;">
+            <button type="submit" class="btn btn-secondary">⬆️ Import</button>
+        </form>
+        <span style="color: var(--text-muted); font-size: 0.85em;">Export/import providers.json, bots.json, autonomous.json</span>
+    </div>
+</div>
+
 <!-- JSON Configuration Editors -->
 <div class="card">
     <h2>📝 Configuration Files</h2>

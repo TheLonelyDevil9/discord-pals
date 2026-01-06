@@ -159,7 +159,8 @@ RE_EMPTY_ANGLE = re.compile(r'<>')
 RE_MALFORMED_EMOJI = re.compile(r'<(?!a?:[a-zA-Z0-9_]+:\d{17,21}>)[^>]{0,50}>')
 
 # Pre-compiled patterns for parse_reactions
-RE_REACTION_TAG = re.compile(r'\[REACT:\s*([^\]]+)\]', re.IGNORECASE)
+# Matches [REACT: emoji], [REACT emoji], or [REACT:emoji] (colon is optional)
+RE_REACTION_TAG = re.compile(r'\[REACT:?\s*([^\]]+)\]', re.IGNORECASE)
 
 # Pre-compiled pattern for word extraction
 RE_WORD = re.compile(r'\w+')
