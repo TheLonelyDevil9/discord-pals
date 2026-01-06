@@ -11,6 +11,13 @@ from config import CHARACTERS_DIR
 
 PROMPTS_DIR = "prompts"
 
+# Pre-compiled regex patterns for character parsing
+RE_TITLE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
+RE_PERSONA = re.compile(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
+RE_DIALOGUE = re.compile(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
+RE_SPECIAL_USERS = re.compile(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
+RE_EMPTY_LINES = re.compile(r'\n{3,}')
+
 
 class PromptManager:
     """Manages prompt templates."""
@@ -64,7 +71,7 @@ class PromptManager:
             prompt = prompt.replace(key, value)
         
         # Clean up empty lines from unused placeholders
-        prompt = re.sub(r'\n{3,}', '\n\n', prompt)
+        prompt = RE_EMPTY_LINES.sub('\n\n', prompt)
         
         return prompt.strip()
     
@@ -98,7 +105,7 @@ class PromptManager:
             context = context.replace(key, value)
         
         # Clean up empty lines from unused placeholders
-        context = re.sub(r'\n{3,}', '\n\n', context)
+        context = RE_EMPTY_LINES.sub('\n\n', context)
         
         return context.strip()
 
@@ -160,22 +167,22 @@ class CharacterManager:
         special_users = {}
         
         # Extract character name from title
-        title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+        title_match = RE_TITLE.search(content)
         if title_match:
             char_name = title_match.group(1).strip()
-        
+
         # Extract Persona section
-        persona_match = re.search(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
+        persona_match = RE_PERSONA.search(content)
         if persona_match:
             persona = persona_match.group(1).strip()
-        
+
         # Extract Example Dialogue section
-        dialogue_match = re.search(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
+        dialogue_match = RE_DIALOGUE.search(content)
         if dialogue_match:
             example_dialogue = dialogue_match.group(1).strip()
-        
+
         # Extract Special Users section
-        special_match = re.search(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', content, re.DOTALL | re.IGNORECASE)
+        special_match = RE_SPECIAL_USERS.search(content)
         if special_match:
             lines = special_match.group(1).strip().split('\n')
             current_user = None

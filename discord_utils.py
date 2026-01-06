@@ -12,6 +12,7 @@ import aiohttp
 import threading
 import time
 import functools
+from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
@@ -680,24 +681,20 @@ def get_sticker_info(message: discord.Message) -> Optional[str]:
 
 # --- Emoji Handling ---
 
-# LRU-style emoji cache with max size
-_emoji_cache: Dict[int, Dict[str, discord.Emoji]] = {}
-_emoji_cache_order: List[int] = []  # Track access order for LRU eviction
+# LRU-style emoji cache using OrderedDict for O(1) operations
+_emoji_cache: OrderedDict[int, Dict[str, discord.Emoji]] = OrderedDict()
 _EMOJI_CACHE_MAX_SIZE = 50  # Max number of guilds to cache
 
 
 def _update_emoji_cache_lru(guild_id: int):
-    """Update LRU order and evict oldest if needed."""
-    global _emoji_cache_order
-    # Remove if already in list (will re-add at end)
-    if guild_id in _emoji_cache_order:
-        _emoji_cache_order.remove(guild_id)
-    _emoji_cache_order.append(guild_id)
+    """Update LRU order and evict oldest if needed (O(1) operations)."""
+    # Move to end if already exists (marks as recently used)
+    if guild_id in _emoji_cache:
+        _emoji_cache.move_to_end(guild_id)
 
     # Evict oldest entries if over limit
-    while len(_emoji_cache_order) > _EMOJI_CACHE_MAX_SIZE:
-        oldest = _emoji_cache_order.pop(0)
-        _emoji_cache.pop(oldest, None)
+    while len(_emoji_cache) > _EMOJI_CACHE_MAX_SIZE:
+        _emoji_cache.popitem(last=False)  # Remove oldest (first) item
 
 
 def get_guild_emojis(guild: discord.Guild, max_count: int = MAX_EMOJIS_IN_PROMPT) -> str:

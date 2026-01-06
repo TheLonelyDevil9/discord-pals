@@ -37,28 +37,32 @@ class RequestQueue:
         sticker_info: str = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
-        
+
         async with self.locks[channel_id]:
             current_time = time.time()
-            
+
+            # Pre-compute stripped content once for comparisons
+            content_stripped = content.strip()
+
             # Check for duplicate requests from same user (spam prevention)
             for queued in self.queues[channel_id]:
                 if (queued['user_id'] == user_id and
                     current_time - queued['timestamp'] < 3 and
-                    queued['content'].strip() == content.strip()):
+                    queued['content_stripped'] == content_stripped):
                     return False
-            
+
             # Limit pending requests per user
             user_pending = sum(1 for req in self.queues[channel_id] if req['user_id'] == user_id)
             if user_pending >= 2:
                 return False
-            
+
             # Add request to queue
             request = {
                 'id': len(self.queues[channel_id]) + int(current_time),
                 'timestamp': current_time,
                 'message': message,
                 'content': content,
+                'content_stripped': content_stripped,  # Pre-computed for duplicate checks
                 'guild': guild,
                 'attachments': list(attachments) if attachments else [],
                 'user_name': user_name,
@@ -67,13 +71,13 @@ class RequestQueue:
                 'reply_to_name': reply_to_name,
                 'sticker_info': sticker_info
             }
-            
+
             self.queues[channel_id].append(request)
-            
+
             # Start processing if not already
             if not self.processing[channel_id]:
                 asyncio.create_task(self._process_queue(channel_id))
-            
+
             return True
     
     async def _process_queue(self, channel_id: int):

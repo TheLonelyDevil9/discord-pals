@@ -4,6 +4,7 @@ Tracks message counts, response times, and user activity.
 With debounced saving to reduce disk I/O.
 """
 
+import heapq
 import json
 import os
 import time
@@ -124,19 +125,19 @@ class StatsManager:
         if self.stats["total_responses_sent"] > 0:
             avg_response_time = self.stats["total_response_time_ms"] // self.stats["total_responses_sent"]
 
-        # Get top users
-        top_users = sorted(
+        # Get top users (O(n log k) instead of O(n log n) full sort)
+        top_users = heapq.nlargest(
+            10,
             self.stats["user_stats"].items(),
-            key=lambda x: x[1]["messages"],
-            reverse=True
-        )[:10]
+            key=lambda x: x[1]["messages"]
+        )
 
-        # Get top channels
-        top_channels = sorted(
+        # Get top channels (O(n log k) instead of O(n log n) full sort)
+        top_channels = heapq.nlargest(
+            10,
             self.stats["channel_stats"].items(),
-            key=lambda x: x[1]["messages"],
-            reverse=True
-        )[:10]
+            key=lambda x: x[1]["messages"]
+        )
 
         # Get last 7 days
         recent_days = []

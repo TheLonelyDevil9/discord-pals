@@ -5,20 +5,31 @@ Essential bot management commands: reload, switch, clear, recall, status, autono
 
 import discord
 from discord import app_commands
-from typing import Optional
+from typing import Optional, Set
 
 from discord_utils import clear_history, remove_assistant_from_history
 from character import character_manager
 import logger as log
 
 
+# Cache for owner/team member IDs (populated on first check)
+_owner_ids_cache: Set[int] = set()
+_owner_cache_populated: bool = False
+
+
 async def is_owner(interaction: discord.Interaction) -> bool:
-    """Check if the user is the application owner."""
-    app_info = await interaction.client.application_info()
-    if app_info.team:
-        # If the bot is owned by a team, check if user is a team member
-        return interaction.user.id in [m.id for m in app_info.team.members]
-    return interaction.user.id == app_info.owner.id
+    """Check if the user is the application owner (cached after first call)."""
+    global _owner_ids_cache, _owner_cache_populated
+
+    if not _owner_cache_populated:
+        app_info = await interaction.client.application_info()
+        if app_info.team:
+            _owner_ids_cache = {m.id for m in app_info.team.members}
+        else:
+            _owner_ids_cache = {app_info.owner.id}
+        _owner_cache_populated = True
+
+    return interaction.user.id in _owner_ids_cache
 
 
 def setup_core_commands(bot_instance) -> None:

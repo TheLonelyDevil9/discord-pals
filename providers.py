@@ -93,10 +93,21 @@ def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
         log.debug(f"Failed to parse exclude_body YAML: {e}")
 
 
+def is_multimodal_content(content) -> bool:
+    """Check if content is multimodal (list with image_url type)."""
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for part in content
+    )
+
+
 def validate_messages(messages: List[dict]) -> List[dict]:
     """
     Validate and sanitize messages before sending to API.
     Ensures no malformed JSON or None values are sent.
+    Preserves multimodal content (list format with images).
     """
     validated = []
     for msg in messages:
@@ -104,20 +115,39 @@ def validate_messages(messages: List[dict]) -> List[dict]:
         role = msg.get("role", "user")
         if role not in ("system", "user", "assistant"):
             role = "user"
-        
-        # Ensure content is a string, never None
+
         content = msg.get("content")
-        if content is None:
-            content = ""
-        elif not isinstance(content, str):
-            content = str(content)
-        
-        # Remove any null bytes or invalid characters
-        content = content.replace("\x00", "")
-        
-        validated.append({"role": role, "content": content})
-    
+
+        # Preserve multimodal content (list with image_url)
+        if is_multimodal_content(content):
+            # Validate each part of multimodal content
+            validated_parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text = part.get("text", "")
+                        if text:
+                            validated_parts.append({"type": "text", "text": text.replace("\x00", "")})
+                    elif part.get("type") == "image_url":
+                        validated_parts.append(part)
+            validated.append({"role": role, "content": validated_parts})
+        else:
+            # Standard string content
+            if content is None:
+                content = ""
+            elif not isinstance(content, str):
+                content = str(content)
+
+            # Remove any null bytes or invalid characters
+            content = content.replace("\x00", "")
+            validated.append({"role": role, "content": content})
+
     return validated
+
+
+def has_multimodal_message(messages: List[dict]) -> bool:
+    """Check if any message contains multimodal content."""
+    return any(is_multimodal_content(msg.get("content")) for msg in messages)
 
 
 def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict]:
@@ -135,7 +165,14 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
 
     Note: Uses "Author: message" format (no brackets) to prevent LLMs from
     learning and outputting bracket patterns in their responses.
+
+    Note: If messages contain multimodal content (images), this function
+    returns None to signal that single-user mode should be bypassed.
     """
+    # Check for multimodal content - cannot use single-user mode with images
+    if has_multimodal_message(messages):
+        return None
+
     parts = []
 
     # Add system prompt first
@@ -145,7 +182,9 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
     # Add conversation messages
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "").strip()
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            content = content.strip()
 
         if not content:
             continue
@@ -315,7 +354,7 @@ class AIProviderManager:
         use_single_user: bool = True  # SillyTavern-style by default
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
-        
+
         Args:
             messages: Conversation messages
             system_prompt: System prompt / character definition
@@ -324,11 +363,17 @@ class AIProviderManager:
             use_single_user: If True (default), format as single user message
                              like SillyTavern's "Single user message (no tools)"
         """
-        
+
         # Format messages based on mode
         if use_single_user:
             # SillyTavern-style: combine everything into one user message
+            # Returns None if messages contain multimodal content (images)
             full_messages = format_as_single_user(messages, system_prompt)
+            if full_messages is None:
+                # Multimodal content detected - fall back to multi-message format
+                log.info("Multimodal content detected, using multi-message format")
+                full_messages = [{"role": "system", "content": system_prompt}] + messages
+                full_messages = validate_messages(full_messages)
         else:
             # Legacy multi-message format with roles
             full_messages = [{"role": "system", "content": system_prompt}] + messages
