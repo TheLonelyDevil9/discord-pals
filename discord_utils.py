@@ -178,6 +178,11 @@ RE_OUTPUT_WRAPPER = re.compile(r'<output>(.*?)</output>', re.DOTALL | re.IGNOREC
 RE_RESPONSE_WRAPPER = re.compile(r'<response>(.*?)</response>', re.DOTALL | re.IGNORECASE)
 RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
 
+# GLM 4.7 plain-text reasoning patterns
+RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
+RE_GLM_ACTUAL_OUTPUT = re.compile(r'(?:Actual\s*output|Final\s*Polish)\s*:\s*["\']?(.+?)["\']?\s*$', re.DOTALL | re.IGNORECASE)
+RE_GLM_QUOTED_OUTPUT = re.compile(r'^["\'](.+)["\']$', re.DOTALL)
+
 
 def save_history(force: bool = False):
     """Save conversation history to disk for persistence across restarts.
@@ -523,9 +528,39 @@ def remove_thinking_tags(text: str) -> str:
     - <|begin_of_box|>...<|end_of_box|> (GLM)
     - Partial/unclosed tags at start or end of response
     - Various other reasoning formats from local LLMs
+    - GLM 4.7 plain-text reasoning format (think:, Actual output:, Final Polish:)
     """
     if not text:
         return text
+
+    # GLM 4.7 plain-text reasoning format - check first as it's most specific
+    # Format: starts with "think:" and ends with "Actual output:" or "Final Polish:"
+    if RE_GLM_THINK_START.match(text.strip()):
+        # Look for "Actual output:" or "Final Polish:" marker
+        match = RE_GLM_ACTUAL_OUTPUT.search(text)
+        if match:
+            extracted = match.group(1).strip()
+            # Remove surrounding quotes if present
+            quote_match = RE_GLM_QUOTED_OUTPUT.match(extracted)
+            if quote_match:
+                extracted = quote_match.group(1).strip()
+            if extracted:
+                return extracted
+
+        # Fallback: if no marker found, try to extract content after last double newline
+        # This handles cases where the format is slightly different
+        parts = text.rsplit('\n\n', 1)
+        if len(parts) > 1:
+            last_part = parts[-1].strip()
+            # Check if last part looks like actual output (not a reasoning label)
+            if not any(last_part.lower().startswith(p) for p in ['think:', 'context:', 'character check:',
+                       'action:', 'tone:', 'constraint', 'mental sandbox:', 'check constraints']):
+                # Remove quotes if present
+                quote_match = RE_GLM_QUOTED_OUTPUT.match(last_part)
+                if quote_match:
+                    last_part = quote_match.group(1).strip()
+                if last_part:
+                    return last_part
 
     # Remove standard thinking tags (using pre-compiled patterns)
     text = RE_THINKING_OPEN.sub('', text)

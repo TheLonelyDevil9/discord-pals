@@ -6,6 +6,7 @@ Discord Pals - AI Providers
 from openai import AsyncOpenAI, RateLimitError, APIError
 from typing import List, Dict, Optional
 from config import PROVIDERS, API_TIMEOUT
+from discord_utils import remove_thinking_tags
 import asyncio
 import logger as log
 
@@ -264,7 +265,7 @@ class AIProviderManager:
                         return None  # Return None to trigger fallback to next provider
                     
                     log.ok(f"[{tier}] Got {len(content)} chars from {model}")
-                    
+
                     # Raw generation logging (when enabled)
                     import runtime_config
                     if runtime_config.get("raw_generation_logging", False):
@@ -274,7 +275,10 @@ class AIProviderManager:
                             log.info(f"[RAW-GEN] {content}")
                         else:
                             log.info(f"[RAW-GEN] {content[:preview_len]}... ({len(content)} chars total)")
-                    
+
+                    # Strip any reasoning/thinking content that leaked into output
+                    content = remove_thinking_tags(content)
+
                     return content
                 else:
                     log.warn(f"[{tier}] No choices in response from {model}")

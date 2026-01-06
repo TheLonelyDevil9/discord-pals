@@ -466,29 +466,29 @@ class MemoryManager:
 
         prompt = f"""Analyze this conversation and extract anything worth remembering about {target_user}.
 
-IMPORTANT: Only save facts specifically about {target_user}, NOT about other users in the conversation.
-If multiple users are chatting, focus ONLY on what {target_user} says and reveals about themselves.
+CRITICAL RULES - READ CAREFULLY:
+1. Only save facts that {target_user} DIRECTLY STATED about THEMSELVES in their own messages
+2. Do NOT save things OTHER users said about {target_user} - those could be jokes, teasing, or wrong
+3. Look for messages from [{target_user}] only - ignore what others say about them
+4. The memory must be verifiable from {target_user}'s own words in the conversation
 
-SAVE memories about:
-- Personal facts (name, job, hobbies, pets, relationships, location)
-- Preferences and opinions (likes, dislikes, favorites)
-- Life events or experiences mentioned
-- Emotional moments or significant statements
-- Quirks, habits, or recurring behaviors
-- Promises, plans, or commitments they made
+SAVE memories about (only if {target_user} said it themselves):
+- Personal facts they shared (job, hobbies, pets, relationships, location)
+- Preferences and opinions they expressed (likes, dislikes, favorites)
+- Life events or experiences they mentioned
+- Plans or commitments they made
 
-SKIP if:
-- Generic greetings ("hi", "how are you")
-- Very short exchanges with no substance
-- Pure roleplay actions with no personal info
-- The info is about someone OTHER than {target_user}
+NEVER SAVE:
+- Things other users claimed about {target_user} (e.g., "User2 said {target_user} has a boyfriend")
+- Jokes, teasing, or roleplay between users
+- Generic greetings or short exchanges
+- Anything {target_user} didn't explicitly say themselves
 
-If nothing memorable about {target_user}, respond with just "NOTHING".
+If nothing memorable that {target_user} PERSONALLY STATED, respond with just "NOTHING".
 Otherwise, write ONE concise sentence starting with "{target_user}" (use their actual name).
 
-Example: "{target_user} works as a nurse and has two cats named Luna and Mochi"
-Example: "{target_user} mentioned they love cooking Italian food"
-Example: "{target_user} gets anxious about job interviews"
+Example: "{target_user} mentioned they work as a nurse"
+Example: "{target_user} said they have two cats"
 
 Conversation:
 {context}
@@ -502,6 +502,11 @@ Memory about {target_user} (or NOTHING):"""
             )
 
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):
+                # Validate memory is about the correct user - must mention their name
+                if user_name and user_name.lower() not in result.lower():
+                    log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")
+                    return None
+
                 if is_dm:
                     self.add_dm_memory(id_key, result.strip(), auto=True,
                                        character_name=character_name, user_name=user_name)
