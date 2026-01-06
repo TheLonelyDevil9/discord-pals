@@ -12,7 +12,8 @@ from providers import provider_manager
 from memory import memory_manager
 from discord_utils import (
     get_history, get_user_display_name,
-    remove_thinking_tags, clean_bot_name_prefix, convert_emojis_in_text
+    remove_thinking_tags, clean_bot_name_prefix, convert_emojis_in_text,
+    format_history_split
 )
 
 
@@ -72,12 +73,13 @@ async def handle_fun_command(bot_instance, interaction: discord.Interaction, act
     guild_id = interaction.guild.id if interaction.guild else None
     channel_id = interaction.channel_id
     
-    # Get relationship context
-    history = get_history(channel_id)
-    recent_context = "\n".join([
-        f"{m.get('role', 'user')}: {m.get('content', '')[:100]}"
-        for m in history[-15:]
-    ]) if history else ""
+    # Get conversation context using proper history split
+    history_messages, immediate_messages = format_history_split(
+        channel_id,
+        total_limit=50,
+        immediate_count=10,
+        current_bot_name=bot_instance.character.name
+    )
     
     # Get memories
     char_name = bot_instance.character.name if bot_instance.character else None
@@ -87,29 +89,31 @@ async def handle_fun_command(bot_instance, interaction: discord.Interaction, act
         user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
         server_memories = memory_manager.get_server_memories(guild_id)
     
-    # Build context
+    # Build system prompt (lightweight - just character identity + memories)
     context_parts = []
     if user_memories:
         context_parts.append(f"What you remember about {user_name}:\n{user_memories}")
     if server_memories:
         context_parts.append(f"Server context:\n{server_memories}")
-    if recent_context:
-        context_parts.append(f"Recent conversation:\n{recent_context}")
-    
-    relationship_context = "\n\n".join(context_parts) if context_parts else "No prior context with this user."
-    
+
+    memory_context = "\n\n".join(context_parts) if context_parts else ""
+
     system_prompt = f"""You are {bot_instance.character.name}. Keep your response brief (1-3 sentences).
 
-{relationship_context}
+{memory_context}
 
-Respond naturally based on your relationship with {user_name}. Consider the history and memories when responding. If you know them well, be warmer. If they're new, be appropriately reserved."""
+Respond naturally based on your relationship with {user_name}."""
 
     action_prompt = ACTION_PROMPTS.get(action, "React naturally.").format(user=user_name)
-    
+
+    # Build messages array with conversation history + action prompt
+    messages = history_messages + immediate_messages
+    messages.append({"role": "user", "content": action_prompt})
+
     response = await provider_manager.generate(
-        messages=[{"role": "user", "content": action_prompt}],
+        messages=messages,
         system_prompt=system_prompt,
-        max_tokens=300
+        max_tokens=800
     )
     
     if not response:
@@ -155,14 +159,15 @@ def setup_fun_commands(bot_instance) -> None:
         user_name = get_user_display_name(interaction.user)
         user_id = interaction.user.id
         guild_id = interaction.guild.id if interaction.guild else None
-        
-        # Get chat history
-        history = get_history(interaction.channel_id)
-        chat_context = "\n".join([
-            f"{m.get('role', 'user')}: {m.get('content', '')[:100]}"
-            for m in history[-20:]
-        ]) if history else ""
-        
+
+        # Get conversation context using proper history split
+        history_messages, immediate_messages = format_history_split(
+            interaction.channel_id,
+            total_limit=50,
+            immediate_count=10,
+            current_bot_name=bot_instance.character.name
+        )
+
         # Get memories
         char_name = bot_instance.character.name if bot_instance.character else None
         user_memories = ""
@@ -170,26 +175,30 @@ def setup_fun_commands(bot_instance) -> None:
         if guild_id:
             user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
             server_memories = memory_manager.get_server_memories(guild_id)
-        
-        # Build context
+
+        # Build system prompt (lightweight - just character identity + memories)
         context_parts = []
         if user_memories:
             context_parts.append(f"What you remember about {user_name}:\n{user_memories}")
         if server_memories:
             context_parts.append(f"Server context:\n{server_memories}")
-        if chat_context:
-            context_parts.append(f"Recent conversations:\n{chat_context}")
-        
-        full_context = "\n\n".join(context_parts) if context_parts else "No prior interactions with this user."
-        
-        system = f"""You are {bot_instance.character.name}. Based on your interactions and memories with {user_name}, give a brief, 
-in-character assessment of your affection/feelings toward them. Be genuine and reflect actual 
-interactions. Include a rough affection percentage (0-100%) if it fits your character."""
-        
+
+        memory_context = "\n\n".join(context_parts) if context_parts else ""
+
+        system = f"""You are {bot_instance.character.name}. Based on your interactions and memories with {user_name}, give a brief,
+in-character assessment of your affection/feelings toward them. Be genuine and reflect actual
+interactions. Include a rough affection percentage (0-100%) if it fits your character.
+
+{memory_context}"""
+
+        # Build messages array with conversation history + question
+        messages = history_messages + immediate_messages
+        messages.append({"role": "user", "content": f"How do you feel about {user_name}?"})
+
         response = await provider_manager.generate(
-            messages=[{"role": "user", "content": f"{full_context}\n\nHow do you feel about {user_name}?"}],
+            messages=messages,
             system_prompt=system,
-            max_tokens=400
+            max_tokens=800
         )
         
         if not response:
