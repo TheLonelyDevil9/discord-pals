@@ -498,10 +498,10 @@
         let html = '';
         for (const log of logs) {
             const bot = log.bot ? `[${log.bot}]` : '';
-            html += `<div class="log-entry log-${log.level}">
-            <span class="log-time">${log.time}</span>
+            html += `<div class="log-entry log-${escapeHtml(log.level)}">
+            <span class="log-time">${escapeHtml(log.time)}</span>
             <span class="log-icon">${log.icon}</span>
-            <span class="log-bot">${bot}</span>
+            <span class="log-bot">${escapeHtml(bot)}</span>
             <span class="log-message">${escapeHtml(log.message)}</span>
         </div>`;
         }
@@ -547,7 +547,17 @@
     }
 
     fetchLogs();
-    setInterval(fetchLogs, 2000);
+    let logsPollInterval = setInterval(fetchLogs, 2000);
+
+    // Pause polling when tab is hidden
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            clearInterval(logsPollInterval);
+        } else {
+            fetchLogs();
+            logsPollInterval = setInterval(fetchLogs, 2000);
+        }
+    });
 </script>
 
 <style>

@@ -24,6 +24,12 @@
             padding: 0;
         }
 
+        /* Accessibility: Focus indicators */
+        :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg);
@@ -326,6 +332,49 @@
 
             .grid {
                 grid-template-columns: 1fr;
+            }
+        }
+
+        /* Responsive table wrapper */
+        .table-responsive {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-bottom: 1rem;
+        }
+
+        /* Tablet breakpoint */
+        @media (max-width: 1024px) {
+            .container {
+                padding: 15px;
+            }
+
+            .card {
+                padding: 15px;
+            }
+        }
+
+        /* Small phone breakpoint */
+        @media (max-width: 480px) {
+            .container {
+                padding: 10px;
+            }
+
+            nav .container {
+                padding: 10px;
+            }
+
+            .card {
+                padding: 12px;
+                border-radius: 6px;
+            }
+
+            .btn {
+                padding: 8px 12px;
+                font-size: 0.9em;
+            }
+
+            h1 {
+                font-size: 1.5em;
             }
         }
     </style>

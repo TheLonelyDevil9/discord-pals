@@ -447,10 +447,10 @@
 
         const result = await response.json();
         if (result.status === 'ok') {
-            alert(`Switched to ${result.character}`);
+            showToast(`Switched to ${result.character}`, 'success');
             location.reload();
         } else {
-            alert('Error: ' + (result.message || 'Unknown error'));
+            showToast('Error: ' + (result.message || 'Unknown error'), 'error');
         }
     }
 

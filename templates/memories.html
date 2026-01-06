@@ -55,7 +55,7 @@
         border: none;
         color: var(--text-muted);
         cursor: pointer;
-        border-radius: 6px x 0 0;
+        border-radius: 6px 6px 0 0;
         font-size: 0.95em;
     }
     
@@ -393,7 +393,10 @@ async function saveLore(replace) {
     try {
         const response = await fetch(`/api/lore/${guildId}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({
                 content: content,
                 replace: replace
@@ -433,7 +436,10 @@ function clearLore() {
     showConfirm('Clear Lore', 'Are you sure you want to clear all lore for this server?', async () => {
         try {
             const response = await fetch(`/api/lore/${guildId}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-Token': '{{ csrf_token() }}'
+                }
             });
             
             const data = await response.json();

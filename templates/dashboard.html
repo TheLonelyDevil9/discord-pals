@@ -195,6 +195,8 @@ padding: 15px 20px;
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
 .control-icon {
     font-size: 1.5em;
 }
@@ -525,8 +527,17 @@ async function refreshStatus() {
     }
 }
 
-// Start auto-refresh
-setInterval(refreshStatus, 5000);
+// Start auto-refresh with visibility-based pause
+let statusPollInterval = setInterval(refreshStatus, 5000);
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        clearInterval(statusPollInterval);
+    } else {
+        refreshStatus();
+        statusPollInterval = setInterval(refreshStatus, 5000);
+    }
+});
 
 // Restart bot
 async function restartBot() {

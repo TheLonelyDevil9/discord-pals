@@ -176,6 +176,30 @@
         padding: 40px;
         color: var(--text-muted);
     }
+
+    .search-box {
+        margin-bottom: 20px;
+    }
+
+    .search-box input {
+        width: 100%;
+        max-width: 400px;
+        padding: 10px 14px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        font-size: 0.95em;
+    }
+
+    .search-box input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .character-card.hidden {
+        display: none;
+    }
 </style>
 
 <h1 style="margin-bottom: 20px;">🎭 Characters</h1>
@@ -190,9 +214,12 @@
 <!-- Files Tab -->
 <div id="tab-files" class="tab-content active">
     {% if characters %}
+    <div class="search-box">
+        <input type="text" id="character-search" placeholder="Search characters..." oninput="filterCharacters()">
+    </div>
     <div class="character-grid">
         {% for name, data in characters.items() %}
-        <div class="character-card">
+        <div class="character-card" data-name="{{ name|lower }}">
             <div class="character-header">
                 <span class="character-name">🎭 {{ name }}</span>
                 <span class="character-meta">{{ data.size }} chars</span>
@@ -291,6 +318,18 @@
 </div>
 
 <script>
+    function filterCharacters() {
+        const search = document.getElementById('character-search').value.toLowerCase();
+        document.querySelectorAll('.character-card').forEach(card => {
+            const name = card.dataset.name || '';
+            if (name.includes(search)) {
+                card.classList.remove('hidden');
+            } else {
+                card.classList.add('hidden');
+            }
+        });
+    }
+
     function switchTab(tabName) {
         document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
