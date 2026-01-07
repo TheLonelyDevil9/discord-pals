@@ -464,14 +464,13 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
         if role == "user" and author:
             # User messages get Author: prefix (no brackets)
             content = f"{author}: {content}"
-        elif role == "assistant" and author:
+        elif role == "assistant":
             # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
-            if current_bot_name and author.lower() != current_bot_name.lower():
+            if author and current_bot_name and author.lower() != current_bot_name.lower():
                 # Different bot - treat as "user" role with name prefix to prevent personality bleed
-                # This makes the LLM see it as another person's speech, not an example to follow
                 role = "user"
                 content = f"{author}: {content}"
-            # If same bot or no current_bot_name specified, keep as assistant (no prefix)
+            # If same bot or no author field, keep as assistant (no prefix)
 
         formatted.append({"role": role, "content": content})
     

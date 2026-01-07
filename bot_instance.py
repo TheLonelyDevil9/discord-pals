@@ -906,8 +906,7 @@ class BotInstance:
         for msg in messages:
             is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
             role = "assistant" if is_bot else "user"
-            user_name = get_user_display_name(msg.author) if not is_bot else None
-            
+            user_name = get_user_display_name(msg.author)  # Always store author, even for bots
             add_to_history(channel.id, role, msg.content, author_name=user_name)
             count += 1
         
