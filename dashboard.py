@@ -1219,30 +1219,108 @@ def api_add_memory():
 def api_lore(guild_id):
     """Get, set, or delete lore for a guild."""
     from memory import memory_manager
-    
+
     if request.method == 'GET':
         lore = memory_manager.get_lore(guild_id)
         return jsonify({'guild_id': guild_id, 'lore': lore})
-    
+
     elif request.method == 'POST':
         data = request.json or {}
         content = data.get('content', '').strip()
         replace = data.get('replace', False)
-        
+
         if replace:
             # Clear existing lore first
             memory_manager.clear_lore(guild_id)
-        
+
         if content:
             memory_manager.add_lore(guild_id, content)
             log.info(f"Lore {'replaced' if replace else 'added'} via dashboard for guild {guild_id}")
-        
+
         return jsonify({'status': 'ok', 'guild_id': guild_id})
-    
+
     elif request.method == 'DELETE':
         memory_manager.clear_lore(guild_id)
         log.info(f"Lore cleared via dashboard for guild {guild_id}")
         return jsonify({'status': 'ok', 'guild_id': guild_id})
+
+
+@app.route('/api/memories/<file_name>/delete-selected', methods=['POST'])
+@requires_csrf
+def api_delete_selected_memories(file_name):
+    """Delete multiple selected memory entries from a file."""
+    import json
+
+    data = request.json or {}
+    keys = data.get('keys', [])
+
+    if not keys:
+        return jsonify({'status': 'error', 'message': 'No keys provided'}), 400
+
+    try:
+        # Load the memory file
+        file_path = DATA_DIR / f"{file_name}.json"
+        if not file_path.exists():
+            return jsonify({'status': 'error', 'message': 'File not found'}), 404
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            memories = json.load(f)
+
+        # Delete selected keys
+        deleted_count = 0
+        for key in keys:
+            if key in memories:
+                del memories[key]
+                deleted_count += 1
+
+        # Save back to file
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(memories, f, indent=2, ensure_ascii=False)
+
+        log.info(f"Deleted {deleted_count} memories from {file_name} via dashboard")
+        return jsonify({'status': 'ok', 'deleted': deleted_count})
+
+    except Exception as e:
+        log.error(f"Error deleting selected memories: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/memories/<file_name>/clear-all', methods=['POST'])
+@requires_csrf
+def api_clear_all_memories(file_name):
+    """Clear all memories from a specific file."""
+    import json
+
+    try:
+        # Map file names to appropriate clear functions
+        if file_name == 'memories':
+            # This would clear ALL server memories - need guild_id
+            return jsonify({'status': 'error', 'message': 'Cannot clear all server memories without guild_id'}), 400
+        elif file_name == 'lore':
+            # This would clear ALL lore - need guild_id
+            return jsonify({'status': 'error', 'message': 'Cannot clear all lore without guild_id'}), 400
+        elif file_name == 'user_profiles':
+            # Clear all global user profiles - dangerous!
+            file_path = DATA_DIR / f"{file_name}.json"
+            if file_path.exists():
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
+                log.warn(f"Cleared ALL global user profiles via dashboard")
+                return jsonify({'status': 'ok', 'message': 'All global user profiles cleared'})
+        else:
+            # For other files (dm_memories, user_memories, etc.), clear the entire file
+            file_path = DATA_DIR / f"{file_name}.json"
+            if file_path.exists():
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
+                log.warn(f"Cleared all memories from {file_name} via dashboard")
+                return jsonify({'status': 'ok', 'message': f'All memories cleared from {file_name}'})
+            else:
+                return jsonify({'status': 'error', 'message': 'File not found'}), 404
+
+    except Exception as e:
+        log.error(f"Error clearing memories: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 # --- Restart API ---

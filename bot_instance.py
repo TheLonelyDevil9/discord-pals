@@ -22,7 +22,7 @@ from discord_utils import (
     get_reply_context, get_user_display_name, get_sticker_info,
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
-    resolve_discord_formatting, load_history, set_channel_name
+    resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names
 )
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -61,7 +61,10 @@ class BotInstance:
         self._consecutive_failures: Dict[int, int] = {}  # channel_id -> failure count
         self._response_timestamps: Dict[int, list] = {}  # channel_id -> list of response timestamps
         self._user_timestamps: Dict[int, list] = {}  # user_id -> list of message timestamps (per-user rate limit)
-        
+
+        # Bot-on-bot conversation fall-off tracker
+        self._bot_conversation_tracker: Dict[int, dict] = {}  # channel_id -> {consecutive_bot_messages, last_message_time, last_human_message_time}
+
         # Set up events and commands
         self._setup_events()
         self._setup_commands()
@@ -131,8 +134,42 @@ class BotInstance:
                 if runtime_config.get("bot_interactions_paused", False):
                     add_to_history(message.channel.id, "user", message.content, author_name=user_name)
                     return
-                
-                last_bot_response = self._last_bot_response.get(message.channel.id, 0)
+
+                # Progressive fall-off for bot-on-bot conversations
+                channel_id = message.channel.id
+
+                # Initialize or update conversation tracker
+                if channel_id not in self._bot_conversation_tracker:
+                    self._bot_conversation_tracker[channel_id] = {
+                        "consecutive_bot_messages": 0,
+                        "last_message_time": 0,
+                        "last_human_message_time": time.time()
+                    }
+
+                tracker = self._bot_conversation_tracker[channel_id]
+
+                # Increment consecutive bot message counter
+                tracker["consecutive_bot_messages"] += 1
+                tracker["last_message_time"] = time.time()
+
+                # Calculate response probability based on conversation length
+                consecutive_msgs = tracker["consecutive_bot_messages"]
+                response_probability = self._calculate_bot_response_probability(
+                    consecutive_msgs, runtime_config
+                )
+
+                # Roll the dice
+                if random.random() > response_probability:
+                    log.debug(
+                        f"Bot fall-off: Skipping response (consecutive: {consecutive_msgs}, "
+                        f"probability: {response_probability:.2%})",
+                        self.name
+                    )
+                    add_to_history(message.channel.id, "user", message.content, author_name=user_name)
+                    return
+
+                # Keep existing 60-second cooldown as additional safeguard
+                last_bot_response = self._last_bot_response.get(channel_id, 0)
                 if time.time() - last_bot_response < 60:  # 60 second cooldown for bot chains
                     add_to_history(message.channel.id, "user", message.content, author_name=user_name)
                     return
@@ -193,12 +230,18 @@ class BotInstance:
                         # This prevents :nahida_happy: from triggering "nahida" nickname
                         content_for_name_check = re.sub(r':[a-zA-Z0-9_]+:', '', content_lower)
 
+                        # Strip GIF URLs to prevent false triggers from URLs like https://tenor.com/view/nahida-gif-123
+                        content_for_name_check = re.sub(r'https?://\S+', '', content_for_name_check)
+
                         # Check if any name appears in message (excluding emoji names)
                         for name in names_to_check:
-                            if name and len(name) >= 2 and name in content_for_name_check:
-                                if random.random() < name_trigger_chance:
-                                    name_triggered = True
-                                    break
+                            if name and len(name) >= 2:
+                                # Use word boundary matching to prevent false triggers (e.g., "Luna" in "Lunatic")
+                                pattern = rf'\b{re.escape(name)}\b'
+                                if re.search(pattern, content_for_name_check, re.IGNORECASE):
+                                    if random.random() < name_trigger_chance:
+                                        name_triggered = True
+                                        break
             
             should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
             
@@ -219,7 +262,13 @@ class BotInstance:
                 # Track if responding to a bot
                 if is_other_bot:
                     self._last_bot_response[message.channel.id] = time.time()
-                
+                else:
+                    # Reset bot conversation tracker when human speaks
+                    if message.channel.id in self._bot_conversation_tracker:
+                        self._bot_conversation_tracker[message.channel.id]["consecutive_bot_messages"] = 0
+                        self._bot_conversation_tracker[message.channel.id]["last_human_message_time"] = time.time()
+                        log.debug(f"Bot fall-off: Reset counter (human message)", self.name)
+
                 if sticker_info:
                     content = f"{user_name} {sticker_info}"
                 else:
@@ -586,6 +635,9 @@ class BotInstance:
             
             # SECTION 3: Chatroom Context (injected between history and immediate)
             # Contains: Lore, Memories, Emojis, Active Users, Reply Target, Mentioned Context
+            # Get other bot names to prevent impersonation
+            other_bot_names = get_other_bot_names(channel_id, self.character.name)
+
             chatroom_context = character_manager.build_chatroom_context(
                 guild_name=guild.name if guild else "DM",
                 emojis=emojis,
@@ -593,7 +645,8 @@ class BotInstance:
                 memories=memories,
                 user_name=user_name,
                 active_users=active_users,
-                mentioned_context=mentioned_context
+                mentioned_context=mentioned_context,
+                other_bot_names=other_bot_names
             )
             
             # Handle attachment content in the last immediate message
@@ -636,7 +689,8 @@ class BotInstance:
                     system_prompt=system_prompt,
                     temperature=None,  # Use per-provider config
                     max_tokens=None,   # Use per-provider config (fixes max_tokens issue)
-                    use_single_user=use_single_user
+                    use_single_user=use_single_user,
+                    current_bot_name=self.character.name
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)
@@ -650,6 +704,7 @@ class BotInstance:
             response = remove_thinking_tags(response)
             response = clean_bot_name_prefix(response, self.character.name)
             response = clean_em_dashes(response)
+            response = self._strip_other_bot_prefixes(response, other_bot_names)
 
             response, reactions = parse_reactions(response)
 
@@ -744,6 +799,60 @@ class BotInstance:
         # Decay toward neutral
         new_mood *= 0.95
         self._channel_mood[channel_id] = new_mood
+
+    def _calculate_bot_response_probability(self, consecutive_bot_msgs: int, config: dict) -> float:
+        """Calculate probability of responding to another bot based on conversation length.
+
+        Uses progressive decay formula to naturally taper off bot-on-bot conversations.
+
+        Args:
+            consecutive_bot_msgs: Number of consecutive bot-only messages
+            config: Runtime configuration dict with fall-off settings
+
+        Returns:
+            Probability between 0.0 and 1.0
+        """
+        # Check if fall-off is enabled
+        if not config.get('bot_falloff_enabled', True):
+            return 1.0  # Always respond if disabled
+
+        base_chance = config.get('bot_falloff_base_chance', 0.8)
+        decay_rate = config.get('bot_falloff_decay_rate', 0.15)
+        min_chance = config.get('bot_falloff_min_chance', 0.05)
+        hard_limit = config.get('bot_falloff_hard_limit', 10)
+
+        # Hard cutoff at limit
+        if consecutive_bot_msgs >= hard_limit:
+            return 0.0
+
+        # Progressive decay: base_chance * (1 - decay_rate)^consecutive_msgs
+        probability = base_chance * ((1 - decay_rate) ** consecutive_bot_msgs)
+
+        # Apply minimum floor
+        return max(probability, min_chance)
+
+    def _strip_other_bot_prefixes(self, response: str, other_bot_names: list) -> str:
+        """Remove any other bot's name prefix from response to prevent impersonation.
+
+        Args:
+            response: The bot's response text
+            other_bot_names: List of other bot character names in the channel
+
+        Returns:
+            Response with any other bot name prefixes removed
+        """
+        if not other_bot_names:
+            return response
+
+        for name in other_bot_names:
+            # Check for "Name:" or "Name :" at start
+            patterns = [f"{name}:", f"{name} :"]
+            for pattern in patterns:
+                if response.lower().startswith(pattern.lower()):
+                    response = response[len(pattern):].strip()
+                    log.warn(f"Stripped impersonation prefix '{pattern}' from response", self.name)
+                    break
+        return response
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).

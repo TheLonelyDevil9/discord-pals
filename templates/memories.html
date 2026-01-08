@@ -165,6 +165,9 @@
             <table class="memories-table">
                 <thead>
                     <tr>
+                        <th style="width: 40px;">
+                            <input type="checkbox" id="select-all-{{ file_name }}" onchange="toggleSelectAll('{{ file_name }}')">
+                        </th>
                         <th>Key / Type</th>
                         <th>Content</th>
                         <th>Action</th>
@@ -173,6 +176,9 @@
                 <tbody>
                     {% for key, value in data.items() %}
                     <tr>
+                        <td>
+                            <input type="checkbox" class="memory-checkbox" data-file="{{ file_name }}" data-key="{{ key }}">
+                        </td>
                         <td>
                             <code>{{ key }}</code>
                             {% if key in user_names %}
@@ -193,6 +199,12 @@
                     {% endfor %}
                 </tbody>
             </table>
+
+            <!-- Bulk Action Buttons -->
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button type="button" class="btn btn-danger" onclick="deleteSelectedMemories('{{ file_name }}')">🗑️ Delete Selected</button>
+                <button type="button" class="btn btn-danger" onclick="clearAllMemories('{{ file_name }}')">⚠️ Clear All Memories</button>
+            </div>
             {% else %}
             <div class="empty">No memories stored</div>
             {% endif %}
@@ -480,6 +492,87 @@ function confirmDeleteMemory(fileName, key) {
         document.body.appendChild(form);
         form.submit();
     });
+}
+
+// Toggle select all checkboxes for a file
+function toggleSelectAll(fileName) {
+    const selectAllCheckbox = document.getElementById(`select-all-${fileName}`);
+    const checkboxes = document.querySelectorAll(`.memory-checkbox[data-file="${fileName}"]`);
+    checkboxes.forEach(cb => cb.checked = selectAllCheckbox.checked);
+}
+
+// Get selected memory keys for a file
+function getSelectedMemories(fileName) {
+    const checkboxes = document.querySelectorAll(`.memory-checkbox[data-file="${fileName}"]:checked`);
+    return Array.from(checkboxes).map(cb => cb.dataset.key);
+}
+
+// Delete selected memories
+async function deleteSelectedMemories(fileName) {
+    const selectedKeys = getSelectedMemories(fileName);
+
+    if (selectedKeys.length === 0) {
+        showToast('No memories selected', 'error');
+        return;
+    }
+
+    showConfirm(
+        'Delete Selected Memories',
+        `Are you sure you want to delete ${selectedKeys.length} selected memor${selectedKeys.length === 1 ? 'y' : 'ies'}?`,
+        async function() {
+            try {
+                const response = await fetch(`/api/memories/${fileName}/delete-selected`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({ keys: selectedKeys })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    showToast(`Deleted ${selectedKeys.length} memor${selectedKeys.length === 1 ? 'y' : 'ies'}!`, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast(data.message || 'Failed to delete memories', 'error');
+                }
+            } catch (e) {
+                showToast('Error deleting memories', 'error');
+            }
+        }
+    );
+}
+
+// Clear all memories for a file
+function clearAllMemories(fileName) {
+    showConfirm(
+        'Clear All Memories',
+        `⚠️ WARNING: This will permanently delete ALL memories in ${fileName}. This action cannot be undone. Are you absolutely sure?`,
+        async function() {
+            try {
+                const response = await fetch(`/api/memories/${fileName}/clear-all`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': '{{ csrf_token() }}'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    showToast('All memories cleared!', 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast(data.message || 'Failed to clear memories', 'error');
+                }
+            } catch (e) {
+                showToast('Error clearing memories', 'error');
+            }
+        }
+    );
 }
 </script>
 {% endblock %}

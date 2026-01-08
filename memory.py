@@ -463,10 +463,10 @@ class MemoryManager:
         if len(messages) < 5:
             return None
 
-        # Build context with explicit user attribution (using author_name from history)
+        # Build context with explicit user attribution (using author from history)
         context_lines = []
         for m in messages[-20:]:
-            author = m.get('author_name', 'Unknown')
+            author = m.get('author', 'Unknown')
             role = m.get('role', 'user')
             content = m.get('content', '')[:200]
             if role == 'assistant':

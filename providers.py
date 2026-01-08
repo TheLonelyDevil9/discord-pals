@@ -174,7 +174,7 @@ def strip_images_from_messages(messages: List[dict]) -> List[dict]:
     return stripped
 
 
-def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict]:
+def format_as_single_user(messages: List[dict], system_prompt: str, current_bot_name: str = None) -> List[dict]:
     """
     Format multi-message array as a single user message (SillyTavern style).
 
@@ -237,8 +237,14 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
                 if first_colon < 30 and prefix.replace(" ", "").isalnum():
                     parts.append(content)
                     continue
+            # Only add author prefix if this is NOT the current bot
             author = msg.get("author", "Assistant")
-            parts.append(f"{author}: {content}")
+            if current_bot_name and author.lower() == current_bot_name.lower():
+                # This is the current bot - don't prefix with name
+                parts.append(content)
+            else:
+                # Different bot or unknown - add prefix
+                parts.append(f"{author}: {content}")
     
     # Combine all parts into a single user message
     combined = "\n\n".join(parts)
@@ -375,7 +381,8 @@ class AIProviderManager:
         system_prompt: str,
         temperature: float = None,
         max_tokens: int = None,
-        use_single_user: bool = True  # SillyTavern-style by default
+        use_single_user: bool = True,  # SillyTavern-style by default
+        current_bot_name: str = None
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
 
@@ -386,6 +393,7 @@ class AIProviderManager:
             max_tokens: Max response length. If None, uses per-provider config.
             use_single_user: If True (default), format as single user message
                              like SillyTavern's "Single user message (no tools)"
+            current_bot_name: Name of current bot (for single-user mode formatting)
         """
 
         # Check if we have multimodal content
@@ -395,7 +403,7 @@ class AIProviderManager:
         if use_single_user:
             # SillyTavern-style: combine everything into one user message
             # Returns None if messages contain multimodal content (images)
-            full_messages = format_as_single_user(messages, system_prompt)
+            full_messages = format_as_single_user(messages, system_prompt, current_bot_name)
             if full_messages is None:
                 # Multimodal content detected - fall back to multi-message format
                 log.info("Multimodal content detected, using multi-message format")

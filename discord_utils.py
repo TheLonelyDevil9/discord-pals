@@ -489,13 +489,25 @@ def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
     """Get list of unique users who have participated recently."""
     history = get_history(channel_id)[-limit:]
     users = set()
-    
+
     for msg in history:
         author = msg.get("author")
         if author and msg.get("role") == "user":
             users.add(author)
-    
+
     return list(users)
+
+
+def get_other_bot_names(channel_id: int, current_bot_name: str) -> List[str]:
+    """Get names of other bot characters from history."""
+    history = get_history(channel_id)
+    other_bots = set()
+    for msg in history:
+        if msg.get("role") == "assistant":
+            author = msg.get("author")
+            if author and author.lower() != current_bot_name.lower():
+                other_bots.add(author)
+    return list(other_bots)
 
 
 # --- Reply Context ---

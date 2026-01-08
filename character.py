@@ -257,17 +257,23 @@ class CharacterManager:
         memories: str = "",
         user_name: str = "",
         active_users: list = None,
-        mentioned_context: str = ""
+        mentioned_context: str = "",
+        other_bot_names: list = None
     ) -> str:
         """Build chatroom context (injected between history and immediate)."""
-        
+
         # Add active users for social awareness
         active_users_context = ""
         if active_users and len(active_users) > 1:
             others = [u for u in active_users if u != user_name][:5]
             if others:
                 active_users_context = f"Other active participants: {', '.join(others)}"
-        
+
+        # Add other bots awareness to prevent impersonation
+        other_bots_context = ""
+        if other_bot_names:
+            other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
+
         return self.prompt_manager.build_chatroom_context(
             guild_name=guild_name,
             emojis=emojis,
@@ -275,7 +281,8 @@ class CharacterManager:
             memories=memories,
             user_name=user_name,
             active_users=active_users_context,
-            mentioned_context=mentioned_context
+            mentioned_context=mentioned_context,
+            other_bots=other_bots_context
         )
 
 
