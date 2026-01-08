@@ -689,8 +689,7 @@ class BotInstance:
                     system_prompt=system_prompt,
                     temperature=None,  # Use per-provider config
                     max_tokens=None,   # Use per-provider config (fixes max_tokens issue)
-                    use_single_user=use_single_user,
-                    current_bot_name=self.character.name
+                    use_single_user=use_single_user
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)
