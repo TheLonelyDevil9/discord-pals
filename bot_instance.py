@@ -916,6 +916,7 @@ class BotInstance:
                 self._recent_responses.pop(channel_id, None)
                 self._consecutive_failures.pop(channel_id, None)
                 self._channel_mood.pop(channel_id, None)
+                self._bot_conversation_tracker.pop(channel_id, None)
 
         # Cleanup user state
         for user_id in list(self._user_timestamps.keys()):
