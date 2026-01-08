@@ -291,16 +291,17 @@ class AIProviderManager:
                 if include_body:
                     merge_yaml_to_dict(request_kwargs, include_body)
                     log.debug(f"[{tier}] Applied include_body YAML")
-                
+
                 # Remove keys specified in exclude_body
                 if exclude_body:
                     exclude_keys_by_yaml(request_kwargs, exclude_body)
                     log.debug(f"[{tier}] Applied exclude_body YAML")
-                
-                # Legacy: Add extra_body if provided (for backward compatibility)
+
+                # Merge extra_body directly into request (not as SDK parameter)
+                # This ensures parameters like GLM's "thinking" are at the top level
                 if extra_body:
-                    request_kwargs["extra_body"] = extra_body
-                    log.debug(f"[{tier}] Using extra_body: {extra_body}")
+                    deep_merge_dict(request_kwargs, extra_body)
+                    log.debug(f"[{tier}] Merged extra_body: {extra_body}")
                 
                 log.debug(f"[{tier}] Requesting {model} with {len(messages)} messages, max_tokens={max_tokens}")
                 

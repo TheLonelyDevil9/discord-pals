@@ -22,6 +22,8 @@ The system instructions were authored by legendary chef @Geechan.
 - [Memory Architecture](#-memory-architecture)
 - [Commands](#-commands)
 - [Autonomous Mode](#-autonomous-mode)
+- [Bot-on-Bot Fall-off](#-bot-on-bot-fall-off)
+- [Impersonation Prevention](#-impersonation-prevention)
 - [Creating Characters](#creating-characters)
 - [Running Multiple Bots](#running-multiple-bots)
 - [Runtime Configuration](#️-runtime-configuration)
@@ -58,6 +60,8 @@ The system instructions were authored by legendary chef @Geechan.
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Message batching** - Collects follow-up messages before responding (configurable timeout)
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
+- **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
+- **Impersonation prevention** - Bots won't roleplay as each other in multi-bot setups
 - **Context-aware commands** - Slash commands use chat history and memories
 - **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
 - **Smart responses** - Tracks reply chains with full message context
@@ -610,6 +614,70 @@ Click the ON/OFF badge in the Autonomous column to quickly enable/disable autono
 | `/roast`       | Get roasted (playfully)        |
 | `/fortune`     | Get your fortune told          |
 | `/challenge`   | Challenge the bot              |
+
+---
+
+## 📉 Bot-on-Bot Fall-off
+
+When running multiple bots, they can get into endless conversation loops. The fall-off system progressively reduces the probability of responding as bot-to-bot exchanges continue.
+
+### How It Works
+
+1. **Consecutive Counter**: Tracks how many bot messages in a row have occurred in a channel
+2. **Progressive Decay**: Each consecutive bot message reduces response probability
+3. **Hard Limit**: After N consecutive bot messages, stops responding entirely
+4. **Human Reset**: Counter resets when ANY human sends ANY message in the channel
+
+### Configuration
+
+Configure via the web dashboard (Config page) or `bot_data/runtime_config.json`:
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `bot_falloff_enabled` | true | Enable/disable the fall-off system |
+| `bot_falloff_base_chance` | 0.8 | Starting probability (80%) for first bot response |
+| `bot_falloff_decay_rate` | 0.15 | Probability reduction per consecutive bot message |
+| `bot_falloff_min_chance` | 0.05 | Minimum probability floor (5%) |
+| `bot_falloff_hard_limit` | 10 | Stop responding entirely after this many bot messages |
+
+### Example Decay
+
+With default settings (base: 0.8, decay: 0.15, min: 0.05):
+
+| Bot Messages | Response Chance |
+| ------------ | --------------- |
+| 1 | 80% |
+| 2 | 65% |
+| 3 | 50% |
+| 4 | 35% |
+| 5 | 20% |
+| 6+ | 5% (minimum) |
+| 10+ | 0% (hard limit) |
+
+---
+
+## 🎭 Impersonation Prevention
+
+In multi-bot setups, bots are automatically prevented from roleplaying as each other.
+
+### How It Works
+
+1. **Bot Detection**: The system detects all other bots in the current channel
+2. **System Prompt Injection**: Other bot names are added to the system prompt with instructions not to impersonate them
+3. **Per-Message Context**: Updated dynamically based on which bots are present
+
+### What Gets Blocked
+
+- Bot A pretending to speak as Bot B
+- Bots writing dialogue for other boots narrating other bots' actions
+
+### No Configuration Needed
+
+This feature is automatic when running multiple bots. The system prompt includes:
+
+```
+IMPORTANT: Do NOT roleplay as or impersonate these other bots: [BotA, BotB, ...]
+```
 
 ---
 
