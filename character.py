@@ -83,13 +83,14 @@ class PromptManager:
         memories: str = "",
         user_name: str = "",
         active_users: str = "",
-        mentioned_context: str = ""
+        mentioned_context: str = "",
+        other_bots: str = ""
     ) -> str:
         """Build chatroom context (injected between history and immediate messages)."""
-        
+
         # Start with template
         context = self.chatroom_context_template
-        
+
         # Make substitutions
         replacements = {
             "{{GUILD_NAME}}": guild_name,
@@ -98,15 +99,16 @@ class PromptManager:
             "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
             "{{USER_NAME}}": user_name,
             "{{ACTIVE_USERS}}": active_users,
-            "{{MENTIONED_CONTEXT}}": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else ""
+            "{{MENTIONED_CONTEXT}}": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else "",
+            "{{OTHER_BOTS}}": other_bots
         }
-        
+
         for key, value in replacements.items():
             context = context.replace(key, value)
-        
+
         # Clean up empty lines from unused placeholders
         context = RE_EMPTY_LINES.sub('\n\n', context)
-        
+
         return context.strip()
 
 
