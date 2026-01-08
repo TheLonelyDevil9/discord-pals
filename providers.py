@@ -297,11 +297,11 @@ class AIProviderManager:
                     exclude_keys_by_yaml(request_kwargs, exclude_body)
                     log.debug(f"[{tier}] Applied exclude_body YAML")
 
-                # Merge extra_body directly into request (not as SDK parameter)
-                # This ensures parameters like GLM's "thinking" are at the top level
+                # Pass extra_body as SDK parameter (bypasses validation)
+                # This allows provider-specific params like GLM's "thinking"
                 if extra_body:
-                    deep_merge_dict(request_kwargs, extra_body)
-                    log.debug(f"[{tier}] Merged extra_body: {extra_body}")
+                    request_kwargs["extra_body"] = extra_body
+                    log.debug(f"[{tier}] Using extra_body: {extra_body}")
                 
                 log.debug(f"[{tier}] Requesting {model} with {len(messages)} messages, max_tokens={max_tokens}")
                 
