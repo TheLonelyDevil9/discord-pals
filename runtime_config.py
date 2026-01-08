@@ -20,6 +20,12 @@ DEFAULTS = {
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
+    # Bot-on-bversation fall-off settings
+    "bot_falloff_enabled": True,  # Enable progressive fall-off for bot-bot conversations
+    "bot_falloff_base_chance": 0.8,  # Initial response probability (80%)
+    "bot_falloff_decay_rate": 0.15,  # Decay per consecutive bot message (15%)
+    "bot_falloff_min_chance": 0.05,  # Minimum probability floor (5%)
+    "bot_falloff_hard_limit": 10,  # Hard cutoff after N consecutive bot messages
 }
 
 # Config cache to avoid repeated file reads

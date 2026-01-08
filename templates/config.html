@@ -131,6 +131,66 @@
 </div>
 
 <div class="card">
+    <h2>🤖 Bot-on-Bot Fall-off</h2>
+    <p class="text-muted" style="margin-bottom: 15px;">Gradually reduce response probability in bot-to-bot conversations to emphasize human interactions</p>
+
+    <div class="form-group">
+        <label>
+            <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
+                onchange="saveFalloffSettings()">
+            Enable Bot Fall-off
+        </label>
+        <small>When enabled, bots gradually stop responding to each other after consecutive exchanges</small>
+    </div>
+
+    <div class="form-group">
+        <label for="bot_falloff_base_chance">Base Response Chance</label>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="range" id="bot_falloff_base_chance" name="bot_falloff_base_chance" min="0" max="100" step="5"
+                value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
+                oninput="document.getElementById('base_chance_val').textContent = this.value + '%'">
+            <span id="base_chance_val" style="min-width: 50px;">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
+        </div>
+        <small>Initial probability of responding to another bot (first message)</small>
+    </div>
+
+    <div class="form-group">
+        <label for="bot_falloff_decay_rate">Decay Rate</label>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="range" id="bot_falloff_decay_rate" name="bot_falloff_decay_rate" min="0" max="50" step="5"
+                value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
+                oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'">
+            <span id="decay_rate_val" style="min-width: 50px;">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
+        </div>
+        <small>How much probability drops per consecutive bot message</small>
+    </div>
+
+    <div class="form-group">
+        <label for="bot_falloff_min_chance">Minimum Chance</label>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="range" id="bot_falloff_min_chance" name="bot_falloff_min_chance" min="0" max="20" step="1"
+                value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
+                oninput="document.getElementById('min_chance_val').textContent = this.value + '%'">
+            <span id="min_chance_val" style="min-width: 50px;">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
+        </div>
+        <small>Floor probability (always has at least this chance to respond)</small>
+    </div>
+
+    <div class="form-group">
+        <label for="bot_falloff_hard_limit">Hard Limit (messages)</label>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="range" id="bot_falloff_hard_limit" name="bot_falloff_hard_limit" min="3" max="25" step="1"
+                value="{{ config.bot_falloff_hard_limit or 10 }}"
+                oninput="document.getElementById('hard_limit_val').textContent = this.value">
+            <span id="hard_limit_val" style="min-width: 40px;">{{ config.bot_falloff_hard_limit or 10 }}</span>
+        </div>
+        <small>After this many consecutive bot messages, stop responding entirely (resets when human speaks)</small>
+    </div>
+
+    <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
+</div>
+
+<div class="card">
     <h2>🔧 Debug Settings</h2>
 
     <div class="form-group">
@@ -467,6 +527,28 @@
 
         if (response.ok) {
             showToast('Name trigger chance saved!', 'success');
+        } else {
+            showToast('Failed to save settings', 'error');
+        }
+    }
+
+    async function saveFalloffSettings() {
+        const data = {
+            bot_falloff_enabled: document.getElementById('bot_falloff_enabled').checked,
+            bot_falloff_base_chance: parseInt(document.getElementById('bot_falloff_base_chance').value) / 100,
+            bot_falloff_decay_rate: parseInt(document.getElementById('bot_falloff_decay_rate').value) / 100,
+            bot_falloff_min_chance: parseInt(document.getElementById('bot_falloff_min_chance').value) / 100,
+            bot_falloff_hard_limit: parseInt(document.getElementById('bot_falloff_hard_limit').value)
+        };
+
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            showToast('Bot fall-off settings saved!', 'success');
         } else {
             showToast('Failed to save settings', 'error');
         }

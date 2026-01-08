@@ -155,7 +155,7 @@ class BotInstance:
                 # Calculate response probability based on conversation length
                 consecutive_msgs = tracker["consecutive_bot_messages"]
                 response_probability = self._calculate_bot_response_probability(
-                    consecutive_msgs, runtime_config
+                    consecutive_msgs, runtime_config.get_all()
                 )
 
                 # Roll the dice

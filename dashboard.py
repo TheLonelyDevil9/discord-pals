@@ -737,7 +737,7 @@ def api_switch_character():
         if bot.name == bot_name:
             try:
                 from character import character_manager
-                bot.character = character_manager.load_character(character_name)
+                bot.character = character_manager.load(character_name)
                 return jsonify({'status': 'ok', 'character': bot.character.name})
             except Exception as e:
                 return jsonify({'status': 'error', 'message': str(e)}), 400
