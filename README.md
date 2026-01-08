@@ -544,6 +544,7 @@ When a user talks to the bot, context is loaded in priority order:
 | ------------------------ | ----------------------------------------- |
 | `/memory <text>`         | Save a memory                             |
 | `/memories`              | View saved memories                       |
+| `/clearmemories`         | Clear all memories for the current context |
 | `/lore <text>`           | Add server lore                           |
 
 ### Moderation Commands
@@ -800,6 +801,11 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
 | `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
+| `bot_falloff_enabled` | true | Enable progressive response decay for bot-to-bot conversations |
+| `bot_falloff_base_chance` | 0.8 | Starting probability (80%) for first bot response |
+| `bot_falloff_decay_rate` | 0.15 | Probability reduction per consecutive bot message |
+| `bot_falloff_min_chance` | 0.05 | Minimum probability floor (5%) before hard limit |
+| `bot_falloff_hard_limit` | 10 | Stop responding entirely after this many consecutive bot messages |
 
 ### When to Adjust Settings
 
