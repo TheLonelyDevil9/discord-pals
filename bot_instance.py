@@ -604,7 +604,11 @@ class BotInstance:
                 memories = "\n\n".join(memory_parts) if memory_parts else ""
             else:
                 memories = ""
-            
+
+            # Sanitize memories to remove any reasoning tags that may have leaked in
+            if memories:
+                memories = remove_thinking_tags(memories)
+
             # Get active users for social awareness
             active_users = get_active_users(channel_id) if not is_dm else []
             

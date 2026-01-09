@@ -13,7 +13,7 @@ from config import (
     DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE,
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
 )
-from discord_utils import safe_json_load, safe_json_save
+from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
 from constants import MEMORY_SAVE_INTERVAL
 import logger as log
 
@@ -188,7 +188,7 @@ class MemoryManager:
         memories = self.server_memories.get(key, [])[-limit:]
         if not memories:
             return ""
-        return "\n".join([f"- {m['content']}" for m in memories])
+        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
 
     def clear_server_memories(self, guild_id: int):
         """Clear all memories for a server."""
@@ -264,7 +264,7 @@ class MemoryManager:
 
         if not memories:
             return ""
-        return "\n".join([f"- {m['content']}" for m in memories])
+        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
 
     def clear_dm_memories(self, user_id: int, character_name: str = None):
         """Clear all memories for a user's DMs."""
@@ -364,7 +364,7 @@ class MemoryManager:
 
         if not memories:
             return ""
-        return "\n".join([f"- {m['content']}" for m in memories])
+        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
 
     def clear_user_memories(self, guild_id: int, user_id: int, character_name: str = None):
         """Clear memories about a specific user."""
@@ -415,7 +415,7 @@ class MemoryManager:
         memories = self.global_user_profiles.get(key, [])[-limit:]
         if not memories:
             return ""
-        return "\n".join([f"- {m['content']}" for m in memories])
+        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
 
     def clear_global_user_profile(self, user_id: int):
         """Clear all global facts about a user."""
@@ -516,6 +516,9 @@ Memory about {target_user} (or NOTHING):"""
             )
 
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):
+                # Sanitize before storing - remove any reasoning tags
+                result = remove_thinking_tags(result)
+
                 # Validate memory is about the correct user - must mention their name
                 if user_name and user_name.lower() not in result.lower():
                     log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")

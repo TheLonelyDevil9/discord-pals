@@ -190,6 +190,12 @@ RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
 RE_GLM_ACTUAL_OUTPUT = re.compile(r'(?:Actual\s*output|Final\s*Polish)\s*:\s*["\']?(.+?)["\']?\s*$', re.DOTALL | re.IGNORECASE)
 RE_GLM_QUOTED_OUTPUT = re.compile(r'^["\'](.+)["\']$', re.DOTALL)
 
+# Additional reasoning leak patterns (internal processing labels)
+RE_INTERNAL_LABELS = re.compile(r'^(?:message\s+)?(?:duplication\s+)?glitch:?\s*', re.MULTILINE | re.IGNORECASE)
+RE_READABLE_VERSION = re.compile(r'^readable\s+version:?\s*', re.MULTILINE | re.IGNORECASE)
+RE_INTERNAL_NOTE = re.compile(r'^\s*\[(?:internal|note|debug|processing)\].*$', re.MULTILINE | re.IGNORECASE)
+RE_STEP_LABELS = re.compile(r'^(?:step\s*\d+|phase\s*\d+|stage\s*\d+):.*$', re.MULTILINE | re.IGNORECASE)
+
 
 def save_history(force: bool = False):
     """Save conversation history to disk for persistence across restarts.
@@ -620,6 +626,12 @@ def remove_thinking_tags(text: str) -> str:
 
     # Remove lines that start with common reasoning prefixes
     text = RE_REASONING_PREFIX.sub('', text)
+
+    # Remove internal processing labels (glitch, readable version, etc.)
+    text = RE_INTERNAL_LABELS.sub('', text)
+    text = RE_READABLE_VERSION.sub('', text)
+    text = RE_INTERNAL_NOTE.sub('', text)
+    text = RE_STEP_LABELS.sub('', text)
 
     # Remove <output> wrapper if present (some models wrap actual response)
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
