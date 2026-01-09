@@ -404,7 +404,7 @@
     <main class="container">{% block content %}{% endblock %}</main>
     <script>
         function showToast(msg, type) { type = type || 'success'; var c = document.getElementById('toast-container'), t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg; c.appendChild(t); setTimeout(function () { t.classList.add('hiding'); setTimeout(function () { t.remove() }, 300) }, 3000) }
-        function showConfirm(title, msg, cb) { var m = document.createElement('div'); m.className = 'confirm-modal'; m.innerHTML = '<div class="confirm-modal-content"><h3>' + title + '</h3><p>' + msg + '</p><div class="confirm-modal-buttons"><button class="btn btn-secondary" onclick="this.closest(\".confirm-modal\").remove()">Cancel</button><button class="btn btn-danger" id="cfm">Delete</button></div></div>'; document.body.appendChild(m); m.querySelector('#cfm').onclick = function () { m.remove(); cb() }; m.onclick = function (e) { if (e.target === m) m.remove() } }
+        function showConfirm(title, msg, cb) { var m = document.createElement('div'); m.className = 'confirm-modal'; m.innerHTML = '<div class="confirm-modal-content"><h3>' + title + '</h3><p>' + msg + '</p><div class="confirm-modal-buttons"><button class="btn btn-secondary" id="cancel-btn">Cancel</button><button class="btn btn-danger" id="cfm">Delete</button></div></div>'; document.body.appendChild(m); m.querySelector('#cancel-btn').onclick = function () { m.remove() }; m.querySelector('#cfm').onclick = function () { m.remove(); cb() }; m.onclick = function (e) { if (e.target === m) m.remove() } }
     </script>
 </body>
 
