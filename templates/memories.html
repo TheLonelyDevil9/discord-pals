@@ -2,192 +2,60 @@
 {% block title %}Memories - Discord Pals{% endblock %}
 
 {% block content %}
-<style>
-    .memories-table {
-        table-layout: fixed;
-        width: 100%;
-    }
-
-    .memories-table th:first-child,
-    .memories-table td:first-child {
-        width: 180px;
-        word-break: break-all;
-    }
-
-    .memories-table th:last-child,
-    .memories-table td:last-child {
-        width: 80px;
-    }
-
-    .memories-table th:nth-child(2),
-    .memories-table td:nth-child(2) {
-        overflow: hidden;
-    }
-
-    .memories-table td {
-        vertical-align: top;
-    }
-
-    .memory-content {
-        max-height: 200px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        word-break: break-word;
-        font-size: 0.85em;
-        background: var(--bg);
-        padding: 8px;
-        border-radius: 4px;
-        max-width: 100%;
-    }
-    
-    .tab-container {
-        display: flex;
-        gap: 5px;
-        margin-bottom: 20px;
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 10px;
-    }
-    
-    .tab-btn {
-        padding: 10px 20px;
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        cursor: pointer;
-        border-radius: 6px 6px 0 0;
-        font-size: 0.95em;
-    }
-    
-    .tab-btn:hover {
-        background: var(--bg);
-        color: var(--text);
-    }
-    
-    .tab-btn.active {
-        background: var(--accent);
-        color: var(--bg);
-    }
-    
-    .tab-content {
-        display: none;
-    }
-    
-    .tab-content.active {
-        display: block;
-    }
-    
-    .form-row {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 15px;
-        margin-bottom: 15px;
-    }
-    
-    .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-    }
-    
-    .form-group label {
-        font-size: 0.85em;
-        color: var(--text-muted);
-        font-weight: 500;
-    }
-    
-    .form-group input, .form-group select, .form-group textarea {
-        padding: 10px 12px;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        color: var(--text);
-        border-radius: 6px;
-        font-size: 0.95em;
-    }
-    
-    .form-group textarea {
-        min-height: 100px;
-        resize: vertical;
-        font-family: inherit;
-    }
-    
-    .lore-card {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 15px;
-    }
-    
-    .lore-card h4 {
-        color: var(--accent);
-        margin-bottom: 10px;
-    }
-    
-    .lore-content {
-        white-space: pre-wrap;
-        font-size: 0.9em;
-        color: var(--text-muted);
-        max-height: 200px;
-        overflow-y: auto;
-    }
-    
-    .lore-actions {
-        margin-top: 10px;
-        display: flex;
-        gap: 10px;
-    }
-</style>
-
-<h1 style="margin-bottom: 30px;">🧠 Memories</h1>
+<div class="page-header">
+    <h1 class="page-title">Memories</h1>
+    <p class="page-subtitle">Manage bot memories and server lore</p>
+</div>
 
 <!-- Tab Navigation -->
-<div class="card">
-    <div class="tab-container">
-        <button class="tab-btn active" onclick="switchTab('files')">📁 Memory Files</button>
-        <button class="tab-btn" onclick="switchTab('add')">➕ Add Memory</button>
-        <button class="tab-btn" onclick="switchTab('lore')">📜 Server Lore</button>
-    </div>
+<div class="tabs">
+    <button type="button" class="tab active" onclick="switchTab('files')">Memory Files</button>
+    <button type="button" class="tab" onclick="switchTab('add')">Add Memory</button>
+    <button type="button" class="tab" onclick="switchTab('lore')">Server Lore</button>
+</div>
 
-    <!-- Memory Files Tab -->
-    <div id="tab-files" class="tab-content active">
-        {% if memories %}
-        {% for file_name, data in memories.items() %}
-        <div class="card" style="margin-bottom: 15px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 class="card-title" style="margin: 0;">📁 {{ file_name }}</h3>
-                <a href="/memories/{{ file_name }}/edit" class="btn btn-primary">Edit Raw JSON</a>
-            </div>
+<!-- Memory Files Tab -->
+<div id="tab-files" class="tab-content active">
+    {% if memories %}
+    {% for file_name, data in memories.items() %}
+    <div class="card memory-file-card">
+        <div class="card-header">
+            <span class="card-title">{{ file_name }}</span>
+            <a href="/memories/{{ file_name }}/edit" class="btn btn-ghost">Edit Raw JSON</a>
+        </div>
 
-            {% if data.error %}
+        {% if data.error %}
+        <div class="card-body">
             <div class="empty">Error: {{ data.error }}</div>
-            {% elif data %}
+        </div>
+        {% elif data %}
+        <div class="table-responsive">
             <table class="memories-table">
                 <thead>
                     <tr>
-                        <th style="width: 40px;">
-                            <input type="checkbox" id="select-all-{{ file_name }}" onchange="toggleSelectAll('{{ file_name }}')">
+                        <th class="col-checkbox">
+                            <input type="checkbox" id="select-all-{{ file_name }}" onchange="toggleSelectAll('{{ file_name }}')" title="Select all">
                         </th>
-                        <th>Key / Type</th>
-                        <th>Content</th>
-                        <th>Action</th>
+                        <th class="col-key">Key / Type</th>
+                        <th class="col-content">Content</th>
+                        <th class="col-action">Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for key, value in data.items() %}
                     <tr>
                         <td>
-                            <input type="checkbox" class="memory-checkbox" data-file="{{ file_name }}" data-key="{{ key }}">
+                            <input type="checkbox" class="memory-checkbox" data-file="{{ file_name }}" data-key="{{ key }}" title="Select this memory">
                         </td>
                         <td>
                             <code>{{ key }}</code>
                             {% if key in user_names %}
-                            <div style="color: var(--accent); font-size: 0.85em; margin-top: 4px;">{{ user_names[key] }}</div>
+                            <div class="user-name-hint">{{ user_names[key] }}</div>
                             {% endif %}
                         </td>
                         <td>
                             {% if value is string %}
-                            {{ value[:200] }}{% if value|length > 200 %}...{% endif %}
+                            <span class="memory-text">{{ value[:200] }}{% if value|length > 200 %}...{% endif %}</span>
                             {% else %}
                             <pre class="memory-content">{{ value | tojson(indent=2) }}</pre>
                             {% endif %}
@@ -199,102 +67,242 @@
                     {% endfor %}
                 </tbody>
             </table>
-
-            <!-- Bulk Action Buttons -->
-            <div style="margin-top: 15px; display: flex; gap: 10px;">
-                <button type="button" class="btn btn-danger" onclick="deleteSelectedMemories('{{ file_name }}')">🗑️ Delete Selected</button>
-                <button type="button" class="btn btn-danger" onclick="clearAllMemories('{{ file_name }}')">⚠️ Clear All Memories</button>
-            </div>
-            {% else %}
-            <div class="empty">No memories stored</div>
-            {% endif %}
         </div>
-        {% endfor %}
+
+        <div class="card-body bulk-actions">
+            <button type="button" class="btn btn-danger" onclick="deleteSelectedMemories('{{ file_name }}')">Delete Selected</button>
+            <button type="button" class="btn btn-danger" onclick="clearAllMemories('{{ file_name }}')">Clear All</button>
+        </div>
         {% else %}
-        <div class="empty">No memory files found in <code>bot_data/</code></div>
+        <div class="card-body">
+            <div class="empty">No memories stored</div>
+        </div>
         {% endif %}
     </div>
+    {% endfor %}
+    {% else %}
+    <div class="card">
+        <div class="empty">No memory files found in <code>bot_data/</code></div>
+    </div>
+    {% endif %}
+</div>
 
-    <!-- Add Memory Tab -->
-    <div id="tab-add" class="tab-content">
-        <h3 style="margin-bottom: 15px;">Add New Memory</h3>
-        <p style="color: var(--text-muted); margin-bottom: 20px;">Manually add memories that the bot will remember about servers or users.</p>
-        
-        <div class="form-row">
-            <div class="form-group">
-                <label>Memory Type</label>
-                <select id="memory-type" onchange="updateMemoryForm()">
-                    <option value="server">Server Memory (shared)</option>
-                    <option value="lore">Server Lore (world-building)</option>
-                    <option value="global">Global User Profile (cross-server)</option>
-                </select>
+<!-- Add Memory Tab -->
+<div id="tab-add" class="tab-content">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Add New Memory</span>
+        </div>
+        <div class="card-body">
+            <p class="tab-description">Manually add memories that the bot will remember about servers or users.</p>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="memory-type">Memory Type</label>
+                    <select id="memory-type" onchange="updateMemoryForm()" title="Select memory type">
+                        <option value="server">Server Memory (shared)</option>
+                        <option value="lore">Server Lore (world-building)</option>
+                        <option value="global">Global User Profile (cross-server)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="guild-select-group">
+                    <label for="memory-guild">Server</label>
+                    <select id="memory-guild" title="Select a server">
+                        <option value="">Select a server...</option>
+                        {% for guild in guilds %}
+                        <option value="{{ guild.id }}">{{ guild.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
+
+            <div class="form-row hidden" id="user-id-row">
+                <div class="form-group">
+                    <label for="memory-user-id">User ID</label>
+                    <input type="text" id="memory-user-id" placeholder="Discord User ID">
+                </div>
+            </div>
+
             <div class="form-group">
-                <label>Server</label>
-                <select id="memory-guild">
+                <label for="memory-content">Memory Content</label>
+                <textarea id="memory-content" placeholder="Enter the memory content..." title="Memory content"></textarea>
+            </div>
+
+            <button type="button" class="btn btn-primary" onclick="addMemory()">Save Memory</button>
+        </div>
+    </div>
+</div>
+
+<!-- Lore Tab -->
+<div id="tab-lore" class="tab-content">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Server Lore Management</span>
+        </div>
+        <div class="card-body">
+            <p class="tab-description">Lore is world-building information that helps the bot understand the context of your server.</p>
+
+            {% if guilds %}
+            <div class="form-group">
+                <label for="lore-guild">Select Server</label>
+                <select id="lore-guild" onchange="loadLore()" title="Select a server">
                     <option value="">Select a server...</option>
                     {% for guild in guilds %}
-                    <option value="{{ guild.id }}">{{ guild.name }}</option>
+                    <option value="{{ guild.id }}" data-lore="{{ guild.lore | e }}">{{ guild.name }}</option>
                     {% endfor %}
                 </select>
             </div>
-        </div>
-        
-        <div class="form-row" id="user-id-row" style="display: none;">
-            <div class="form-group">
-                <label>User ID (for user-specific memories)</label>
-                <input type="text" id="memory-user-id" placeholder="Discord User ID">
-            </div>
-        </div>
-        
-        <div class="form-group">
-            <label>Memory Content</label>
-            <textarea id="memory-content" placeholder="Enter the memory content..."></textarea>
-        </div>
-        
-        <button type="button" class="btn btn-primary" onclick="addMemory()">💾 Save Memory</button>
-    </div>
 
-    <!-- Lore Tab -->
-    <div id="tab-lore" class="tab-content">
-        <h3 style="margin-bottom: 15px;">Server Lore Management</h3>
-        <p style="color: var(--text-muted); margin-bottom: 20px;">Lore is world-building information that helps the bot understand the context of your server.</p>
-        
-        {% if guilds %}
-        <div class="form-group" style="margin-bottom: 20px;">
-            <label>Select Server</label>
-            <select id="lore-guild" onchange="loadLore()">
-                <option value="">Select a server...</option>
-                {% for guild in guilds %}
-                <option value="{{ guild.id }}" data-lore="{{ guild.lore | e }}">{{ guild.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        
-        <div id="lore-editor" style="display: none;">
-            <div class="form-group">
-                <label>Current Lore</label>
-                <textarea id="lore-content" placeholder="No lore set for this server..."></textarea>
+            <div id="lore-editor" class="hidden">
+                <div class="form-group">
+                    <label for="lore-content">Current Lore</label>
+                    <textarea id="lore-content" placeholder="No lore set for this server..." title="Server lore content"></textarea>
+                </div>
+
+                <div class="lore-actions">
+                    <button type="button" class="btn btn-primary" onclick="saveLore(false)">Append Lore</button>
+                    <button type="button" class="btn btn-ghost" onclick="saveLore(true)">Replace Lore</button>
+                    <button type="button" class="btn btn-danger" onclick="clearLore()">Clear Lore</button>
+                </div>
             </div>
-            
-            <div style="display: flex; gap: 10px; margin-top: 15px;">
-                <button type="button" class="btn btn-primary" onclick="saveLore(false)">➕ Append Lore</button>
-                <button type="button" class="btn btn-secondary" onclick="saveLore(true)">🔄 Replace Lore</button>
-                <button type="button" class="btn btn-danger" onclick="clearLore()">🗑️ Clear Lore</button>
-            </div>
+            {% else %}
+            <div class="empty">No servers available. Make sure your bots are online.</div>
+            {% endif %}
         </div>
-        {% else %}
-        <div class="empty">No servers available. Make sure your bots are online.</div>
-        {% endif %}
     </div>
 </div>
+
+<style>
+/* Page Header */
+.page-header {
+    margin-bottom: 32px;
+}
+
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 4px;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+.tab-description {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 20px;
+}
+
+/* Memory File Card */
+.memory-file-card {
+    margin-bottom: 20px;
+}
+
+/* Memories Table */
+.memories-table {
+    table-layout: fixed;
+}
+
+.memories-table .col-checkbox {
+    width: 48px;
+}
+
+.memories-table .col-key {
+    width: 180px;
+}
+
+.memories-table .col-action {
+    width: 100px;
+}
+
+.memories-table td {
+    vertical-align: top;
+}
+
+.user-name-hint {
+    color: var(--accent);
+    font-size: 0.75rem;
+    margin-top: 4px;
+}
+
+.memory-text {
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+}
+
+.memory-content {
+    max-height: 150px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 0.75rem;
+    background: var(--bg-primary);
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    margin: 0;
+}
+
+/* Bulk Actions */
+.bulk-actions {
+    display: flex;
+    gap: 12px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* Form Layout */
+.form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.form-group textarea {
+    min-height: 120px;
+}
+
+/* Lore Actions */
+.lore-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+/* Utility */
+.hidden {
+    display: none !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .bulk-actions {
+        flex-direction: column;
+    }
+
+    .lore-actions {
+        flex-direction: column;
+    }
+
+    .memories-table .col-key {
+        width: 120px;
+    }
+}
+</style>
 
 <script>
 // Tab switching
 function switchTab(tabName) {
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-    
+
     document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
     document.getElementById('tab-' + tabName).classList.add('active');
 }
@@ -303,17 +311,14 @@ function switchTab(tabName) {
 function updateMemoryForm() {
     const type = document.getElementById('memory-type').value;
     const userIdRow = document.getElementById('user-id-row');
-    const guildSelect = document.getElementById('memory-guild');
-    
+    const guildSelect = document.getElementById('guild-select-group');
+
     if (type === 'global') {
-        userIdRow.style.display = 'block';
-        guildSelect.parentElement.style.display = 'none';
-    } else if (type === 'user') {
-        userIdRow.style.display = 'block';
-        guildSelect.parentElement.style.display = 'block';
+        userIdRow.classList.remove('hidden');
+        guildSelect.classList.add('hidden');
     } else {
-        userIdRow.style.display = 'none';
-        guildSelect.parentElement.style.display = 'block';
+        userIdRow.classList.add('hidden');
+        guildSelect.classList.remove('hidden');
     }
 }
 
@@ -323,22 +328,22 @@ async function addMemory() {
     const guildId = document.getElementById('memory-guild').value;
     const userId = document.getElementById('memory-user-id').value;
     const content = document.getElementById('memory-content').value.trim();
-    
+
     if (!content) {
         showToast('Please enter memory content', 'error');
         return;
     }
-    
+
     if ((type === 'server' || type === 'lore') && !guildId) {
         showToast('Please select a server', 'error');
         return;
     }
-    
+
     if (type === 'global' && !userId) {
         showToast('Please enter a user ID', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/memories/add', {
             method: 'POST',
@@ -353,13 +358,12 @@ async function addMemory() {
                 content: content
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
             showToast('Memory saved successfully!', 'success');
             document.getElementById('memory-content').value = '';
-            // Reload page to show new memory
             setTimeout(() => location.reload(), 1000);
         } else {
             showToast(data.message || 'Failed to save memory', 'error');
@@ -374,34 +378,34 @@ function loadLore() {
     const select = document.getElementById('lore-guild');
     const editor = document.getElementById('lore-editor');
     const textarea = document.getElementById('lore-content');
-    
+
     if (!select.value) {
-        editor.style.display = 'none';
+        editor.classList.add('hidden');
         return;
     }
-    
+
     const option = select.options[select.selectedIndex];
     const lore = option.dataset.lore || '';
-    
+
     textarea.value = lore;
-    editor.style.display = 'block';
+    editor.classList.remove('hidden');
 }
 
 // Save lore
 async function saveLore(replace) {
     const guildId = document.getElementById('lore-guild').value;
     const content = document.getElementById('lore-content').value.trim();
-    
+
     if (!guildId) {
         showToast('Please select a server', 'error');
         return;
     }
-    
+
     if (!content && !replace) {
         showToast('Please enter lore content', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/lore/${guildId}`, {
             method: 'POST',
@@ -414,19 +418,14 @@ async function saveLore(replace) {
                 replace: replace
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
             showToast(replace ? 'Lore replaced!' : 'Lore appended!', 'success');
-            // Update the data attribute
             const option = document.querySelector(`#lore-guild option[value="${guildId}"]`);
             if (option) {
-                if (replace) {
-                    option.dataset.lore = content;
-                } else {
-                    option.dataset.lore = (option.dataset.lore || '') + '\n' + content;
-                }
+                option.dataset.lore = replace ? content : (option.dataset.lore || '') + '\n' + content;
             }
         } else {
             showToast('Failed to save lore', 'error');
@@ -439,31 +438,26 @@ async function saveLore(replace) {
 // Clear lore
 function clearLore() {
     const guildId = document.getElementById('lore-guild').value;
-    
+
     if (!guildId) {
         showToast('Please select a server', 'error');
         return;
     }
-    
+
     showConfirm('Clear Lore', 'Are you sure you want to clear all lore for this server?', async () => {
         try {
             const response = await fetch(`/api/lore/${guildId}`, {
                 method: 'DELETE',
-                headers: {
-                    'X-CSRF-Token': '{{ csrf_token() }}'
-                }
+                headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
             });
-            
+
             const data = await response.json();
-            
+
             if (data.status === 'ok') {
                 showToast('Lore cleared!', 'success');
                 document.getElementById('lore-content').value = '';
-                // Update the data attribute
                 const option = document.querySelector(`#lore-guild option[value="${guildId}"]`);
-                if (option) {
-                    option.dataset.lore = '';
-                }
+                if (option) option.dataset.lore = '';
             } else {
                 showToast('Failed to clear lore', 'error');
             }
@@ -494,14 +488,14 @@ function confirmDeleteMemory(fileName, key) {
     });
 }
 
-// Toggle select all checkboxes for a file
+// Toggle select all checkboxes
 function toggleSelectAll(fileName) {
     const selectAllCheckbox = document.getElementById(`select-all-${fileName}`);
     const checkboxes = document.querySelectorAll(`.memory-checkbox[data-file="${fileName}"]`);
     checkboxes.forEach(cb => cb.checked = selectAllCheckbox.checked);
 }
 
-// Get selected memory keys for a file
+// Get selected memory keys
 function getSelectedMemories(fileName) {
     const checkboxes = document.querySelectorAll(`.memory-checkbox[data-file="${fileName}"]:checked`);
     return Array.from(checkboxes).map(cb => cb.dataset.key);
@@ -545,11 +539,11 @@ async function deleteSelectedMemories(fileName) {
     );
 }
 
-// Clear all memories for a file
+// Clear all memories
 function clearAllMemories(fileName) {
     showConfirm(
         'Clear All Memories',
-        `⚠️ WARNING: This will permanently delete ALL memories in ${fileName}. This action cannot be undone. Are you absolutely sure?`,
+        `This will permanently delete ALL memories in ${fileName}. This action cannot be undone. Are you sure?`,
         async function() {
             try {
                 const response = await fetch(`/api/memories/${fileName}/clear-all`, {

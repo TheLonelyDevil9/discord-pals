@@ -2,103 +2,119 @@
 {% block title %}Dashboard - Discord Pals{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 30px;">Dashboard</h1>
+<div class="page-header">
+    <h1 class="page-title">Dashboard</h1>
+    <p class="page-subtitle">Monitor and control your Discord bots</p>
+</div>
 
 <!-- Killswitch Banner (shown when active) -->
-<div id="killswitch-banner" class="killswitch-banner {% if not global_paused %}hidden{% endif %}">
-    <span class="banner-icon">🛑</span>
-    <span class="banner-text">KILLSWITCH ACTIVE - All bot responses are paused</span>
-    <button class="btn btn-secondary" onclick="toggleKillswitch()">Release</button>
+<div id="killswitch-banner" class="alert-banner {% if not global_paused %}hidden{% endif %}">
+    <span class="alert-icon">⚠️</span>
+    <div class="alert-content">
+        <div class="alert-title">Killswitch Active</div>
+        <div class="alert-text">All bot responses are currently paused</div>
+    </div>
+    <button type="button" class="btn btn-ghost" onclick="toggleKillswitch()">Release</button>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="card stat-card">
+        <div class="stat-label">Active Bots</div>
+        <div class="stat-value">{{ bots|length }}</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-label">Memory Files</div>
+        <div class="stat-value">{{ memory_count }}</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-label">Characters</div>
+        <div class="stat-value">{{ character_count }}</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-label">Auto Channels</div>
+        <div class="stat-value">{{ autonomous_count }}</div>
+    </div>
 </div>
 
 <!-- Control Panel -->
-<div class="card control-panel">
-    <h3 class="card-title">🎛️ Control Panel</h3>
-    <div class="controls-grid">
-        <div class="control-item" id="killswitch-control">
-            <div class="control-label">
-                <span class="control-icon">🛑</span>
-                <div>
-                    <strong>Global Killswitch</strong>
-                    <small>Stops ALL bot responses</small>
-                </div>
-            </div>
-            <button id="killswitch-btn" class="btn toggle-btn {% if global_paused %}active danger{% else %}inactive{% endif %}" onclick="toggleKillswitch()">
-                <span class="toggle-status">{{ 'ACTIVE' if global_paused else 'INACTIVE' }}</span>
-            </button>
-        </div>
-        <div class="control-item">
-            <div class="control-label">
-                <span class="control-icon">🤖</span>
-                <div>
-                    <strong>Bot-to-Bot Chat</strong>
-                    <small>Allow bots to respond to each other</small>
-                </div>
-            </div>
-            <button id="bot-interactions-btn" class="btn toggle-btn {% if bot_interactions_paused %}inactive{% else %}active success{% endif %}" onclick="toggleBotInteractions()">
-                <span class="toggle-status">{{ 'PAUSED' if bot_interactions_paused else 'ENABLED' }}</span>
-            </button>
-        </div>
-        <div class="control-item">
-            <div class="control-label">
-                <span class="control-icon">📝</span>
-                <div>
-                    <strong>Message Format</strong>
-                    <small>How messages are sent to LLM</small>
-                </div>
-            </div>
-            <button id="message-format-btn" class="btn toggle-btn {% if use_single_user %}active info{% else %}inactive{% endif %}" onclick="toggleMessageFormat()">
-                <span class="toggle-status">{{ 'SINGLE-USER' if use_single_user else 'MULTI-ROLE' }}</span>
-            </button>
-        </div>
-        <div class="control-item">
-            <div class="control-label">
-                <span class="control-icon">🔄</span>
-                <div>
-                    <strong>Restart Bot</strong>
-                    <small>Restart without terminal</small>
-                </div>
-            </div>
-            <button id="restart-btn" class="btn toggle-btn restart-btn" onclick="restartBot()">
-                <span class="toggle-status">RESTART</span>
-            </button>
-        </div>
-    </div>
-    <div class="control-help">
-        <details open>
-            <summary>ℹ️ Message Format Help</summary>
-            <div class="format-disclaimer">
-                <p><strong>🔀 Multi-Role (Default - Recommended):</strong> Uses traditional system/user/assistant roles. This is the standard OpenAI-compatible format that most LLM APIs expect. Each message has a proper role designation.</p>
-                <p><strong>📝 Single-User (SillyTavern-style):</strong> All messages combined into one user message with [Author]: prefixes. Use this only if your LLM provider has issues with multi-role format or you're using a model that works better with combined context.</p>
-                <div class="format-warning">
-                    <span>⚠️</span> Single-User mode is provided for compatibility. Most users should keep Multi-Role enabled for best results with modern LLM APIs.
-                </div>
-            </div>
-        </details>
-    </div>
-</div>
-
-<div class="grid">
-    <div class="card stat">
-        <div class="stat-value">{{ bots|length }}</div>
-        <div class="stat-label">Active Bot(s)</div>
-    </div>
-    <div class="card stat">
-        <div class="stat-value">{{ memory_count }}</div>
-        <div class="stat-label">Memory Files</div>
-    </div>
-    <div class="card stat">
-        <div class="stat-value">{{ character_count }}</div>
-        <div class="stat-label">Characters</div>
-    </div>
-    <div class="card stat">
-        <div class="stat-value">{{ autonomous_count }}</div>
-        <div class="stat-label">Autonomous Channels</div>
-    </div>
-</div>
-
 <div class="card">
-    <h3 class="card-title">Bot Status <span id="refresh-indicator" style="font-size: 0.7em; color: var(--text-muted);">● Live</span></h3>
+    <div class="card-header">
+        <span class="card-title">Control Panel</span>
+    </div>
+    <div class="card-body">
+        <div class="controls-grid">
+            <div class="control-item" id="killswitch-control">
+                <div class="control-info">
+                    <div class="control-icon">🛑</div>
+                    <div>
+                        <div class="control-label">Global Killswitch</div>
+                        <div class="control-desc">Stops all bot responses</div>
+          </div>
+                </div>
+                <button type="button" id="killswitch-btn" class="btn {% if global_paused %}btn-danger{% else %}btn-ghost{% endif %}" onclick="toggleKillswitch()">
+                    <span class="toggle-status">{{ 'Active' if global_paused else 'Inactive' }}</span>
+                </button>
+            </div>
+            <div class="control-item">
+                <div class="control-info">
+                    <div class="control-icon">🤖</div>
+                    <div>
+                        <div class="control-label">Bot-to-Bot Chat</div>
+                        <div class="control-desc">Allow bots to respond to each other</div>
+                    </div>
+                </div>
+                <button type="button" id="bot-interactions-btn" class="btn {% if bot_interactions_paused %}btn-ghost{% else %}btn-success{% endif %}" onclick="toggleBotInteractions()">
+                    <span class="toggle-status">{{ 'Paused' if bot_interactions_paused else 'Enabled' }}</span>
+                </button>
+            </div>
+            <div class="control-item">
+                <div class="control-info">
+                    <div class="control-icon">📝</div>
+                    <div>
+                        <div class="control-label">Message Format</div>
+                        <div class="control-desc">How messages are sent to LLM</div>
+                    </div>
+                </div>
+                <button type="button" id="message-format-btn" class="btn {% if use_single_user %}btn-primary{% else %}btn-ghost{% endif %}" onclick="toggleMessageFormat()">
+                    <span class="toggle-status">{{ 'Single-User' if use_single_user else 'Multi-Role' }}</span>
+                </button>
+            </div>
+            <div class="control-item">
+                <div class="control-info">
+                    <div class="control-icon">🔄</div>
+                    <div>
+                        <div class="control-label">Restart Bot</div>
+                        <div class="control-desc">Restart without terminal</div>
+                    </div>
+                </div>
+                <button type="button" id="restart-btn" class="btn btn-primary" onclick="restartBot()">
+                    <span class="toggle-status">Restart</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="control-help">
+            <details>
+                <summary>Message Format Help</summary>
+                <div class="help-content">
+                    <p><strong>Multi-Role (Default):</strong> Uses traditional system/user/assistant roles. This is the standard OpenAI-compatible format that most LLM APIs expect.</p>
+                    <p><strong>Single-User:</strong> All messages combined into one user message with [Author]: prefixes. Use this only if your LLM provider has issues with multi-role format.</p>
+                </div>
+            </details>
+        </div>
+    </div>
+</div>
+
+<!-- Bot Status -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Bot Status</span>
+        <div class="live-indicator">
+            <span class="live-dot"></span>
+            Live
+        </div>
+    </div>
     {% if bots %}
     <table>
         <thead>
@@ -113,12 +129,12 @@
             {% for bot in bots %}
             <tr>
                 <td><strong>{{ bot.name }}</strong></td>
-                <td>{{ bot.character }}</td>
+                <td style="color: var(--text-secondary);">{{ bot.character }}</td>
                 <td>
                     {% if bot.online %}
-                    <span class="badge badge-success">● Online</span>
+                    <span class="badge badge-success"><span class="badge-dot"></span> Online</span>
                     {% else %}
-                    <span class="badge badge-danger">● Offline</span>
+                    <span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>
                     {% endif %}
                 </td>
                 <td style="color: var(--text-muted);">{{ bot.last_activity }}</td>
@@ -132,205 +148,183 @@
 </div>
 
 <style>
-/* Killswitch Banner */
-.killswitch-banner {
-    background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
-    color: white;
-padding: 15px 20px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    gap: 15px;
-    animation: banner-pulse 1.5s infinite;
+/* Page Header */
+.page-header {
+    margin-bottom: 32px;
 }
 
-.killswitch-banner.hidden {
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 4px;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Alert Banner */
+.alert-banner {
+    background: var(--danger-muted);
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.alert-banner.hidden {
     display: none;
 }
 
-.banner-icon {
-    font-size: 1.5em;
+.alert-icon {
+    font-size: 1.25rem;
 }
 
-.banner-text {
+.alert-content {
     flex: 1;
-    font-weight: bold;
-    font-size: 1.1em;
 }
 
-@keyframes banner-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.5); }
-    50% { box-shadow: 0 0 20px 5px rgba(248, 81, 73, 0.3); }
+.alert-title {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--danger);
 }
 
-.control-panel {
-    background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(88, 166, 255, 0.05) 100%);
-    border: 1px solid var(--accent);
+.alert-text {
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    margin-top: 2px;
 }
 
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    padding: 24px;
+}
+
+.stat-card .stat-label {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.stat-card .stat-value {
+    font-size: 2rem;
+    font-weight: 600;
+    margin-top: 8px;
+    letter-spacing: -0.025em;
+}
+
+/* Control Panel */
 .controls-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
 }
 
 .control-item {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 15px;
-    background: var(--bg);
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: var(--bg-primary);
     border-radius: 8px;
-    border: 1px solid var(--border);
-    transition: border-color 0.3s ease;
+    border: 1px solid var(--border-subtle);
 }
 
-.control-item.killswitch-active {
-    border-color: var(--danger);
-    background: rgba(248, 81, 73, 0.1);
-}
-
-.control-label {
+.control-info {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
 }
 
 .control-icon {
-    font-size: 1.5em;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    background: var(--bg-tertiary);
 }
 
-.control-label small {
-    display: block;
+.control-label {
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.control-desc {
     color: var(--text-muted);
-    font-size: 0.85em;
+    font-size: 0.75rem;
+    margin-top: 2px;
 }
 
 .control-help {
-    margin-top: 15px;
-    padding-top: 15px;
-    border-top: 1px solid var(--border);
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .control-help details {
     color: var(--text-muted);
-    font-size: 0.9em;
+    font-size: 0.8125rem;
 }
 
 .control-help summary {
     cursor: pointer;
-    color: var(--accent);
+    color: var(--text-secondary);
+    font-weight: 500;
 }
 
-.control-help p {
-    margin: 8px 0 8px 20px;
+.control-help summary:hover {
+    color: var(--text-primary);
 }
 
-.toggle-btn {
-    min-width: 120px;
-    padding: 10px 20px;
-    font-weight: bold;
-    text-transform: uppercase;
-    font-size: 0.85em;
-    transition: all 0.3s ease;
-    position: relative;
+.help-content {
+    margin-top: 12px;
+    padding-left: 16px;
 }
 
-.toggle-btn:disabled {
-    opacity: 0.6;
-    cursor: wait;
+.help-content p {
+    margin-bottom: 8px;
+    line-height: 1.6;
 }
 
-.toggle-btn.active.danger {
-    background: var(--danger);
-    color: white;
-    animation: pulse-danger 2s infinite;
+/* Responsive */
+@media (max-width: 1024px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
-.toggle-btn.active.success {
-    background: var(--success);
-    color: white;
-}
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
 
-.toggle-btn.active.info {
-    background: var(--accent);
-    color: #0d1117;
-}
+    .controls-grid {
+        grid-template-columns: 1fr;
+    }
 
-.toggle-btn.inactive {
-    background: var(--border);
-    color: var(--text-muted);
-}
-
-/* Confirmation flash effect */
-.toggle-btn.confirmed {
-    animation: confirm-flash 0.5s ease;
-}
-
-@keyframes confirm-flash {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-}
-
-@keyframes pulse-danger {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4); }
-    50% { box-shadow: 0 0 0 10px rgba(248, 81, 73, 0); }
-}
-
-#refresh-indicator {
-    animation: blink 2s infinite;
-}
-
-@keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-}
-
-/* Format disclaimer styles */
-.format-disclaimer {
-    padding: 10px 0;
-}
-
-.format-disclaimer p {
-    margin: 10px 0 10px 20px;
-    line-height: 1.5;
-}
-
-.format-warning {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin: 15px 0 5px 20px;
-    padding: 12px 15px;
-    background: rgba(210, 153, 34, 0.15);
-    border: 1px solid var(--warning);
-    border-radius: 6px;
-    color: var(--warning);
-    font-size: 0.9em;
-}
-
-.format-warning span {
-    font-size: 1.2em;
-}
-
-/* Restart button styles */
-.restart-btn {
-    background: linear-gradient(135deg, var(--warning) 0%, #b45309 100%);
-    color: #0d1117;
-}
-
-.restart-btn:hover {
-    opacity: 0.9;
-}
-
-.restart-btn.restarting {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    .alert-banner {
+        flex-direction: column;
+        text-align: center;
+        gap: 12px;
+    }
 }
 </style>
 
@@ -340,10 +334,10 @@ async function toggleKillswitch() {
     const btn = document.getElementById('killswitch-btn');
     const banner = document.getElementById('killswitch-banner');
     const control = document.getElementById('killswitch-control');
-    
+
     btn.disabled = true;
     btn.querySelector('.toggle-status').textContent = '...';
-    
+
     try {
         const response = await fetch('/api/killswitch', {
             method: 'POST',
@@ -351,34 +345,26 @@ async function toggleKillswitch() {
             body: JSON.stringify({})
         });
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
-            // Verify the state was actually changed by fetching current state
             const verifyResponse = await fetch('/api/killswitch');
             const verifyData = await verifyResponse.json();
-            
-            // Use verified state
             const confirmedState = verifyData.global_paused;
             updateKillswitchUI(confirmedState);
-            
-            // Add confirmation flash
-            btn.classList.add('confirmed');
-            setTimeout(() => btn.classList.remove('confirmed'), 500);
-            
-            // Show prominent feedback
+
             if (confirmedState) {
-                showToast('✅ KILLSWITCH CONFIRMED ACTIVE - All bot responses are now paused', 'warning');
+                showToast('Killswitch activated - All bot responses paused', 'warning');
             } else {
-                showToast('✅ KILLSWITCH CONFIRMED OFF - Bots are now responding normally', 'success');
+                showToast('Killswitch released - Bots responding normally', 'success');
             }
         } else {
-            showToast('⚠️ Killswitch toggle failed - please try again', 'error');
+            showToast('Killswitch toggle failed - please try again', 'error');
         }
     } catch (e) {
-        showToast('❌ Failed to toggle killswitch - check connection', 'error');
+        showToast('Failed to toggle killswitch - check connection', 'error');
         console.error('Killswitch error:', e);
     }
-    
+
     btn.disabled = false;
 }
 
@@ -387,7 +373,7 @@ async function toggleBotInteractions() {
     const btn = document.getElementById('bot-interactions-btn');
     btn.disabled = true;
     btn.querySelector('.toggle-status').textContent = '...';
-    
+
     try {
         const response = await fetch('/api/bot-interactions', {
             method: 'POST',
@@ -395,17 +381,15 @@ async function toggleBotInteractions() {
             body: JSON.stringify({})
         });
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
             updateBotInteractionsUI(data.bot_interactions_paused);
-            btn.classList.add('confirmed');
-            setTimeout(() => btn.classList.remove('confirmed'), 500);
-            showToast(data.bot_interactions_paused ? '✅ Bot-to-bot chat PAUSED' : '✅ Bot-to-bot chat ENABLED', 'success');
+            showToast(data.bot_interactions_paused ? 'Bot-to-bot chat paused' : 'Bot-to-bot chat enabled', 'success');
         }
     } catch (e) {
         showToast('Failed to toggle bot interactions', 'error');
     }
-    
+
     btn.disabled = false;
 }
 
@@ -414,7 +398,7 @@ async function toggleMessageFormat() {
     const btn = document.getElementById('message-format-btn');
     btn.disabled = true;
     btn.querySelector('.toggle-status').textContent = '...';
-    
+
     try {
         const response = await fetch('/api/message-format', {
             method: 'POST',
@@ -422,19 +406,15 @@ async function toggleMessageFormat() {
             body: JSON.stringify({})
         });
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
             updateMessageFormatUI(data.use_single_user);
-            btn.classList.add('confirmed');
-            setTimeout(() => btn.classList.remove('confirmed'), 500);
-            showToast(data.use_single_user
-                ? '✅ Message format: SINGLE-USER (SillyTavern-style)'
-                : '✅ Message format: MULTI-ROLE (system/user/assistant)', 'success');
+            showToast(data.use_single_user ? 'Message format: Single-User' : 'Message format: Multi-Role', 'success');
         }
     } catch (e) {
         showToast('Failed to toggle message format', 'error');
     }
-    
+
     btn.disabled = false;
 }
 
@@ -442,19 +422,16 @@ async function toggleMessageFormat() {
 function updateKillswitchUI(isPaused) {
     const btn = document.getElementById('killswitch-btn');
     const banner = document.getElementById('killswitch-banner');
-    const control = document.getElementById('killswitch-control');
     const status = btn.querySelector('.toggle-status');
-    
+
     if (isPaused) {
-        btn.className = 'btn toggle-btn active danger';
-        status.textContent = 'ACTIVE';
+        btn.className = 'btn btn-danger';
+        status.textContent = 'Active';
         banner.classList.remove('hidden');
-        control.classList.add('killswitch-active');
     } else {
-        btn.className = 'btn toggle-btn inactive';
-        status.textContent = 'INACTIVE';
+        btn.className = 'btn btn-ghost';
+        status.textContent = 'Inactive';
         banner.classList.add('hidden');
-        control.classList.remove('killswitch-active');
     }
 }
 
@@ -462,13 +439,13 @@ function updateKillswitchUI(isPaused) {
 function updateBotInteractionsUI(isPaused) {
     const btn = document.getElementById('bot-interactions-btn');
     const status = btn.querySelector('.toggle-status');
-    
+
     if (isPaused) {
-        btn.className = 'btn toggle-btn inactive';
-        status.textContent = 'PAUSED';
+        btn.className = 'btn btn-ghost';
+        status.textContent = 'Paused';
     } else {
-        btn.className = 'btn toggle-btn active success';
-        status.textContent = 'ENABLED';
+        btn.className = 'btn btn-success';
+        status.textContent = 'Enabled';
     }
 }
 
@@ -476,13 +453,13 @@ function updateBotInteractionsUI(isPaused) {
 function updateMessageFormatUI(isSingleUser) {
     const btn = document.getElementById('message-format-btn');
     const status = btn.querySelector('.toggle-status');
-    
+
     if (isSingleUser) {
-        btn.className = 'btn toggle-btn active info';
-        status.textContent = 'SINGLE-USER';
+        btn.className = 'btn btn-primary';
+        status.textContent = 'Single-User';
     } else {
-        btn.className = 'btn toggle-btn inactive';
-        status.textContent = 'MULTI-ROLE';
+        btn.className = 'btn btn-ghost';
+        status.textContent = 'Multi-Role';
     }
 }
 
@@ -491,43 +468,33 @@ async function refreshStatus() {
     try {
         const response = await fetch('/api/status');
         const data = await response.json();
-        
-        // Update control panel
+
         updateKillswitchUI(data.global_paused);
         updateBotInteractionsUI(data.bot_interactions_paused);
         if (data.use_single_user !== undefined) {
             updateMessageFormatUI(data.use_single_user);
         }
-        
-        // Update bot status table
+
         const table = document.getElementById('bot-status-table');
         if (table && data.bots) {
             table.innerHTML = data.bots.map(bot => `
                 <tr>
                     <td><strong>${bot.name}</strong></td>
-                    <td>${bot.character || 'None'}</td>
+                    <td style="color: var(--text-secondary);">${bot.character || 'None'}</td>
                     <td>
                         ${bot.online
-                            ? '<span class="badge badge-success">● Online</span>'
-                            : '<span class="badge badge-danger">● Offline</span>'}
+                            ? '<span class="badge badge-success"><span class="badge-dot"></span> Online</span>'
+                            : '<span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>'}
                     </td>
                     <td style="color: var(--text-muted);">${bot.last_activity}</td>
                 </tr>
             `).join('');
-        }
-        
-        // Flash the indicator
-        const indicator = document.getElementById('refresh-indicator');
-        if (indicator) {
-            indicator.style.color = 'var(--success)';
-            setTimeout(() => { indicator.style.color = 'var(--text-muted)'; }, 500);
         }
     } catch (e) {
         console.error('Failed to refresh status:', e);
     }
 }
 
-// Start auto-refresh with visibility-based pause
 let statusPollInterval = setInterval(refreshStatus, 5000);
 
 document.addEventListener('visibilitychange', () => {
@@ -542,41 +509,33 @@ document.addEventListener('visibilitychange', () => {
 // Restart bot
 async function restartBot() {
     const btn = document.getElementById('restart-btn');
-    
-    // Confirm restart
+
     if (!confirm('Are you sure you want to restart the bot? This will briefly disconnect all bots.')) {
         return;
     }
-    
+
     btn.disabled = true;
-    btn.querySelector('.toggle-status').textContent = 'RESTARTING...';
-    btn.classList.add('restarting');
-    
+    btn.querySelector('.toggle-status').textContent = 'Restarting...';
+
     try {
         const response = await fetch('/api/restart', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
-            showToast('🔄 Restart initiated. Page will reload in 5 seconds...', 'warning');
-            
-            // Wait and then reload the page
-            setTimeout(() => {
-                location.reload();
-            }, 5000);
+            showToast('Restart initiated. Page will reload in 5 seconds...', 'warning');
+            setTimeout(() => { location.reload(); }, 5000);
         } else {
-            showToast('❌ Restart failed: ' + (data.message || 'Unknown error'), 'error');
+            showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
             btn.disabled = false;
-            btn.querySelector('.toggle-status').textContent = 'RESTART';
-            btn.classList.remove('restarting');
+            btn.querySelector('.toggle-status').textContent = 'Restart';
         }
     } catch (e) {
-        showToast('❌ Failed to restart - check connection', 'error');
+        showToast('Failed to restart - check connection', 'error');
         btn.disabled = false;
-        btn.querySelector('.toggle-status').textContent = 'RESTART';
-        btn.classList.remove('restarting');
+        btn.querySelector('.toggle-status').textContent = 'Restart';
     }
 }
 </script>

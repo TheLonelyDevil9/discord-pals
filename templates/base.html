@@ -1,27 +1,73 @@
-﻿<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Discord Pals{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg: #0d1117;
-            --bg-secondary: #161b22;
-            --border: #30363d;
-            --text: #c9d1d9;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --success: #3fb950;
-            --warning: #d29922;
-            --danger: #f85149;
+        /* ===== Design System: Clean Minimal ===== */
+
+        /* Dark Theme (Default) */
+        :root, [data-theme="dark"] {
+            --bg-primary: #09090b;
+            --bg-secondary: #18181b;
+            --bg-tertiary: #27272a;
+            --border: #3f3f46;
+            --border-subtle: #27272a;
+            --text-primary: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --accent-muted: rgba(59, 130, 246, 0.1);
+            --success: #22c55e;
+            --success-muted: rgba(34, 197, 94, 0.1);
+            --warning: #eab308;
+            --warning-muted: rgba(234, 179, 8, 0.1);
+            --danger: #ef4444;
+            --danger-muted: rgba(239, 68, 68, 0.1);
         }
 
+        /* Light Theme */
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f4f4f5;
+            --bg-tertiary: #e4e4e7;
+            --border: #d4d4d8;
+            --border-subtle: #e4e4e7;
+            --text-primary: #09090b;
+            --text-secondary: #52525b;
+            --text-muted: #71717a;
+            --accent: #2563eb;
+            --accent-muted: rgba(37, 99, 235, 0.1);
+            --success: #16a34a;
+            --success-muted: rgba(22, 163, 74, 0.1);
+            --warning: #ca8a04;
+            --warning-muted: rgba(202, 138, 4, 0.1);
+            --danger: #dc2626;
+            --danger-muted: rgba(220, 38, 38, 0.1);
+        }
+
+        /* ===== Base Styles ===== */
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
+        }
+
+        html {
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+            font-size: 0.875rem;
         }
 
         /* Accessibility: Focus indicators */
@@ -30,168 +76,274 @@
             outline-offset: 2px;
         }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-        }
-
+        /* ===== Layout ===== */
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 32px;
         }
 
+        /* ===== Navigation ===== */
         nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border);
-            padding: 15px 0;
-            margin-bottom: 30px;
-        }
-
-        nav .container {
             display: flex;
             align-items: center;
-            gap: 30px;
+            justify-content: space-between;
+            padding: 0 32px;
+            height: 64px;
+            background: var(--bg-primary);
+            border-bottom: 1px solid var(--border-subtle);
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
 
-        nav .logo {
-            font-size: 1.4em;
-            font-weight: bold;
-            color: var(--accent);
-            text-decoration: none;
+        .nav-brand {
             display: flex;
             align-items: center;
-        }
-
-        nav .logo .logo-img {
-            height: 300px;
-            width: auto;
-            border-radius: 8px;
-        }
-
-        nav a {
-            color: var(--text-muted);
+            gap: 10px;
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--text-primary);
             text-decoration: none;
+        }
+
+        .nav-brand-icon {
+            font-size: 1.25rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 4px;
+        }
+
+        .nav-link {
             padding: 8px 16px;
             border-radius: 6px;
-            transition: all 0.2s;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.875rem;
+            transition: all 0.15s ease;
         }
 
-        nav a:hover,
-        nav a.active {
-            color: var(--text);
-            background: var(--border);
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: var(--bg-secondary);
         }
 
+        .nav-link.active {
+            color: var(--text-primary);
+            background: var(--bg-secondary);
+        }
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-user {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 1rem;
+        }
+
+        .theme-toggle:hover {
+            color: var(--text-primary);
+            border-color: var(--border);
+        }
+
+        /* ===== Cards ===== */
         .card {
             background: var(--bg-secondary);
-            border: 1px solid var(--border);
+            border: 1px solid var(--border-subtle);
             border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 24px;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
         }
 
         .card-title {
-            font-size: 1.1em;
-            margin-bottom: 15px;
-            color: var(--text);
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-primary);
         }
 
+        .card-body {
+            padding: 24px;
+        }
+
+        /* Legacy card support */
+        .card:not(:has(.card-header)):not(:has(.card-body)) {
+            padding: 24px;
+        }
+
+        /* ===== Grid ===== */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
+            gap: 16px;
         }
 
+        /* ===== Stats ===== */
         .stat {
             text-align: center;
-            padding: 20px;
-        }
-
-        .stat-value {
-            font-size: 2.5em;
-            font-weight: bold;
-            color: var(--accent);
+            padding: 24px;
         }
 
         .stat-label {
             color: var(--text-muted);
-            font-size: 0.9em;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-top: 8px;
+            letter-spacing: -0.025em;
+            color: var(--text-primary);
+        }
+
+        /* ===== Badges ===== */
         .badge {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 0.8em;
+            border-radius: 4px;
+            font-size: 0.6875rem;
             font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
         }
 
         .badge-success {
-            background: rgba(63, 185, 80, 0.2);
+            background: var(--success-muted);
             color: var(--success);
         }
 
         .badge-warning {
-            background: rgba(210, 153, 34, 0.2);
+            background: var(--warning-muted);
             color: var(--warning);
         }
 
         .badge-danger {
-            background: rgba(248, 81, 73, 0.2);
+            background: var(--danger-muted);
             color: var(--danger);
         }
 
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* ===== Tables ===== */
         table {
             width: 100%;
             border-collapse: collapse;
         }
 
-        th,
-        td {
-            text-align: left;
-            padding: 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
         th {
+            text-align: left;
+            padding: 12px 24px;
             color: var(--text-muted);
+            font-size: 0.6875rem;
             font-weight: 500;
-            font-size: 0.85em;
             text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: var(--bg-primary);
         }
 
-        pre,
+        td {
+            padding: 16px 24px;
+            font-size: 0.875rem;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        [data-theme="light"] tr:hover td {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        /* Responsive table wrapper */
+        .table-responsive {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* ===== Code ===== */
+        pre, code {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.8125rem;
+        }
+
         code {
-            background: var(--bg);
-            border-radius: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
             padding: 2px 6px;
-            font-family: monospace;
-            font-size: 0.9em;
         }
 
         pre {
-            padding: 15px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 16px;
             overflow-x: auto;
             max-height: 400px;
         }
 
+        pre code {
+            background: none;
+            padding: 0;
+        }
+
+        /* ===== Buttons ===== */
         .btn {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
             padding: 8px 16px;
             border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.8125rem;
             border: none;
             cursor: pointer;
-            font-size: 0.9em;
+            transition: all 0.15s ease;
             text-decoration: none;
-            transition: all 0.2s;
         }
 
         .btn-primary {
             background: var(--accent);
-            color: #0d1117;
+            color: white;
         }
 
         .btn-primary:hover {
@@ -199,12 +351,23 @@
         }
 
         .btn-secondary {
-            background: var(--border);
-            color: var(--text);
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
         }
 
         .btn-secondary:hover {
-            background: var(--text-muted);
+            background: var(--border);
+            color: var(--text-primary);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-success:hover {
+            opacity: 0.9;
         }
 
         .btn-danger {
@@ -213,32 +376,118 @@
         }
 
         .btn-danger:hover {
-            opacity: 0.8;
+            opacity: 0.9;
         }
 
-        .empty {
-            text-align: center;
-            padding: 40px;
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        .btn-ghost:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        /* ===== Forms ===== */
+        input, select, textarea {
+            font-family: inherit;
+            font-size: 0.875rem;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: border-color 0.15s ease;
+            width: 100%;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        input::placeholder, textarea::placeholder {
             color: var(--text-muted);
         }
 
+        label {
+            display: block;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        /* ===== Tabs ===== */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 24px;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.875rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: all 0.15s ease;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            color: var(--text-primary);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* ===== Empty State ===== */
+        .empty {
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--text-muted);
+        }
+
+        /* ===== Toast Notifications ===== */
         .toast-container {
             position: fixed;
-            bottom: 20px;
-            right: 20px;
+            bottom: 24px;
+            right: 24px;
             z-index: 1000;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
         }
 
         .toast {
             padding: 12px 20px;
-            border-radius: 6px;
-            color: white;
-            font-size: 0.9em;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
             animation: toastIn 0.3s ease;
+            max-width: 360px;
         }
 
         .toast.hiding {
@@ -247,52 +496,49 @@
 
         .toast.success {
             background: var(--success);
+            color: white;
         }
 
         .toast.error {
             background: var(--danger);
+            color: white;
         }
 
         .toast.warning {
             background: var(--warning);
-            color: #0d1117;
+            color: #09090b;
         }
 
         @keyframes toastIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
         }
 
         @keyframes toastOut {
-            from {
-                transform: translateX(0);
-                opacity: 1;
-            }
-
-            to {
-                transform: translateX(100%);
-                opacity: 0;
-            }
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
         }
 
+        /* ===== Modal ===== */
         .confirm-modal {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(0, 0, 0, 0.6);
+            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(4px);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 2000;
+            animation: modalFadeIn 0.2s ease;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
 
         .confirm-modal-content {
@@ -302,109 +548,201 @@
             padding: 24px;
             max-width: 400px;
             width: 90%;
+            animation: modalSlideIn 0.2s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
         }
 
         .confirm-modal h3 {
-            margin-bottom: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 8px;
         }
 
         .confirm-modal p {
-            color: var(--text-muted);
-            margin-bottom: 20px;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 24px;
+            line-height: 1.6;
         }
 
         .confirm-modal-buttons {
             display: flex;
-            gap: 10px;
+            gap: 12px;
             justify-content: flex-end;
         }
 
-        @media (max-width: 768px) {
-            nav .container {
-                flex-wrap: wrap;
-                gap: 10px;
+        /* ===== Live Indicator ===== */
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--success);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 1024px) {
+            .container {
+                padding: 24px;
             }
 
-            nav .logo {
+            nav {
+                padding: 0 24px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            nav {
+                flex-wrap: wrap;
+                height: auto;
+                padding: 16px;
+                gap: 12px;
+            }
+
+            .nav-brand {
                 width: 100%;
-                text-align: center;
+                justify-content: center;
+            }
+
+            .nav-links {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+
+            .nav-right {
+                width: 100%;
+                justify-content: center;
             }
 
             .grid {
                 grid-template-columns: 1fr;
             }
-        }
 
-        /* Responsive table wrapper */
-        .table-responsive {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            margin-bottom: 1rem;
-        }
-
-        /* Tablet breakpoint */
-        @media (max-width: 1024px) {
             .container {
-                padding: 15px;
+                padding: 16px;
             }
 
-            .card {
-                padding: 15px;
+            th, td {
+                padding: 12px 16px;
             }
         }
 
-        /* Small phone breakpoint */
         @media (max-width: 480px) {
             .container {
-                padding: 10px;
-            }
-
-            nav .container {
-                padding: 10px;
-            }
-
-            .card {
                 padding: 12px;
-                border-radius: 6px;
+            }
+
+            .card-body, .card:not(:has(.card-header)):not(:has(.card-body)) {
+                padding: 16px;
             }
 
             .btn {
                 padding: 8px 12px;
-                font-size: 0.9em;
+                font-size: 0.8125rem;
             }
 
             h1 {
-                font-size: 1.5em;
+                font-size: 1.5rem;
             }
         }
     </style>
+    <script>
+        // Theme initialization (runs before page renders to prevent flash)
+        (function() {
+            const saved = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = saved || (prefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
 </head>
 
 <body>
     <div class="toast-container" id="toast-container"></div>
     <nav>
-        <div class="container">
-            <a href="/" class="logo"><img src="/static/banner.jpg" alt="Discord Pals" class="logo-img"
-                    onerror="this.style.display='none';this.nextSibling.style.display='inline'"><span
-                    style="display:none">Discord Pals</span></a>
-            <a href="/" {% if request.path=='/' %}class="active" {% endif %}>Dashboard</a>
-            <a href="/characters" {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in
-                request.path %}class="active" {% endif %}>Characters</a>
-            <a href="/memories" {% if request.path=='/memories' %}class="active" {% endif %}>Memories</a>
-            <a href="/channels" {% if request.path=='/channels' %}class="active" {% endif %}>Channels</a>
-            <a href="/config" {% if request.path=='/config' or request.path=='/settings' %}class="active" {% endif
-                %}>Config</a>
-            <a href="/logs" {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context'
-                %}class="active" {% endif %}>Logs</a>
+        <a href="/" class="nav-brand">
+            <span class="nav-brand-icon">🤖</span>
+            <span>Discord Pals</span>
+        </a>
+        <div class="nav-links">
+            <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}">Dashboard</a>
+            <a href="/characters" class="nav-link {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}active{% endif %}">Characters</a>
+            <a href="/memories" class="nav-link {% if request.path=='/memories' %}active{% endif %}">Memories</a>
+            <a href="/channels" class="nav-link {% if request.path=='/channels' %}active{% endif %}">Channels</a>
+            <a href="/config" class="nav-link {% if request.path=='/config' or request.path=='/settings' %}active{% endif %}">Config</a>
+            <a href="/logs" class="nav-link {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}active{% endif %}">Logs</a>
+        </div>
+        <div class="nav-right">
             {% if is_logged_in %}
-            <a href="/logout" style="margin-left: auto; color: var(--text-muted);">Logout</a>
+            <span class="nav-user">admin</span>
+            <a href="/logout" class="nav-link">Logout</a>
             {% endif %}
+            <button type="button" class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                <span id="theme-icon">🌙</span>
+            </button>
         </div>
     </nav>
     <main class="container">{% block content %}{% endblock %}</main>
     <script>
-        function showToast(msg, type) { type = type || 'success'; var c = document.getElementById('toast-container'), t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg; c.appendChild(t); setTimeout(function () { t.classList.add('hiding'); setTimeout(function () { t.remove() }, 300) }, 3000) }
-        function showConfirm(title, msg, cb) { var m = document.createElement('div'); m.className = 'confirm-modal'; m.innerHTML = '<div class="confirm-modal-content"><h3>' + title + '</h3><p>' + msg + '</p><div class="confirm-modal-buttons"><button class="btn btn-secondary" id="cancel-btn">Cancel</button><button class="btn btn-danger" id="cfm">Delete</button></div></div>'; document.body.appendChild(m); m.querySelector('#cancel-btn').onclick = function () { m.remove() }; m.querySelector('#cfm').onclick = function () { m.remove(); cb() }; m.onclick = function (e) { if (e.target === m) m.remove() } }
+        function showToast(msg, type) {
+            type = type || 'success';
+            var c = document.getElementById('toast-container');
+            var t = document.createElement('div');
+            t.className = 'toast ' + type;
+            t.textContent = msg;
+            c.appendChild(t);
+            setTimeout(function() {
+                t.classList.add('hiding');
+                setTimeout(function() { t.remove(); }, 300);
+            }, 3000);
+        }
+
+        function showConfirm(title, msg, cb) {
+            var m = document.createElement('div');
+            m.className = 'confirm-modal';
+            m.innerHTML = '<div class="confirm-modal-content"><h3>' + title + '</h3><p>' + msg + '</p><div class="confirm-modal-buttons"><button class="btn btn-secondary" id="cancel-btn">Cancel</button><button class="btn btn-danger" id="cfm">Delete</button></div></div>';
+            document.body.appendChild(m);
+            m.querySelector('#cancel-btn').onclick = function() { m.remove(); };
+            m.querySelector('#cfm').onclick = function() { m.remove(); cb(); };
+            m.onclick = function(e) { if (e.target === m) m.remove(); };
+        }
+
+        function toggleTheme() {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            updateThemeIcon(next);
+        }
+
+        function updateThemeIcon(theme) {
+            var icon = document.getElementById('theme-icon');
+            if (icon) {
+                icon.textContent = theme === 'dark' ? '🌙' : '☀️';
+            }
+        }
+
+        // Update icon on load
+        updateThemeIcon(document.documentElement.getAttribute('data-theme'));
     </script>
 </body>
 

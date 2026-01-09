@@ -1,117 +1,230 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Discord Pals</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg: #0d1117;
-            --bg-secondary: #161b22;
-            --border: #30363d;
-            --text: #c9d1d9;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --danger: #f85149;
+        /* Dark Theme (Default) */
+        :root, [data-theme="dark"] {
+            --bg-primary: #09090b;
+            --bg-secondary: #18181b;
+            --bg-tertiary: #27272a;
+            --border: #3f3f46;
+            --border-subtle: #27272a;
+            --text-primary: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --danger: #ef4444;
+            --danger-muted: rgba(239, 68, 68, 0.1);
         }
+
+        /* Light Theme */
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f4f4f5;
+            --bg-tertiary: #e4e4e7;
+            --border: #d4d4d8;
+            --border-subtle: #e4e4e7;
+            --text-primary: #09090b;
+            --text-secondary: #52525b;
+            --text-muted: #71717a;
+            --accent: #2563eb;
+            --danger: #dc2626;
+            --danger-muted: rgba(220, 38, 38, 0.1);
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html {
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            line-height: 1.5;
         }
-        .login-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 40px;
+
+        .login-container {
             width: 100%;
             max-width: 400px;
-            margin: 20px;
+            padding: 20px;
         }
-        .login-card h1 {
-            text-align: center;
-            margin-bottom: 10px;
-            color: var(--accent);
+
+        .login-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 40px;
         }
-        .login-card p {
+
+        .login-header {
             text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .login-icon {
+            font-size: 2.5rem;
+            margin-bottom: 16px;
+        }
+
+        .login-header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            letter-spacing: -0.025em;
+        }
+
+        .login-header p {
             color: var(--text-muted);
-            margin-bottom: 30px;
-            font-size: 0.9em;
+            font-size: 0.875rem;
         }
+
         .form-group {
             margin-bottom: 20px;
         }
+
         .form-group label {
             display: block;
-            margin-bottom: 8px;
-            color: var(--text-muted);
-            font-size: 0.9em;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            font-weight: 500;
         }
+
         .form-group input {
             width: 100%;
-            padding: 12px 15px;
-            background: var(--bg);
+            padding: 10px 14px;
+            background: var(--bg-primary);
             border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-size: 1em;
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.875rem;
+            transition: border-color 0.15s ease;
         }
+
         .form-group input:focus {
             outline: none;
             border-color: var(--accent);
         }
+
+        .form-group input::placeholder {
+            color: var(--text-muted);
+        }
+
         .btn {
             width: 100%;
-            padding: 12px;
+            padding: 10px 16px;
             background: var(--accent);
-            color: #0d1117;
+            color: white;
             border: none;
             border-radius: 6px;
-            font-size: 1em;
+            font-family: inherit;
+            font-size: 0.875rem;
             font-weight: 500;
             cursor: pointer;
-            transition: opacity 0.2s;
+            transition: opacity 0.15s ease;
         }
+
         .btn:hover {
             opacity: 0.9;
         }
+
         .error {
-            background: rgba(248, 81, 73, 0.1);
+            background: var(--danger-muted);
             border: 1px solid var(--danger);
             color: var(--danger);
-            padding: 12px;
-            border-radius: 6px;
-            margin-bottom: 20px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
             text-align: center;
-            font-size: 0.9em;
+            font-size: 0.8125rem;
+            font-weight: 500;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 1.125rem;
+        }
+
+        .theme-toggle:hover {
+            color: var(--text-primary);
+            border-color: var(--border);
         }
     </style>
+    <script>
+        (function() {
+            const saved = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = saved || (prefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
 </head>
 <body>
-    <div class="login-card">
-        <h1>Discord Pals</h1>
-        <p>Dashboard Login</p>
-        {% if error %}
-        <div class="error">{{ error }}</div>
-        {% endif %}
-        <form method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autofocus>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="login-icon">🤖</div>
+                <h1>Discord Pals</h1>
+                <p>Sign in to your dashboard</p>
             </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required>
-            </div>
-            <button type="submit" class="btn">Login</button>
-        </form>
+            {% if error %}
+            <div class="error">{{ error }}</div>
+            {% endif %}
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" placeholder="Enter your username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                </div>
+                <button type="submit" class="btn">Sign in</button>
+            </form>
+        </div>
     </div>
+
+    <button type="button" class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        <span id="theme-icon">🌙</span>
+    </button>
+
+    <script>
+        function toggleTheme() {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            document.getElementById('theme-icon').textContent = next === 'dark' ? '🌙' : '☀️';
+        }
+        document.getElementById('theme-icon').textContent =
+            document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙' : '☀️';
+    </script>
 </body>
 </html>

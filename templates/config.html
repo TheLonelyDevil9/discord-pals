@@ -1,270 +1,316 @@
 {% extends "base.html" %}
 
-{% block title %}Runtime Config - Discord Pals{% endblock %}
+{% block title %}Configuration - Discord Pals{% endblock %}
 
 {% block content %}
-<h1>⚙️ Runtime Configuration</h1>
+<div class="page-header">
+    <h1 class="page-title">Configuration</h1>
+    <p class="page-subtitle">Runtime settings and bot configuration</p>
+</div>
 
+<!-- Core Settings -->
 <div class="card">
-    <h2>Settings</h2>
-    <form id="config-form">
-        <div class="form-group">
-            <label for="history_limit">Total History Limit (messages sent to LLM)</label>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
-                    value="{{ config.history_limit }}"
-                    oninput="document.getElementById('history_val').textContent = this.value">
-                <span id="history_val" style="min-width: 40px;">{{ config.history_limit }}</span>
+    <div class="card-header">
+        <span class="card-title">Core Settings</span>
+    </div>
+    <div class="card-body">
+        <form id="config-form">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="history_limit">History Limit</label>
+                    <div class="slider-row">
+                        <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
+                            value="{{ config.history_limit }}"
+                            oninput="document.getElementById('history_val').textContent = this.value"
+                            title="Total history limit">
+                        <span class="slider-val" id="history_val">{{ config.history_limit }}</span>
+                    </div>
+                    <p class="form-hint">Total messages sent to LLM (includes history + immediate)</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="immediate_message_count">Immediate Messages</label>
+                    <div class="slider-row">
+                        <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
+                            step="1" value="{{ config.immediate_message_count or 5 }}"
+                            oninput="document.getElementById('immediate_val').textContent = this.value"
+                            title="Immediate message count">
+                        <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
+                    </div>
+                    <p class="form-hint">Priority messages placed after chatroom context</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="batch_timeout">Batch Timeout</label>
+                    <div class="slider-row">
+                        <input type="range" id="batch_timeout" name="batch_timeout" min="5" max="30" step="1"
+                      value="{{ config.batch_timeout }}"
+                            oninput="document.getElementById('batch_val').textContent = this.value + 's'"
+                            title="Batch collection time">
+                        <span class="slider-val" id="batch_val">{{ config.batch_timeout }}s</span>
+                    </div>
+                    <p class="form-hint">Time to wait for follow-up messages before responding</p>
+                </div>
+
+                {% if providers %}
+                <div class="form-group">
+                    <label for="active_provider">Active Provider</label>
+                    <select id="active_provider" name="active_provider" title="Select AI provider">
+                        <option value="">Auto (first available)</option>
+                        {% for provider in providers %}
+                        <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
             </div>
-            <small>Current: {{ config.history_limit }} messages (includes history + immediate)</small>
-        </div>
 
-        <div class="form-group">
-            <label for="immediate_message_count">Immediate Messages (priority focus)</label>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
-                    step="1" value="{{ config.immediate_message_count or 5 }}"
-                    oninput="document.getElementById('immediate_val').textContent = this.value">
-                <span id="immediate_val" style="min-width: 40px;">{{ config.immediate_message_count or 5 }}</span>
-            </div>
-            <small>Last N messages placed after chatroom context for maximum LLM attention</small>
-        </div>
-
-        <div class="form-group">
-            <label for="batch_timeout">Batch Collection Time (seconds)</label>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="batch_timeout" name="batch_timeout" min="5" max="30" step="1"
-                    value="{{ config.batch_timeout }}"
-                    oninput="document.getElementById('batch_val').textContent = this.value + 's'">
-                <span id="batch_val" style="min-width: 40px;">{{ config.batch_timeout }}s</span>
-            </div>
-            <small>Time to wait for follow-up messages before responding</small>
-        </div>
-
-        {% if providers %}
-        <div class="form-group">
-            <label for="active_provider">Active Provider</label>
-            <select id="active_provider" name="active_provider">
-                <option value="">Auto (use first available)</option>
-                {% for provider in providers %}
-                <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider
-                    }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        {% endif %}
-
-        <button type="submit" class="btn btn-primary">Save Settings</button>
-    </form>
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+        </form>
+    </div>
 </div>
 
 {% if bots %}
+<!-- Character Switcher -->
 <div class="card">
-    <h2>Character Switcher</h2>
-    {% for bot in bots %}
-    <div class="bot-row">
-        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-        <strong>{{ bot.name }}</strong>
-        <span class="text-muted">currently:</span>
-        <span>{{ bot.character }}</span>
-        <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
-            {% for char in characters %}
-            <option value="{{ char }}" {% if bot.character==char %}selected{% endif %}>{{ char }}</option>
-            {% endfor %}
-        </select>
-        <button class="btn btn-small"
-            onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value)">Switch</button>
+    <div class="card-header">
+        <span class="card-title">Character Switcher</span>
     </div>
-    {% endfor %}
+    <div class="card-body">
+        {% for bot in bots %}
+        <div class="bot-row">
+            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+            <div class="bot-info">
+                <span class="bot-name">{{ bot.name }}</span>
+                <span class="bot-character">{{ bot.character }}</span>
+            </div>
+            <div class="bot-actions">
+                <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
+                    {% for char in characters %}
+                    <option value="{{ char }}" {% if bot.character==char %}selected{% endif %}>{{ char }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-ghost btn-sm"
+                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value)">Switch</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
 </div>
 
+<!-- Autonomous Channels -->
 <div class="card">
-    <h2>🤖 Autonomous Channels</h2>
-    {% for bot in bots %}
-    <div class="auto-section">
-        <h3>{{ bot.name }}</h3>
-        {% if bot.auto_channels %}
-        <ul class="channel-list">
-            {% for ch in bot.auto_channels %}
-            <li><span class="channel-name">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-muted">No autonomous channels enabled</p>
-        {% endif %}
+    <div class="card-header">
+        <span class="card-title">Autonomous Channels</span>
     </div>
-    {% endfor %}
+    <div class="card-body">
+        {% for bot in bots %}
+        <div class="auto-section">
+            <div class="auto-section-header">{{ bot.name }}</div>
+            {% if bot.auto_channels %}
+            <ul class="channel-list">
+                {% for ch in bot.auto_channels %}
+                <li><span class="channel-tag">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted">No autonomous channels enabled</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
 </div>
 
+<!-- Name Trigger Settings -->
 <div class="card">
-    <h2>🏷️ Name Trigger Settings</h2>
-    <p class="text-muted" style="margin-bottom: 15px;">Bot responds when its name/nickname is mentioned (without
-        @mention)</p>
+    <div class="card-header">
+        <span class="card-title">Name Triggers</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
 
-    <div class="form-group">
-        <label for="name_trigger_chance">Response Chance (All Bots)</label>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
-                value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
-                oninput="document.getElementById('name_chance_val').textContent = this.value + '%'">
-            <span id="name_chance_val" style="min-width: 50px;">{{ ((config.name_trigger_chance or 1.0) * 100) | int
-                }}%</span>
+        <div class="form-group">
+            <label for="name_trigger_chance">Response Chance</label>
+            <div class="slider-row">
+                <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
+                    value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
+                    oninput="document.getElementById('name_chance_val').textContent = this.value + '%'"
+                    title="Name trigger response chance">
+                <span class="slider-val" id="name_chance_val">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+            </div>
+            <p class="form-hint">Chance to respond when bot name is mentioned</p>
         </div>
-        <small>Chance to respond when bot name, username, or character name is mentioned</small>
-    </div>
 
-    <h3 style="margin-top: 20px;">Per-Bot Nicknames</h3>
-    <small class="text-muted">Comma-separated list of additional names each bot responds to</small>
-    {% for bot in bots %}
-    <div class="bot-row" style="margin-top: 10px;">
-        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-        <strong>{{ bot.name }}</strong>
-        <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
-            placeholder="e.g., bestie, buddy"
-            style="flex: 1; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); margin-left: 10px;">
-        <button class="btn btn-small" onclick="saveNicknames('{{ bot.name }}')">Save</button>
-    </div>
-    {% endfor %}
+        <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
 
-    <button type="button" class="btn btn-primary" style="margin-top: 15px;" onclick="saveNameTriggerSettings()">Save
-        Chance</button>
+        <div class="section-divider"></div>
+
+        <h4 class="subsection-title">Per-Bot Nicknames</h4>
+        <p class="form-hint" style="margin-bottom: 16px;">Comma-separated list of additional names each bot responds to</p>
+
+        {% for bot in bots %}
+        <div class="bot-row compact">
+            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+            <span class="bot-name">{{ bot.name }}</span>
+            <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
+                placeholder="e.g., bestie, buddy" title="Nicknames for {{ bot.name }}">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="saveNicknames('{{ bot.name }}')">Save</button>
+        </div>
+        {% endfor %}
+    </div>
 </div>
 
+<!-- Bot-on-Bot Fall-off -->
 <div class="card">
-    <h2>🤖 Bot-on-Bot Fall-off</h2>
-    <p class="text-muted" style="margin-bottom: 15px;">Gradually reduce response probability in bot-to-bot conversations to emphasize human interactions</p>
-
-    <div class="form-group">
-        <label>
-            <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
-                onchange="saveFalloffSettings()">
-            Enable Bot Fall-off
-        </label>
-        <small>When enabled, bots gradually stop responding to each other after consecutive exchanges</small>
+    <div class="card-header">
+        <span class="card-title">Bot-on-Bot Fall-off</span>
     </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Gradually reduce response probability in bot-to-bot conversations</p>
 
-    <div class="form-group">
-        <label for="bot_falloff_base_chance">Base Response Chance</label>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="range" id="bot_falloff_base_chance" name="bot_falloff_base_chance" min="0" max="100" step="5"
-                value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
-                oninput="document.getElementById('base_chance_val').textContent = this.value + '%'">
-            <span id="base_chance_val" style="min-width: 50px;">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
+                    onchange="saveFalloffSettings()">
+                <span>Enable Bot Fall-off</span>
+            </label>
+            <p class="form-hint">Bots gradually stop responding to each other after consecutive exchanges</p>
         </div>
-        <small>Initial probability of responding to another bot (first message)</small>
-    </div>
 
-    <div class="form-group">
-        <label for="bot_falloff_decay_rate">Decay Rate</label>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="range" id="bot_falloff_decay_rate" name="bot_falloff_decay_rate" min="0" max="50" step="5"
-                value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
-                oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'">
-            <span id="decay_rate_val" style="min-width: 50px;">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
+        <div class="settings-grid">
+            <div class="form-group">
+                <label for="bot_falloff_base_chance">Base Chance</label>
+                <div class="slider-row">
+                    <input type="range" id="bot_falloff_base_chance" min="0" max="100" step="5"
+                        value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
+                        oninput="document.getElementById('base_chance_val').textContent = this.value + '%'"
+                        title="Base response chance">
+                    <span class="slider-val" id="base_chance_val">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
+                </div>
+                <p class="form-hint">Initial probability for first message</p>
+            </div>
+
+            <div class="form-group">
+                <label for="bot_falloff_decay_rate">Decay Rate</label>
+                <div class="slider-row">
+                    <input type="range" id="bot_falloff_decay_rate" min="0" max="50" step="5"
+                        value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
+                        oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'"
+                        title="Decay rate per message">
+                    <span class="slider-val" id="decay_rate_val">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
+                </div>
+                <p class="form-hint">Drop per consecutive bot message</p>
+            </div>
+
+            <div class="form-group">
+                <label for="bot_falloff_min_chance">Minimum Chance</label>
+                <div class="slider-row">
+                    <input type="range" id="bot_falloff_min_chance" min="0" max="20" step="1"
+                        value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
+                        oninput="document.getElementById('min_chance_val').textContent = this.value + '%'"
+                        title="Minimum response chance">
+                    <span class="slider-val" id="min_chance_val">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
+                </div>
+                <p class="form-hint">Floor probability</p>
+            </div>
+
+            <div class="form-group">
+                <label for="bot_falloff_hard_limit">Hard Limit</label>
+                <div class="slider-row">
+                    <input type="range" id="bot_falloff_hard_limit" min="3" max="25" step="1"
+                        value="{{ config.bot_falloff_hard_limit or 10 }}"
+                        oninput="document.getElementById('hard_limit_val').textContent = this.value"
+                        title="Hard message limit">
+                    <span class="slider-val" id="hard_limit_val">{{ config.bot_falloff_hard_limit or 10 }}</span>
+                </div>
+                <p class="form-hint">Stop responding after this many bot messages</p>
+            </div>
         </div>
-        <small>How much probability drops per consecutive bot message</small>
-    </div>
 
-    <div class="form-group">
-        <label for="bot_falloff_min_chance">Minimum Chance</label>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="range" id="bot_falloff_min_chance" name="bot_falloff_min_chance" min="0" max="20" step="1"
-                value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
-                oninput="document.getElementById('min_chance_val').textContent = this.value + '%'">
-            <span id="min_chance_val" style="min-width: 50px;">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
-        </div>
-        <small>Floor probability (always has at least this chance to respond)</small>
+        <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
     </div>
-
-    <div class="form-group">
-        <label for="bot_falloff_hard_limit">Hard Limit (messages)</label>
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="range" id="bot_falloff_hard_limit" name="bot_falloff_hard_limit" min="3" max="25" step="1"
-                value="{{ config.bot_falloff_hard_limit or 10 }}"
-                oninput="document.getElementById('hard_limit_val').textContent = this.value">
-            <span id="hard_limit_val" style="min-width: 40px;">{{ config.bot_falloff_hard_limit or 10 }}</span>
-        </div>
-        <small>After this many consecutive bot messages, stop responding entirely (resets when human speaks)</small>
-    </div>
-
-    <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
 </div>
 
+<!-- Debug Settings -->
 <div class="card">
-    <h2>🔧 Debug Settings</h2>
-
-    <div class="form-group">
-        <label>
-            <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
-                onchange="toggleRawLogging(this.checked)">
-            Enable Raw Generation Logging
-        </label>
-        <small>Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</small>
+    <div class="card-header">
+        <span class="card-title">Debug Settings</span>
+    </div>
+    <div class="card-body">
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
+                    onchange="toggleRawLogging(this.checked)">
+                <span>Enable Raw Generation Logging</span>
+            </label>
+            <p class="form-hint">Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</p>
+        </div>
     </div>
 </div>
 {% endif %}
 
 <!-- Export/Import -->
 <div class="card">
-    <h2>📦 Export / Import Configuration</h2>
-    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-        <a href="/settings/export" class="btn btn-primary">⬇️ Export All Config</a>
-        <form action="/settings/import" method="post" enctype="multipart/form-data" style="display: flex; gap: 10px; align-items: center;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="file" name="config_zip" accept=".zip" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px; border-radius: 4px;">
-            <button type="submit" class="btn btn-secondary">⬆️ Import</button>
-        </form>
-        <span style="color: var(--text-muted); font-size: 0.85em;">Export/import providers.json, bots.json, autonomous.json</span>
+    <div class="card-header">
+        <span class="card-title">Export / Import</span>
+    </div>
+    <div class="card-body">
+        <div class="export-import-row">
+            <a href="/settings/export" class="btn btn-primary">Export Config</a>
+            <form action="/settings/import" method="post" enctype="multipart/form-data" class="import-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="file" name="config_zip" accept=".zip" title="Select config ZIP file">
+                <button type="submit" class="btn btn-ghost">Import</button>
+            </form>
+        </div>
+        <p class="form-hint">Export/import providers.json, bots.json, autonomous.json</p>
     </div>
 </div>
 
 <!-- JSON Configuration Editors -->
 <div class="card">
-    <h2>📝 Configuration Files</h2>
-    <p style="color: var(--text-muted); margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a
-        restart to take effect.</p>
+    <div class="card-header">
+        <span class="card-title">Configuration Files</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a restart.</p>
 
-    <!-- Providers Tab -->
-    <details class="config-editor">
-        <summary>providers.json - AI Provider Settings</summary>
-        <form action="/settings/providers/save" method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea name="content" class="json-editor" spellcheck="false">{{ providers_raw }}</textarea>
-            <div class="editor-actions">
-                <button type="submit" class="btn btn-primary">Save Providers</button>
-                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
-                    JSON</button>
-            </div>
-        </form>
-    </details>
+        <details class="config-editor">
+            <summary>providers.json</summary>
+            <form action="/settings/providers/save" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <textarea name="content" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
+                <div class="editor-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                </div>
+            </form>
+        </details>
 
-    <!-- Bots Tab -->
-    <details class="config-editor">
-        <summary>bots.json - Multi-Bot Configuration</summary>
-        <form action="/settings/bots/save" method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea name="content" class="json-editor" spellcheck="false">{{ bots_raw }}</textarea>
-            <div class="editor-actions">
-                <button type="submit" class="btn btn-primary">Save Bots</button>
-                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
-                    JSON</button>
-            </div>
-        </form>
-    </details>
+        <details class="config-editor">
+            <summary>bots.json</summary>
+            <form action="/settings/bots/save" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <textarea name="content" class="json-editor" spellcheck="false" title="Bots JSON configuration">{{ bots_raw }}</textarea>
+                <div class="editor-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                </div>
+            </form>
+        </details>
 
-    <!-- Autonomous Tab -->
-    <details class="config-editor">
-        <summary>autonomous.json - Autonomous Mode Settings</summary>
-        <form action="/settings/autonomous/save" method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea name="content" class="json-editor" spellcheck="false">{{ autonomous_raw }}</textarea>
-            <div class="editor-actions">
-                <button type="submit" class="btn btn-primary">Save Autonomous</button>
-                <button type="button" class="btn btn-secondary" onclick="formatJSON(this.form.content)">Format
-                    JSON</button>
-            </div>
-        </form>
-    </details>
+        <details class="config-editor">
+            <summary>autonomous.json</summary>
+            <form action="/settings/autonomous/save" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <textarea name="content" class="json-editor" spellcheck="false" title="Autonomous JSON configuration">{{ autonomous_raw }}</textarea>
+                <div class="editor-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                </div>
+            </form>
+        </details>
+    </div>
 </div>
 
 {% if message %}
@@ -275,313 +321,512 @@
 {% endif %}
 
 <style>
-    .form-group {
-        margin-bottom: 20px;
-    }
+/* Page Header */
+.page-header {
+    margin-bottom: 32px;
+}
 
-    .form-group label {
-        display: block;
-        margin-bottom: 5px;
-        font-weight: 500;
-    }
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 4px;
+}
 
-    .form-group small {
-        color: var(--text-muted);
-        margin-top: 5px;
-        display: block;
-    }
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
 
-    input[type="range"] {
-        flex: 1;
-        max-width: 300px;
-    }
+/* Settings Grid */
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+    margin-bottom: 24px;
+}
 
-    select {
-        padding: 8px 12px;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        color: var(--text);
-    }
+/* Form Elements */
+.form-group {
+    margin-bottom: 20px;
+}
 
-    .status-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-    }
+.form-group:last-child {
+    margin-bottom: 0;
+}
 
-    .status-dot.online {
-        background: var(--success);
-    }
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
 
-    .status-dot.offline {
-        background: var(--danger);
-    }
+.form-hint {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-top: 6px;
+}
 
-    .btn-small {
-        padding: 6px 12px;
-        font-size: 0.9em;
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.slider-val {
+    min-width: 48px;
+    text-align: right;
+    font-weight: 500;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+input[type="range"] {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    outline: none;
+    -webkit-appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+select {
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+}
+
+select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Checkbox */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+}
+
+.checkbox-label span {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Bot Row */
+.bot-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.bot-row:last-child {
+    margin-bottom: 0;
+}
+
+.bot-row.compact {
+    padding: 10px 12px;
+}
+
+.bot-row.compact input[type="text"] {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+}
+
+.bot-row.compact input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.online {
+    background: var(--success);
+}
+
+.status-dot.offline {
+    background: var(--text-muted);
+}
+
+.bot-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bot-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.bot-character {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.bot-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Auto Section */
+.auto-section {
+    padding: 16px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.auto-section:last-child {
+    margin-bottom: 0;
+}
+
+.auto-section-header {
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 12px;
+    font-size: 0.875rem;
+}
+
+.channel-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.channel-list li {
+    padding: 6px 0;
+    font-size: 0.875rem;
+}
+
+.channel-tag {
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.text-muted {
+    color: var(--text-muted);
+}
+
+/* Section Divider */
+.section-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 24px 0;
+}
+
+.subsection-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+/* Export/Import */
+.export-import-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.import-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.import-form input[type="file"] {
+    padding: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+}
+
+/* JSON Editor */
+.config-editor {
+    margin-bottom: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.config-editor:last-child {
+    margin-bottom: 0;
+}
+
+.config-editor summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    background: var(--bg-primary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.config-editor summary:hover {
+    background: var(--bg-tertiary);
+}
+
+.config-editor[open] summary {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.config-editor form {
+    padding: 16px;
+}
+
+.json-editor {
+    width: 100%;
+    min-height: 250px;
+    max-height: 400px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    resize: vertical;
+    tab-size: 2;
+    white-space: pre;
+    overflow-x: auto;
+}
+
+.json-editor:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.editor-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+}
+
+/* Button sizes */
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .settings-grid {
+        grid-template-columns: 1fr;
     }
 
     .bot-row {
-        display: flex;
-        align-items: center;
-        gap: 15px;
-        margin-bottom: 15px;
-        padding: 10px;
-        background: var(--bg);
-        border-radius: 8px;
-    }
-
-    .bot-row select {
-        margin-left: auto;
-    }
-
-    .text-muted {
-        color: var(--text-muted);
-    }
-
-    .auto-section {
-        margin-bottom: 20px;
-        padding: 15px;
-        background: var(--bg);
-        border-radius: 8px;
-    }
-
-    .auto-section h3 {
-        margin-bottom: 10px;
-        color: var(--accent);
-    }
-
-    .channel-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }
-
-    .channel-list li {
-        padding: 5px 0;
-    }
-
-    .channel-name {
-        color: var(--accent);
-        font-weight: 500;
-    }
-
-    .slider-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .slider-val {
-        min-width: 40px;
-    }
-
-    /* JSON Editor Styles */
-    .config-editor {
-        margin-bottom: 15px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
-    }
-
-    .config-editor summary {
-        cursor: pointer;
-        padding: 12px 15px;
-        background: var(--bg);
-        font-weight: 500;
-        -webkit-user-select: none;
-        user-select: none;
-        transition: background 0.2s;
-    }
-
-    .config-editor summary:hover {
-        background: var(--bg-hover, rgba(255,255,255,0.05));
-    }
-
-    .config-editor[open] summary {
-        border-bottom: 1px solid var(--border);
-    }
-
-    .config-editor form {
-        padding: 15px;
-    }
-
-    .json-editor {
-        width: 100%;
-        min-height: 300px;
-        max-height: 500px;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 13px;
-        line-height: 1.5;
-        background: var(--bg);
-        color: var(--text);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 12px;
-        resize: vertical;
-        tab-size: 2;
-        white-space: pre;
-        overflow-wrap: normal;
-        overflow-x: auto;
-    }
-
-    .json-editor:focus {
-        outline: none;
-        border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 99, 102, 241), 0.2);
-    }
-
-    .editor-actions {
-        margin-top: 12px;
-        display: flex;
-        gap: 10px;
         flex-wrap: wrap;
     }
 
-    .btn-secondary {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        color: var(--text);
+    .bot-actions {
+        width: 100%;
+        margin-top: 8px;
     }
 
-    .btn-secondary:hover {
-        background: var(--bg-hover, rgba(255,255,255,0.1));
+    .export-import-row {
+        flex-direction: column;
+        align-items: stretch;
     }
+
+    .import-form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
 </style>
 
 <script>
-    // Format JSON in textarea with proper indentation
-    function formatJSON(textarea) {
-        try {
-            const obj = JSON.parse(textarea.value);
-            textarea.value = JSON.stringify(obj, null, 2);
-            showToast('JSON formatted successfully', 'success');
-        } catch (e) {
-            showToast('Invalid JSON: ' + e.message, 'error');
-        }
+// Format JSON in textarea
+function formatJSON(textarea) {
+    try {
+        const obj = JSON.parse(textarea.value);
+        textarea.value = JSON.stringify(obj, null, 2);
+        showToast('JSON formatted', 'success');
+    } catch (e) {
+        showToast('Invalid JSON: ' + e.message, 'error');
     }
+}
 
-    // Handle tab key in JSON editors for indentation
-    document.querySelectorAll('.json-editor').forEach(textarea => {
-        textarea.addEventListener('keydown', (e) => {
-            if (e.key === 'Tab') {
-                e.preventDefault();
-                const start = textarea.selectionStart;
-                const end = textarea.selectionEnd;
-                textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
-                textarea.selectionStart = textarea.selectionEnd = start + 2;
-            }
-        });
-    });
-
-    document.getElementById('config-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const data = {
-            history_limit: parseInt(document.getElementById('history_limit').value),
-            immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-            batch_timeout: parseInt(document.getElementById('batch_timeout').value),
-            active_provider: document.getElementById('active_provider')?.value || null
-        };
-
-        const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        if (response.ok) {
-            showToast('Settings saved!', 'success');
-        } else {
-            showToast('Failed to save settings', 'error');
+// Tab key in JSON editors
+document.querySelectorAll('.json-editor').forEach(textarea => {
+    textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
+            textarea.selectionStart = textarea.selectionEnd = start + 2;
         }
     });
+});
 
-    async function switchCharacter(botName, character) {
-        const response = await fetch('/api/switch_character', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bot_name: botName, character: character })
-        });
+// Save core settings
+document.getElementById('config-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = {
+        history_limit: parseInt(document.getElementById('history_limit').value),
+        immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
+        batch_timeout: parseInt(document.getElementById('batch_timeout').value),
+        active_provider: document.getElementById('active_provider')?.value || null
+    };
 
-        const result = await response.json();
-        if (result.status === 'ok') {
-            showToast(`Switched to ${result.character}`, 'success');
-            location.reload();
-        } else {
-            showToast('Error: ' + (result.message || 'Unknown error'), 'error');
-        }
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
     }
+});
 
-    async function saveNameTriggerSettings() {
-        const data = {
-            name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100
-        };
+// Switch character
+async function switchCharacter(botName, character) {
+    const response = await fetch('/api/switch_character', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bot_name: botName, character: character })
+    });
 
-        const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        if (response.ok) {
-            showToast('Name trigger chance saved!', 'success');
-        } else {
-            showToast('Failed to save settings', 'error');
-        }
+    const result = await response.json();
+    if (result.status === 'ok') {
+        showToast(`Switched to ${result.character}`, 'success');
+        location.reload();
+    } else {
+        showToast('Error: ' + (result.message || 'Unknown error'), 'error');
     }
+}
 
-    async function saveFalloffSettings() {
-        const data = {
-            bot_falloff_enabled: document.getElementById('bot_falloff_enabled').checked,
-            bot_falloff_base_chance: parseInt(document.getElementById('bot_falloff_base_chance').value) / 100,
-            bot_falloff_decay_rate: parseInt(document.getElementById('bot_falloff_decay_rate').value) / 100,
-            bot_falloff_min_chance: parseInt(document.getElementById('bot_falloff_min_chance').value) / 100,
-            bot_falloff_hard_limit: parseInt(document.getElementById('bot_falloff_hard_limit').value)
-        };
+// Save name trigger settings
+async function saveNameTriggerSettings() {
+    const data = {
+        name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100
+    };
 
-        const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
 
-        if (response.ok) {
-            showToast('Bot fall-off settings saved!', 'success');
-        } else {
-            showToast('Failed to save settings', 'error');
-        }
+    if (response.ok) {
+        showToast('Name trigger chance saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
     }
+}
 
-    async function toggleRawLogging(enabled) {
-        const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ raw_generation_logging: enabled })
-        });
+// Save fall-off settings
+async function saveFalloffSettings() {
+    const data = {
+        bot_falloff_enabled: document.getElementById('bot_falloff_enabled').checked,
+        bot_falloff_base_chance: parseInt(document.getElementById('bot_falloff_base_chance').value) / 100,
+        bot_falloff_decay_rate: parseInt(document.getElementById('bot_falloff_decay_rate').value) / 100,
+        bot_falloff_min_chance: parseInt(document.getElementById('bot_falloff_min_chance').value) / 100,
+        bot_falloff_hard_limit: parseInt(document.getElementById('bot_falloff_hard_limit').value)
+    };
 
-        if (response.ok) {
-            showToast(enabled ? 'Raw generation logging enabled' : 'Raw generation logging disabled', 'success');
-        } else {
-            showToast('Failed to toggle setting', 'error');
-        }
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Fall-off settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
     }
+}
 
-    async function saveNicknames(botName) {
-        const nicknames = document.getElementById('nicknames-' + botName).value.trim();
+// Toggle raw logging
+async function toggleRawLogging(enabled) {
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_generation_logging: enabled })
+    });
 
-        const response = await fetch('/api/nicknames', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
-        });
-
-        if (response.ok) {
-            showToast('Nicknames saved for ' + botName + '!', 'success');
-        } else {
-            showToast('Failed to save nicknames', 'error');
-        }
+    if (response.ok) {
+        showToast(enabled ? 'Raw logging enabled' : 'Raw logging disabled', 'success');
+    } else {
+        showToast('Failed to toggle setting', 'error');
     }
+}
+
+// Save nicknames
+async function saveNicknames(botName) {
+    const nicknames = document.getElementById('nicknames-' + botName).value.trim();
+
+    const response = await fetch('/api/nicknames', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
+    });
+
+    if (response.ok) {
+        showToast('Nicknames saved for ' + botName, 'success');
+    } else {
+        showToast('Failed to save nicknames', 'error');
+    }
+}
 </script>
 {% endblock %}

@@ -2,346 +2,52 @@
 {% block title %}Logs - Discord Pals{% endblock %}
 
 {% block content %}
-<style>
-    .tab-container {
-        display: flex;
-        gap: 5px;
-        margin-bottom: 20px;
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 10px;
-    }
-
-    .tab-btn {
-        padding: 10px 20px;
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        cursor: pointer;
-        border-radius: 6px 6px 0 0;
-        font-size: 0.95em;
-    }
-
-    .tab-btn:hover {
-        background: var(--bg);
-        color: var(--text);
-    }
-
-    .tab-btn.active {
-        background: var(--accent);
-        color: var(--bg);
-    }
-
-    .tab-content {
-        display: none;
-    }
-
-    .tab-content.active {
-        display: block;
-    }
-
-    /* Logs styles */
-    .logs-controls {
-        display: flex;
-        gap: 15px;
-        margin-bottom: 20px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    .logs-container {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 15px;
-        height: 500px;
-        overflow-y: auto;
-        font-family: monospace;
-        font-size: 0.9em;
-    }
-
-    .log-entry {
-        padding: 6px 10px;
-        border-radius: 4px;
-        margin-bottom: 4px;
-        display: flex;
-        gap: 10px;
-    }
-
-    .log-entry:hover {
-        background: var(--bg);
-    }
-
-    .log-time {
-        color: var(--text-muted);
-        flex-shrink: 0;
-    }
-
-    .log-icon {
-        flex-shrink: 0;
-        width: 20px;
-        text-align: center;
-    }
-
-    .log-bot {
-        color: var(--accent);
-        flex-shrink: 0;
-        min-width: 80px;
-    }
-
-    .log-message {
-        flex: 1;
-        word-break: break-word;
-    }
-
-    .log-ok .log-icon {
-        color: var(--success);
-    }
-
-    .log-warn .log-icon {
-        color: var(--warning);
-    }
-
-    .log-error .log-icon {
-        color: var(--danger);
-    }
-
-    .log-info .log-icon {
-        color: var(--accent);
-    }
-
-    .auto-scroll-indicator {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        color: var(--text-muted);
-        font-size: 0.9em;
-        cursor: pointer;
-        padding: 6px 12px;
-        border-radius: 6px;
-    }
-
-    .auto-scroll-indicator.active {
-        color: var(--success);
-        background: rgba(63, 185, 80, 0.1);
-    }
-
-    .auto-scroll-indicator.active #scroll-dot {
-        animation: pulse-dot 1.5s infinite;
-    }
-
-    @keyframes pulse-dot {
-
-        0%,
-        100% {
-            opacity: 1;
-        }
-
-        50% {
-            opacity: 0.4;
-        }
-    }
-
-    /* Stats styles */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 15px;
-        margin-bottom: 25px;
-    }
-
-    .stat-card {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 15px;
-        text-align: center;
-    }
-
-    .stat-value {
-        font-size: 2em;
-        font-weight: 700;
-        color: var(--accent);
-    }
-
-    .stat-label {
-        color: var(--text-muted);
-        font-size: 0.85em;
-        margin-top: 5px;
-    }
-
-    .table-container {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        overflow: hidden;
-    }
-
-    .table-container h3 {
-        padding: 12px 15px;
-        margin: 0;
-        border-bottom: 1px solid var(--border);
-        font-size: 1em;
-    }
-
-    .stats-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.9em;
-    }
-
-    .stats-table th,
-    .stats-table td {
-        padding: 10px 15px;
-        text-align: left;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .stats-table tr:last-child td {
-        border-bottom: none;
-    }
-
-    .stats-table th {
-        background: var(--bg);
-        font-weight: 500;
-        color: var(--text-muted);
-    }
-
-    .rank {
-        color: var(--accent);
-        font-weight: 600;
-    }
-
-    .chart-bars {
-        display: flex;
-        align-items: flex-end;
-        gap: 8px;
-        height: 120px;
-        padding: 15px;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        margin-bottom: 25px;
-    }
-
-    .chart-bar {
-        flex: 1;
-        background: var(--accent);
-        border-radius: 4px 4px 0 0;
-        min-height: 4px;
-        position: relative;
-    }
-
-    .chart-bar::after {
-        content: attr(data-label);
-        position: absolute;
-        bottom: -22px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 0.7em;
-        color: var(--text-muted);
-    }
-
-    .chart-bar::before {
-        content: attr(data-value);
-        position: absolute;
-        top: -18px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 0.75em;
-        color: var(--text);
-    }
-
-    /* Context styles */
-    .context-section {
-        margin-bottom: 20px;
-    }
-
-    .context-section h3 {
-        margin-bottom: 10px;
-        color: var(--accent);
-        font-size: 1em;
-    }
-
-    .context-box {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 15px;
-        max-height: 250px;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        font-size: 0.85em;
-        font-family: monospace;
-    }
-
-    .messages-list {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        max-height: 300px;
-        overflow-y: auto;
-    }
-
-    .message {
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        font-size: 0.85em;
-    }
-
-    .message:last-child {
-        border-bottom: none;
-    }
-
-    .message.assistant {
-        background: rgba(88, 166, 255, 0.1);
-    }
-
-    .message strong {
-        color: var(--accent);
-        margin-right: 8px;
-    }
-</style>
-
-<h1 style="margin-bottom: 20px;">📋 Logs & Stats</h1>
+<div class="page-header">
+    <h1 class="page-title">Logs & Stats</h1>
+    <p class="page-subtitle">Live activity logs and usage statistics</p>
+</div>
 
 <!-- Tab Navigation -->
-<div class="tab-container">
-    <button class="tab-btn active" onclick="switchTab('live')">📋 Live Logs</button>
-    <button class="tab-btn" onclick="switchTab('stats')">📊 Stats</button>
-    <button class="tab-btn" onclick="switchTab('context')">🔍 Context</button>
+<div class="tabs">
+    <button type="button" class="tab active" onclick="switchTab('live')">Live Logs</button>
+    <button type="button" class="tab" onclick="switchTab('stats')">Stats</button>
+    <button type="button" class="tab" onclick="switchTab('context')">Context</button>
 </div>
 
 <!-- Live Logs Tab -->
 <div id="tab-live" class="tab-content active">
-    <div class="logs-controls">
-        <button class="btn btn-primary" onclick="toggleAutoScroll()"><span id="auto-scroll-btn">⏸ Pause</span></button>
-        <button class="btn" onclick="clearLogs()">Clear</button>
-        <input type="text" id="log-search" placeholder="Search..." oninput="filterLogs()"
-            style="padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; width: 150px;">
-        <select id="log-level-filter" onchange="filterLogs()"
-            style="padding: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px;">
-            <option value="">All</option>
-            <option value="ok">✓ Success</option>
-            <option value="info">ℹ Info</option>
-            <option value="warn">⚠ Warning</option>
-            <option value="error">✖ Error</option>
-        </select>
-        <span id="log-count">0 entries</span>
-        <span class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()">
-            <span id="scroll-dot">●</span> Auto-scroll
-        </span>
-    </div>
-    <div class="logs-container" id="logs-container">
-        <div style="text-align: center; color: var(--text-muted); padding: 20px;">Loading logs...</div>
+    <div class="card">
+        <div class="logs-controls">
+            <button type="button" class="btn btn-primary btn-sm" onclick="toggleAutoScroll()">
+                <span id="auto-scroll-btn">Pause</span>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="clearLogs()">Clear</button>
+            <input type="text" id="log-search" placeholder="Search logs..." oninput="filterLogs()" title="Search logs">
+            <select id="log-level-filter" onchange="filterLogs()" title="Filter by level">
+                <option value="">All Levels</option>
+                <option value="ok">Success</option>
+                <option value="info">Info</option>
+                <option value="warn">Warning</option>
+                <option value="error">Error</option>
+            </select>
+            <span class="log-count" id="log-count">0 entries</span>
+            <span class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()">
+                <span class="scroll-dot" id="scroll-dot"></span>
+                Auto-scroll
+            </span>
+        </div>
+        <div class="logs-container" id="logs-container">
+            <div class="logs-empty">Loading logs...</div>
+        </div>
     </div>
 </div>
 
 <!-- Stats Tab -->
 <div id="tab-stats" class="tab-content">
     {% if stats.created_at %}
-    <p style="color: var(--text-muted); margin-bottom: 15px; font-size: 0.9em;">Tracking since: {{ stats.created_at[:10]
-        }}</p>
+    <p class="stats-since">Tracking since {{ stats.created_at[:10] }}</p>
     {% endif %}
+
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-value">{{ stats.total_messages }}</div>
@@ -360,246 +66,654 @@
             <div class="stat-label">Users</div>
         </div>
     </div>
+
     {% if stats.recent_days %}
-    <h4 style="margin-bottom: 10px;">Last 7 Days</h4>
-    <div class="chart-bars">
-        {% set max_msgs = stats.recent_days | map(attribute='messages') | max %}
-        {% for day in stats.recent_days %}
-        <div class="chart-bar" style="height: {{ (day.messages / max_msgs * 100) if max_msgs > 0 else 0 }}%;"
-            data-label="{{ day.date[-5:] }}" data-value="{{ day.messages }}"></div>
-        {% endfor %}
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Last 7 Days</span>
+        </div>
+        <div class="card-body">
+            <div class="chart-bars">
+                {% set max_msgs = stats.recent_days | map(attribute='messages') | max %}
+                {% for day in stats.recent_days %}
+                <div class="chart-bar-wrapper">
+                    <span class="chart-value">{{ day.messages }}</span>
+                    <div class="chart-bar" style="height: {{ (day.messages / max_msgs * 100) if max_msgs > 0 else 0 }}%;"></div>
+                    <span class="chart-label">{{ day.date[-5:] }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
     {% endif %}
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-        <div class="table-container">
-            <h3>🏆 Top Users</h3>
-            <table class="stats-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>User</th>
-                        <th>Msgs</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for user_id, data in stats.top_users %}
-                    <tr>
-                        <td class="rank">{{ loop.index }}</td>
-                        <td>{{ data.name }}</td>
-                        <td>{{ data.messages }}</td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="3" style="text-align: center; color: var(--text-muted);">No data</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+
+    <div class="stats-tables">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Top Users</span>
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>User</th>
+                            <th>Messages</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user_id, data in stats.top_users %}
+                        <tr>
+                            <td><span class="rank">{{ loop.index }}</span></td>
+                            <td>{{ data.name }}</td>
+                            <td>{{ data.messages }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="empty-cell">No data</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <div class="table-container">
-            <h3>📢 Top Channels</h3>
-            <table class="stats-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Channel</th>
-                        <th>Msgs</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for channel_id, data in stats.top_channels %}
-                    <tr>
-                        <td class="rank">{{ loop.index }}</td>
-                        <td>#{{ data.name }}</td>
-                        <td>{{ data.messages }}</td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="3" style="text-align: center; color: var(--text-muted);">No data</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Top Channels</span>
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Channel</th>
+                            <th>Messages</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for channel_id, data in stats.top_channels %}
+                        <tr>
+                            <td><span class="rank">{{ loop.index }}</span></td>
+                            <td>#{{ data.name }}</td>
+                            <td>{{ data.messages }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="empty-cell">No data</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
 
 <!-- Context Tab -->
 <div id="tab-context" class="tab-content">
-    <p style="color: var(--text-muted); margin-bottom: 15px; font-size: 0.9em;">See what was sent to the LLM on the last
-        API call for each bot.</p>
+    <p class="context-intro">See what was sent to the LLM on the last API call for each bot.</p>
+
     {% if contexts %}
     {% for bot_name, ctx in contexts.items() %}
     <div class="card">
-        <h3>{{ bot_name }}</h3>
-        <div style="display: flex; gap: 15px; margin-bottom: 10px; color: var(--text-muted); font-size: 0.85em;">
-            <span>Messages: {{ ctx.message_count }}</span><span>•</span><span>Est. Tokens: ~{{ ctx.token_estimate
-                }}</span>
+        <div class="card-header">
+            <span class="card-title">{{ bot_name }}</span>
+            <div class="context-meta">
+                <span>{{ ctx.message_count }} messages</span>
+                <span>~{{ ctx.token_estimate }} tokens</span>
+            </div>
         </div>
-        <div class="context-section">
-            <h3>System Prompt</h3>
-            <pre class="context-box">{{ ctx.system_prompt }}</pre>
-        </div>
-        <div class="context-section">
-            <h3>Messages ({{ ctx.messages|length }})</h3>
-            <div class="messages-list">
-                {% for msg in ctx.messages[-15:] %}
-                <div class="message {% if msg.role == 'assistant' %}assistant{% endif %}">
-                    <strong>{{ msg.role }}:</strong> {{ msg.content[:400] }}{% if msg.content|length > 400 %}...{% endif
-                    %}
+        <div class="card-body">
+            <div class="context-section">
+                <h4 class="context-section-title">System Prompt</h4>
+                <pre class="context-box">{{ ctx.system_prompt }}</pre>
+            </div>
+            <div class="context-section">
+                <h4 class="context-section-title">Messages ({{ ctx.messages|length }})</h4>
+                <div class="messages-list">
+                    {% for msg in ctx.messages[-15:] %}
+                    <div class="message {% if msg.role == 'assistant' %}assistant{% endif %}">
+                        <span class="message-role">{{ msg.role }}</span>
+                        <span class="message-content">{{ msg.content[:400] }}{% if msg.content|length > 400 %}...{% endif %}</span>
+                    </div>
+                    {% endfor %}
+                    {% if ctx.messages|length > 15 %}
+                    <div class="messages-more">... and {{ ctx.messages|length - 15 }} more</div>
+                    {% endif %}
                 </div>
-                {% endfor %}
-                {% if ctx.messages|length > 15 %}
-                <div style="color: var(--text-muted); text-align: center; padding: 8px; font-size: 0.85em;">... and {{
-                    ctx.messages|length - 15 }} more</div>
-                {% endif %}
             </div>
         </div>
     </div>
     {% endfor %}
     {% else %}
     <div class="card">
-        <p style="color: var(--text-muted); text-align: center; padding: 30px;">No context stored yet. Make a request to
-            see what's sent to the LLM.</p>
+        <div class="card-body">
+            <div class="empty">No context stored yet. Make a request to see what's sent to the LLM.</div>
+        </div>
     </div>
     {% endif %}
 </div>
 
+<style>
+/* Page Header */
+.page-header {
+    margin-bottom: 32px;
+}
+
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 4px;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 0;
+}
+
+.tab {
+    padding: 10px 20px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: inherit;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.15s ease;
+}
+
+.tab:hover {
+    color: var(--text-secondary);
+}
+
+.tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Logs Controls */
+.logs-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.logs-controls input,
+.logs-controls select {
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.8125rem;
+}
+
+.logs-controls input {
+    width: 160px;
+}
+
+.logs-controls input:focus,
+.logs-controls select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.log-count {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    margin-left: auto;
+}
+
+.auto-scroll-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+}
+
+.auto-scroll-indicator:hover {
+    background: var(--bg-tertiary);
+}
+
+.auto-scroll-indicator.active {
+    color: var(--success);
+}
+
+.scroll-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.auto-scroll-indicator.active .scroll-dot {
+    animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Logs Container */
+.logs-container {
+    height: 500px;
+    overflow-y: auto;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.8125rem;
+}
+
+.logs-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 20px;
+}
+
+.log-entry {
+    display: flex;
+    gap: 12px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background 0.1s ease;
+}
+
+.log-entry:hover {
+    background: var(--bg-primary);
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-time {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 0.75rem;
+}
+
+.log-icon {
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+}
+
+.log-bot {
+    color: var(--accent);
+    flex-shrink: 0;
+    min-width: 80px;
+    font-weight: 500;
+}
+
+.log-message {
+    flex: 1;
+    word-break: break-word;
+    color: var(--text-secondary);
+}
+
+.log-ok .log-icon { color: var(--success); }
+.log-warn .log-icon { color: var(--warning); }
+.log-error .log-icon { color: var(--danger); }
+.log-info .log-icon { color: var(--accent); }
+
+/* Stats */
+.stats-since {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    margin-bottom: 20px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.025em;
+}
+
+.stat-label {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Chart */
+.chart-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    height: 140px;
+    padding-top: 24px;
+    padding-bottom: 32px;
+}
+
+.chart-bar-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    position: relative;
+}
+
+.chart-bar {
+    width: 100%;
+    background: var(--accent);
+    border-radius: 4px 4px 0 0;
+    min-height: 4px;
+    margin-top: auto;
+}
+
+.chart-value {
+    position: absolute;
+    top: 0;
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.chart-label {
+    position: absolute;
+    bottom: -24px;
+    font-size: 0.6875rem;
+    color: var(--text-muted);
+}
+
+/* Stats Tables */
+.stats-tables {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.rank {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.empty-cell {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 20px;
+}
+
+/* Context */
+.context-intro {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 20px;
+}
+
+.context-meta {
+    display: flex;
+    gap: 16px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.context-section {
+    margin-bottom: 20px;
+}
+
+.context-section:last-child {
+    margin-bottom: 0;
+}
+
+.context-section-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 10px;
+}
+
+.context-box {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 0.8125rem;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.messages-list {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.message {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 0.8125rem;
+}
+
+.message:last-child {
+    border-bottom: none;
+}
+
+.message.assistant {
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.message-role {
+    color: var(--accent);
+    font-weight: 600;
+    margin-right: 8px;
+    text-transform: capitalize;
+}
+
+.message-content {
+    color: var(--text-secondary);
+}
+
+.messages-more {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 10px;
+    font-size: 0.75rem;
+}
+
+/* Button sizes */
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .tabs {
+        flex-wrap: wrap;
+    }
+
+    .tab {
+        padding: 8px 14px;
+        font-size: 0.8125rem;
+    }
+
+    .logs-controls {
+        gap: 8px;
+    }
+
+    .logs-controls input,
+    .logs-controls select {
+        width: 100%;
+    }
+
+    .log-count {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .log-time {
+        display: none;
+    }
+
+    .log-bot {
+        min-width: 60px;
+        font-size: 0.75rem;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .stats-tables {
+        grid-template-columns: 1fr;
+    }
+
+    .context-meta {
+        flex-direction: column;
+        gap: 4px;
+    }
+}
+</style>
+
 <script>
-    function switchTab(tabName) {
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-        document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
-        document.getElementById('tab-' + tabName).classList.add('active');
+function switchTab(tabName) {
+    document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
+    document.getElementById('tab-' + tabName).classList.add('active');
+}
+
+let autoScroll = true;
+let lastLogCount = 0;
+let allLogs = [];
+
+function filterLogs() {
+    const search = document.getElementById('log-search').value.toLowerCase();
+    const level = document.getElementById('log-level-filter').value;
+    const filtered = allLogs.filter(log => {
+        const matchesSearch = !search || log.message.toLowerCase().includes(search) || (log.bot && log.bot.toLowerCase().includes(search));
+        const matchesLevel = !level || log.level === level;
+        return matchesSearch && matchesLevel;
+    });
+    renderFilteredLogs(filtered);
+}
+
+function renderFilteredLogs(logs) {
+    const container = document.getElementById('logs-container');
+    if (logs.length === 0) {
+        container.innerHTML = '<div class="logs-empty">No matching logs</div>';
+        updateLogCount(0);
+        return;
     }
-
-    let autoScroll = true;
-    let lastLogCount = 0;
-    let allLogs = [];
-
-    function filterLogs() {
-        const search = document.getElementById('log-search').value.toLowerCase();
-        const level = document.getElementById('log-level-filter').value;
-        const filtered = allLogs.filter(log => {
-            const matchesSearch = !search || log.message.toLowerCase().includes(search) || (log.bot && log.bot.toLowerCase().includes(search));
-            const matchesLevel = !level || log.level === level;
-            return matchesSearch && matchesLevel;
-        });
-        renderFilteredLogs(filtered);
-    }
-
-    function renderFilteredLogs(logs) {
-        const container = document.getElementById('logs-container');
-        if (logs.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">No matching logs</div>';
-            updateLogCount(0);
-            return;
-        }
-        let html = '';
-        for (const log of logs) {
-            const bot = log.bot ? `[${log.bot}]` : '';
-            html += `<div class="log-entry log-${escapeHtml(log.level)}">
+    let html = '';
+    for (const log of logs) {
+        const bot = log.bot ? `[${log.bot}]` : '';
+        html += `<div class="log-entry log-${escapeHtml(log.level)}">
             <span class="log-time">${escapeHtml(log.time)}</span>
             <span class="log-icon">${log.icon}</span>
             <span class="log-bot">${escapeHtml(bot)}</span>
             <span class="log-message">${escapeHtml(log.message)}</span>
         </div>`;
+    }
+    container.innerHTML = html;
+    updateLogCount(logs.length);
+    if (autoScroll) container.scrollTop = container.scrollHeight;
+}
+
+function toggleAutoScroll() {
+    autoScroll = !autoScroll;
+    document.getElementById('auto-scroll-btn').textContent = autoScroll ? 'Pause' : 'Resume';
+    document.getElementById('scroll-indicator').className = 'auto-scroll-indicator' + (autoScroll ? ' active' : '');
+}
+
+function clearLogs() {
+    document.getElementById('logs-container').innerHTML = '<div class="logs-empty">Logs cleared</div>';
+    lastLogCount = 0;
+    allLogs = [];
+    updateLogCount(0);
+}
+
+function updateLogCount(count) {
+    document.getElementById('log-count').textContent = count + ' entries';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function fetchLogs() {
+    try {
+        const response = await fetch('/api/logs');
+        const logs = await response.json();
+        if (logs.length !== lastLogCount) {
+            allLogs = logs;
+            lastLogCount = logs.length;
+            filterLogs();
         }
-        container.innerHTML = html;
-        updateLogCount(logs.length);
-        if (autoScroll) container.scrollTop = container.scrollHeight;
+    } catch (err) {
+        console.error('Failed to fetch logs:', err);
     }
+}
 
-    function toggleAutoScroll() {
-        autoScroll = !autoScroll;
-        document.getElementById('auto-scroll-btn').textContent = autoScroll ? '⏸ Pause' : '▶ Resume';
-        document.getElementById('scroll-indicator').className = 'auto-scroll-indicator' + (autoScroll ? ' active' : '');
+fetchLogs();
+let logsPollInterval = setInterval(fetchLogs, 2000);
+
+// Pause polling when tab is hidden
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        clearInterval(logsPollInterval);
+    } else {
+        fetchLogs();
+        logsPollInterval = setInterval(fetchLogs, 2000);
     }
-
-    function clearLogs() {
-        document.getElementById('logs-container').innerHTML = '';
-        lastLogCount = 0;
-        updateLogCount(0);
-    }
-
-    function updateLogCount(count) {
-        document.getElementById('log-count').textContent = count + ' entries';
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    async function fetchLogs() {
-        try {
-            const response = await fetch('/api/logs');
-            const logs = await response.json();
-            if (logs.length !== lastLogCount) {
-                allLogs = logs;
-                lastLogCount = logs.length;
-                filterLogs();
-            }
-        } catch (err) {
-            console.error('Failed to fetch logs:', err);
-        }
-    }
-
-    fetchLogs();
-    let logsPollInterval = setInterval(fetchLogs, 2000);
-
-    // Pause polling when tab is hidden
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            clearInterval(logsPollInterval);
-        } else {
-            fetchLogs();
-            logsPollInterval = setInterval(fetchLogs, 2000);
-        }
-    });
+});
 </script>
-
-<style>
-    @media (max-width: 768px) {
-        .tab-container {
-            flex-wrap: wrap;
-        }
-
-        .tab-btn {
-            padding: 8px 12px;
-            font-size: 0.85em;
-        }
-
-        .logs-controls {
-            gap: 10px;
-        }
-
-        .logs-controls input,
-        .logs-controls select {
-            width: 100%;
-        }
-
-        .log-time {
-            display: none;
-        }
-
-        .log-bot {
-            min-width: 60px;
-            font-size: 0.8em;
-        }
-
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-
-        div[style*="grid-template-columns: 1fr 1fr"] {
-            display: block !important;
-        }
-
-        .table-container {
-            margin-bottom: 15px;
-        }
-    }
-</style>
 {% endblock %}

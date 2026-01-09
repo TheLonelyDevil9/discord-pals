@@ -2,24 +2,86 @@
 {% block title %}Edit {{ name }} - Discord Pals{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 30px;">
-    <a href="/memories" style="color: var(--text-muted); text-decoration: none;">Memories</a> / {{ name }}
-</h1>
+<div class="page-header">
+    <div class="breadcrumb">
+        <a href="/memories" class="breadcrumb-link">Memories</a>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-current">{{ name }}</span>
+    </div>
+    <h1 class="page-title">Edit Memory File</h1>
+</div>
 
 <div class="card">
-    <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;">
-        Edit the raw JSON. Be careful with the structure!
-    </p>
-    <form action="/memories/{{ name }}/save" method="post">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <textarea name="content" style="width: 100%; height: 500px; font-family: monospace; font-size: 13px;
-            background: var(--bg); border: 1px solid var(--border); color: var(--text);
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ content }}</textarea>
-
-        <div style="margin-top: 15px; display: flex; gap: 10px;">
-            <button type="submit" class="btn btn-primary">Save Changes</button>
-            <a href="/memories" class="btn">Cancel</a>
-        </div>
-    </form>
+    <div class="card-header">
+        <span class="card-title">{{ name }}</span>
+    </div>
+    <div class="card-body">
+        <p class="editor-warning">Edit the raw JSON. Be careful with the structure!</p>
+        <form action="/memories/{{ name }}/save" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <textarea name="content" class="editor-textarea" title="Memory JSON content">{{ content }}</textarea>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <a href="/memories" class="btn btn-ghost">Cancel</a>
+            </div>
+        </form>
+    </div>
 </div>
+
+<style>
+.page-header {
+    margin-bottom: 32px;
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 0.875rem;
+}
+
+.breadcrumb-link {
+    color: var(--text-muted);
+    text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+    color: var(--text-primary);
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+}
+
+.breadcrumb-current {
+    color: var(--text-secondary);
+}
+
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+}
+
+.editor-warning {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+}
+
+.editor-textarea {
+    width: 100%;
+    height: 500px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.8125rem;
+    resize: vertical;
+}
+
+.editor-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+}
+</style>
 {% endblock %}

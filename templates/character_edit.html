@@ -2,32 +2,108 @@
 {% block title %}Edit {{ name }} - Discord Pals{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 30px;">
-    <a href="/characters" style="color: var(--text-muted); text-decoration: none;">Characters</a> / {{ name }}
-</h1>
+<div class="page-header">
+    <div class="breadcrumb">
+        <a href="/characters" class="breadcrumb-link">Characters</a>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-current">{{ name }}</span>
+    </div>
+    <h1 class="page-title">Edit Character</h1>
+</div>
 
 <div class="card">
-    <form action="/characters/{{ name }}/save" method="post">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <textarea name="content" style="width: 100%; height: 500px; font-family: monospace; font-size: 14px;
-            background: var(--bg); border: 1px solid var(--border); color: var(--text);
-            padding: 15px; border-radius: 4px; resize: vertical;">{{ content }}</textarea>
-
-        <div style="margin-top: 15px; display: flex; gap: 10px;">
-            <button type="submit" class="btn btn-primary">Save Changes</button>
-            <a href="/characters" class="btn">Cancel</a>
-        </div>
-    </form>
+    <div class="card-header">
+        <span class="card-title">{{ name }}</span>
+    </div>
+    <div class="card-body">
+        <form action="/characters/{{ name }}/save" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <textarea name="content" class="editor-textarea" title="Character content">{{ content }}</textarea>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <a href="/characters" class="btn btn-ghost">Cancel</a>
+            </div>
+        </form>
+    </div>
 </div>
 
-<div class="card" style="margin-top: 20px; border-color: var(--danger);">
-    <h3 class="card-title" style="color: var(--danger);">⚠️ Danger Zone</h3>
-    <form action="/characters/{{ name }}/delete" method="post" style="display: inline;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-danger"
-            onclick="return confirm('Are you sure you want to delete {{ name }}? This cannot be undone.')">
-            Delete Character
-        </button>
-    </form>
+<div class="card danger-zone">
+    <div class="card-header">
+        <span class="card-title danger-title">Danger Zone</span>
+    </div>
+    <div class="card-body">
+        <p class="danger-desc">Once you delete a character, there is no going back. Please be certain.</p>
+        <form action="/characters/{{ name }}/delete" method="post" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete {{ name }}? This cannot be undone.')">
+                Delete Character
+            </button>
+        </form>
+    </div>
 </div>
+
+<style>
+.page-header {
+    margin-bottom: 32px;
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 0.875rem;
+}
+
+.breadcrumb-link {
+    color: var(--text-muted);
+    text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+    color: var(--text-primary);
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+}
+
+.breadcrumb-current {
+    color: var(--text-secondary);
+}
+
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+}
+
+.editor-textarea {
+    width: 100%;
+    height: 500px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.8125rem;
+    resize: vertical;
+}
+
+.editor-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+}
+
+.danger-zone {
+    border-color: var(--danger);
+}
+
+.danger-title {
+    color: var(--danger);
+}
+
+.danger-desc {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+}
+</style>
 {% endblock %}

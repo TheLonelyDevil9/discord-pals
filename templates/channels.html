@@ -2,14 +2,17 @@
 {% block title %}Channels - Discord Pals{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 30px;">📺 Channel Management</h1>
+<div class="page-header">
+    <h1 class="page-title">Channels</h1>
+    <p class="page-subtitle">Manage channel settings and autonomous responses</p>
+</div>
 
 <!-- Filter Controls -->
-<div class="card">
+<div class="card filter-card">
     <div class="filter-row">
         <div class="filter-group">
-            <label for="guild-filter">Filter by Server:</label>
-            <select id="guild-filter" onchange="filterChannels()">
+            <label for="guild-filter">Server</label>
+            <select id="guild-filter" onchange="filterChannels()" title="Filter by server">
                 <option value="">All Servers</option>
                 {% for guild in guilds %}
                 <option value="{{ guild.id }}">{{ guild.name }}</option>
@@ -17,82 +20,91 @@
             </select>
         </div>
         <div class="filter-group">
-            <label for="auto-filter">Autonomous:</label>
-            <select id="auto-filter" onchange="filterChannels()">
+            <label for="auto-filter">Autonomous</label>
+            <select id="auto-filter" onchange="filterChannels()" title="Filter by autonomous status">
                 <option value="">All</option>
-                <option value="enabled">Enabled Only</option>
-                <option value="disabled">Disabled Only</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
             </select>
         </div>
         <div class="filter-group">
-            <label for="history-filter">Has History:</label>
-            <select id="history-filter" onchange="filterChannels()">
+            <label for="history-filter">History</label>
+            <select id="history-filter" onchange="filterChannels()" title="Filter by history">
                 <option value="">All</option>
                 <option value="yes">With History</option>
                 <option value="no">No History</option>
             </select>
+        </div>
+        <div class="filter-count">
+            <span id="channel-count">{{ channels|length }} channels</span>
         </div>
     </div>
 </div>
 
 <!-- Channels Table -->
 <div class="card">
-    <h3 class="card-title">Channels <span id="channel-count" style="color: var(--text-muted); font-weight: normal;">({{ channels|length }} total)</span></h3>
-    
+    <div class="card-header">
+        <span class="card-title">Channel List</span>
+    </div>
+
     {% if channels %}
-    <table id="channels-table">
-        <thead>
-            <tr>
-                <th>Channel</th>
-                <th>Server</th>
-                <th>History</th>
-                <th>Autonomous</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for channel in channels %}
-            <tr data-channel-id="{{ channel.id }}" 
-                data-guild-id="{{ channel.guild_id }}"
-                data-autonomous="{{ 'enabled' if channel.autonomous else 'disabled' }}"
-                data-has-history="{{ 'yes' if channel.history_count > 0 else 'no' }}">
-                <td>
-                    <strong>#{{ channel.name }}</strong>
-                    <small style="display: block; color: var(--text-muted);">ID: {{ channel.id }}</small>
-                </td>
-                <td>{{ channel.guild_name }}</td>
-                <td>
-                    <span class="history-count {% if channel.history_count > 0 %}has-history{% endif %}">
-                        {{ channel.history_count }} messages
-                    </span>
-                </td>
-                <td>
-                    <div class="auto-status" id="auto-status-{{ channel.id }}">
-                        {% if channel.autonomous %}
-                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto({{ channel.id }}, false)" title="Click to disable">● ON</span>
-                        <small>{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min{% if channel.allow_bot_triggers %} 🤖{% endif %}</small>
-                        {% else %}
-                        <span class="badge badge-danger auto-toggle" onclick="quickToggleAuto({{ channel.id }}, true)" title="Click to enable">● OFF</span>
-                        {% endif %}
-                    </div>
-                </td>
-              <td>
-                    <div class="action-buttons">
-                        <button class="btn btn-small btn-secondary" onclick="openAutoModal({{ channel.id }}, '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }}, {{ 'true' if channel.allow_bot_triggers else 'false' }})">
-                            ⚙️ Configure
-                        </button>
-                        <button class="btn btn-small btn-danger" onclick="clearHistory({{ channel.id }}, '{{ channel.name }}')" {% if channel.history_count == 0 %}disabled{% endif %}>
-                            🗑️ Clear
-                        </button>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table id="channels-table">
+            <thead>
+                <tr>
+                    <th>Channel</th>
+                    <th>Server</th>
+                    <th>History</th>
+                    <th>Autonomous</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for channel in channels %}
+                <tr data-channel-id="{{ channel.id }}"
+                    data-guild-id="{{ channel.guild_id }}"
+                    data-autonomous="{{ 'enabled' if channel.autonomous else 'disabled' }}"
+                    data-has-history="{{ 'yes' if channel.history_count > 0 else 'no' }}">
+                    <td>
+                        <div class="channel-info">
+                            <span class="channel-name">#{{ channel.name }}</span>
+                            <span class="channel-id">{{ channel.id }}</span>
+                        </div>
+                    </td>
+                    <td>{{ channel.guild_name }}</td>
+                    <td>
+                        <span class="history-count {% if channel.history_count > 0 %}has-history{% endif %}">
+                            {{ channel.history_count }} messages
+                        </span>
+                    </td>
+                    <td>
+                        <div class="auto-status" id="auto-status-{{ channel.id }}">
+                            {% if channel.autonomous %}
+                            <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto({{ channel.id }}, false)" title="Click to disable">ON</button>
+                            <span class="auto-details">{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min{% if channel.allow_bot_triggers %} +bots{% endif %}</span>
+                            {% else %}
+                            <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto({{ channel.id }}, true)" title="Click to enable">OFF</button>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="action-buttons">
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="openAutoModal({{ channel.id }}, '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }}, {{ 'true' if channel.allow_bot_triggers else 'false' }})">
+                                Configure
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="clearHistory({{ channel.id }}, '{{ channel.name }}')" {% if channel.history_count == 0 %}disabled{% endif %}>
+                                Clear
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
-    <div class="empty">
-        <p>No channels found. Make sure your bots are online and connected to servers.</p>
+    <div class="card-body">
+        <div class="empty">No channels found. Make sure your bots are online and connected to servers.</div>
     </div>
     {% endif %}
 </div>
@@ -100,90 +112,160 @@
 <!-- Autonomous Configuration Modal -->
 <div id="auto-modal" class="modal" style="display: none;">
     <div class="modal-content">
-        <h3>⚙️ Configure Channel</h3>
-        <p id="auto-modal-channel" style="color: var(--text-muted); margin-bottom: 20px;"></p>
-        
+        <div class="modal-header">
+            <h3 class="modal-title">Configure Channel</h3>
+            <p id="auto-modal-channel" class="modal-subtitle"></p>
+        </div>
+
         <!-- Autonomous Mode Section -->
         <div class="config-section">
-            <h4>🎲 Autonomous Mode</h4>
+            <div class="config-section-header">Autonomous Mode</div>
             <div class="form-group">
-                <label>
+                <label class="checkbox-label">
                     <input type="checkbox" id="auto-enabled">
-                    Enable Autonomous Responses
+                    <span>Enable Autonomous Responses</span>
                 </label>
-                <small>Bot will occasionally respond without being mentioned (includes name triggers)</small>
+                <p class="form-hint">Bot will occasionally respond without being mentioned</p>
             </div>
-            
-            <div class="form-group" id="auto-settings">
-                <label for="auto-chance">Response Chance: <span id="chance-val">5</span>%</label>
-                <input type="range" id="auto-chance" min="1" max="50" value="5"
-                       oninput="document.getElementById('chance-val').textContent = this.value">
-                
-                <label for="auto-cooldown" style="margin-top: 15px;">Cooldown: <span id="cooldown-val">2</span> minutes</label>
-                <input type="range" id="auto-cooldown" min="1" max="10" value="2"
-                       oninput="document.getElementById('cooldown-val').textContent = this.value">
+
+            <div id="auto-settings">
+                <div class="form-group">
+                    <label for="auto-chance">Response Chance: <span id="chance-val">5</span>%</label>
+                    <input type="range" id="auto-chance" min="1" max="50" value="5"
+                           oninput="document.getElementById('chance-val').textContent = this.value" title="Response chance percentage">
+                </div>
+
+                <div class="form-group">
+                    <label for="auto-cooldown">Cooldown: <span id="cooldown-val">2</span> minutes</label>
+                    <input type="range" id="auto-cooldown" min="1" max="10" value="2"
+                           oninput="document.getElementById('cooldown-val').textContent = this.value" title="Cooldown in minutes">
+                </div>
             </div>
         </div>
-        
+
         <!-- Name Trigger Section -->
         <div class="config-section">
-            <h4>🏷️ Name Triggers</h4>
-            <small class="section-desc">Bot responds when its name/nickname is mentioned (requires autonomous mode)</small>
-            
+            <div class="config-section-header">Name Triggers</div>
+            <p class="form-hint" style="margin-bottom: 16px;">Bot responds when its name/nickname is mentioned (requires autonomous mode)</p>
+
             <div class="form-group">
-                <label>
+                <label class="checkbox-label">
                     <input type="checkbox" id="auto-allow-bots">
-                    🤖 Allow Bot/App Triggers
+                    <span>Allow Bot/App Triggers</span>
                 </label>
-                <small>When enabled, other Discord bots/apps can trigger name-based responses (not just humans)</small>
+                <p class="form-hint">Other Discord bots can trigger name-based responses</p>
             </div>
-            
+
             <div class="form-group" id="nickname-settings">
                 <label>Bot Nicknames</label>
-                <small>Comma-separated list of additional names the bot responds to</small>
+                <p class="form-hint">Comma-separated list of additional names the bot responds to</p>
                 <div id="bot-nicknames-container">
                     <!-- Populated by JavaScript -->
                 </div>
             </div>
         </div>
-        
+
         <div class="modal-buttons">
-            <button class="btn btn-secondary" onclick="closeAutoModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveAutoConfig()">Save</button>
+            <button type="button" class="btn btn-ghost" onclick="closeAutoModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="saveAutoConfig()">Save Changes</button>
         </div>
-        
+
         <input type="hidden" id="auto-channel-id">
     </div>
 </div>
 
 <style>
+/* Page Header */
+.page-header {
+    margin-bottom: 32px;
+}
+
+.page-title {
+    font-size: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 4px;
+}
+
+.page-subtitle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Filter Card */
+.filter-card {
+    margin-bottom: 24px;
+}
+
+.filter-card .card-body {
+    padding: 0;
+}
+
 .filter-row {
     display: flex;
+    align-items: flex-end;
     gap: 20px;
     flex-wrap: wrap;
+    padding: 20px;
 }
 
 .filter-group {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .filter-group label {
     color: var(--text-muted);
-    font-size: 0.9em;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
 .filter-group select {
     padding: 8px 12px;
-    background: var(--bg);
+    background: var(--bg-primary);
     border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--text);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+    min-width: 150px;
 }
 
+.filter-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.filter-count {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+/* Channel Info */
+.channel-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.channel-name {
+    font-weight: 500;
+}
+
+.channel-id {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+
+/* History Count */
 .history-count {
     color: var(--text-muted);
+    font-size: 0.875rem;
 }
 
 .history-count.has-history {
@@ -191,34 +273,68 @@
     font-weight: 500;
 }
 
+/* Auto Status */
 .auto-status {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 4px;
 }
 
-.auto-status small {
+.auto-details {
     color: var(--text-muted);
-    font-size: 0.8em;
+    font-size: 0.75rem;
 }
 
+/* Auto Toggle Badge */
+.auto-toggle {
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+    font-weight: 600;
+    font-size: 0.6875rem;
+}
+
+.auto-toggle:hover {
+    transform: scale(1.05);
+}
+
+.badge-muted {
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}
+
+.badge-muted:hover {
+    background: rgba(34, 197, 94, 0.2);
+    color: var(--success);
+}
+
+.badge-success.auto-toggle:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--danger);
+}
+
+/* Action Buttons */
 .action-buttons {
     display: flex;
     gap: 8px;
 }
 
-.btn-small {
+.btn-sm {
     padding: 6px 12px;
-    font-size: 0.85em;
+    font-size: 0.8125rem;
 }
 
+/* Modal Styles */
 .modal {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -227,119 +343,158 @@
 
 .modal-content {
     background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-subtle);
     border-radius: 12px;
     padding: 24px;
-    max-width: 450px;
+    max-width: 480px;
     width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
 }
 
-.modal-content h3 {
-    margin-bottom: 8px;
+.modal-header {
+    margin-bottom: 24px;
 }
 
-.form-group {
-    margin-bottom: 20px;
+.modal-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 4px;
 }
 
-.form-group label {
-    display: block;
-    margin-bottom: 8px;
+.modal-subtitle {
+    color: var(--accent);
+    font-size: 0.875rem;
     font-weight: 500;
-}
-
-.form-group small {
-    display: block;
-    color: var(--text-muted);
-    margin-top: 4px;
-    font-size: 0.85em;
-}
-
-.form-group input[type="range"] {
-    width: 100%;
-    margin-top: 8px;
 }
 
 .modal-buttons {
     display: flex;
-    gap: 10px;
+    gap: 12px;
     justify-content: flex-end;
     margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-subtle);
 }
 
-tr.hidden {
-    display: none;
-}
-
-/* Clickable autonomous toggle badges */
-.auto-toggle {
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.auto-toggle:hover {
-    transform: scale(1.1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.badge-success.auto-toggle:hover {
-    background: rgba(248, 81, 73, 0.3);
-    color: var(--danger);
-}
-
-.badge-danger.auto-toggle:hover {
-    background: rgba(63, 185, 80, 0.3);
-    color: var(--success);
-}
-
-/* Config sections in modal */
+/* Config Sections */
 .config-section {
-    margin-bottom: 20px;
-    padding-bottom: 15px;
-    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .config-section:last-of-type {
     border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
 }
 
-.config-section h4 {
-    margin-bottom: 12px;
-    color: var(--accent);
-    font-size: 1em;
+.config-section-header {
+    font-weight: 600;
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+    color: var(--text-primary);
 }
 
-.section-desc {
+/* Form Elements */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group:last-child {
+    margin-bottom: 0;
+}
+
+.form-group label {
     display: block;
-    color: var(--text-muted);
-    margin-bottom: 15px;
-    font-size: 0.85em;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    font-weight: 500;
 }
 
-/* Nickname input rows */
-.nickname-row {
+.form-hint {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-top: 4px;
+}
+
+.checkbox-label {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: 10px;
-    padding: 8px;
-    background: var(--bg);
-    border-radius: 6px;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+}
+
+.checkbox-label span {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Range Input */
+input[type="range"] {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    outline: none;
+    -webkit-appearance: none;
+    margin-top: 8px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+/* Nickname Rows */
+.nickname-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
 }
 
 .nickname-row .bot-name {
     min-width: 100px;
     font-weight: 500;
     color: var(--accent);
+    font-size: 0.875rem;
 }
 
 .nickname-row input {
     flex: 1;
-    padding: 6px 10px;
+    padding: 8px 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
 }
 
 .nickname-row input:focus {
@@ -347,16 +502,59 @@ tr.hidden {
     border-color: var(--accent);
 }
 
-.modal-content {
-    max-width: 500px;
-    max-height: 80vh;
-    overflow-y: auto;
+.nickname-row input::placeholder {
+    color: var(--text-muted);
+}
+
+/* Hidden rows */
+tr.hidden {
+    display: none;
+}
+
+/* Disabled state for auto settings */
+#auto-settings.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .filter-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filter-group {
+        width: 100%;
+    }
+
+    .filter-group select {
+        width: 100%;
+    }
+
+    .filter-count {
+        margin-left: 0;
+        margin-top: 8px;
+    }
+
+    .action-buttons {
+        flex-direction: column;
+    }
+
+    .nickname-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .nickname-row .bot-name {
+        min-width: auto;
+    }
 }
 </style>
 
 <script>
 let currentChannelId = null;
-let botNicknames = {};  // Cache for bot nicknames
+let botNicknames = {};
 
 // Load bot nicknames on page load
 async function loadBotNicknames() {
@@ -377,30 +575,30 @@ function filterChannels() {
     const guildFilter = document.getElementById('guild-filter').value;
     const autoFilter = document.getElementById('auto-filter').value;
     const historyFilter = document.getElementById('history-filter').value;
-    
+
     const rows = document.querySelectorAll('#channels-table tbody tr');
     let visibleCount = 0;
-    
+
     rows.forEach(row => {
         let show = true;
-        
+
         if (guildFilter && row.dataset.guildId !== guildFilter) {
             show = false;
         }
-        
+
         if (autoFilter && row.dataset.autonomous !== autoFilter) {
             show = false;
         }
-        
+
         if (historyFilter && row.dataset.hasHistory !== historyFilter) {
             show = false;
         }
-        
+
         row.classList.toggle('hidden', !show);
         if (show) visibleCount++;
     });
-    
-    document.getElementById('channel-count').textContent = `(${visibleCount} shown)`;
+
+    document.getElementById('channel-count').textContent = `${visibleCount} channels`;
 }
 
 // Open autonomous configuration modal
@@ -414,11 +612,11 @@ function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowB
     document.getElementById('auto-cooldown').value = cooldown;
     document.getElementById('cooldown-val').textContent = cooldown;
     document.getElementById('auto-allow-bots').checked = allowBots || false;
-    
+
     // Populate nickname inputs for each bot
     const container = document.getElementById('bot-nicknames-container');
     container.innerHTML = '';
-    
+
     for (const [botName, nicknames] of Object.entries(botNicknames)) {
         const row = document.createElement('div');
         row.className = 'nickname-row';
@@ -428,25 +626,23 @@ function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowB
                    id="nickname-${botName.replace(/\s+/g, '-')}"
                    data-bot-name="${botName}"
                    value="${nicknames || ''}"
-                   placeholder="e.g., bestie, buddy">
+                   placeholder="e.g., bestie, buddy"
+                   title="Nicknames for ${botName}">
         `;
         container.appendChild(row);
     }
-    
+
     // If no bots loaded yet, show a message
     if (Object.keys(botNicknames).length === 0) {
-        container.innerHTML = '<small style="color: var(--text-muted);">Loading bot info...</small>';
-        // Try to reload
+        container.innerHTML = '<p class="form-hint">Loading bot info...</p>';
         loadBotNicknames().then(() => {
             if (Object.keys(botNicknames).length > 0) {
                 openAutoModal(channelId, channelName, enabled, chance, cooldown, allowBots);
             }
         });
     }
-    
+
     document.getElementById('auto-modal').style.display = 'flex';
-    
-    // Toggle settings visibility based on enabled state
     toggleAutoSettings();
 }
 
@@ -457,7 +653,12 @@ function closeAutoModal() {
 
 function toggleAutoSettings() {
     const enabled = document.getElementById('auto-enabled').checked;
-    document.getElementById('auto-settings').style.opacity = enabled ? '1' : '0.5';
+    const settings = document.getElementById('auto-settings');
+    if (enabled) {
+        settings.classList.remove('disabled');
+    } else {
+        settings.classList.add('disabled');
+    }
 }
 
 document.getElementById('auto-enabled').addEventListener('change', toggleAutoSettings);
@@ -469,16 +670,15 @@ async function saveAutoConfig() {
     const chance = parseInt(document.getElementById('auto-chance').value);
     const cooldown = parseInt(document.getElementById('auto-cooldown').value);
     const allowBotTriggers = document.getElementById('auto-allow-bots').checked;
-    
+
     let hasErrors = false;
-    
+
     // Save nicknames for each bot
     const nicknameInputs = document.querySelectorAll('#bot-nicknames-container input[data-bot-name]');
     for (const input of nicknameInputs) {
         const botName = input.dataset.botName;
         const nicknames = input.value.trim();
-        
-        // Only save if changed
+
         if (botNicknames[botName] !== nicknames) {
             try {
                 const response = await fetch('/api/nicknames', {
@@ -486,10 +686,10 @@ async function saveAutoConfig() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
                 });
-                
+
                 const data = await response.json();
                 if (data.status === 'ok') {
-                    botNicknames[botName] = nicknames;  // Update cache
+                    botNicknames[botName] = nicknames;
                 } else {
                     hasErrors = true;
                 }
@@ -498,7 +698,7 @@ async function saveAutoConfig() {
             }
         }
     }
-    
+
     // Save autonomous settings
     try {
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
@@ -506,30 +706,29 @@ async function saveAutoConfig() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
-            // Update the row
             const row = document.querySelector(`tr[data-channel-id="${channelId}"]`);
             if (row) {
                 row.dataset.autonomous = enabled ? 'enabled' : 'disabled';
                 const statusDiv = document.getElementById(`auto-status-${channelId}`);
-                const botIcon = allowBotTriggers ? ' 🤖' : '';
+                const botIcon = allowBotTriggers ? ' +bots' : '';
                 if (enabled) {
                     statusDiv.innerHTML = `
-                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">● ON</span>
-                        <small>${chance}% / ${cooldown}min${botIcon}</small>
+                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">ON</button>
+                        <span class="auto-details">${chance}% / ${cooldown}min${botIcon}</span>
                     `;
                 } else {
-                    statusDiv.innerHTML = `<span class="badge badge-danger auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">● OFF</span>`;
+                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">OFF</button>`;
                 }
             }
-            
+
             if (hasErrors) {
                 showToast('Settings saved (some nickname updates failed)', 'warning');
             } else {
-                showToast('All settings saved!', 'success');
+                showToast('Settings saved successfully', 'success');
             }
             closeAutoModal();
         } else {
@@ -554,23 +753,21 @@ function clearHistory(channelId, channelName) {
                         'X-CSRF-Token': '{{ csrf_token() }}'
                     }
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (data.status === 'ok') {
-                    // Update the row
                     const row = document.querySelector(`tr[data-channel-id="${channelId}"]`);
                     if (row) {
                         row.dataset.hasHistory = 'no';
                         const countSpan = row.querySelector('.history-count');
                         countSpan.textContent = '0 messages';
                         countSpan.classList.remove('has-history');
-                        
-                        // Disable the clear button
+
                         const clearBtn = row.querySelector('.btn-danger');
                         if (clearBtn) clearBtn.disabled = true;
                     }
-                    
+
                     showToast(`History cleared for #${channelName}`, 'success');
                 } else {
                     showToast('Failed to clear history', 'error');
@@ -589,44 +786,41 @@ document.getElementById('auto-modal').addEventListener('click', function(e) {
     }
 });
 
-// Quick toggle autonomous mode (click on badge)
+// Quick toggle autonomous mode
 async function quickToggleAuto(channelId, enable) {
     try {
-        // First get current settings to preserve them
         const getResponse = await fetch(`/api/channels/${channelId}/autonomous`);
         const currentSettings = await getResponse.json();
-        
-        // Use current values or defaults for quick toggle
+
         const chance = currentSettings.chance || 5;
         const cooldown = currentSettings.cooldown || 2;
         const allowBotTriggers = currentSettings.allow_bot_triggers || false;
-        
+
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: enable, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'ok') {
-            // Update the row
             const row = document.querySelector(`tr[data-channel-id="${channelId}"]`);
             if (row) {
                 row.dataset.autonomous = enable ? 'enabled' : 'disabled';
                 const statusDiv = document.getElementById(`auto-status-${channelId}`);
-                const botIcon = data.allow_bot_triggers ? ' 🤖' : '';
+                const botIcon = data.allow_bot_triggers ? ' +bots' : '';
                 if (enable) {
                     statusDiv.innerHTML = `
-                        <span class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">● ON</span>
-                        <small>${data.chance}% / ${data.cooldown}min${botIcon}</small>
+                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">ON</button>
+                        <span class="auto-details">${data.chance}% / ${data.cooldown}min${botIcon}</span>
                     `;
                 } else {
-                    statusDiv.innerHTML = `<span class="badge badge-danger auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">● OFF</span>`;
+                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">OFF</button>`;
                 }
             }
-            
-            showToast(enable ? '✅ Autonomous mode enabled' : '✅ Autonomous mode disabled', 'success');
+
+            showToast(enable ? 'Autonomous mode enabled' : 'Autonomous mode disabled', 'success');
         } else {
             showToast('Failed to toggle autonomous mode', 'error');
         }
