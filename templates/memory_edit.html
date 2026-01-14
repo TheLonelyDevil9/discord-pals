@@ -19,9 +19,10 @@
         <p class="editor-warning">Edit the raw JSON. Be careful with the structure!</p>
         <form action="/memories/{{ name }}/save" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea name="content" class="editor-textarea" title="Memory JSON content">{{ content }}</textarea>
+            <textarea id="json-editor" name="content" class="editor-textarea" title="Memory JSON content">{{ content }}</textarea>
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" class="btn btn-ghost" onclick="formatJson()">Format JSON</button>
                 <a href="/memories" class="btn btn-ghost">Cancel</a>
             </div>
         </form>
@@ -84,4 +85,17 @@
     gap: 12px;
 }
 </style>
+
+<script>
+function formatJson() {
+    const textarea = document.getElementById('json-editor');
+    try {
+        const parsed = JSON.parse(textarea.value);
+        textarea.value = JSON.stringify(parsed, null, 2);
+        showToast('JSON formatted successfully', 'success');
+    } catch (e) {
+        showToast('Invalid JSON: ' + e.message, 'error');
+    }
+}
+</script>
 {% endblock %}
