@@ -52,10 +52,10 @@
         <table id="channels-table">
             <thead>
                 <tr>
-                    <th>Channel</th>
-                    <th>Server</th>
-                    <th>History</th>
-                    <th>Autonomous</th>
+                    <th class="sortable" data-sort="channel" onclick="sortTable('channel')">Channel <span class="sort-icon"></span></th>
+                    <th class="sortable" data-sort="server" onclick="sortTable('server')">Server <span class="sort-icon"></span></th>
+                    <th class="sortable" data-sort="history" onclick="sortTable('history')">History <span class="sort-icon"></span></th>
+                    <th class="sortable" data-sort="autonomous" onclick="sortTable('autonomous')">Autonomous <span class="sort-icon"></span></th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -64,7 +64,10 @@
                 <tr data-channel-id="{{ channel.id }}"
                     data-guild-id="{{ channel.guild_id }}"
                     data-autonomous="{{ 'enabled' if channel.autonomous else 'disabled' }}"
-                    data-has-history="{{ 'yes' if channel.history_count > 0 else 'no' }}">
+                    data-has-history="{{ 'yes' if channel.history_count > 0 else 'no' }}"
+                    data-channel-name="{{ channel.name|lower }}"
+                    data-server-name="{{ channel.guild_name|lower }}"
+                    data-history-count="{{ channel.history_count }}">
                     <td>
                         <div class="channel-info">
                             <span class="channel-name">#{{ channel.name }}</span>
@@ -243,6 +246,37 @@
     margin-left: auto;
     color: var(--text-muted);
     font-size: 0.875rem;
+}
+
+/* Sortable Headers */
+.sortable {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.sortable:hover {
+    background: var(--bg-tertiary);
+}
+
+.sort-icon {
+    margin-left: 4px;
+    font-size: 0.75rem;
+    opacity: 0.5;
+}
+
+.sort-icon::after {
+    content: '⇅';
+}
+
+.sortable.asc .sort-icon::after {
+    content: '↑';
+    opacity: 1;
+}
+
+.sortable.desc .sort-icon::after {
+    content: '↓';
+    opacity: 1;
 }
 
 /* Channel Info */
@@ -555,6 +589,7 @@ tr.hidden {
 <script>
 let currentChannelId = null;
 let botNicknames = {};
+let currentSort = { column: null, direction: 'asc' };
 
 // Load bot nicknames on page load
 async function loadBotNicknames() {
@@ -569,6 +604,68 @@ async function loadBotNicknames() {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', loadBotNicknames);
+
+// Sort table
+function sortTable(column) {
+    const table = document.getElementById('channels-table');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    // Toggle direction if same column
+    if (currentSort.column === column) {
+        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentSort.column = column;
+        currentSort.direction = 'asc';
+    }
+
+    // Update header classes
+    document.querySelectorAll('.sortable').forEach(th => {
+        th.classList.remove('asc', 'desc');
+    });
+    const activeHeader = document.querySelector(`.sortable[data-sort="${column}"]`);
+    if (activeHeader) {
+        activeHeader.classList.add(currentSort.direction);
+    }
+
+    // Sort rows
+    rows.sort((a, b) => {
+        let aVal, bVal;
+
+        switch (column) {
+            case 'channel':
+                aVal = a.dataset.channelName || '';
+                bVal = b.dataset.channelName || '';
+                break;
+            case 'server':
+                aVal = a.dataset.serverName || '';
+                bVal = b.dataset.serverName || '';
+                break;
+            case 'history':
+                aVal = parseInt(a.dataset.historyCount) || 0;
+                bVal = parseInt(b.dataset.historyCount) || 0;
+                break;
+            case 'autonomous':
+                aVal = a.dataset.autonomous === 'enabled' ? 1 : 0;
+                bVal = b.dataset.autonomous === 'enabled' ? 1 : 0;
+                break;
+            default:
+                return 0;
+        }
+
+        let result;
+        if (typeof aVal === 'number') {
+            result = aVal - bVal;
+        } else {
+            result = aVal.localeCompare(bVal);
+        }
+
+        return currentSort.direction === 'asc' ? result : -result;
+    });
+
+    // Re-append sorted rows
+    rows.forEach(row => tbody.appendChild(row));
+}
 
 // Filter channels
 function filterChannels() {
