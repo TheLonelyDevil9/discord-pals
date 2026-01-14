@@ -343,7 +343,7 @@ def edit_character(name):
         except Exception as e:
             log.warn(f"Failed to read character file: {e}")
 
-    return render_template('character_edit.html', name=name, content=content)
+    return render_template('character_edit.html', name=name, content=content, providers=PROVIDERS)
 
 
 @app.route('/characters/<name>/save', methods=['POST'])

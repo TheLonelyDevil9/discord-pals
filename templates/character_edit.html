@@ -20,9 +20,11 @@
             <label for="provider-tier">Preferred Provider</label>
             <select id="provider-tier" onchange="updateProviderSection()" title="Select preferred provider tier">
                 <option value="">Default (use fallback order)</option>
-                <option value="primary">Primary</option>
-                <option value="secondary">Secondary</option>
-                <option value="fallback">Fallback</option>
+                {% for tier in ['primary', 'secondary', 'fallback'] %}
+                {% if tier in providers %}
+                <option value="{{ tier }}">{{ tier|capitalize }} ({{ providers[tier].name }})</option>
+                {% endif %}
+                {% endfor %}
             </select>
             <span class="provider-hint">This character will prefer the selected provider tier</span>
         </div>
