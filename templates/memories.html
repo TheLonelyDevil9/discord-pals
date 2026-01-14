@@ -18,18 +18,21 @@
 <div id="tab-files" class="tab-content active">
     {% if memories %}
     {% for file_name, data in memories.items() %}
-    <div class="card memory-file-card">
-        <div class="card-header">
-            <span class="card-title">{{ file_name }}</span>
-            <a href="/memories/{{ file_name }}/edit" class="btn btn-ghost">Edit Raw JSON</a>
+    <div class="card memory-file-card" data-file="{{ file_name }}">
+        <div class="card-header clickable" onclick="toggleMemoryCard('{{ file_name }}')">
+            <span class="card-title">
+                <span class="collapse-icon">▼</span>
+                {{ file_name }}
+            </span>
+            <a href="/memories/{{ file_name }}/edit" class="btn btn-ghost" onclick="event.stopPropagation()">Edit Raw JSON</a>
         </div>
 
         {% if data.error %}
-        <div class="card-body">
+        <div class="card-body collapsible">
             <div class="empty">Error: {{ data.error }}</div>
         </div>
         {% elif data %}
-        <div class="table-responsive">
+        <div class="table-responsive collapsible">
             <table class="memories-table">
                 <thead>
                     <tr>
@@ -69,12 +72,12 @@
             </table>
         </div>
 
-        <div class="card-body bulk-actions">
+        <div class="card-body bulk-actions collapsible">
             <button type="button" class="btn btn-danger" onclick="deleteSelectedMemories('{{ file_name }}')">Delete Selected</button>
             <button type="button" class="btn btn-danger" onclick="clearAllMemories('{{ file_name }}')">Clear All</button>
         </div>
         {% else %}
-        <div class="card-body">
+        <div class="card-body collapsible">
             <div class="empty">No memories stored</div>
         </div>
         {% endif %}
@@ -201,6 +204,29 @@
     margin-bottom: 20px;
 }
 
+/* Collapsible Card Header */
+.card-header.clickable {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.card-header.clickable:hover {
+    background: var(--bg-tertiary);
+}
+
+.collapse-icon {
+    margin-right: 8px;
+    font-family: monospace;
+    font-size: 0.75rem;
+    transition: transform 0.2s ease;
+}
+
+/* Collapsed state */
+.collapsible.collapsed {
+    display: none;
+}
+
 /* Memories Table */
 .memories-table {
     table-layout: fixed;
@@ -298,6 +324,59 @@
 </style>
 
 <script>
+// Collapsible memory cards
+function toggleMemoryCard(fileName) {
+    const card = document.querySelector(`.memory-file-card[data-file="${fileName}"]`);
+    if (!card) return;
+
+    const collapsibles = card.querySelectorAll('.collapsible');
+    const icon = card.querySelector('.collapse-icon');
+    const isCollapsed = collapsibles[0]?.classList.contains('collapsed');
+
+    collapsibles.forEach(el => {
+        if (isCollapsed) {
+            el.classList.remove('collapsed');
+        } else {
+            el.classList.add('collapsed');
+        }
+    });
+
+    if (icon) {
+        icon.textContent = isCollapsed ? '▼' : '▶';
+    }
+
+    // Save state to localStorage
+    const collapsedCards = JSON.parse(localStorage.getItem('memoryCardsCollapsed') || '{}');
+    collapsedCards[fileName] = !isCollapsed;
+    localStorage.setItem('memoryCardsCollapsed', JSON.stringify(collapsedCards));
+}
+
+// Initialize collapsed state on page load
+function initCollapsedState() {
+    const collapsedCards = JSON.parse(localStorage.getItem('memoryCardsCollapsed') || '{}');
+
+    document.querySelectorAll('.memory-file-card').forEach(card => {
+        const fileName = card.dataset.file;
+        const rowCount = card.querySelectorAll('tbody tr').length;
+
+        // Default: collapse cards with >10 entries, or use saved state
+        let shouldCollapse = rowCount > 10;
+        if (fileName in collapsedCards) {
+            shouldCollapse = collapsedCards[fileName];
+        }
+
+        if (shouldCollapse) {
+            const collapsibles = card.querySelectorAll('.collapsible');
+            const icon = card.querySelector('.collapse-icon');
+            collapsibles.forEach(el => el.classList.add('collapsed'));
+            if (icon) icon.textContent = '▶';
+        }
+    });
+}
+
+// Run on page load
+initCollapsedState();
+
 // Tab switching
 function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
