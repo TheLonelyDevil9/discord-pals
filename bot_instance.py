@@ -28,6 +28,7 @@ from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
 import logger as log
+from prometheus_metrics import metrics_manager
 
 
 class BotInstance:
@@ -86,17 +87,27 @@ class BotInstance:
                 if available:
                     self.character = character_manager.load(available[0])
                     log.info(f"Loaded fallback: {self.character.name}", self.name)
-            
+
             # Set up request processor
             self.request_queue.set_processor(self._process_request)
-            
+
+            # Start periodic state cleanup task (every 5 minutes)
+            asyncio.create_task(self._periodic_state_cleanup())
+
+            # Initialize Prometheus metrics for this bot
+            metrics_manager.update_bot_status(
+                bot_name=self.name,
+                character_name=self.character.name if self.character else 'None',
+                online=True
+            )
+
             # Sync commands
             try:
                 synced = await self.tree.sync()
                 log.ok(f"Synced {len(synced)} commands", self.name)
             except Exception as e:
                 log.error(f"Command sync failed: {e}", self.name)
-            
+
             log.online(f"{self.client.user} is online!", self.name)
         
         @self.client.event
@@ -576,6 +587,12 @@ class BotInstance:
             # Track stats
             stats_manager.record_message(user_id, user_name, channel_id, channel_name)
 
+            # Record Prometheus metrics
+            metrics_manager.record_message(
+                bot_name=self.name,
+                channel_type='dm' if is_dm else 'server'
+            )
+
             attachment_content = await process_attachments(message) if attachments else None
             if attachment_content:
                 log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
@@ -708,9 +725,18 @@ class BotInstance:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)
 
+                # Record Prometheus metrics
+                metrics_manager.record_response(
+                    bot_name=self.name,
+                    success=bool(response),
+                    duration_seconds=response_time_ms / 1000.0,
+                    provider_tier=preferred_tier or 'default'
+                )
+
             # Handle failed generation
             if not response:
                 log.error("All providers failed to generate response")
+                metrics_manager.record_error(bot_name=self.name, error_type='provider_failure')
                 await message.channel.send("Something went wrong - all providers failed.")
                 return
 
@@ -727,11 +753,13 @@ class BotInstance:
             # Anti-looping: Check rate limit before responding
             if self._check_rate_limit(channel_id):
                 log.warn("Skipping response due to rate limit", self.name)
+                metrics_manager.record_rate_limit_hit(bot_name=self.name, limit_type='channel')
                 return
 
             # Anti-looping: Check circuit breaker
             if self._check_circuit_breaker(channel_id):
                 log.warn("Skipping response due to circuit breaker", self.name)
+                metrics_manager.record_circuit_breaker_trip(bot_name=self.name, channel_id=channel_id)
                 # Decay the failure count slowly to allow recovery
                 self._consecutive_failures[channel_id] = max(0, self._consecutive_failures.get(channel_id, 0) - 1)
                 return
@@ -764,6 +792,7 @@ class BotInstance:
             
             # Update last activity timestamp
             runtime_config.update_last_activity(self.name)
+            metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
             
             if len(sent_messages) > 1:
                 store_multipart_response(channel_id, [m.id for m in sent_messages], response)
@@ -946,12 +975,47 @@ class BotInstance:
                 self._consecutive_failures.pop(channel_id, None)
                 self._channel_mood.pop(channel_id, None)
                 self._bot_conversation_tracker.pop(channel_id, None)
+                self._last_bot_response.pop(channel_id, None)
 
         # Cleanup user state
         for user_id in list(self._user_timestamps.keys()):
             timestamps = self._user_timestamps[user_id]
             if not timestamps or now - max(timestamps) > STALE_STATE_THRESHOLD:
                 del self._user_timestamps[user_id]
+
+        # Cleanup message batches (orphaned batches)
+        now = time.time()
+        for batch_key in list(self._message_batches.keys()):
+            batch = self._message_batches[batch_key]
+            # Check if timer task is still running
+            if batch.get('timer_task') and batch['timer_task'].done():
+                # Timer completed but batch wasn't processed - clean it up
+                del self._message_batches[batch_key]
+                log.debug(f"Cleaned up orphaned message batch: {batch_key}", self.name)
+
+        # Cleanup last memory check tracking
+        last_memory_check = getattr(self, '_last_memory_check', {})
+        for channel_id in list(last_memory_check.keys()):
+            # Remove entries for channels that no longer exist in history
+            from discord_utils import conversation_history
+            if channel_id not in conversation_history:
+                last_memory_check.pop(channel_id, None)
+
+    async def _periodic_state_cleanup(self):
+        """Periodically clean up stale state to prevent memory leaks."""
+        from constants import STALE_STATE_THRESHOLD
+        cleanup_interval = 300  # 5 minutes
+
+        while True:
+            try:
+                await asyncio.sleep(cleanup_interval)
+                self._cleanup_stale_state()
+                log.debug("Periodic state cleanup completed", self.name)
+            except asyncio.CancelledError:
+                # Task was cancelled during shutdown
+                break
+            except Exception as e:
+                log.error(f"Error during periodic state cleanup: {e}", self.name)
 
     def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
         """Check if response is too similar to recent responses (anti-loop measure).

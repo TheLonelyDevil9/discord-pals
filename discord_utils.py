@@ -113,7 +113,7 @@ def safe_json_save(filepath: str, data, indent: int = 2) -> bool:
 _history_save_pending = False
 _history_save_lock = threading.Lock()
 _history_last_save = 0.0
-HISTORY_SAVE_DEBOUNCE = 5.0  # Minimum seconds between saves
+HISTORY_SAVE_DEBOUNCE = 30.0  # Minimum seconds between saves (increased from 5s for performance)
 
 
 # Conversation history storage (in-memory, per channel/DM)
@@ -131,6 +131,11 @@ HISTORY_CACHE_FILE = os.path.join(DATA_DIR, "history_cache.json")
 
 # Channel name mapping (channel_id -> name) for readable storage
 channel_names: Dict[int, str] = {}
+
+# Conversation history limits
+_MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
+_STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
+_channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
 
 # Pre-compiled regex patterns for performance
 RE_THINKING_OPEN = re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE)
@@ -356,6 +361,9 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
     
+    # Track activity for this channel
+    _channel_last_activity[channel_id] = time.time()
+    
     # Strip character name prefixes from bot/assistant messages
     if role == "user" and author_name:
         content = strip_character_prefix(content)
@@ -396,6 +404,44 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
     # Trigger debounced save to prevent data loss on crash
     save_history()
+
+    # Periodic cleanup of stale channels (every 100 messages added)
+    if len(conversation_history) > _MAX_CHANNELS_IN_HISTORY:
+        cleanup_stale_conversation_history()
+
+
+def cleanup_stale_conversation_history():
+    """Remove stale channels from conversation_history to prevent memory leaks."""
+    now = time.time()
+    channels_to_remove = []
+
+    # Find channels with no recent activity
+    for channel_id in list(conversation_history.keys()):
+        last_activity = _channel_last_activity.get(channel_id, 0)
+        if now - last_activity > _STALE_CHANNEL_THRESHOLD:
+            channels_to_remove.append(channel_id)
+
+    # If still over limit, remove oldest channels
+    if len(conversation_history) - len(channels_to_remove) > _MAX_CHANNELS_IN_HISTORY:
+        # Sort by last activity, oldest first
+        sorted_channels = sorted(
+            conversation_history.keys(),
+            key=lambda cid: _channel_last_activity.get(cid, 0)
+        )
+        # Remove oldest until under limit
+        excess = len(conversation_history) - _MAX_CHANNELS_IN_HISTORY
+        channels_to_remove.extend(sorted_channels[:excess])
+
+    # Remove duplicates and clean up
+    channels_to_remove = list(set(channels_to_remove))
+    for ch in channels_to_remove:
+        conversation_history.pop(ch, None)
+        _recent_message_hashes.pop(ch, None)
+        _channel_last_activity.pop(ch, None)
+        channel_names.pop(ch, None)
+
+    if channels_to_remove:
+        log.debug(f"Cleaned up {len(channels_to_remove)} stale channels from conversation history")
 
 
 def update_history_on_edit(channel_id: int, old_content: str, new_content: str, user_name: str = None):

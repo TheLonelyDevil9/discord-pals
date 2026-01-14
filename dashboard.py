@@ -10,6 +10,7 @@ import os
 import io
 import zipfile
 from pathlib import Path
+from datetime import timedelta
 import logger as log
 from security import (
     safe_path, safe_filename, validate_zip_entry,
@@ -31,6 +32,18 @@ PROMPTS_DIR = Path("prompts")
 # Initialize secret key securely
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app.secret_key = get_or_create_secret_key(DATA_DIR)
+
+# Flask session cookie security settings
+app.config.update(
+    # Only send cookies over HTTPS (set to False for local development)
+    SESSION_COOKIE_SECURE=False,
+    # Prevent JavaScript access to cookies
+    SESSION_COOKIE_HTTPONLY=True,
+    # Restrict cookie to same-site requests
+    SESSION_COOKIE_SAMESITE='Lax',
+    # Set cookie expiration (24 hours)
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=24)
+)
 
 # Make CSRF token available in all templates
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
@@ -55,6 +68,12 @@ def check_login():
         return None
     if request.path.startswith('/static/'):
         return None
+
+    # Validate content-type for JSON POST requests
+    if request.method == 'POST' and request.is_json:
+        if not request.content_type or 'application/json' not in request.content_type:
+            log.warn(f"Invalid content-type for JSON request: {request.content_type}")
+            return jsonify({'status': 'error', 'message': 'Invalid content-type'}), 400
 
     # If auth is enabled and not logged in, redirect to login
     if is_auth_enabled():
