@@ -121,7 +121,7 @@ conversation_history: Dict[int, List[dict]] = {}
 
 # Recent message hashes for fast duplicate detection (channel_id -> set of hashes)
 _recent_message_hashes: Dict[int, set] = {}
-_RECENT_HASH_LIMIT = 10  # Number of recent hashes to track per channel
+_RECENT_HASH_LIMIT = 50  # Number of recent hashes to track per channel
 
 # Multi-part response tracking (message_id -> full_content)
 multipart_responses: Dict[int, Dict[int, str]] = {}
@@ -368,7 +368,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["author"] = author_name
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
-    msg_hash = hash((role, content))
+    msg_hash = hash((role, content, author_name or ''))
     if channel_id not in _recent_message_hashes:
         _recent_message_hashes[channel_id] = set()
 

@@ -558,7 +558,13 @@ class BotInstance:
             
             channel_id = message.channel.id
             guild_id = guild.id if guild else None
-            
+
+            # Check for duplicate message before adding to history
+            recent = get_history(channel_id)[-5:]
+            if any(m.get('content') == content and m.get('author') == user_name for m in recent):
+                log.debug(f"Skipping duplicate message from {user_name}", self.name)
+                return
+
             add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
             
             # Store channel name for readable history display
