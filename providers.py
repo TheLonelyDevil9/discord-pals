@@ -377,7 +377,8 @@ class AIProviderManager:
         system_prompt: str,
         temperature: float = None,
         max_tokens: int = None,
-        use_single_user: bool = True  # SillyTavern-style by default
+        use_single_user: bool = True,  # SillyTavern-style by default
+        preferred_tier: str = ""  # Per-character provider preference
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
 
@@ -388,6 +389,7 @@ class AIProviderManager:
             max_tokens: Max response length. If None, uses per-provider config.
             use_single_user: If True (default), format as single user message
                              like SillyTavern's "Single user message (no tools)"
+            preferred_tier: If set (primary/secondary/fallback), try this tier first
         """
 
         # Check if we have multimodal content
@@ -413,9 +415,16 @@ class AIProviderManager:
         if has_images:
             text_only_messages = strip_images_from_messages(full_messages)
 
+        # Build tier order - put preferred tier first if specified
+        tier_order = ["primary", "secondary", "fallback"]
+        if preferred_tier and preferred_tier in tier_order:
+            tier_order.remove(preferred_tier)
+            tier_order.insert(0, preferred_tier)
+            log.info(f"Using preferred provider tier: {preferred_tier}")
+
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
-            for tier in ["primary", "secondary", "fallback"]:
+            for tier in tier_order:
                 if tier not in self.providers:
                     self.status[tier] = "no key"
                     continue

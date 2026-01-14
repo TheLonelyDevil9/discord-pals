@@ -690,16 +690,20 @@ class BotInstance:
                 
                 # Track response time
                 start_time = time.time()
-                
+
                 # Get message format preference from runtime config
                 use_single_user = runtime_config.get("use_single_user", False)
-                
+
+                # Get character's preferred provider tier
+                preferred_tier = self.character.provider if self.character else ""
+
                 response = await provider_manager.generate(
                     messages=messages_for_api,
                     system_prompt=system_prompt,
                     temperature=None,  # Use per-provider config
                     max_tokens=None,   # Use per-provider config (fixes max_tokens issue)
-                    use_single_user=use_single_user
+                    use_single_user=use_single_user,
+                    preferred_tier=preferred_tier
                 )
                 response_time_ms = int((time.time() - start_time) * 1000)
                 stats_manager.record_response(response_time_ms)
