@@ -446,6 +446,7 @@ Manage your character files directly from the browser:
 - **Live Preview** - See how your character will be parsed
 - **System Prompts** - Edit `prompts/system.md` and `prompts/chatroom_context.md`
 - **Placeholder Reference** - Quick reference for available placeholders (`{{char}}`, `{{user}}`, etc.)
+- **Per-Character Provider** - Select preferred AI provider tier for each character
 
 Changes are saved immediately. Use `/reload` in Discord or click the reload button to apply changes.
 
@@ -464,6 +465,8 @@ Features:
 - Add, edit, and delete memories
 - Filter by server, user, or character
 - User ID to username resolution for readability
+- **Collapsible Cards** - Click card headers to collapse/expand (large files collapse by default)
+- **Format JSON** - Button in raw editor to pretty-print and validate JSON
 
 ### Channels Page
 
@@ -472,7 +475,9 @@ Configure autonomous mode per channel:
 - **Enable/Disable** - Toggle autonomous responses for each channel
 - **Response Chance** - Set probability (1-50%) of responding to messages
 - **Cooldown** - Minimum time between autonomous responses (1-10 minutes)
-- **Bot Triggers** - Allow/disallow other bots from triggering responses
+- **Bot Triggers** - Allow/disallow other bots from triggering responses (quick toggle badge in table)
+- **Sortable Columns** - Click column headers to sort by Channel, Server, History, or Autonomous status
+- **Clear History** - Remove conversation history for specific channels
 
 Click the channel name to expand settings, or use the quick toggle to enable/disable.
 
@@ -492,9 +497,9 @@ See [Runtime Configuration](#️-runtime-configuration) for details on each sett
 
 Monitor your bot in real-time:
 
-- **Live Log Stream** - Watch bot activity as it happens
+- **Live Log Stream** - Watch bot activity as it happens (with server-side clear)
 - **Message Stats** - Daily message counts, response times, top users
-- **Context Visualization** - See exactly what context is sent to the AI (with token estimates)
+- **Context Visualization** - See exactly what context is sent to the AI (live polling every 3 seconds)
 - **Error Tracking** - View recent errors and provider failures
 
 ---
@@ -716,12 +721,12 @@ Stuff/special treatment, etc.
 ## Persona
 
 `{{user}}`: Introduction?
-`Samuel`: *smiles warmly* "Hey there! I'm Sam - short for Samuel. 
+`Samuel`: *smiles warmly* "Hey there! I'm Sam - short for Samuel.
 I'm a coffee addict, terrible at mornings, and I collect vintage vinyl records."
 
 `{{user}}`: Personality?
-`Samuel`: "Hmm, let's see... I'm pretty chill, maybe a bit sarcastic, 
-definitely loyal to my friends. I hate small talk but I'll debate 
+`Samuel`: "Hmm, let's see... I'm pretty chill, maybe a bit sarcastic,
+definitely loyal to my friends. I hate small talk but I'll debate
 philosophy for hours."
 
 ```
@@ -733,6 +738,10 @@ Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
 
 ```
 
+## Provider
+
+primary
+
 ## Special Users
 
 ### TheLonelyDevil
@@ -740,6 +749,26 @@ Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
 Samuel's best friend. Very comfortable around them, teases them often.
 
 ```
+
+### Per-Character Provider Selection
+
+You can specify a preferred AI provider tier for each character by adding a `## Provider` section to the character file:
+
+```markdown
+## Provider
+
+primary
+```
+
+Valid values are:
+- `primary` - Use the first provider in your fallback chain
+- `secondary` - Use the second provider
+- `fallback` - Use the third provider
+- (empty/omitted) - Use default fallback order
+
+This is useful when different characters work better with different models. For example, you might want a complex character to always use your best model, while simpler characters can use faster/cheaper providers.
+
+The provider dropdown in the character edit page automatically manages this section for you.
 
 ## Running Multiple Bots
 
