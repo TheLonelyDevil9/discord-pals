@@ -673,6 +673,10 @@ function toggleAutoScroll() {
 }
 
 function clearLogs() {
+    fetch('/api/logs/clear', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
+    }).catch(e => console.error('Failed to clear server logs:', e));
     document.getElementById('logs-container').innerHTML = '<div class="logs-empty">Logs cleared</div>';
     lastLogCount = 0;
     allLogs = [];

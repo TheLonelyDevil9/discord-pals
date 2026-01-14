@@ -998,6 +998,16 @@ def api_logs():
     return jsonify(logs)
 
 
+@app.route('/api/logs/clear', methods=['POST'])
+@requires_csrf
+def api_clear_logs():
+    """Clear the log buffer."""
+    import logger
+    logger.clear_logs()
+    log.info("Logs cleared via dashboard")
+    return jsonify({'status': 'ok'})
+
+
 # --- Channels Management ---
 
 @app.route('/channels')

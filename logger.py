@@ -42,6 +42,12 @@ def get_logs(limit: int = 100) -> list:
     return _log_buffer[-limit:]
 
 
+def clear_logs():
+    """Clear the in-memory log buffer."""
+    global _log_buffer
+    _log_buffer = []
+
+
 def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NORMAL):
     """Internal logging function."""
     ts_str = _timestamp()
