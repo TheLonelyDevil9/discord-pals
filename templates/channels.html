@@ -84,7 +84,10 @@
                         <div class="auto-status" id="auto-status-{{ channel.id }}">
                             {% if channel.autonomous %}
                             <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', false)" title="Click to disable">ON</button>
-                            <span class="auto-details">{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min{% if channel.allow_bot_triggers %} +bots{% endif %}</span>
+                            <span class="auto-details">{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min</span>
+                            <button type="button" class="badge badge-sm bot-trigger-toggle {% if channel.allow_bot_triggers %}badge-info{% else %}badge-muted{% endif %}" onclick="quickToggleBotTriggers('{{ channel.id }}', {{ 'false' if channel.allow_bot_triggers else 'true' }})" title="{% if channel.allow_bot_triggers %}Bot triggers enabled - click to disable{% else %}Bot triggers disabled - click to enable{% endif %}">
+                                bots: {% if channel.allow_bot_triggers %}✓{% else %}✗{% endif %}
+                            </button>
                             {% else %}
                             <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', true)" title="Click to enable">OFF</button>
                             {% endif %}
@@ -310,9 +313,9 @@
 /* Auto Status */
 .auto-status {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .auto-details {
@@ -331,6 +334,24 @@
 
 .auto-toggle:hover {
     transform: scale(1.05);
+}
+
+/* Bot Trigger Toggle */
+.bot-trigger-toggle {
+    cursor: pointer;
+    font-size: 0.6875rem;
+    padding: 2px 6px;
+    border: none;
+    transition: all 0.15s ease;
+}
+
+.bot-trigger-toggle:hover {
+    transform: scale(1.05);
+}
+
+.badge-info {
+    background: var(--accent);
+    color: white;
 }
 
 .badge-muted {
@@ -906,11 +927,14 @@ async function quickToggleAuto(channelId, enable) {
             if (row) {
                 row.dataset.autonomous = enable ? 'enabled' : 'disabled';
                 const statusDiv = document.getElementById(`auto-status-${channelId}`);
-                const botIcon = data.allow_bot_triggers ? ' +bots' : '';
+                const botTriggersEnabled = data.allow_bot_triggers;
                 if (enable) {
                     statusDiv.innerHTML = `
                         <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('${channelId}', false)" title="Click to disable">ON</button>
-                        <span class="auto-details">${data.chance}% / ${data.cooldown}min${botIcon}</span>
+                        <span class="auto-details">${data.chance}% / ${data.cooldown}min</span>
+                        <button type="button" class="badge badge-sm bot-trigger-toggle ${botTriggersEnabled ? 'badge-info' : 'badge-muted'}" onclick="quickToggleBotTriggers('${channelId}', ${!botTriggersEnabled})" title="${botTriggersEnabled ? 'Bot triggers enabled - click to disable' : 'Bot triggers disabled - click to enable'}">
+                            bots: ${botTriggersEnabled ? '✓' : '✗'}
+                        </button>
                     `;
                 } else {
                     statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('${channelId}', true)" title="Click to enable">OFF</button>`;
@@ -923,6 +947,44 @@ async function quickToggleAuto(channelId, enable) {
         }
     } catch (e) {
         showToast('Error toggling autonomous mode', 'error');
+    }
+}
+
+// Quick toggle bot triggers
+async function quickToggleBotTriggers(channelId, enable) {
+    try {
+        const getResponse = await fetch(`/api/channels/${channelId}/autonomous`);
+        const currentSettings = await getResponse.json();
+
+        const response = await fetch(`/api/channels/${channelId}/autonomous`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                enabled: currentSettings.enabled,
+                chance: currentSettings.chance,
+                cooldown: currentSettings.cooldown,
+                allow_bot_triggers: enable
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+            const statusDiv = document.getElementById(`auto-status-${channelId}`);
+            const botToggle = statusDiv.querySelector('.bot-trigger-toggle');
+            if (botToggle) {
+                botToggle.className = `badge badge-sm bot-trigger-toggle ${enable ? 'badge-info' : 'badge-muted'}`;
+                botToggle.setAttribute('onclick', `quickToggleBotTriggers('${channelId}', ${!enable})`);
+                botToggle.setAttribute('title', enable ? 'Bot triggers enabled - click to disable' : 'Bot triggers disabled - click to enable');
+                botToggle.textContent = `bots: ${enable ? '✓' : '✗'}`;
+            }
+
+            showToast(enable ? 'Bot triggers enabled' : 'Bot triggers disabled', 'success');
+        } else {
+            showToast('Failed to toggle bot triggers', 'error');
+        }
+    } catch (e) {
+        showToast('Error toggling bot triggers', 'error');
     }
 }
 </script>
