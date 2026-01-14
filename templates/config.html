@@ -785,10 +785,14 @@ async function switchCharacter(botName, character) {
 async function saveCharacterProvider(charName) {
     const select = document.getElementById('char-provider-' + charName);
     const tier = select.value;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
     const response = await fetch('/api/character-provider', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+        },
         body: JSON.stringify({ character: charName, tier: tier })
     });
 
