@@ -16,7 +16,6 @@ RE_TITLE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
 RE_PERSONA = re.compile(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_DIALOGUE = re.compile(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_SPECIAL_USERS = re.compile(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
-RE_PROVIDER = re.compile(r'##\s*Provider\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_EMPTY_LINES = re.compile(r'\n{3,}')
 
 
@@ -116,12 +115,11 @@ class PromptManager:
 class Character:
     """Represents a loaded character definition."""
 
-    def __init__(self, name: str, persona: str, special_users: Dict[str, str] = None, example_dialogue: str = "", provider: str = ""):
+    def __init__(self, name: str, persona: str, special_users: Dict[str, str] = None, example_dialogue: str = ""):
         self.name = name
         self.persona = persona
         self.special_users = special_users or {}
         self.example_dialogue = example_dialogue
-        self.provider = provider  # Preferred provider tier (primary, secondary, fallback, or empty for default)
 
     def get_special_user_context(self, user_name: str) -> str:
         """Get special context for a user if it exists."""
@@ -169,7 +167,6 @@ class CharacterManager:
         persona = ""
         example_dialogue = ""
         special_users = {}
-        provider = ""
 
         # Extract character name from title
         title_match = RE_TITLE.search(content)
@@ -185,14 +182,6 @@ class CharacterManager:
         dialogue_match = RE_DIALOGUE.search(content)
         if dialogue_match:
             example_dialogue = dialogue_match.group(1).strip()
-
-        # Extract Provider section
-        provider_match = RE_PROVIDER.search(content)
-        if provider_match:
-            provider = provider_match.group(1).strip().lower()
-            # Validate provider tier
-            if provider not in ('primary', 'secondary', 'fallback', ''):
-                provider = ''
 
         # Extract Special Users section
         special_match = RE_SPECIAL_USERS.search(content)
@@ -213,7 +202,7 @@ class CharacterManager:
             if current_user:
                 special_users[current_user] = '\n'.join(current_context).strip()
 
-        character = Character(char_name, persona, special_users, example_dialogue, provider)
+        character = Character(char_name, persona, special_users, example_dialogue)
         self.characters[name] = character
         return character
     

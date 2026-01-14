@@ -65,11 +65,11 @@ def _validate_provider_value(value, expected_type, default, min_val=None, max_va
 
     return value
 
-def load_providers() -> tuple[dict, int]:
+def load_providers() -> tuple[dict, int, dict]:
     """Load providers from providers.json or use defaults.
-    
+
     Returns:
-        tuple: (providers_dict, timeout_seconds)
+        tuple: (providers_dict, timeout_seconds, character_providers_dict)
     """
     config_path = os.path.join(os.path.dirname(__file__), "providers.json")
     timeout = 600  # Default 10 minutes (local LLMs can be slow)
@@ -80,14 +80,14 @@ def load_providers() -> tuple[dict, int]:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             log.warn(f"Invalid providers.json: {e}")
-            return {}, timeout
+            return {}, timeout, {}
         
         providers = {}
         provider_list = data.get("providers", [])
         
         if not provider_list:
             log.warn("providers.json has no providers defined")
-            return {}, timeout
+            return {}, timeout, {}
         
         for i, p in enumerate(provider_list):
             tier = ["primary", "secondary", "fallback"][i] if i < 3 else f"tier_{i}"
@@ -123,7 +123,19 @@ def load_providers() -> tuple[dict, int]:
             }
 
         timeout = _validate_provider_value(data.get("timeout"), int, 60, min_val=5, max_val=3600, name="timeout")
-        return providers, timeout
+
+        # Load character provider preferences
+        character_providers = data.get("character_providers", {})
+        # Validate that values are valid tier names
+        valid_tiers = set(providers.keys())
+        validated_char_providers = {}
+        for char_name, tier in character_providers.items():
+            if tier in valid_tiers:
+                validated_char_providers[char_name] = tier
+            else:
+                log.warn(f"Invalid tier '{tier}' for character '{char_name}', ignoring")
+
+        return providers, timeout, validated_char_providers
     
     # Default fallback (original hardcoded config)
     return {
@@ -139,10 +151,30 @@ def load_providers() -> tuple[dict, int]:
             "key": os.getenv('DEEPSEEK_API_KEY'),
             "model": "deepseek-chat"
         }
-    }, timeout
+    }, timeout, {}
 
 
-PROVIDERS, API_TIMEOUT = load_providers()
+PROVIDERS, API_TIMEOUT, CHARACTER_PROVIDERS = load_providers()
+
+
+def reload_character_providers() -> dict:
+    """Reload character_providers from providers.json without full restart."""
+    global CHARACTER_PROVIDERS
+    config_path = os.path.join(os.path.dirname(__file__), "providers.json")
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+            char_providers = data.get("character_providers", {})
+            # Validate against current provider tiers
+            valid_tiers = set(PROVIDERS.keys())
+            CHARACTER_PROVIDERS = {k: v for k, v in char_providers.items() if v in valid_tiers}
+            return CHARACTER_PROVIDERS
+        except Exception as e:
+            log.warn(f"Failed to reload character_providers: {e}")
+
+    return CHARACTER_PROVIDERS
 
 # Character Settings
 CHARACTERS_DIR = "characters"

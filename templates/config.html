@@ -98,6 +98,32 @@
     </div>
 </div>
 
+<!-- Character Provider Preferences -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Character Provider Preferences</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">
+            Assign preferred provider tiers to characters. Leave as "Default" to use the standard fallback order.
+        </p>
+        {% for char in characters %}
+        <div class="bot-row compact">
+            <span class="bot-name" style="min-width: 120px;">{{ char }}</span>
+            <select id="char-provider-{{ char }}" title="Provider tier for {{ char }}">
+                <option value="">Default (fallback order)</option>
+                {% for tier in provider_tiers %}
+                <option value="{{ tier }}" {% if character_providers.get(char) == tier %}selected{% endif %}>
+                    {{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})
+                </option>
+                {% endfor %}
+            </select>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="saveCharacterProvider('{{ char }}')">Save</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- Autonomous Channels -->
 <div class="card">
     <div class="card-header">
@@ -750,6 +776,25 @@ async function switchCharacter(botName, character) {
     if (result.status === 'ok') {
         showToast(`Switched to ${result.character}`, 'success');
         location.reload();
+    } else {
+        showToast('Error: ' + (result.message || 'Unknown error'), 'error');
+    }
+}
+
+// Save character provider preference
+async function saveCharacterProvider(charName) {
+    const select = document.getElementById('char-provider-' + charName);
+    const tier = select.value;
+
+    const response = await fetch('/api/character-provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character: charName, tier: tier })
+    });
+
+    const result = await response.json();
+    if (result.status === 'ok') {
+        showToast(`Provider preference saved for ${charName}`, 'success');
     } else {
         showToast('Error: ' + (result.message || 'Unknown error'), 'error');
     }

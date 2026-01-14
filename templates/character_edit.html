@@ -16,18 +16,6 @@
         <span class="card-title">{{ name }}</span>
     </div>
     <div class="card-body">
-        <div class="provider-select">
-            <label for="provider-tier">Preferred Provider</label>
-            <select id="provider-tier" onchange="updateProviderSection()" title="Select preferred provider tier">
-                <option value="">Default (use fallback order)</option>
-                {% for tier in ['primary', 'secondary', 'fallback'] %}
-                {% if tier in providers %}
-                <option value="{{ tier }}">{{ tier|capitalize }} ({{ providers[tier].name }})</option>
-                {% endif %}
-                {% endfor %}
-            </select>
-            <span class="provider-hint">This character will prefer the selected provider tier</span>
-        </div>
         <form action="/characters/{{ name }}/save" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <textarea id="character-editor" name="content" class="editor-textarea" title="Character content">{{ content }}</textarea>
@@ -117,78 +105,5 @@
     font-size: 0.875rem;
     margin-bottom: 16px;
 }
-
-/* Provider Select */
-.provider-select {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-.provider-select label {
-    font-weight: 500;
-    font-size: 0.875rem;
-}
-
-.provider-select select {
-    padding: 6px 12px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-family: inherit;
-    font-size: 0.875rem;
-}
-
-.provider-hint {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-}
 </style>
-
-<script>
-// Parse existing provider from content
-function parseProvider(content) {
-    const match = content.match(/##\s*Provider\s*\n(\w+)/i);
-    return match ? match[1].toLowerCase() : '';
-}
-
-// Update provider section in markdown
-function updateProviderSection() {
-    const select = document.getElementById('provider-tier');
-    const textarea = document.getElementById('character-editor');
-    let content = textarea.value;
-    const newProvider = select.value;
-
-    // Remove existing Provider section
-    content = content.replace(/\n*##\s*Provider\s*\n\w+\s*/gi, '');
-
-    // Add new Provider section if selected
-    if (newProvider) {
-        // Add before Special Users section if it exists, otherwise at end
-        const specialUsersMatch = content.match(/\n##\s*Special Users?/i);
-        if (specialUsersMatch) {
-            const insertPos = content.indexOf(specialUsersMatch[0]);
-            content = content.slice(0, insertPos) + `\n\n## Provider\n${newProvider}` + content.slice(insertPos);
-        } else {
-            content = content.trimEnd() + `\n\n## Provider\n${newProvider}\n`;
-        }
-    }
-
-    textarea.value = content;
-}
-
-// Initialize dropdown from content on page load
-document.addEventListener('DOMContentLoaded', function() {
-    const textarea = document.getElementById('character-editor');
-    const select = document.getElementById('provider-tier');
-    const currentProvider = parseProvider(textarea.value);
-    if (currentProvider && ['primary', 'secondary', 'fallback'].includes(currentProvider)) {
-        select.value = currentProvider;
-    }
-});
-</script>
 {% endblock %}

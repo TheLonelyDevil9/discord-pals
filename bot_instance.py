@@ -11,7 +11,7 @@ import re
 import time
 from typing import Optional, Dict
 
-from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS
+from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
 from providers import provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir
@@ -694,8 +694,8 @@ class BotInstance:
                 # Get message format preference from runtime config
                 use_single_user = runtime_config.get("use_single_user", False)
 
-                # Get character's preferred provider tier
-                preferred_tier = self.character.provider if self.character else ""
+                # Get character's preferred provider tier from config
+                preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
 
                 response = await provider_manager.generate(
                     messages=messages_for_api,

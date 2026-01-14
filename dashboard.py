@@ -18,6 +18,7 @@ from security import (
     login_user, logout_user, is_auth_enabled
 )
 from constants import ALLOWED_IMPORT_FILES
+from config import PROVIDERS, CHARACTER_PROVIDERS
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
 
@@ -343,7 +344,7 @@ def edit_character(name):
         except Exception as e:
             log.warn(f"Failed to read character file: {e}")
 
-    return render_template('character_edit.html', name=name, content=content, providers=PROVIDERS)
+    return render_template('character_edit.html', name=name, content=content)
 
 
 @app.route('/characters/<name>/save', methods=['POST'])
@@ -704,6 +705,9 @@ def config_page():
         config=config,
         characters=characters,
         providers=providers,
+        provider_tiers=list(PROVIDERS.keys()),
+        providers_dict=PROVIDERS,
+        character_providers=CHARACTER_PROVIDERS,
         bots=bots_info,
         providers_raw=providers_raw,
         bots_raw=bots_raw,
@@ -745,6 +749,68 @@ def api_switch_character():
                 return jsonify({'status': 'error', 'message': str(e)}), 400
     
     return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
+
+
+@app.route('/api/character-provider', methods=['GET', 'POST'])
+@requires_csrf
+def api_character_provider():
+    """Get or set character provider preferences."""
+    from config import reload_character_providers
+
+    providers_file = Path("providers.json")
+
+    if request.method == 'GET':
+        return jsonify({'character_providers': CHARACTER_PROVIDERS})
+
+    # POST request
+    data = request.json or {}
+    character = data.get('character', '')
+    tier = data.get('tier', '')
+
+    if not character:
+        return jsonify({'status': 'error', 'message': 'Character name required'}), 400
+
+    # Validate tier
+    if tier and tier not in PROVIDERS:
+        return jsonify({'status': 'error', 'message': f'Invalid tier: {tier}'}), 400
+
+    try:
+        # Load current providers.json
+        if providers_file.exists():
+            with open(providers_file, 'r') as f:
+                providers_data = json.load(f)
+        else:
+            providers_data = {"providers": [], "timeout": 60}
+
+        # Initialize character_providers if not exists
+        if 'character_providers' not in providers_data:
+            providers_data['character_providers'] = {}
+
+        # Update or remove the character's provider preference
+        if tier:
+            providers_data['character_providers'][character] = tier
+        else:
+            # Empty tier means remove preference (use default)
+            providers_data['character_providers'].pop(character, None)
+
+        # Save back to file
+        with open(providers_file, 'w') as f:
+            json.dump(providers_data, f, indent=2)
+
+        # Reload config
+        reload_character_providers()
+
+        log.info(f"Character provider preference updated: {character} -> {tier or 'default'}")
+
+        return jsonify({
+            'status': 'ok',
+            'character': character,
+            'tier': tier or 'default'
+        })
+
+    except Exception as e:
+        log.error(f"Failed to save character provider: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/nicknames', methods=['GET', 'POST'])
