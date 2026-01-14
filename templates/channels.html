@@ -80,19 +80,19 @@
                     <td>
                         <div class="auto-status" id="auto-status-{{ channel.id }}">
                             {% if channel.autonomous %}
-                            <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto({{ channel.id }}, false)" title="Click to disable">ON</button>
+                            <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', false)" title="Click to disable">ON</button>
                             <span class="auto-details">{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min{% if channel.allow_bot_triggers %} +bots{% endif %}</span>
                             {% else %}
-                            <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto({{ channel.id }}, true)" title="Click to enable">OFF</button>
+                            <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', true)" title="Click to enable">OFF</button>
                             {% endif %}
                         </div>
                     </td>
                     <td>
                         <div class="action-buttons">
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="openAutoModal({{ channel.id }}, '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }}, {{ 'true' if channel.allow_bot_triggers else 'false' }})">
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="openAutoModal('{{ channel.id }}', '{{ channel.name }}', {{ 'true' if channel.autonomous else 'false' }}, {{ channel.auto_chance }}, {{ channel.auto_cooldown }}, {{ 'true' if channel.allow_bot_triggers else 'false' }})">
                                 Configure
                             </button>
-                            <button type="button" class="btn btn-danger btn-sm" onclick="clearHistory({{ channel.id }}, '{{ channel.name }}')" {% if channel.history_count == 0 %}disabled{% endif %}>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="clearHistory('{{ channel.id }}', '{{ channel.name }}')" {% if channel.history_count == 0 %}disabled{% endif %}>
                                 Clear
                             </button>
                         </div>
@@ -717,11 +717,11 @@ async function saveAutoConfig() {
                 const botIcon = allowBotTriggers ? ' +bots' : '';
                 if (enabled) {
                     statusDiv.innerHTML = `
-                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">ON</button>
+                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('${channelId}', false)" title="Click to disable">ON</button>
                         <span class="auto-details">${chance}% / ${cooldown}min${botIcon}</span>
                     `;
                 } else {
-                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">OFF</button>`;
+                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('${channelId}', true)" title="Click to enable">OFF</button>`;
                 }
             }
 
@@ -812,11 +812,11 @@ async function quickToggleAuto(channelId, enable) {
                 const botIcon = data.allow_bot_triggers ? ' +bots' : '';
                 if (enable) {
                     statusDiv.innerHTML = `
-                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto(${channelId}, false)" title="Click to disable">ON</button>
+                        <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('${channelId}', false)" title="Click to disable">ON</button>
                         <span class="auto-details">${data.chance}% / ${data.cooldown}min${botIcon}</span>
                     `;
                 } else {
-                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto(${channelId}, true)" title="Click to enable">OFF</button>`;
+                    statusDiv.innerHTML = `<button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('${channelId}', true)" title="Click to enable">OFF</button>`;
                 }
             }
 
