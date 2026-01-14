@@ -818,11 +818,18 @@ def context_page():
 def api_context(bot_name):
     """Get last context for a specific bot."""
     import runtime_config
-    
+
     context = runtime_config.get_last_context(bot_name)
     if context:
         return jsonify(context)
     return jsonify({'status': 'no context stored'})
+
+
+@app.route('/api/contexts')
+def api_contexts():
+    """Get all bot contexts for live updates."""
+    import runtime_config
+    return jsonify(runtime_config.get_last_context())
 
 
 # --- Stats ---

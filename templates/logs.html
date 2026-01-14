@@ -153,46 +153,9 @@
 <!-- Context Tab -->
 <div id="tab-context" class="tab-content">
     <p class="context-intro">See what was sent to the LLM on the last API call for each bot.</p>
-
-    {% if contexts %}
-    {% for bot_name, ctx in contexts.items() %}
-    <div class="card">
-        <div class="card-header">
-            <span class="card-title">{{ bot_name }}</span>
-            <div class="context-meta">
-                <span>{{ ctx.message_count }} messages</span>
-                <span>~{{ ctx.token_estimate }} tokens</span>
-            </div>
-        </div>
-        <div class="card-body">
-            <div class="context-section">
-                <h4 class="context-section-title">System Prompt</h4>
-                <pre class="context-box">{{ ctx.system_prompt }}</pre>
-            </div>
-            <div class="context-section">
-                <h4 class="context-section-title">Messages ({{ ctx.messages|length }})</h4>
-                <div class="messages-list">
-                    {% for msg in ctx.messages[-15:] %}
-                    <div class="message {% if msg.role == 'assistant' %}assistant{% endif %}">
-                        <span class="message-role">{{ msg.role }}</span>
-                        <span class="message-content">{{ msg.content[:400] }}{% if msg.content|length > 400 %}...{% endif %}</span>
-                    </div>
-                    {% endfor %}
-                    {% if ctx.messages|length > 15 %}
-                    <div class="messages-more">... and {{ ctx.messages|length - 15 }} more</div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
+    <div id="context-container">
+        <div class="card"><div class="card-body"><div class="empty">Loading contexts...</div></div></div>
     </div>
-    {% endfor %}
-    {% else %}
-    <div class="card">
-        <div class="card-body">
-            <div class="empty">No context stored yet. Make a request to see what's sent to the LLM.</div>
-        </div>
-    </div>
-    {% endif %}
 </div>
 
 <style>
@@ -714,10 +677,95 @@ let logsPollInterval = setInterval(fetchLogs, 2000);
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         clearInterval(logsPollInterval);
+        clearInterval(contextPollInterval);
     } else {
         fetchLogs();
         logsPollInterval = setInterval(fetchLogs, 2000);
+        if (document.getElementById('tab-context').classList.contains('active')) {
+            fetchContexts();
+            contextPollInterval = setInterval(fetchContexts, 3000);
+        }
     }
 });
+
+// Context polling
+let contextPollInterval = null;
+
+async function fetchContexts() {
+    try {
+        const response = await fetch('/api/contexts');
+        const contexts = await response.json();
+        renderContexts(contexts);
+    } catch (e) {
+        console.error('Failed to fetch contexts:', e);
+    }
+}
+
+function renderContexts(contexts) {
+    const container = document.getElementById('context-container');
+    if (!contexts || Object.keys(contexts).length === 0) {
+        container.innerHTML = '<div class="card"><div class="card-body"><div class="empty">No context stored yet. Make a request to see what\'s sent to the LLM.</div></div></div>';
+        return;
+    }
+
+    let html = '';
+    for (const [botName, ctx] of Object.entries(contexts)) {
+        const messages = ctx.messages || [];
+        const lastMessages = messages.slice(-15);
+
+        html += `
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">${escapeHtml(botName)}</span>
+                <div class="context-meta">
+                    <span>${ctx.message_count || 0} messages</span>
+                    <span>~${ctx.token_estimate || 0} tokens</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="context-section">
+                    <h4 class="context-section-title">System Prompt</h4>
+                    <pre class="context-box">${escapeHtml(ctx.system_prompt || '')}</pre>
+                </div>
+                <div class="context-section">
+                    <h4 class="context-section-title">Messages (${messages.length})</h4>
+                    <div class="messages-list">
+                        ${lastMessages.map(msg => `
+                            <div class="message ${msg.role === 'assistant' ? 'assistant' : ''}">
+                                <span class="message-role">${escapeHtml(msg.role)}</span>
+                                <span class="message-content">${escapeHtml((msg.content || '').substring(0, 400))}${(msg.content || '').length > 400 ? '...' : ''}</span>
+                            </div>
+                        `).join('')}
+                     ${messages.length > 15 ? `<div class="messages-more">... and ${messages.length - 15} more</div>` : ''}
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }
+    container.innerHTML = html;
+}
+
+// Override switchTab to manage context polling
+const originalSwitchTab = switchTab;
+switchTab = function(tabName) {
+    originalSwitchTab(tabName);
+    if (tabName === 'context') {
+        fetchContexts();
+        if (!contextPollInterval) {
+            contextPollInterval = setInterval(fetchContexts, 3000);
+        }
+    } else {
+        if (contextPollInterval) {
+            clearInterval(contextPollInterval);
+            contextPollInterval = null;
+        }
+    }
+};
+
+// Initial context fetch if context tab is active
+if (document.getElementById('tab-context').classList.contains('active')) {
+    fetchContexts();
+    contextPollInterval = setInterval(fetchContexts, 3000);
+}
 </script>
 {% endblock %}
