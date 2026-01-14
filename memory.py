@@ -165,6 +165,9 @@ class MemoryManager:
 
     def add_server_memory(self, guild_id: int, content: str, auto: bool = False):
         """Add a memory for a server."""
+        # Strip any reasoning tags before storing
+        content = remove_thinking_tags(content)
+
         key = str(guild_id)
         if key not in self.server_memories:
             self.server_memories[key] = []
@@ -286,6 +289,9 @@ class MemoryManager:
     def add_user_memory(self, guild_id: int, user_id: int, content: str,
                         auto: bool = False, user_name: str = None, character_name: str = None):
         """Add a memory about a specific user in a server."""
+        # Strip any reasoning tags before storing
+        content = remove_thinking_tags(content)
+
         if not character_name:
             # Fallback to legacy shared file
             return self._add_legacy_user_memory(guild_id, user_id, content, auto, user_name)
@@ -387,6 +393,9 @@ class MemoryManager:
     def add_global_user_profile(self, user_id: int, content: str, auto: bool = False,
                                  user_name: str = None, character_name: str = None):
         """Add a cross-server fact about a user (follows them everywhere)."""
+        # Strip any reasoning tags before storing
+        content = remove_thinking_tags(content)
+
         key = str(user_id)
         if key not in self.global_user_profiles:
             self.global_user_profiles[key] = []
@@ -428,6 +437,9 @@ class MemoryManager:
 
     def add_lore(self, guild_id: int, lore_text: str):
         """Add or append lore for a server."""
+        # Strip any reasoning tags before storing
+        lore_text = remove_thinking_tags(lore_text)
+
         key = str(guild_id)
         existing = self.lore.get(key, "")
         if existing:

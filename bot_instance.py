@@ -861,7 +861,22 @@ class BotInstance:
                     response = response[len(pattern):].strip()
                     log.warn(f"Stripped impersonation prefix '{pattern}' from response", self.name)
                     break
-        return response
+
+        # Check for mid-response impersonation (lines starting with "OtherBot:")
+        lines = response.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            skip = False
+            for name in other_bot_names:
+                # Check if line starts with "OtherBot:" pattern
+                if re.match(rf'^{re.escape(name)}\s*:', line, re.IGNORECASE):
+                    log.warn(f"Stripped mid-response impersonation line for '{name}'", self.name)
+                    skip = True
+                    break
+            if not skip:
+                cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).

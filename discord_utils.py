@@ -196,6 +196,13 @@ RE_READABLE_VERSION = re.compile(r'^readable\s+version:?\s*', re.MULTILINE | re.
 RE_INTERNAL_NOTE = re.compile(r'^\s*\[(?:internal|note|debug|processing)\].*$', re.MULTILINE | re.IGNORECASE)
 RE_STEP_LABELS = re.compile(r'^(?:step\s*\d+|phase\s*\d+|stage\s*\d+):.*$', re.MULTILINE | re.IGNORECASE)
 
+# Deepseek-style reasoning tags
+RE_DEEPSEEK_THINK = re.compile(r'<\|think\|>.*?<\|/think\|>', re.DOTALL)
+# Qwen-style reasoning tags
+RE_QWEN_THOUGHT = re.compile(r'<\|startofthought\|>.*?<\|endofthought\|>', re.DOTALL)
+# Generic internal monologue
+RE_INTERNAL_MONOLOGUE = re.compile(r'\[Internal:.*?\]', re.DOTALL | re.IGNORECASE)
+
 
 def save_history(force: bool = False):
     """Save conversation history to disk for persistence across restarts.
@@ -632,6 +639,13 @@ def remove_thinking_tags(text: str) -> str:
     text = RE_READABLE_VERSION.sub('', text)
     text = RE_INTERNAL_NOTE.sub('', text)
     text = RE_STEP_LABELS.sub('', text)
+
+    # Remove Deepseek-style reasoning tags
+    text = RE_DEEPSEEK_THINK.sub('', text)
+    # Remove Qwen-style reasoning tags
+    text = RE_QWEN_THOUGHT.sub('', text)
+    # Remove generic internal monologue
+    text = RE_INTERNAL_MONOLOGUE.sub('', text)
 
     # Remove <output> wrapper if present (some models wrap actual response)
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
