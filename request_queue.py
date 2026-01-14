@@ -106,3 +106,7 @@ class RequestQueue:
         finally:
             async with self.locks[channel_id]:
                 self.processing[channel_id] = False
+                # Check if new requests arrived while we were finishing up
+                # This fixes a race condition where requests could get stuck
+                if self.queues[channel_id]:
+                    asyncio.create_task(self._process_queue(channel_id))
