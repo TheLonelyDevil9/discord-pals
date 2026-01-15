@@ -492,14 +492,14 @@ async function refreshStatus() {
         if (table && data.bots) {
             table.innerHTML = data.bots.map(bot => `
                 <tr>
-                    <td><strong>${bot.name}</strong></td>
-                    <td style="color: var(--text-secondary);">${bot.character || 'None'}</td>
+                    <td><strong>${escapeHtml(bot.name)}</strong></td>
+                    <td style="color: var(--text-secondary);">${escapeHtml(bot.character) || 'None'}</td>
                     <td>
                         ${bot.online
                             ? '<span class="badge badge-success"><span class="badge-dot"></span> Online</span>'
                             : '<span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>'}
                     </td>
-                    <td style="color: var(--text-muted);">${bot.last_activity}</td>
+                    <td style="color: var(--text-muted);">${escapeHtml(bot.last_activity)}</td>
                 </tr>
             `).join('');
         }

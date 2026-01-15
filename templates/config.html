@@ -755,22 +755,35 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 });
 
 // Switch character
-async function switchCharacter(botName, character) {
-    const response = await fetch('/api/switch_character', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify({ bot_name: botName, character: character })
-    });
+async function switchCharacter(botName, character, btn) {
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Switching...';
+    }
+    try {
+        const response = await fetch('/api/switch_character', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({ bot_name: botName, character: character })
+        });
 
-    const result = await response.json();
-    if (result.status === 'ok') {
-        showToast(`Switched to ${result.character}`, 'success');
-        location.reload();
-    } else {
-        showToast('Error: ' + (result.message || 'Unknown error'), 'error');
+        const result = await response.json();
+        if (result.status === 'ok') {
+            showToast(`Switched to ${result.character}`, 'success');
+            location.reload();
+        } else {
+            showToast('Error: ' + (result.message || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        showToast('Failed to switch character', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Switch';
+        }
     }
 }
 

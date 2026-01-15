@@ -738,15 +738,18 @@ function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowB
     for (const [botName, nicknames] of Object.entries(botNicknames)) {
         const row = document.createElement('div');
         row.className = 'nickname-row';
-        row.innerHTML = `
-            <span class="bot-name">${botName}</span>
-            <input type="text"
-                   id="nickname-${botName.replace(/\s+/g, '-')}"
-                   data-bot-name="${botName}"
-                   value="${nicknames || ''}"
-                   placeholder="e.g., bestie, buddy"
-                   title="Nicknames for ${botName}">
-        `;
+        const span = document.createElement('span');
+        span.className = 'bot-name';
+        span.textContent = botName;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = 'nickname-' + botName.replace(/\s+/g, '-');
+        input.dataset.botName = botName;
+        input.value = nicknames || '';
+        input.placeholder = 'e.g., bestie, buddy';
+        input.title = 'Nicknames for ' + botName;
+        row.appendChild(span);
+        row.appendChild(input);
         container.appendChild(row);
     }
 
@@ -783,6 +786,12 @@ document.getElementById('auto-enabled').addEventListener('change', toggleAutoSet
 
 // Save autonomous configuration and nicknames
 async function saveAutoConfig() {
+    const saveBtn = document.querySelector('#auto-modal .btn-primary');
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+    }
+
     const channelId = document.getElementById('auto-channel-id').value;
     const enabled = document.getElementById('auto-enabled').checked;
     const chance = parseInt(document.getElementById('auto-chance').value);
@@ -791,37 +800,37 @@ async function saveAutoConfig() {
 
     let hasErrors = false;
 
-    // Save nicknames for each bot
-    const nicknameInputs = document.querySelectorAll('#bot-nicknames-container input[data-bot-name]');
-    for (const input of nicknameInputs) {
-        const botName = input.dataset.botName;
-        const nicknames = input.value.trim();
+    try {
+        // Save nicknames for each bot
+        const nicknameInputs = document.querySelectorAll('#bot-nicknames-container input[data-bot-name]');
+        for (const input of nicknameInputs) {
+            const botName = input.dataset.botName;
+            const nicknames = input.value.trim();
 
-        if (botNicknames[botName] !== nicknames) {
-            try {
-                const response = await fetch('/api/nicknames', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': '{{ csrf_token() }}'
-                    },
-                    body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
-                });
+            if (botNicknames[botName] !== nicknames) {
+                try {
+                    const response = await fetch('/api/nicknames', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
+                    });
 
-                const data = await response.json();
-                if (data.status === 'ok') {
-                    botNicknames[botName] = nicknames;
-                } else {
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        botNicknames[botName] = nicknames;
+                    } else {
+                        hasErrors = true;
+                    }
+                } catch (e) {
                     hasErrors = true;
                 }
-            } catch (e) {
-                hasErrors = true;
             }
         }
-    }
 
-    // Save autonomous settings
-    try {
+        // Save autonomous settings
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
             headers: {
@@ -860,6 +869,11 @@ async function saveAutoConfig() {
         }
     } catch (e) {
         showToast('Error saving configuration', 'error');
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Changes';
+        }
     }
 }
 

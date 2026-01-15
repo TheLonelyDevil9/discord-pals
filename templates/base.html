@@ -720,11 +720,86 @@
         function showConfirm(title, msg, cb) {
             var m = document.createElement('div');
             m.className = 'confirm-modal';
-            m.innerHTML = '<div class="confirm-modal-content"><h3>' + title + '</h3><p>' + msg + '</p><div class="confirm-modal-buttons"><button class="btn btn-secondary" id="cancel-btn">Cancel</button><button class="btn btn-danger" id="cfm">Delete</button></div></div>';
+            var content = document.createElement('div');
+            content.className = 'confirm-modal-content';
+            var h3 = document.createElement('h3');
+            h3.textContent = title;
+            var p = document.createElement('p');
+            p.textContent = msg;
+            var buttons = document.createElement('div');
+            buttons.className = 'confirm-modal-buttons';
+            var cancelBtn = document.createElement('button');
+            cancelBtn.className = 'btn btn-secondary';
+            cancelBtn.textContent = 'Cancel';
+            var confirmBtn = document.createElement('button');
+            confirmBtn.className = 'btn btn-danger';
+            confirmBtn.textContent = 'Delete';
+            buttons.appendChild(cancelBtn);
+            buttons.appendChild(confirmBtn);
+            content.appendChild(h3);
+            content.appendChild(p);
+            content.appendChild(buttons);
+            m.appendChild(content);
             document.body.appendChild(m);
-            m.querySelector('#cancel-btn').onclick = function() { m.remove(); };
-            m.querySelector('#cfm').onclick = function() { m.remove(); cb(); };
+            cancelBtn.onclick = function() { m.remove(); };
+            confirmBtn.onclick = function() { m.remove(); cb(); };
             m.onclick = function(e) { if (e.target === m) m.remove(); };
+            document.addEventListener('keydown', function handler(e) {
+                if (e.key === 'Escape') { m.remove(); document.removeEventListener('keydown', handler); }
+            });
+        }
+
+        // Shared utility: Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            if (text == null) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Shared utility: API request helper with CSRF token
+        async function apiRequest(url, method, data) {
+            method = method || 'GET';
+            var options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                }
+            };
+            if (data && method !== 'GET') {
+                options.body = JSON.stringify(data);
+            }
+            var response = await fetch(url, options);
+            if (!response.ok) {
+                var errorData = await response.json().catch(function() { return {}; });
+                throw new Error(errorData.message || 'Request failed: ' + response.status);
+            }
+            return response.json();
+        }
+
+        // Shared utility: Debounce function for search inputs
+        function debounce(fn, delay) {
+            var timeout;
+            return function() {
+                var args = arguments;
+                var context = this;
+                clearTimeout(timeout);
+                timeout = setTimeout(function() { fn.apply(context, args); }, delay);
+            };
+        }
+
+        // Shared utility: Disable button during async operation
+        async function withButtonLoading(btn, asyncFn) {
+            var originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            try {
+                return await asyncFn();
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
         }
 
         function toggleTheme() {

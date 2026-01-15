@@ -22,7 +22,7 @@
                 <span id="auto-scroll-btn">Pause</span>
             </button>
             <button type="button" class="btn btn-ghost btn-sm" onclick="clearLogs()">Clear</button>
-            <input type="text" id="log-search" placeholder="Search logs..." oninput="filterLogs()" title="Search logs">
+            <input type="text" id="log-search" placeholder="Search logs..." oninput="debouncedFilterLogs()" title="Search logs">
             <select id="log-level-filter" onchange="filterLogs()" title="Filter by level">
                 <option value="">All Levels</option>
                 <option value="ok">Success</option>
@@ -607,6 +607,8 @@ function filterLogs() {
     renderFilteredLogs(filtered);
 }
 
+const debouncedFilterLogs = debounce(filterLogs, 150);
+
 function renderFilteredLogs(logs) {
     const container = document.getElementById('logs-container');
     if (logs.length === 0) {
@@ -635,15 +637,25 @@ function toggleAutoScroll() {
     document.getElementById('scroll-indicator').className = 'auto-scroll-indicator' + (autoScroll ? ' active' : '');
 }
 
-function clearLogs() {
-    fetch('/api/logs/clear', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
-    }).catch(e => console.error('Failed to clear server logs:', e));
-    document.getElementById('logs-container').innerHTML = '<div class="logs-empty">Logs cleared</div>';
-    lastLogCount = 0;
-    allLogs = [];
-    updateLogCount(0);
+async function clearLogs() {
+    try {
+        const response = await fetch('/api/logs/clear', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
+        });
+        if (response.ok) {
+            document.getElementById('logs-container').innerHTML = '<div class="logs-empty">Logs cleared</div>';
+            lastLogCount = 0;
+            allLogs = [];
+            updateLogCount(0);
+            showToast('Logs cleared', 'success');
+        } else {
+            showToast('Failed to clear logs', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to clear server logs:', e);
+        showToast('Failed to clear logs', 'error');
+    }
 }
 
 function updateLogCount(count) {
