@@ -341,7 +341,10 @@ async function toggleKillswitch() {
     try {
         const response = await fetch('/api/killswitch', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({})
         });
         const data = await response.json();
@@ -377,7 +380,10 @@ async function toggleBotInteractions() {
     try {
         const response = await fetch('/api/bot-interactions', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({})
         });
         const data = await response.json();
@@ -385,6 +391,8 @@ async function toggleBotInteractions() {
         if (data.status === 'ok') {
             updateBotInteractionsUI(data.bot_interactions_paused);
             showToast(data.bot_interactions_paused ? 'Bot-to-bot chat paused' : 'Bot-to-bot chat enabled', 'success');
+        } else {
+            showToast('Failed to toggle bot interactions', 'error');
         }
     } catch (e) {
         showToast('Failed to toggle bot interactions', 'error');
@@ -402,7 +410,10 @@ async function toggleMessageFormat() {
     try {
         const response = await fetch('/api/message-format', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({})
         });
         const data = await response.json();
@@ -410,6 +421,8 @@ async function toggleMessageFormat() {
         if (data.status === 'ok') {
             updateMessageFormatUI(data.use_single_user);
             showToast(data.use_single_user ? 'Message format: Single-User' : 'Message format: Multi-Role', 'success');
+        } else {
+            showToast('Failed to toggle message format', 'error');
         }
     } catch (e) {
         showToast('Failed to toggle message format', 'error');
@@ -520,7 +533,10 @@ async function restartBot() {
     try {
         const response = await fetch('/api/restart', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            }
         });
         const data = await response.json();
 

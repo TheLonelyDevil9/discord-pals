@@ -801,7 +801,10 @@ async function saveAutoConfig() {
             try {
                 const response = await fetch('/api/nicknames', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': '{{ csrf_token() }}'
+                    },
                     body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
                 });
 
@@ -821,7 +824,10 @@ async function saveAutoConfig() {
     try {
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({ enabled, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
 
@@ -908,6 +914,10 @@ document.getElementById('auto-modal').addEventListener('click', function(e) {
 async function quickToggleAuto(channelId, enable) {
     try {
         const getResponse = await fetch(`/api/channels/${channelId}/autonomous`);
+        if (!getResponse.ok) {
+            showToast('Failed to get current settings', 'error');
+            return;
+        }
         const currentSettings = await getResponse.json();
 
         const chance = currentSettings.chance || 5;
@@ -916,7 +926,10 @@ async function quickToggleAuto(channelId, enable) {
 
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({ enabled: enable, chance, cooldown, allow_bot_triggers: allowBotTriggers })
         });
 
@@ -954,11 +967,18 @@ async function quickToggleAuto(channelId, enable) {
 async function quickToggleBotTriggers(channelId, enable) {
     try {
         const getResponse = await fetch(`/api/channels/${channelId}/autonomous`);
+        if (!getResponse.ok) {
+            showToast('Failed to get current settings', 'error');
+            return;
+        }
         const currentSettings = await getResponse.json();
 
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
             body: JSON.stringify({
                 enabled: currentSettings.enabled,
                 chance: currentSettings.chance,

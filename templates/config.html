@@ -740,7 +740,10 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 
     const response = await fetch('/api/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify(data)
     });
 
@@ -755,7 +758,10 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 async function switchCharacter(botName, character) {
     const response = await fetch('/api/switch_character', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify({ bot_name: botName, character: character })
     });
 
@@ -799,7 +805,10 @@ async function saveNameTriggerSettings() {
 
     const response = await fetch('/api/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify(data)
     });
 
@@ -822,7 +831,10 @@ async function saveFalloffSettings() {
 
     const response = await fetch('/api/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify(data)
     });
 
@@ -837,7 +849,10 @@ async function saveFalloffSettings() {
 async function toggleRawLogging(enabled) {
     const response = await fetch('/api/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify({ raw_generation_logging: enabled })
     });
 
@@ -854,7 +869,10 @@ async function saveNicknames(botName) {
 
     const response = await fetch('/api/nicknames', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
         body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
     });
 
