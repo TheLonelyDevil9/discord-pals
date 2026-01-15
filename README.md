@@ -82,6 +82,23 @@ The system instructions were authored by legendary chef @Geechan.
    - Cloud API (DeepSeek, OpenAI, Anthropic via OpenRouter)
    - Local LLM (llama.cpp, Ollama, LM Studio)
 
+### Python Dependencies
+
+All dependencies are listed in `requirements.txt` with pinned versions:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| discord.py | 2.3.2 | Discord API client |
+| openai | 1.12.0 | OpenAI-compatible API client |
+| python-dotenv | 1.0.1 | Environment variable loading |
+| aiohttp | 3.9.3 | Async HTTP client |
+| flask | 3.1.2 | Web dashboard |
+| pyyaml | 6.0.2 | YAML configuration parsing |
+| prometheus-client | 0.20.0 | Metrics and monitoring |
+| orjson | 3.9.15 | Fast JSON parsing (optional) |
+
+Install with: `pip install -r requirements.txt`
+
 ---
 
 ## Quick Start

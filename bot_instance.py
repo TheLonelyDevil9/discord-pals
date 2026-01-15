@@ -20,10 +20,10 @@ from discord_utils import (
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_reply_context, get_user_display_name, get_sticker_info,
-    remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names
 )
+from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
@@ -318,189 +318,42 @@ class BotInstance:
 
             is_dm = isinstance(message.channel, discord.DMChannel)
             is_other_bot = message.author.bot
+            channel_id = message.channel.id
+            guild = message.guild
 
             # Prevent self-loop: Don't respond to messages from bots with same character name
-            if is_other_bot and self.character:
-                bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
-                if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
-                    log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
-                    add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author))
-                    return
+            if is_other_bot and self._should_ignore_self_loop(message):
+                return
 
             user_name = get_user_display_name(message.author)
             reply_to_name = get_reply_context(message)
             sticker_info = get_sticker_info(message) if not is_other_bot else None
-            
-            guild = message.guild
-            guild_id = guild.id if guild else None
-            
+
             # Bot chain prevention - don't respond to bots if we recently responded to a bot
-            if is_other_bot:
-                # Global stop for bot-bot interactions
-                if runtime_config.get("bot_interactions_paused", False):
-                    add_to_history(message.channel.id, "user", message.content, author_name=user_name)
-                    return
+            if is_other_bot and self._should_skip_bot_message(message, user_name):
+                return
 
-                # Progressive fall-off for bot-on-bot conversations
-                channel_id = message.channel.id
+            # Detect all response triggers
+            triggers = self._detect_response_triggers(message, is_dm, is_other_bot, guild)
 
-                # Initialize or update conversation tracker
-                if channel_id not in self._bot_conversation_tracker:
-                    self._bot_conversation_tracker[channel_id] = {
-                        "consecutive_bot_messages": 0,
-                        "last_message_time": 0,
-                        "last_human_message_time": time.time()
-                    }
+            # Debug: log why this bot is responding
+            if triggers["should_respond"]:
+                reason = [k for k, v in triggers.items() if v and k != "should_respond"]
+                log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
 
-                tracker = self._bot_conversation_tracker[channel_id]
+            if triggers["should_respond"]:
+                # Update bot conversation state
+                self._update_bot_conversation_state(channel_id, is_other_bot)
 
-                # Increment consecutive bot message counter
-                tracker["consecutive_bot_messages"] += 1
-                tracker["last_message_time"] = time.time()
-
-                # Calculate response probability based on conversation length
-                consecutive_msgs = tracker["consecutive_bot_messages"]
-                response_probability = self._calculate_bot_response_probability(
-                    consecutive_msgs, runtime_config.get_all()
+                # Prepare message content
+                content = self._prepare_message_content(
+                    message, user_name, sticker_info, is_other_bot,
+                    triggers["is_autonomous"], guild
                 )
 
-                # Roll the dice
-                if random.random() > response_probability:
-                    log.debug(
-                        f"Bot fall-off: Skipping response (consecutive: {consecutive_msgs}, "
-                        f"probability: {response_probability:.2%})",
-                        self.name
-                    )
-                    add_to_history(message.channel.id, "user", message.content, author_name=user_name)
-                    return
-
-                # Keep existing 60-second cooldown as additional safeguard
-                last_bot_response = self._last_bot_response.get(channel_id, 0)
-                if time.time() - last_bot_response < 60:  # 60 second cooldown for bot chains
-                    add_to_history(message.channel.id, "user", message.content, author_name=user_name)
-                    return
-            
-            mentioned = self.client.user in message.mentions if not is_dm else True
-            
-            # Reply chain detection - treat reply to bot's message as implicit mention
-            is_reply_to_bot = False
-            if message.reference and message.reference.message_id:
-                try:
-                    ref_msg = message.reference.cached_message
-                    if ref_msg and ref_msg.author == self.client.user:
-                        is_reply_to_bot = True
-                except Exception:
-                    pass
-            
-            is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(message.channel.id)
-            
-            # Name/nickname trigger - respond when bot's name is mentioned (chance-based)
-            # NOTE: Name trigger is now a SUBSET of autonomous mode - only works if autonomous is enabled
-            name_triggered = False
-            name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
-            channel_id = message.channel.id
-            
-            # Name trigger requires: autonomous enabled for channel + not already triggered by other means
-            if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
-                and channel_id in autonomous_manager.enabled_channels):
-
-                # Check if bot triggers are allowed for this channel when message is from a bot
-                if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
-                    pass  # Skip name trigger for bots when not allowed
-                else:
-                    bot_display_name = guild.me.display_name if guild else self.client.user.display_name
-                    bot_username = self.client.user.name
-                    char_name = self.character.name if self.character else ""
-
-                    content_lower = message.content.lower()
-
-                    # Skip name trigger if message is quoting the bot itself
-                    # Pattern: ↩️ [quoting CharName: or ↩️ [ CharName's message:
-                    if char_name and (f"[quoting {char_name.lower()}" in content_lower
-                                      or f"[ {char_name.lower()}'s message" in content_lower
-                                      or f"[{char_name.lower()}'s message" in content_lower):
-                        log.debug(f"Skipping name trigger - message quotes self: {char_name}", self.name)
-                    else:
-                        names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
-                        if char_name:
-                            names_to_check.append(char_name.lower())
-
-                        # Add custom nicknames from per-bot config
-                        if self.nicknames:
-                            for nick in self.nicknames.split(','):
-                                nick = nick.strip().lower()
-                                if nick and len(nick) >= 2:
-                                    names_to_check.append(nick)
-
-                        # Strip Discord emoji shortcodes before checking names
-                        # This prevents :nahida_happy: from triggering "nahida" nickname
-                        content_for_name_check = re.sub(r':[a-zA-Z0-9_]+:', '', content_lower)
-
-                        # Strip GIF URLs to prevent false triggers from URLs like https://tenor.com/view/nahida-gif-123
-                        content_for_name_check = re.sub(r'https?://\S+', '', content_for_name_check)
-
-                        # Check if any name appears in message (excluding emoji names)
-                        for name in names_to_check:
-                            if name and len(name) >= 2:
-                                # Use word boundary matching to prevent false triggers (e.g., "Luna" in "Lunatic")
-                                pattern = rf'\b{re.escape(name)}\b'
-                                if re.search(pattern, content_for_name_check, re.IGNORECASE):
-                                    if random.random() < name_trigger_chance:
-                                        name_triggered = True
-                                        break
-            
-            should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
-            
-            # Debug: log why this bot is responding
-            if should_respond:
-                reason = []
-                if mentioned:
-                    reason.append("mentioned")
-                if is_reply_to_bot:
-                    reason.append("reply_to_bot")
-                if is_autonomous:
-                    reason.append("autonomous")
-                if name_triggered:
-                    reason.append("name_triggered")
-                log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
-            
-            if should_respond:
-                # Track if responding to a bot
-                if is_other_bot:
-                    self._last_bot_response[message.channel.id] = time.time()
-                else:
-                    # Reset bot conversation tracker when human speaks
-                    if message.channel.id in self._bot_conversation_tracker:
-                        self._bot_conversation_tracker[message.channel.id]["consecutive_bot_messages"] = 0
-                        self._bot_conversation_tracker[message.channel.id]["last_human_message_time"] = time.time()
-                        log.debug(f"Bot fall-off: Reset counter (human message)", self.name)
-
-                if sticker_info:
-                    content = f"{user_name} {sticker_info}"
-                else:
-                    if is_other_bot:
-                        content = message.content.strip()
-                    else:
-                        # Replace THIS bot's mention with its name
-                        bot_name = guild.me.display_name if guild else self.client.user.display_name
-                        content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
-                    
-                    # Resolve all Discord formatting (emojis, mentions, channels, timestamps)
-                    content = resolve_discord_formatting(content, guild)
-                    
-                    # For autonomous responses, prefix to indicate bot is chiming in
-                    if is_autonomous and message.mentions:
-                        # Check if someone ELSE was mentioned (not this bot)
-                        other_mentions = [m for m in message.mentions if m != self.client.user]
-                        if other_mentions:
-                            content = f"[Someone else was mentioned, you're chiming in] {content}"
-                    
-                    if not content and not message.attachments:
-                        content = "Hello!"
-                
                 # Use batching for this user
                 await self._add_to_batch(
-                    channel_id=message.channel.id,
+                    channel_id=channel_id,
                     message=message,
                     content=content,
                     guild=guild,
@@ -513,10 +366,10 @@ class BotInstance:
                 )
             else:
                 add_to_history(
-                    message.channel.id, "user", message.content,
+                    channel_id, "user", message.content,
                     author_name=user_name, reply_to=reply_to_name
                 )
-        
+
         @self.client.event
         async def on_message_edit(before: discord.Message, after: discord.Message):
             # Ignore our own edits (including slash command followups)
@@ -740,281 +593,316 @@ class BotInstance:
             reply_to_name=reply_to_name,
             sticker_info=sticker_info
         )
-    
+
+    # === REQUEST PROCESSING HELPERS ===
+
+    async def _build_request_context(self, request: dict) -> dict | None:
+        """Build the context for an AI request.
+
+        Returns context dict or None if request should be skipped (duplicate, etc.)
+        """
+        message = request['message']
+        content = request['content']
+        guild = request['guild']
+        attachments = request['attachments']
+        user_name = request['user_name']
+        is_dm = request['is_dm']
+        user_id = request['user_id']
+        reply_to_name = request.get('reply_to_name')
+
+        channel_id = message.channel.id
+        guild_id = guild.id if guild else None
+
+        # Check for duplicate message - only skip if THIS BOT already processed it
+        history = get_history(channel_id)
+        already_responded = False
+        for i, m in enumerate(history):
+            if m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user':
+                for j in range(i + 1, len(history)):
+                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
+                        already_responded = True
+                        break
+                if already_responded:
+                    break
+
+        if already_responded:
+            log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
+            return None
+
+        # Only add to history if not already present
+        recent = history[-5:]
+        if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
+            add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
+
+        # Store channel name for readable history display
+        channel_name = getattr(message.channel, 'name', 'DM')
+        if guild:
+            channel_name = f"#{channel_name} ({guild.name})"
+        set_channel_name(channel_id, channel_name)
+
+        # Track stats
+        stats_manager.record_message(user_id, user_name, channel_id, channel_name)
+        metrics_manager.record_message(bot_name=self.name, channel_type='dm' if is_dm else 'server')
+
+        # Process attachments
+        attachment_content = await process_attachments(message) if attachments else None
+        if attachment_content:
+            log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
+
+        # Get emojis and lore
+        emojis = get_guild_emojis(guild) if guild else ""
+        lore = memory_manager.get_lore(guild_id) if guild_id else ""
+
+        # Get memories
+        char_name = self.character.name if self.character else None
+        global_profile = memory_manager.get_global_user_profile(user_id)
+
+        if is_dm:
+            memories = memory_manager.get_dm_memories(user_id, character_name=char_name)
+            if global_profile and memories:
+                memories = f"What you know about this user (cross-server):\n{global_profile}\n\nFrom DMs:\n{memories}"
+            elif global_profile:
+                memories = f"What you know about this user:\n{global_profile}"
+        elif guild_id:
+            server_memories = memory_manager.get_server_memories(guild_id)
+            user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
+            memory_parts = []
+            if global_profile:
+                memory_parts.append(f"What you know about {user_name} (cross-server):\n{global_profile}")
+            if user_memories:
+                memory_parts.append(f"About {user_name} (this server):\n{user_memories}")
+            if server_memories:
+                memory_parts.append(f"General:\n{server_memories}")
+            memories = "\n\n".join(memory_parts) if memory_parts else ""
+        else:
+            memories = ""
+
+        if memories:
+            memories = remove_thinking_tags(memories)
+
+        # Get active users and mentioned context
+        active_users = get_active_users(channel_id) if not is_dm else []
+        mentioned_context = await self._gather_mentioned_user_context(message, char_name)
+
+        # Build system prompt
+        system_prompt = character_manager.build_system_prompt(
+            character=self.character,
+            user_name=user_name
+        )
+
+        # Split history into older context and immediate messages
+        total_limit = runtime_config.get('history_limit', 200)
+        immediate_count = runtime_config.get('immediate_message_count', 5)
+        history_msgs, immediate = format_history_split(
+            channel_id,
+            total_limit=total_limit,
+            immediate_count=immediate_count,
+            current_bot_name=self.character.name
+        )
+
+        # Build chatroom context
+        other_bot_names = get_other_bot_names(channel_id, self.character.name)
+        chatroom_context = character_manager.build_chatroom_context(
+            guild_name=guild.name if guild else "DM",
+            emojis=emojis,
+            lore=lore,
+            memories=memories,
+            user_name=user_name,
+            active_users=active_users,
+            mentioned_context=mentioned_context,
+            other_bot_names=other_bot_names
+        )
+
+        # Handle attachment content in the last immediate message
+        if attachment_content and immediate:
+            log.info(f"[DEBUG] Attaching multimodal content to last immediate message")
+            immediate[-1]["content"] = attachment_content
+        elif attachment_content and not immediate:
+            log.warn(f"[DEBUG] Have attachment_content but immediate is empty!")
+
+        # Build complete message list for API
+        messages_for_api = []
+        messages_for_api.extend(history_msgs)
+        if chatroom_context:
+            messages_for_api.append({"role": "system", "content": chatroom_context})
+        messages_for_api.extend(immediate)
+
+        return {
+            "system_prompt": system_prompt,
+            "messages_for_api": messages_for_api,
+            "chatroom_context": chatroom_context,
+            "other_bot_names": other_bot_names,
+            "channel_id": channel_id,
+            "guild_id": guild_id,
+            "is_dm": is_dm,
+            "user_id": user_id,
+            "user_name": user_name,
+            "content": content
+        }
+
+    async def _generate_ai_response(self, context: dict, message) -> str | None:
+        """Generate AI response using the provider.
+
+        Returns sanitized response string, or None if generation failed.
+        """
+        system_prompt = context["system_prompt"]
+        messages_for_api = context["messages_for_api"]
+        chatroom_context = context["chatroom_context"]
+        other_bot_names = context["other_bot_names"]
+
+        async with message.channel.typing():
+            # Store context for dashboard visualization
+            def _get_content_len(msg):
+                content = msg.get('content', '')
+                if isinstance(content, str):
+                    return len(content)
+                elif isinstance(content, list):
+                    return sum(len(p.get('text', '')) for p in content if p.get('type') == 'text')
+                return 0
+
+            token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
+            runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
+
+            # Track response time
+            start_time = time.time()
+
+            # Get preferences
+            use_single_user = runtime_config.get("use_single_user", False)
+            preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
+
+            response = await provider_manager.generate(
+                messages=messages_for_api,
+                system_prompt=system_prompt,
+                temperature=None,
+                max_tokens=None,
+                use_single_user=use_single_user,
+                preferred_tier=preferred_tier
+            )
+
+            response_time_ms = int((time.time() - start_time) * 1000)
+            stats_manager.record_response(response_time_ms)
+            metrics_manager.record_response(
+                bot_name=self.name,
+                success=bool(response),
+                duration_seconds=response_time_ms / 1000.0,
+                provider_tier=preferred_tier or 'default'
+            )
+
+        if not response:
+            log.error("All providers failed to generate response")
+            metrics_manager.record_error(bot_name=self.name, error_type='provider_failure')
+            return None
+
+        # Sanitize response
+        response = remove_thinking_tags(response)
+        response = clean_bot_name_prefix(response, self.character.name)
+        response = clean_em_dashes(response)
+        response = self._strip_other_bot_prefixes(response, other_bot_names)
+
+        return response
+
+    async def _send_and_finalize_response(self, response: str, context: dict,
+                                           message, request: dict) -> bool:
+        """Send response and handle post-send tasks.
+
+        Returns True if response was sent successfully, False otherwise.
+        """
+        channel_id = context["channel_id"]
+        guild = request['guild']
+        is_dm = context["is_dm"]
+        guild_id = context["guild_id"]
+        user_id = context["user_id"]
+        user_name = context["user_name"]
+        content = context["content"]
+
+        # Parse reactions
+        response, reactions = parse_reactions(response)
+
+        # Convert emojis
+        if guild:
+            response = convert_emojis_in_text(response, guild)
+
+        # Anti-looping: Check rate limit
+        if self._check_rate_limit(channel_id):
+            log.warn("Skipping response due to rate limit", self.name)
+            metrics_manager.record_rate_limit_hit(bot_name=self.name, limit_type='channel')
+            return False
+
+        # Anti-looping: k circuit breaker
+        if self._check_circuit_breaker(channel_id):
+            log.warn("Skipping response due to circuit breaker", self.name)
+            metrics_manager.record_circuit_breaker_trip(bot_name=self.name, channel_id=channel_id)
+            self._consecutive_failures[channel_id] = max(0, self._consecutive_failures.get(channel_id, 0) - 1)
+            return False
+
+        # Handle empty response
+        if not response or not response.strip():
+            log.warn("Empty response after processing", self.name)
+            self._record_failure(channel_id)
+            fallbacks = ["*tilts head*", "*blinks*", "*pauses thoughtfully*", "...", "*hums softly*"]
+            response = random.choice(fallbacks)
+        else:
+            # Check for duplicate/repetitive responses
+            if self._is_duplicate_response(channel_id, response):
+                log.warn("Skipping duplicate response", self.name)
+                self._record_failure(channel_id)
+                return False
+            self._reset_failures(channel_id)
+
+        # Record response for rate limiting
+        self._record_response(channel_id)
+
+        # Update mood
+        self._update_mood(channel_id, content, response)
+
+        # Add to history and send
+        add_to_history(channel_id, "assistant", response, author_name=self.character.name)
+        sent_messages = await self._send_organic_response(message, response)
+
+        # Update activity
+        runtime_config.update_last_activity(self.name)
+        metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
+
+        # Store multipart response
+        if len(sent_messages) > 1:
+            store_multipart_response(channel_id, [m.id for m in sent_messages], response)
+
+        # Send reactions
+        if reactions:
+            asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
+
+        # Auto-memory
+        asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
+
+        return True
+
     async def _process_request(self, request: dict):
         """Process a single queued request."""
         # GLOBAL KILLSWITCH: Skip all processing when paused
         if runtime_config.get("global_paused", False):
             log.debug("Request skipped - global killswitch active", self.name)
             return
-        
+
+        message = request['message']
+
+        if not self.character:
+            await message.channel.send("❌ No character loaded!", delete_after=ERROR_DELETE_AFTER)
+            return
+
         try:
-            message = request['message']
-            content = request['content']
-            guild = request['guild']
-            attachments = request['attachments']
-            user_name = request['user_name']
-            is_dm = request['is_dm']
-            user_id = request['user_id']
-            reply_to_name = request.get('reply_to_name')
-            
-            if not self.character:
-                await message.channel.send("❌ No character loaded!", delete_after=ERROR_DELETE_AFTER)
-                return
+            # Build context (handles duplicate detection, history, memories)
+            context = await self._build_request_context(request)
+            if context is None:
+                return  # Duplicate or should skip
 
-            channel_id = message.channel.id
-            guild_id = guild.id if guild else None
-
-            # Check for duplicate message before adding to history
-            # IMPORTANT: Only skip if THIS BOT already processed this exact message
-            # (not if another bot added it - we want multiple bots to respond when mentioned)
-            recent = get_history(channel_id)[-5:]
-
-            # Check if the last user message with this content already has our response after it
-            already_responded = False
-            history = get_history(channel_id)
-            for i, m in enumerate(history):
-                if m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user':
-                    # Check if any message after this one is from this bot
-                    for j in range(i + 1, len(history)):
-                        if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                            already_responded = True
-                            break
-                    if already_responded:
-                        break
-
-            if already_responded:
-                log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
-                return
-
-            # Only add to history if not already present (another bot may have added it)
-            if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
-                add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
-            
-            # Store channel name for readable history display
-            channel_name = getattr(message.channel, 'name', 'DM')
-            if guild:
-                channel_name = f"#{channel_name} ({guild.name})"
-            set_channel_name(channel_id, channel_name)
-            
-            # Track stats
-            stats_manager.record_message(user_id, user_name, channel_id, channel_name)
-
-            # Record Prometheus metrics
-            metrics_manager.record_message(
-                bot_name=self.name,
-                channel_type='dm' if is_dm else 'server'
-            )
-
-            attachment_content = await process_attachments(message) if attachments else None
-            if attachment_content:
-                log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
-            
-            emojis = get_guild_emojis(guild) if guild else ""
-            lore = memory_manager.get_lore(guild_id) if guild_id else ""
-            
-            # Get both server-wide and per-user memories (per-character)
-            char_name = self.character.name if self.character else None
-            user_memories = ""  # Initialize for later use
-            global_profile = memory_manager.get_global_user_profile(user_id)  # Cross-server facts
-            
-            if is_dm:
-                memories = memory_manager.get_dm_memories(user_id, character_name=char_name)
-                # Combine with global profile
-                if global_profile and memories:
-                    memories = f"What you know about this user (cross-server):\n{global_profile}\n\nFrom DMs:\n{memories}"
-                elif global_profile:
-                    memories = f"What you know about this user:\n{global_profile}"
-            elif guild_id:
-                server_memories = memory_manager.get_server_memories(guild_id)
-                user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
-                
-                # Combine memories: global profile + per-user + server-wide
-                memory_parts = []
-                if global_profile:
-                    memory_parts.append(f"What you know about {user_name} (cross-server):\n{global_profile}")
-                if user_memories:
-                    memory_parts.append(f"About {user_name} (this server):\n{user_memories}")
-                if server_memories:
-                    memory_parts.append(f"General:\n{server_memories}")
-                memories = "\n\n".join(memory_parts) if memory_parts else ""
-            else:
-                memories = ""
-
-            # Sanitize memories to remove any reasoning tags that may have leaked in
-            if memories:
-                memories = remove_thinking_tags(memories)
-
-            # Get active users for social awareness
-            active_users = get_active_users(channel_id) if not is_dm else []
-            
-            # Gather ephemeral context about mentioned users (not stored)
-            mentioned_context = await self._gather_mentioned_user_context(message, char_name)
-            
-            # === BUILD 4-SECTION CONTEXT STRUCTURE ===
-            
-            # SECTION 1: Character Section (system prompt)
-            # Contains: Guidelines, Character Persona, Example Dialogue, Special User Context
-            system_prompt = character_manager.build_system_prompt(
-                character=self.character,
-                user_name=user_name
-            )
-
-            # Get runtime config for context limits
-            total_limit = runtime_config.get('history_limit', 200)
-            immediate_count = runtime_config.get('immediate_message_count', 5)
-            
-            # SECTION 2 & 4: Split history into older context and immediate messages
-            # Pass current bot name so other bots' messages are tagged to prevent personality bleed
-            history, immediate = format_history_split(
-                channel_id, 
-                total_limit=total_limit,
-                immediate_count=immediate_count,
-                current_bot_name=self.character.name
-            )
-            
-            # SECTION 3: Chatroom Context (injected between history and immediate)
-            # Contains: Lore, Memories, Emojis, Active Users, Reply Target, Mentioned Context
-            # Get other bot names to prevent impersonation
-            other_bot_names = get_other_bot_names(channel_id, self.character.name)
-
-            chatroom_context = character_manager.build_chatroom_context(
-                guild_name=guild.name if guild else "DM",
-                emojis=emojis,
-                lore=lore,
-                memories=memories,
-                user_name=user_name,
-                active_users=active_users,
-                mentioned_context=mentioned_context,
-                other_bot_names=other_bot_names
-            )
-            
-            # Handle attachment content in the last immediate message
-            if attachment_content and immediate:
-                log.info(f"[DEBUG] Attaching multimodal content to last immediate message")
-                immediate[-1]["content"] = attachment_content
-            elif attachment_content and not immediate:
-                log.warn(f"[DEBUG] Have attachment_content but immediate is empty!")
-            
-            # Build the complete message list for the API
-            # Order: [system] + [history] + [chatroom context as system] + [immediate]
-            messages_for_api = []
-            messages_for_api.extend(history)
-            if chatroom_context:
-                messages_for_api.append({"role": "system", "content": chatroom_context})
-            messages_for_api.extend(immediate)
-            
-            # Show typing indicator while generating
-            async with message.channel.typing():
-                # Store context for dashboard visualization
-                def _get_content_len(msg):
-                    content = msg.get('content', '')
-                    if isinstance(content, str):
-                        return len(content)
-                    elif isinstance(content, list):
-                        # Multimodal content - only count text parts
-                        return sum(len(p.get('text', '')) for p in content if p.get('type') == 'text')
-                    return 0
-                token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
-                runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
-                
-                # Track response time
-                start_time = time.time()
-
-                # Get message format preference from runtime config
-                use_single_user = runtime_config.get("use_single_user", False)
-
-                # Get character's preferred provider tier from config
-                preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
-
-                response = await provider_manager.generate(
-                    messages=messages_for_api,
-                    system_prompt=system_prompt,
-                    temperature=None,  # Use per-provider config
-                    max_tokens=None,   # Use per-provider config (fixes max_tokens issue)
-                    use_single_user=use_single_user,
-                    preferred_tier=preferred_tier
-                )
-                response_time_ms = int((time.time() - start_time) * 1000)
-                stats_manager.record_response(response_time_ms)
-
-                # Record Prometheus metrics
-                metrics_manager.record_response(
-                    bot_name=self.name,
-                    success=bool(response),
-                    duration_seconds=response_time_ms / 1000.0,
-                    provider_tier=preferred_tier or 'default'
-                )
-
-            # Handle failed generation
-            if not response:
-                log.error("All providers failed to generate response")
-                metrics_manager.record_error(bot_name=self.name, error_type='provider_failure')
+            # Generate AI response (handles provider call, sanitization)
+            response = await self._generate_ai_response(context, message)
+            if response is None:
                 await message.channel.send("Something went wrong - all providers failed.")
                 return
 
-            response = remove_thinking_tags(response)
-            response = clean_bot_name_prefix(response, self.character.name)
-            response = clean_em_dashes(response)
-            response = self._strip_other_bot_prefixes(response, other_bot_names)
-
-            response, reactions = parse_reactions(response)
-
-            if guild:
-                response = convert_emojis_in_text(response, guild)
-
-            # Anti-looping: Check rate limit before responding
-            if self._check_rate_limit(channel_id):
-                log.warn("Skipping response due to rate limit", self.name)
-                metrics_manager.record_rate_limit_hit(bot_name=self.name, limit_type='channel')
-                return
-
-            # Anti-looping: Check circuit breaker
-            if self._check_circuit_breaker(channel_id):
-                log.warn("Skipping response due to circuit breaker", self.name)
-                metrics_manager.record_circuit_breaker_trip(bot_name=self.name, channel_id=channel_id)
-                # Decay the failure count slowly to allow recovery
-                self._consecutive_failures[channel_id] = max(0, self._consecutive_failures.get(channel_id, 0) - 1)
-                return
-
-            # Handle empty response
-            if not response or not response.strip():
-                log.warn("Empty response after processing", self.name)
-                self._record_failure(channel_id)
-                # Use varied fallback responses to avoid repetition
-                fallbacks = ["*tilts head*", "*blinks*", "*pauses thoughtfully*", "...", "*hums softly*"]
-                response = random.choice(fallbacks)
-            else:
-                # Check for duplicate/repetitive responses
-                if self._is_duplicate_response(channel_id, response):
-                    log.warn("Skipping duplicate response", self.name)
-                    self._record_failure(channel_id)
-                    return
-                # Valid unique response - reset failure counter
-                self._reset_failures(channel_id)
-
-            # Record this response for rate limiting
-            self._record_response(channel_id)
-            
-            # Update mood based on response sentiment
-            self._update_mood(channel_id, content, response)
-            
-            add_to_history(channel_id, "assistant", response, author_name=self.character.name)
-            
-            sent_messages = await self._send_organic_response(message, response)
-            
-            # Update last activity timestamp
-            runtime_config.update_last_activity(self.name)
-            metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
-            
-            if len(sent_messages) > 1:
-                store_multipart_response(channel_id, [m.id for m in sent_messages], response)
-            
-            # Send reactions
-            if reactions:
-                asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
-            
-            asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
+            # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
+            await self._send_and_finalize_response(response, context, message, request)
 
         except asyncio.TimeoutError:
             log.warn("Request timed out", self.name)

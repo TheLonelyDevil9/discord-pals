@@ -60,6 +60,18 @@ def inject_auth_status():
     }
 
 
+def _format_activity_time(timestamp: float | None) -> str:
+    """Format a timestamp as a human-readable 'X ago' string."""
+    if not timestamp:
+        return "Never"
+    elapsed = time.time() - timestamp
+    if elapsed < 60:
+        return f"{int(elapsed)}s ago"
+    elif elapsed < 3600:
+        return f"{int(elapsed // 60)}m ago"
+    return f"{int(elapsed // 3600)}h ago"
+
+
 # Global authentication check - protects all routes except login/logout/static
 @app.before_request
 def check_login():
@@ -150,17 +162,8 @@ def dashboard():
     bots_info = []
     for bot in bot_instances:
         bot_activity = last_activity.get(bot.name)
-        if bot_activity:
-            elapsed = time.time() - bot_activity
-            if elapsed < 60:
-                activity_str = f"{int(elapsed)}s ago"
-            elif elapsed < 3600:
-                activity_str = f"{int(elapsed/60)}m ago"
-            else:
-                activity_str = f"{int(elapsed/3600)}h ago"
-        else:
-            activity_str = "Never"
-        
+        activity_str = _format_activity_time(bot_activity)
+
         bots_info.append({
             'name': bot.name,
             'character': bot.character.name if bot.character else 'None',
@@ -530,17 +533,8 @@ def api_status():
     bots_info = []
     for bot in bot_instances:
         bot_activity = last_activity.get(bot.name)
-        if bot_activity:
-            elapsed = time.time() - bot_activity
-            if elapsed < 60:
-                activity_str = f"{int(elapsed)}s ago"
-            elif elapsed < 3600:
-                activity_str = f"{int(elapsed/60)}m ago"
-            else:
-                activity_str = f"{int(elapsed/3600)}h ago"
-        else:
-            activity_str = "Never"
-        
+        activity_str = _format_activity_time(bot_activity)
+
         bots_info.append({
             'name': bot.name,
             'character': bot.character.name if bot.character else None,

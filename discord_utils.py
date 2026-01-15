@@ -18,6 +18,12 @@ from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 
+# Re-export from response_sanitizer for backwards compatibility
+from response_sanitizer import (
+    remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response,
+    RE_NAME_PREFIX, RE_REPLY_PREFIX, RE_RE_PREFIX
+)
+
 
 # --- Thread-safe JSON utilities ---
 
@@ -137,30 +143,12 @@ _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
 _STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
 _channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
 
-# Pre-compiled regex patterns for performance
-RE_THINKING_OPEN = re.compile(r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE)
-RE_THINK_OPEN = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
-RE_GLM_BOX = re.compile(r'<\|begin_of_box\|>.*?<\|end_of_box\|>', re.DOTALL)
-RE_THINKING_PARTIAL_START = re.compile(r'^.*?</thinking>', re.DOTALL | re.IGNORECASE)
-RE_THINK_PARTIAL_START = re.compile(r'^.*?</think>', re.DOTALL | re.IGNORECASE)
-RE_GLM_PARTIAL_START = re.compile(r'^.*?<\|end_of_box\|>', re.DOTALL)
-RE_THINKING_ORPHAN_END = re.compile(r'<thinking>.*$', re.DOTALL | re.IGNORECASE)
-RE_THINK_ORPHAN_END = re.compile(r'<think>.*$', re.DOTALL | re.IGNORECASE)
-RE_GLM_ORPHAN_END = re.compile(r'<\|begin_of_box\|>.*$', re.DOTALL)
-RE_NAME_PREFIX = re.compile(r'^\s*\[[^\]]+\]:\s*', re.MULTILINE)
-RE_REPLY_PREFIX = re.compile(r'^\s*\(replying to [^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
-RE_RE_PREFIX = re.compile(r'^\s*\(RE:?\s+[^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
-
-# Additional pre-compiled patterns for resolve_discord_formatting
+# Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
 RE_USER_MENTION = re.compile(r'<@!?(\d+)>')
 RE_CHANNEL_MENTION = re.compile(r'<#(\d+)>')
 RE_ROLE_MENTION = re.compile(r'<@&(\d+)>')
 RE_TIMESTAMP = re.compile(r'<t:(\d+)(?::[tTdDfFR])?>')
-
-# Pre-compiled patterns for clean_em_dashes
-RE_EM_DASH_BETWEEN_WORDS = re.compile(r'(\w)\s*—\s*(\w)')
-RE_EM_DASH_END = re.compile(r'—\s*$')
 
 # Pre-compiled patterns for convert_emojis_in_text
 RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
