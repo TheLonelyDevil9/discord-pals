@@ -68,7 +68,6 @@ class BotInstance:
         self.request_queue = RequestQueue()
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
-        self._message_batches: Dict[tuple, dict] = {}  # (channel_id, user_id) -> {messages, timer_task}
 
         # Anti-looping state
         self._recent_responses: Dict[int, list] = {}  # channel_id -> list of recent response hashes
@@ -321,6 +320,12 @@ class BotInstance:
             channel_id = message.channel.id
             guild = message.guild
 
+            # User rate limiting - prevent spam
+            if not is_other_bot:
+                if self._check_user_rate_limit(message.author.id):
+                    return
+                self._record_user_message(message.author.id)
+
             # Prevent self-loop: Don't respond to messages from bots with same character name
             if is_other_bot and self._should_ignore_self_loop(message):
                 return
@@ -351,8 +356,8 @@ class BotInstance:
                     triggers["is_autonomous"], guild
                 )
 
-                # Use batching for this user
-                await self._add_to_batch(
+                # Add directly to request queue (no batching - respond to every message)
+                await self.request_queue.add_request(
                     channel_id=channel_id,
                     message=message,
                     content=content,
@@ -501,98 +506,6 @@ class BotInstance:
                 mentioned_contexts.append(context)
 
         return "\n\n".join(mentioned_contexts)
-    
-    async def _add_to_batch(self, channel_id: int, message: discord.Message, content: str, 
-                            guild, attachments, user_name: str, is_dm: bool, user_id: int,
-                            reply_to_name: str, sticker_info: str):
-        """Add message to batch and start/reset 10-second timer for this user."""
-        batch_key = (channel_id, user_id)
-        
-        if batch_key in self._message_batches:
-            # Add to existing batch and cancel old timer
-            batch = self._message_batches[batch_key]
-            batch['messages'].append({
-                'message': message,
-                'content': content,
-                'attachments': attachments,
-                'reply_to_name': reply_to_name,
-                'sticker_info': sticker_info
-            })
-            # Cancel existing timer and start new one
-            if batch['timer_task']:
-                batch['timer_task'].cancel()
-            batch['timer_task'] = asyncio.create_task(
-                self._batch_timer(batch_key, channel_id, guild, user_name, is_dm, user_id)
-            )
-        else:
-            # Create new batch
-            self._message_batches[batch_key] = {
-                'messages': [{
-                    'message': message,
-                    'content': content,
-                    'attachments': attachments,
-                    'reply_to_name': reply_to_name,
-                    'sticker_info': sticker_info
-                }],
-                'timer_task': asyncio.create_task(
-                    self._batch_timer(batch_key, channel_id, guild, user_name, is_dm, user_id)
-                )
-            }
-    
-    async def _batch_timer(self, batch_key: tuple, channel_id: int, guild, user_name: str,
-                           is_dm: bool, user_id: int):
-        """Wait for batch timeout while showing typing, then process the batch."""
-        timeout = runtime_config.get('batch_timeout', 15)
-        
-        # Get channel to show typing indicator
-        if batch_key in self._message_batches:
-            first_msg = self._message_batches[batch_key]['messages'][0]['message']
-            channel = first_msg.channel
-            
-            # Show typing indicator while collecting
-            try:
-                async with channel.typing():
-                    await asyncio.sleep(timeout)
-            except Exception:
-                await asyncio.sleep(timeout)
-        else:
-            await asyncio.sleep(timeout)
-        
-        if batch_key not in self._message_batches:
-            return
-        
-        batch = self._message_batches.pop(batch_key)
-        messages = batch['messages']
-        
-        if not messages:
-            return
-        
-        # Combine all messages into one content block
-        combined_content = "\n".join([m['content'] for m in messages])
-        last_message = messages[-1]['message']
-        
-        # Collect all attachments
-        all_attachments = []
-        for m in messages:
-            all_attachments.extend(m['attachments'])
-        
-        # Use the last message for replying, first for reply context
-        reply_to_name = messages[0].get('reply_to_name', '')
-        sticker_info = messages[-1].get('sticker_info', '')
-        
-        # Add to request queue with combined content
-        await self.request_queue.add_request(
-            channel_id=channel_id,
-            message=last_message,
-            content=combined_content,
-            guild=guild,
-            attachments=all_attachments,
-            user_name=user_name,
-            is_dm=is_dm,
-            user_id=user_id,
-            reply_to_name=reply_to_name,
-            sticker_info=sticker_info
-        )
 
     # === REQUEST PROCESSING HELPERS ===
 
@@ -644,8 +557,19 @@ class BotInstance:
         stats_manager.record_message(user_id, user_name, channel_id, channel_name)
         metrics_manager.record_message(bot_name=self.name, channel_type='dm' if is_dm else 'server')
 
-        # Process attachments
-        attachment_content = await process_attachments(message) if attachments else None
+        # Process attachments and gather mentioned context in parallel
+        char_name = self.character.name if self.character else None
+        attachment_task = process_attachments(message) if attachments else None
+        mentioned_task = self._gather_mentioned_user_context(message, char_name)
+
+        if attachment_task:
+            attachment_content, mentioned_context = await asyncio.gather(
+                attachment_task, mentioned_task
+            )
+        else:
+            attachment_content = None
+            mentioned_context = await mentioned_task
+
         if attachment_content:
             log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
 
@@ -654,7 +578,6 @@ class BotInstance:
         lore = memory_manager.get_lore(guild_id) if guild_id else ""
 
         # Get memories
-        char_name = self.character.name if self.character else None
         global_profile = memory_manager.get_global_user_profile(user_id)
 
         if is_dm:
@@ -680,9 +603,8 @@ class BotInstance:
         if memories:
             memories = remove_thinking_tags(memories)
 
-        # Get active users and mentioned context
+        # Get active users (mentioned_context already gathered above in parallel)
         active_users = get_active_users(channel_id) if not is_dm else []
-        mentioned_context = await self._gather_mentioned_user_context(message, char_name)
 
         # Build system prompt
         system_prompt = character_manager.build_system_prompt(
@@ -1083,16 +1005,6 @@ class BotInstance:
             timestamps = self._user_timestamps[user_id]
             if not timestamps or now - max(timestamps) > STALE_STATE_THRESHOLD:
                 del self._user_timestamps[user_id]
-
-        # Cleanup message batches (orphaned batches)
-        now = time.time()
-        for batch_key in list(self._message_batches.keys()):
-            batch = self._message_batches[batch_key]
-            # Check if timer task is still running
-            if batch.get('timer_task') and batch['timer_task'].done():
-                # Timer completed but batch wasn't processed - clean it up
-                del self._message_batches[batch_key]
-                log.debug(f"Cleaned up orphaned message batch: {batch_key}", self.name)
 
         # Cleanup last memory check tracking
         last_memory_check = getattr(self, '_last_memory_check', {})

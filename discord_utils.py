@@ -11,7 +11,6 @@ import os
 import aiohttp
 import threading
 import time
-import functools
 from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
@@ -19,9 +18,10 @@ from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 
 # Re-export from response_sanitizer for backwards compatibility
-from response_sanitizer import (
+# These are used by other modules that import from discord_utils
+from response_sanitizer import (  # noqa: F401
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response,
-    RE_NAME_PREFIX, RE_REPLY_PREFIX, RE_RE_PREFIX
+    RE_NAME_PREFIX
 )
 
 
@@ -166,35 +166,6 @@ RE_WORD = re.compile(r'\w+')
 
 # Pre-compiled pattern for sentence splitting
 RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
-
-# Pre-compiled patterns for remove_thinking_tags (additional local LLM formats)
-RE_REASONING_TAG = re.compile(r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE)
-RE_REASON_TAG = re.compile(r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE)
-RE_BRACKET_THINKING = re.compile(r'\[thinking\].*?\[/thinking\]', re.DOTALL | re.IGNORECASE)
-RE_BRACKET_THINK = re.compile(r'\[think\].*?\[/think\]', re.DOTALL | re.IGNORECASE)
-RE_MARKDOWN_THINKING = re.compile(r'\*\*(?:Thinking|Reasoning|Internal|Analysis):\*\*.*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE)
-RE_REASONING_PREFIX = re.compile(r'^(?:Thinking:|Reasoning:|Let me think|I need to think|First, I should).*$', re.MULTILINE | re.IGNORECASE)
-RE_OUTPUT_WRAPPER = re.compile(r'<output>(.*?)</output>', re.DOTALL | re.IGNORECASE)
-RE_RESPONSE_WRAPPER = re.compile(r'<response>(.*?)</response>', re.DOTALL | re.IGNORECASE)
-RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
-
-# GLM 4.7 plain-text reasoning patterns
-RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
-RE_GLM_ACTUAL_OUTPUT = re.compile(r'(?:Actual\s*output|Final\s*Polish)\s*:\s*["\']?(.+?)["\']?\s*$', re.DOTALL | re.IGNORECASE)
-RE_GLM_QUOTED_OUTPUT = re.compile(r'^["\'](.+)["\']$', re.DOTALL)
-
-# Additional reasoning leak patterns (internal processing labels)
-RE_INTERNAL_LABELS = re.compile(r'^(?:message\s+)?(?:duplication\s+)?glitch:?\s*', re.MULTILINE | re.IGNORECASE)
-RE_READABLE_VERSION = re.compile(r'^readable\s+version:?\s*', re.MULTILINE | re.IGNORECASE)
-RE_INTERNAL_NOTE = re.compile(r'^\s*\[(?:internal|note|debug|processing)\].*$', re.MULTILINE | re.IGNORECASE)
-RE_STEP_LABELS = re.compile(r'^(?:step\s*\d+|phase\s*\d+|stage\s*\d+):.*$', re.MULTILINE | re.IGNORECASE)
-
-# Deepseek-style reasoning tags
-RE_DEEPSEEK_THINK = re.compile(r'<\|think\|>.*?<\|/think\|>', re.DOTALL)
-# Qwen-style reasoning tags
-RE_QWEN_THOUGHT = re.compile(r'<\|startofthought\|>.*?<\|endofthought\|>', re.DOTALL)
-# Generic internal monologue
-RE_INTERNAL_MONOLOGUE = re.compile(r'\[Internal:.*?\]', re.DOTALL | re.IGNORECASE)
 
 
 def save_history(force: bool = False):
@@ -589,155 +560,6 @@ def get_user_display_name(user: discord.User | discord.Member) -> str:
     elif hasattr(user, 'global_name') and user.global_name:
         return user.global_name
     return user.name
-
-
-# --- Text Cleanup ---
-
-def remove_thinking_tags(text: str) -> str:
-    """Remove all reasoning/thinking blocks from AI output.
-
-    Handles:
-    - <thinking>...</thinking>
-    - <think>...</think>
-    - <|begin_of_box|>...<|end_of_box|> (GLM)
-    - Partial/unclosed tags at start or end of response
-    - Various other reasoning formats from local LLMs
-    - GLM 4.7 plain-text reasoning format (think:, Actual output:, Final Polish:)
-    """
-    if not text:
-        return text
-
-    # GLM 4.7 plain-text reasoning format - check first as it's most specific
-    # Format: starts with "think:" and ends with "Actual output:" or "Final Polish:"
-    if RE_GLM_THINK_START.match(text.strip()):
-        # Look for "Actual output:" or "Final Polish:" marker
-        match = RE_GLM_ACTUAL_OUTPUT.search(text)
-        if match:
-            extracted = match.group(1).strip()
-            # Remove surrounding quotes if present
-            quote_match = RE_GLM_QUOTED_OUTPUT.match(extracted)
-            if quote_match:
-                extracted = quote_match.group(1).strip()
-            if extracted:
-                return extracted
-
-        # Fallback: if no marker found, try to extract content after last double newline
-        # This handles cases where the format is slightly different
-        parts = text.rsplit('\n\n', 1)
-        if len(parts) > 1:
-            last_part = parts[-1].strip()
-            # Check if last part looks like actual output (not a reasoning label)
-            if not any(last_part.lower().startswith(p) for p in ['think:', 'context:', 'character check:',
-                       'action:', 'tone:', 'constraint', 'mental sandbox:', 'check constraints']):
-                # Remove quotes if present
-                quote_match = RE_GLM_QUOTED_OUTPUT.match(last_part)
-                if quote_match:
-                    last_part = quote_match.group(1).strip()
-                if last_part:
-                    return last_part
-
-    # Remove standard thinking tags (using pre-compiled patterns)
-    text = RE_THINKING_OPEN.sub('', text)
-    text = RE_THINK_OPEN.sub('', text)
-
-    # Remove GLM box tags
-    text = RE_GLM_BOX.sub('', text)
-
-    # Remove partial/unclosed tags at START of response
-    text = RE_THINKING_PARTIAL_START.sub('', text)
-    text = RE_THINK_PARTIAL_START.sub('', text)
-    text = RE_GLM_PARTIAL_START.sub('', text)
-
-    # Remove orphaned opening tags at END
-    text = RE_THINKING_ORPHAN_END.sub('', text)
-    text = RE_THINK_ORPHAN_END.sub('', text)
-    text = RE_GLM_ORPHAN_END.sub('', text)
-
-    # Additional patterns for local LLMs that may use different formats
-    # Remove <reasoning>...</reasoning> tags
-    text = RE_REASONING_TAG.sub('', text)
-    text = RE_REASON_TAG.sub('', text)
-
-    # Remove [thinking]...[/thinking] or [think]...[/think] (bracket style)
-    text = RE_BRACKET_THINKING.sub('', text)
-    text = RE_BRACKET_THINK.sub('', text)
-
-    # Remove **Thinking:** or **Reasoning:** blocks (markdown style)
-    text = RE_MARKDOWN_THINKING.sub('', text)
-
-    # Remove lines that start with common reasoning prefixes
-    text = RE_REASONING_PREFIX.sub('', text)
-
-    # Remove internal processing labels (glitch, readable version, etc.)
-    text = RE_INTERNAL_LABELS.sub('', text)
-    text = RE_READABLE_VERSION.sub('', text)
-    text = RE_INTERNAL_NOTE.sub('', text)
-    text = RE_STEP_LABELS.sub('', text)
-
-    # Remove Deepseek-style reasoning tags
-    text = RE_DEEPSEEK_THINK.sub('', text)
-    # Remove Qwen-style reasoning tags
-    text = RE_QWEN_THOUGHT.sub('', text)
-    # Remove generic internal monologue
-    text = RE_INTERNAL_MONOLOGUE.sub('', text)
-
-    # Remove <output> wrapper if present (some models wrap actual response)
-    text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
-    text = RE_RESPONSE_WRAPPER.sub(r'\1', text)
-
-    # Clean up multiple newlines left behind
-    text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
-
-    return text.strip()
-
-
-@functools.lru_cache(maxsize=32)
-def _get_character_name_patterns(character_name: str) -> tuple:
-    """Cache compiled regex patterns for character name prefixes."""
-    return (
-        re.compile(rf'^{re.escape(character_name)}:\s*', re.IGNORECASE),
-        re.compile(rf'^{re.escape(character_name)}\s*:\s*', re.IGNORECASE),
-        re.compile(rf'^\*{re.escape(character_name)}\*:\s*', re.IGNORECASE),
-    )
-
-
-def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
-    """
-    Remove bot persona name prefix and other LLM artifacts from output.
-
-    Strips:
-    - [Name]: prefixes (learned from history format)
-    - (replying to X's message: "...") prefixes
-    - CharacterName: prefixes
-    - *CharacterName*: prefixes
-    """
-    if not text:
-        return text
-
-    # Strip [Name]: prefix pattern (using pre-compiled regex)
-    text = RE_NAME_PREFIX.sub('', text)
-
-    # Strip (replying to X's message: "...") pattern
-    text = RE_REPLY_PREFIX.sub('', text)
-
-    # Strip (RE: ...) or (RE ...) patterns
-    text = RE_RE_PREFIX.sub('', text)
-
-    # Strip character-specific patterns if provided (using cached compiled patterns)
-    if character_name:
-        for pattern in _get_character_name_patterns(character_name):
-            text = pattern.sub('', text)
-    
-    return text.strip()
-
-
-def clean_em_dashes(text: str) -> str:
-    """Replace em-dashes with appropriate punctuation."""
-    # Mid-sentence em-dashes become ", "
-    text = RE_EM_DASH_BETWEEN_WORDS.sub(r'\1, \2', text)
-    # End-sentence em-dashes become "-"
-    text = RE_EM_DASH_END.sub('-', text)
-    return text
 
 
 # --- Sticker Support ---

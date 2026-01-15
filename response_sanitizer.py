@@ -78,6 +78,20 @@ def remove_thinking_tags(text: str) -> str:
     if not text:
         return text
 
+    # EARLY EXIT: Skip expensive processing for clean text (majority of responses)
+    # Only process if text contains markers that suggest reasoning blocks
+    text_lower = text.lower()
+    has_angle_brackets = '<' in text
+    has_square_brackets = '[' in text
+    has_think_keyword = 'think' in text_lower
+    has_reason_keyword = 'reason' in text_lower
+    has_pipe_markers = '|' in text
+
+    if not (has_angle_brackets or has_square_brackets or has_think_keyword or
+            has_reason_keyword or has_pipe_markers):
+        # Clean text - just normalize whitespace and return
+        return text.strip()
+
     # GLM 4.7 plain-text reasoning format - check first as it's most specific
     if RE_GLM_THINK_START.match(text.strip()):
         match = RE_GLM_ACTUAL_OUTPUT.search(text)

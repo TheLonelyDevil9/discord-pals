@@ -21,7 +21,6 @@ MESSAGE_DELAY_MIN = 0.5          # Minimum delay between message parts (seconds)
 MESSAGE_DELAY_MAX = 1.0          # Maximum delay between message parts (seconds)
 ERROR_DELETE_AFTER = 10          # Seconds before error messages auto-delete
 MAX_MESSAGE_LENGTH = 2000        # Discord's max message length
-BATCH_TIMEOUT_DEFAULT = 15       # Default seconds to wait for follow-up messages
 
 # =============================================================================
 # MEMORY LIMITS
@@ -36,7 +35,7 @@ MAX_GLOBAL_USER_FACTS = 20       # Max facts in global user profile
 # HISTORY
 # =============================================================================
 
-MAX_HISTORY_MESSAGES = 1000      # Max messages stored per channel
+MAX_HISTORY_MESSAGES = 300       # Max messages stored per channel (reduced from 1000 for memory efficiency)
 DEFAULT_HISTORY_LIMIT = 200      # Default messages included in context
 HISTORY_SAVE_INTERVAL = 60       # Seconds between history saves
 

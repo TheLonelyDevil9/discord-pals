@@ -6,7 +6,9 @@ With debounced saving to reduce disk I/O.
 """
 
 import os
+import re
 import time
+import difflib
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
@@ -23,6 +25,72 @@ def ensure_data_dir():
     for dir_path in [DATA_DIR, DM_MEMORIES_DIR, USER_MEMORIES_DIR]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
+
+
+# =============================================================================
+# MEMORY DEDUPLICATION
+# =============================================================================
+
+def _normalize_memory(text: str) -> str:
+    """Normalize memory text for comparison."""
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
+    text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+    return text
+
+
+def _extract_key_terms(text: str) -> set:
+    """Extract key terms (names, nouns) for comparison."""
+    stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'have', 'had',
+                  'that', 'this', 'they', 'them', 'their', 'mentioned', 'said', 'told',
+                  'about', 'with', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                  'of', 'it', 'be', 'been', 'being', 'who', 'which', 'what', 'when',
+                  'where', 'how', 'why', 'also', 'just', 'only', 'very', 'really'}
+    words = set(_normalize_memory(text).split())
+    return words - stop_words
+
+
+def _is_duplicate_memory(new_content: str, existing_memories: list, threshold: float = 0.75) -> bool:
+    """Check if new memory is semantically similar to existing ones.
+
+    Uses two-stage check:
+    1. Key term overlap (fast) - if <40% terms match, skip expensive check
+    2. Sequence similarity (accurate) - confirms with difflib
+
+    Args:
+        new_content: The new memory content to check
+        existing_memories: List of existing memory dicts with 'content' key
+        threshold: Similarity threshold (0.0-1.0), default 0.75
+
+    Returns:
+        True if duplicate found, False otherwise
+    """
+    if not existing_memories or not new_content:
+        return False
+
+    new_normalized = _normalize_memory(new_content)
+    new_terms = _extract_key_terms(new_content)
+
+    for mem in existing_memories:
+        existing_content = mem.get('content', '')
+        if not existing_content:
+            continue
+
+        existing_normalized = _normalize_memory(existing_content)
+
+        # Stage 1: Quick key term check
+        existing_terms = _extract_key_terms(existing_content)
+        if new_terms and existing_terms:
+            overlap = len(new_terms & existing_terms) / max(len(new_terms), len(existing_terms))
+            if overlap < 0.4:  # Not enough overlap, skip expensive check
+                continue
+
+        # Stage 2: Sequence similarity
+        similarity = difflib.SequenceMatcher(None, new_normalized, existing_normalized).ratio()
+        if similarity >= threshold:
+            return True
+
+    return False
 
 
 def get_character_dm_file(character_name: str) -> str:
@@ -163,14 +231,22 @@ class MemoryManager:
 
     # --- Server Memories (shared) ---
 
-    def add_server_memory(self, guild_id: int, content: str, auto: bool = False):
-        """Add a memory for a server."""
+    def add_server_memory(self, guild_id: int, content: str, auto: bool = False) -> bool:
+        """Add a memory for a server.
+
+        Returns True if memory was added, False if duplicate detected.
+        """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
 
         key = str(guild_id)
         if key not in self.server_memories:
             self.server_memories[key] = []
+
+        # Check for duplicates before adding
+        if _is_duplicate_memory(content, self.server_memories[key]):
+            log.debug(f"Skipping duplicate server memory: {content[:50]}...")
+            return False
 
         memory = {
             "content": content,
@@ -184,6 +260,7 @@ class MemoryManager:
             self.server_memories[key] = self.server_memories[key][-50:]
 
         self._mark_dirty('server')
+        return True
 
     def get_server_memories(self, guild_id: int, limit: int = 10) -> str:
         """Get formatted memories for a server."""
@@ -203,8 +280,11 @@ class MemoryManager:
     # --- DM Memories (per-character) ---
 
     def add_dm_memory(self, user_id: int, content: str, auto: bool = False,
-                      character_name: str = None, user_name: str = None):
-        """Add a memory for a DM conversation."""
+                      character_name: str = None, user_name: str = None) -> bool:
+        """Add a memory for a DM conversation.
+
+        Returns True if memory was added, False if duplicate detected.
+        """
         if not character_name:
             # Fallback to legacy shared file
             return self._add_legacy_dm_memory(user_id, content, auto)
@@ -214,6 +294,11 @@ class MemoryManager:
 
         if key not in dm_memories:
             dm_memories[key] = []
+
+        # Check for duplicates before adding
+        if _is_duplicate_memory(content, dm_memories[key]):
+            log.debug(f"Skipping duplicate DM memory: {content[:50]}...")
+            return False
 
         memory = {
             "content": content,
@@ -231,6 +316,7 @@ class MemoryManager:
             dm_memories[key] = dm_memories[key][-30:]
 
         self._mark_dirty(f'dm:{character_name}')
+        return True
 
     def _add_legacy_dm_memory(self, user_id: int, content: str, auto: bool = False):
         """Add to legacy shared DM memories (backwards compatibility)."""
@@ -287,8 +373,11 @@ class MemoryManager:
     # --- Per-User Server Memories (per-character) ---
 
     def add_user_memory(self, guild_id: int, user_id: int, content: str,
-                        auto: bool = False, user_name: str = None, character_name: str = None):
-        """Add a memory about a specific user in a server."""
+                        auto: bool = False, user_name: str = None, character_name: str = None) -> bool:
+        """Add a memory about a specific user in a server.
+
+        Returns True if memory was added, False if duplicate detected.
+        """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
 
@@ -304,6 +393,11 @@ class MemoryManager:
             user_memories[guild_key] = {}
         if user_key not in user_memories[guild_key]:
             user_memories[guild_key][user_key] = []
+
+        # Check for duplicates before adding
+        if _is_duplicate_memory(content, user_memories[guild_key][user_key]):
+            log.debug(f"Skipping duplicate user memory: {content[:50]}...")
+            return False
 
         memory = {
             "content": content,
@@ -321,6 +415,7 @@ class MemoryManager:
             user_memories[guild_key][user_key] = user_memories[guild_key][user_key][-20:]
 
         self._mark_dirty(f'user:{character_name}')
+        return True
 
     def _add_legacy_user_memory(self, guild_id: int, user_id: int, content: str,
                                  auto: bool = False, user_name: str = None):
@@ -391,14 +486,22 @@ class MemoryManager:
     # --- Global User Profiles (cross-server) ---
 
     def add_global_user_profile(self, user_id: int, content: str, auto: bool = False,
-                                 user_name: str = None, character_name: str = None):
-        """Add a cross-server fact about a user (follows them everywhere)."""
+                                 user_name: str = None, character_name: str = None) -> bool:
+        """Add a cross-server fact about a user (follows them everywhere).
+
+        Returns True if memory was added, False if duplicate detected.
+        """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
 
         key = str(user_id)
         if key not in self.global_user_profiles:
             self.global_user_profiles[key] = []
+
+        # Check for duplicates before adding
+        if _is_duplicate_memory(content, self.global_user_profiles[key]):
+            log.debug(f"Skipping duplicate global profile: {content[:50]}...")
+            return False
 
         memory = {
             "content": content,
@@ -417,6 +520,7 @@ class MemoryManager:
             self.global_user_profiles[key] = self.global_user_profiles[key][-20:]
 
         self._mark_dirty('global_profiles')
+        return True
 
     def get_global_user_profile(self, user_id: int, limit: int = 5) -> str:
         """Get cross-server facts about a user."""

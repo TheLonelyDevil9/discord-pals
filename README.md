@@ -47,7 +47,7 @@ The system instructions were authored by legendary chef @Geechan.
   - Memories and lore editing (with user name resolution)
   - Character files and live preview
   - System prompts with placeholder reference
-  - Runtime config (history limit, batch timeout, provider switching)
+  - Runtime config (history limit, provider switching)
   - Context visualization with token estimates
   - Message stats (daily counts, response times, top users)
   - Live log streaming
@@ -58,7 +58,8 @@ The system instructions were authored by legendary chef @Geechan.
 - **Auto-memory** - Automatically remembers important facts from conversations
 - **History persistence** - Conversation history survives restarts
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
-- **Message batching** - Collects follow-up messages before responding (configurable timeout)
+- **Instant responses** - Bot responds to every message immediately (no batching delay)
+- **Memory deduplication** - Automatically prevents duplicate memories from being stored
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
 - **Impersonation prevention** - Bots won't roleplay as each other in multi-bot setups
@@ -503,7 +504,6 @@ Click the channel name to expand settings, or use the quick toggle to enable/dis
 Adjust runtime settings without restarting:
 
 - **History Limit** - Messages included in context (default: 200)
-- **Batch Timeout** - Seconds to wait for follow-up messages (default: 15)
 - **Name Trigger Chance** - Probability of responding to name mentions
 - **Provider Selection** - Switch between configured providers
 - **Single User Mode** - SillyTavern-style message formatting
@@ -841,7 +841,6 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | ------- | ------- | ----------- |
 | `history_limit` | 200 | Maximum messages included in AI context. Higher = more memory, slower responses |
 | `immediate_message_count` | 5 | Recent messages placed after the chatroom context block |
-| `batch_timeout` | 15 | Seconds to wait for follow-up messages before responding |
 | `bot_interactions_paused` | false | Pause all bot-to-bot conversations |
 | `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
 | `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
@@ -858,7 +857,6 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 **Slow responses?**
 
 - Lower `history_limit` (try 100)
-- Lower `batch_timeout` (try 5-10)
 
 **Bot missing context?**
 
@@ -1078,10 +1076,6 @@ discord-pals/
 ### Provider timeout
 
 → Increase timeout in `providers.json` (try 120+ for local LLMs)
-
-### Bot responds very slowly
-
-→ This is usually the `batch_timeout` setting (default 15 seconds). The bot waits for follow-up messages before responding. Lower it in the dashboard Config page or set `batch_timeout` to 5-10.
 
 ### Character changes not taking effect
 

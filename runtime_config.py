@@ -12,7 +12,6 @@ from config import RUNTIME_CONFIG_FILE, DATA_DIR
 DEFAULTS = {
     "history_limit": 200,  # Total messages to include (history + immediate)
     "immediate_message_count": 5,  # Last N messages as "current" (placed after chatroom context)
-    "batch_timeout": 15,
     "active_provider": None,  # None = use first provider
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
@@ -20,7 +19,7 @@ DEFAULTS = {
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
-    # Bot-on-bversation fall-off settings
+    # Bot-on-bot conversation fall-off settings
     "bot_falloff_enabled": True,  # Enable progressive fall-off for bot-bot conversations
     "bot_falloff_base_chance": 0.8,  # Initial response probability (80%)
     "bot_falloff_decay_rate": 0.15,  # Decay per consecutive bot message (15%)
@@ -58,16 +57,19 @@ def _load_config_from_disk() -> dict:
 
 
 def load_config() -> dict:
-    """Load runtime config with caching to avoid repeated disk reads."""
+    """Load runtime config with caching to avoid repeated disk reads.
+
+    Returns cached reference for reads (no copy overhead).
+    """
     global _config_cache, _config_cache_time
 
     now = time.time()
     if _config_cache is not None and (now - _config_cache_time) < _CONFIG_CACHE_TTL:
-        return _config_cache.copy()
+        return _config_cache  # Return reference, not copy
 
     _config_cache = _load_config_from_disk()
     _config_cache_time = now
-    return _config_cache.copy()
+    return _config_cache
 
 
 def invalidate_cache():
@@ -93,14 +95,14 @@ def get(key: str, default=None):
 
 def set(key: str, value):
     """Set a config value."""
-    config = load_config()
+    config = load_config().copy()  # Copy only when modifying
     config[key] = value
     save_config(config)
 
 
 def get_all() -> dict:
-    """Get all config values."""
-    return load_config()
+    """Get all config values (returns copy for safety)."""
+    return load_config().copy()
 
 
 # Last context storage for visualization

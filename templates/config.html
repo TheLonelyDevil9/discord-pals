@@ -40,18 +40,6 @@
                     <p class="form-hint">Priority messages placed after chatroom context</p>
                 </div>
 
-                <div class="form-group">
-                    <label for="batch_timeout">Batch Timeout</label>
-                    <div class="slider-row">
-                        <input type="range" id="batch_timeout" name="batch_timeout" min="5" max="30" step="1"
-                      value="{{ config.batch_timeout }}"
-                            oninput="document.getElementById('batch_val').textContent = this.value + 's'"
-                            title="Batch collection time">
-                        <span class="slider-val" id="batch_val">{{ config.batch_timeout }}s</span>
-                    </div>
-                    <p class="form-hint">Time to wait for follow-up messages before responding</p>
-                </div>
-
                 {% if providers %}
                 <div class="form-group">
                     <label for="active_provider">Active Provider</label>
@@ -747,7 +735,6 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     const data = {
         history_limit: parseInt(document.getElementById('history_limit').value),
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-        batch_timeout: parseInt(document.getElementById('batch_timeout').value),
         active_provider: document.getElementById('active_provider')?.value || null
     };
 

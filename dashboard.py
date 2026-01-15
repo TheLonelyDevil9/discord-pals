@@ -556,6 +556,7 @@ def api_status():
 
 
 @app.route('/api/killswitch', methods=['GET', 'POST'])
+@requires_csrf
 def api_killswitch():
     """API endpoint for global killswitch control."""
     import runtime_config
@@ -587,6 +588,7 @@ def api_killswitch():
 
 
 @app.route('/api/bot-interactions', methods=['GET', 'POST'])
+@requires_csrf
 def api_bot_interactions():
     """API endpoint for bot-to-bot interaction control."""
     import runtime_config
@@ -618,6 +620,7 @@ def api_bot_interactions():
 
 
 @app.route('/api/message-format', methods=['GET', 'POST'])
+@requires_csrf
 def api_message_format():
     """API endpoint for message format control (single-user vs multi-role)."""
     import runtime_config
@@ -732,16 +735,22 @@ def config_page():
 
 
 @app.route('/api/config', methods=['GET', 'POST'])
+@requires_csrf
 def api_config():
     """API for runtime config."""
     import runtime_config
-    
+
     if request.method == 'POST':
         data = request.json
+        # Validate keys against allowed config keys
+        allowed_keys = set(runtime_config.DEFAULTS.keys())
         for key, value in data.items():
-            runtime_config.set(key, value)
+            if key in allowed_keys:
+                runtime_config.set(key, value)
+            else:
+                log.warn(f"Rejected unknown config key: {key}")
         return jsonify({'status': 'ok'})
-    
+
     return jsonify(runtime_config.get_all())
 
 
@@ -828,6 +837,7 @@ def api_character_provider():
 
 
 @app.route('/api/nicknames', methods=['GET', 'POST'])
+@requires_csrf
 def api_nicknames():
     """Get or update nicknames for bots. Persists to bots.json or runtime_config.json."""
     import runtime_config
@@ -1210,6 +1220,7 @@ def api_clear_channel(channel_id):
 
 
 @app.route('/api/channels/<int:channel_id>/autonomous', methods=['GET', 'POST'])
+@requires_csrf
 def api_channel_autonomous(channel_id):
     """Get or set autonomous mode for a channel."""
     from discord_utils import autonomous_manager
@@ -1322,6 +1333,7 @@ def api_add_memory():
 
 
 @app.route('/api/lore/<int:guild_id>', methods=['GET', 'POST', 'DELETE'])
+@requires_csrf
 def api_lore(guild_id):
     """Get, set, or delete lore for a guild."""
     from memory import memory_manager
@@ -1426,6 +1438,59 @@ def api_clear_all_memories(file_name):
 
     except Exception as e:
         log.error(f"Error clearing memories: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# --- Memory Deduplication API ---
+
+@app.route('/api/memories/deduplicate', methods=['POST'])
+@requires_csrf
+def api_deduplicate_memories():
+    """Remove duplicate memories across all memory stores."""
+    from memory import memory_manager, _is_duplicate_memory
+
+    removed_count = 0
+
+    def dedupe_list(memories: list) -> tuple:
+        """Deduplicate a list of memories, keeping oldest. Returns (deduped_list, removed_count)."""
+        if not memories:
+            return memories, 0
+
+        seen = []
+        removed = 0
+        for mem in memories:
+            content = mem.get('content', '')
+            if not _is_duplicate_memory(content, seen):
+                seen.append(mem)
+            else:
+                removed += 1
+        return seen, removed
+
+    try:
+        # Deduplicate server memories
+        for guild_id in list(memory_manager.server_memories.keys()):
+            deduped, count = dedupe_list(memory_manager.server_memories[guild_id])
+            if count > 0:
+                memory_manager.server_memories[guild_id] = deduped
+                memory_manager._mark_dirty('server')
+                removed_count += count
+
+        # Deduplicate global user profiles
+        for user_id in list(memory_manager.global_user_profiles.keys()):
+            deduped, count = dedupe_list(memory_manager.global_user_profiles[user_id])
+            if count > 0:
+                memory_manager.global_user_profiles[user_id] = deduped
+                memory_manager._mark_dirty('global_profiles')
+                removed_count += count
+
+        # Force save
+        memory_manager.flush()
+
+        log.info(f"Memory deduplication complete: removed {removed_count} duplicates")
+        return jsonify({'status': 'ok', 'removed': removed_count})
+
+    except Exception as e:
+        log.error(f"Error during memory deduplication: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
