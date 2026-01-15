@@ -169,7 +169,10 @@ def reload_character_providers() -> dict:
             char_providers = data.get("character_providers", {})
             # Validate against current provider tiers
             valid_tiers = set(PROVIDERS.keys())
-            CHARACTER_PROVIDERS = {k: v for k, v in char_providers.items() if v in valid_tiers}
+            validated = {k: v for k, v in char_providers.items() if v in valid_tiers}
+            # Update in-place so all modules that imported CHARACTER_PROVIDERS see the change
+            CHARACTER_PROVIDERS.clear()
+            CHARACTER_PROVIDERS.update(validated)
             return CHARACTER_PROVIDERS
         except Exception as e:
             log.warn(f"Failed to reload character_providers: {e}")

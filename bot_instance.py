@@ -82,7 +82,193 @@ class BotInstance:
         # Set up events and commands
         self._setup_events()
         self._setup_commands()
-    
+
+    # === MESSAGE HANDLING HELPERS (for on_message) ===
+
+    def _should_ignore_self_loop(self, message: discord.Message) -> bool:
+        """Check if message is from a bot with the same character (prevents self-loops).
+
+        Returns True if message should be ignored, False otherwise.
+        Side effect: Adds message to history if returning True.
+        """
+        if not self.character:
+            return False
+        bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
+        if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
+            log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
+            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author))
+            return True
+        return False
+
+    def _should_skip_bot_message(self, message: discord.Message, user_name: str) -> bool:
+        """Check if bot message should be skipped due to bot chain prevention.
+
+        Returns True if message should be skipped, False otherwise.
+        Side effect: Updates tracker state and adds to history if returning True.
+        """
+        channel_id = message.channel.id
+
+        # Global stop-bot interactions
+        if runtime_config.get("bot_interactions_paused", False):
+            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            return True
+
+        # Initialize or update conversation tracker
+        if channel_id not in self._bot_conversation_tracker:
+            self._bot_conversation_tracker[channel_id] = {
+                "consecutive_bot_messages": 0,
+                "last_message_time": 0,
+                "last_human_message_time": time.time()
+            }
+
+        tracker = self._bot_conversation_tracker[channel_id]
+        tracker["consecutive_bot_messages"] += 1
+        tracker["last_message_time"] = time.time()
+
+        # Calculate response probability based on conversation length
+        consecutive_msgs = tracker["consecutive_bot_messages"]
+        response_probability = self._calculate_bot_response_probability(
+            consecutive_msgs, runtime_config.get_all()
+        )
+
+        # Roll the dice
+        if random.random() > response_probability:
+            log.debug(
+                f"Bot fall-off: Skipping response (consecutive: {consecutive_msgs}, "
+                f"probability: {response_probability:.2%})",
+                self.name
+            )
+            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            return True
+
+        # Keep existing 60-second cooldown as additional safeguard
+        last_bot_response = self._last_bot_response.get(channel_id, 0)
+        if time.time() - last_bot_response < 60:
+            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            return True
+
+        return False
+
+    def _detect_response_triggers(self, message: discord.Message, is_dm: bool,
+                                   is_other_bot: bool, guild: discord.Guild) -> dict:
+        """Detect all ways a message might trigger a response.
+
+        Returns dict with keys: mentioned, is_reply_to_bot, is_autonomous, name_triggered, should_respond
+        """
+        channel_id = message.channel.id
+
+        # Check direct mention
+        mentioned = self.client.user in message.mentions if not is_dm else True
+
+        # Reply chain detection
+        is_reply_to_bot = False
+        if message.reference and message.reference.message_id:
+            try:
+                ref_msg = message.reference.cached_message
+                if ref_msg and ref_msg.author == self.client.user:
+                    is_reply_to_bot = True
+            except Exception:
+                pass
+
+        # Autonomous mode check
+        is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
+
+        # Name/nickname trigger
+        name_triggered = False
+        name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
+
+        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
+            and channel_id in autonomous_manager.enabled_channels):
+
+            # Check if bot triggers are allowed for this channel when message is from a bot
+            if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
+                pass  # Skip name trigger for bots when not allowed
+            else:
+                bot_display_name = guild.me.display_name if guild else self.client.user.display_name
+                bot_username = self.client.user.name
+                char_name = self.character.name if self.character else ""
+
+                content_lower = message.content.lower()
+
+                # Skip name trigger if message is quoting the bot itself
+                if char_name and (f"[quoting {char_name.lower()}" in content_lower
+                                  or f"[ {char_name.lower()}'s message" in content_lower
+                                  or f"[{char_name.lower()}'s message" in content_lower):
+                    log.debug(f"Skipping name trigger - message quotes self: {char_name}", self.name)
+                else:
+                    names_to_check = [n.lower() for n in [bot_display_name, bot_username] if n]
+                    if char_name:
+                        names_to_check.append(char_name.lower())
+
+                    # Add custom nicknames from per-bot config
+                    if self.nicknames:
+                        for nick in self.nicknames.split(','):
+                            nick = nick.strip().lower()
+                            if nick and len(nick) >= 2:
+                                names_to_check.append(nick)
+
+                    # Strip Discord emoji shortcodes and GIF URLs
+                    content_for_name_check = re.sub(r':[a-zA-Z0-9_]+:', '', content_lower)
+                    content_for_name_check = re.sub(r'https?://\S+', '', content_for_name_check)
+
+                    # Check if any name appears in message
+                    for name in names_to_check:
+                        if name and len(name) >= 2:
+                            pattern = rf'\b{re.escape(name)}\b'
+                            if re.search(pattern, content_for_name_check, re.IGNORECASE):
+                                if random.random() < name_trigger_chance:
+                                    name_triggered = True
+                                    break
+
+        should_respond = mentioned or is_reply_to_bot or is_autonomous or name_triggered
+
+        return {
+            "mentioned": mentioned,
+            "is_reply_to_bot": is_reply_to_bot,
+            "is_autonomous": is_autonomous,
+            "name_triggered": name_triggered,
+            "should_respond": should_respond
+        }
+
+    def _prepare_message_content(self, message: discord.Message, user_name: str,
+                                  sticker_info: str, is_other_bot: bool,
+                                  is_autonomous: bool, guild: discord.Guild) -> str:
+        """Prepare message content for processing."""
+        if sticker_info:
+            return f"{user_name} {sticker_info}"
+
+        if is_other_bot:
+            content = message.content.strip()
+        else:
+            # Replace THIS bot's mention with its name
+            bot_name = guild.me.display_name if guild else self.client.user.display_name
+            content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
+
+        # Resolve all Discord formatting
+        content = resolve_discord_formatting(content, guild)
+
+        # For autonomous responses, prefix to indicate bot is chiming in
+        if is_autonomous and message.mentions:
+            other_mentions = [m for m in message.mentions if m != self.client.user]
+            if other_mentions:
+                content = f"[Someone else was mentioned, you're chiming in] {content}"
+
+        if not content and not message.attachments:
+            content = "Hello!"
+
+        return content
+
+    def _update_bot_conversation_state(self, channel_id: int, is_other_bot: bool) -> None:
+        """Update bot conversation tracking state when responding."""
+        if is_other_bot:
+            self._last_bot_response[channel_id] = time.time()
+        else:
+            # Reset bot conversation tracker when human speaks
+            if channel_id in self._bot_conversation_tracker:
+                self._bot_conversation_tracker[channel_id]["consecutive_bot_messages"] = 0
+                self._bot_conversation_tracker[channel_id]["last_human_message_time"] = time.time()
+                log.debug(f"Bot fall-off: Reset counter (human message)", self.name)
+
     def _setup_events(self):
         """Register event handlers."""
         
