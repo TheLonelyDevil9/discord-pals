@@ -8,6 +8,7 @@ import threading
 import json
 import os
 import io
+import time
 import zipfile
 from pathlib import Path
 from datetime import timedelta
@@ -981,37 +982,44 @@ def api_preview(name):
 
 # --- Test Provider ---
 
+def _sanitize_error_message(error: Exception) -> str:
+    """Sanitize error message to avoid leaking sensitive info."""
+    msg = str(error)
+    # Remove file paths
+    import re
+    msg = re.sub(r'[A-Za-z]:\\[^\s]+', '[path]', msg)  # Windows paths
+    msg = re.sub(r'/[^\s]+/', '[path]/', msg)  # Unix paths
+    # Remove API keys that might be in error messages
+    msg = re.sub(r'(api[_-]?key|token|secret|password)[=:]\s*\S+', r'\1=[redacted]', msg, flags=re.IGNORECASE)
+    return msg[:200]
+
+
 @app.route('/api/test-provider/<int:index>')
 def api_test_provider(index):
     """Test connection to a specific provider."""
-    import asyncio
-    from openai import AsyncOpenAI
-    
+    from openai import OpenAI  # Use sync client to avoid blocking issues
+
     providers_file = Path("providers.json")
     if not providers_file.exists():
         return jsonify({'success': False, 'error': 'providers.json not found'})
-    
+
     try:
         with open(providers_file, 'r') as f:
             data = json.load(f)
         providers = data.get('providers', [])
         if index >= len(providers):
             return jsonify({'success': False, 'error': 'Provider index out of range'})
-        
+
         p = providers[index]
         key_env = p.get('key_env', '')
         key = os.getenv(key_env, 'not-needed') if key_env else 'not-needed'
-        
-        client = AsyncOpenAI(base_url=p['url'], api_key=key, timeout=10)
-        
-        async def test():
-            response = await client.models.list()
-            return True
-        
-        asyncio.run(test())
+
+        # Use sync client instead of asyncio.run() which can block Flask
+        client = OpenAI(base_url=p['url'], api_key=key, timeout=10)
+        client.models.list()
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)[:200]})
+        return jsonify({'success': False, 'error': _sanitize_error_message(e)})
 
 
 # --- Export/Import ---

@@ -31,6 +31,19 @@ import logger as log
 from prometheus_metrics import metrics_manager
 
 
+def _is_same_character(bot_author_name: str, character_name: str) -> bool:
+    """Check if a bot's name matches a character name (case-insensitive, partial match).
+
+    Used to prevent self-loops where different bot clients share a character.
+    """
+    if not character_name:
+        return False
+    bot_name_lower = bot_author_name.lower()
+    char_name_lower = character_name.lower()
+    return (char_name_lower in bot_name_lower or
+            bot_name_lower in char_name_lower)
+
+
 class BotInstance:
     """Encapsulates a single Discord bot with its own client, character, and state."""
     
@@ -121,13 +134,9 @@ class BotInstance:
             is_other_bot = message.author.bot
 
             # Prevent self-loop: Don't respond to messages from bots with same character name
-            # This catches multi-instance scenarios where different bot clients share a character
             if is_other_bot and self.character:
-                # Check if the bot's display name matches our character name
-                bot_display = message.author.display_name.lower() if hasattr(message.author, 'display_name') else ""
-                bot_name = message.author.name.lower()
-                char_name = self.character.name.lower()
-                if char_name in bot_display or char_name in bot_name or bot_display in char_name:
+                bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
+                if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
                     log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
                     add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author))
                     return
@@ -566,17 +575,35 @@ class BotInstance:
             if not self.character:
                 await message.channel.send("❌ No character loaded!", delete_after=ERROR_DELETE_AFTER)
                 return
-            
+
             channel_id = message.channel.id
             guild_id = guild.id if guild else None
 
             # Check for duplicate message before adding to history
+            # IMPORTANT: Only skip if THIS BOT already processed this exact message
+            # (not if another bot added it - we want multiple bots to respond when mentioned)
             recent = get_history(channel_id)[-5:]
-            if any(m.get('content') == content and m.get('author') == user_name for m in recent):
-                log.debug(f"Skipping duplicate message from {user_name}", self.name)
+
+            # Check if the last user message with this content already has our response after it
+            already_responded = False
+            history = get_history(channel_id)
+            for i, m in enumerate(history):
+                if m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user':
+                    # Check if any message after this one is from this bot
+                    for j in range(i + 1, len(history)):
+                        if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
+                            already_responded = True
+                            break
+                    if already_responded:
+                        break
+
+            if already_responded:
+                log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
                 return
 
-            add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
+            # Only add to history if not already present (another bot may have added it)
+            if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
+                add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
             
             # Store channel name for readable history display
             channel_name = getattr(message.channel, 'name', 'DM')
