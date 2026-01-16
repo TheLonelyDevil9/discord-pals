@@ -497,6 +497,49 @@ class AIProviderManager:
             lines.append(f"• {name}: {emoji} {status}")
         return "\n".join(lines)
 
+    async def get_embedding(self, text: str) -> Optional[List[float]]:
+        """Generate embedding vector for text using OpenAI-compatible API.
+
+        Uses the primary provider's embedding endpoint.
+        Returns None if embedding fails (graceful degradation).
+        """
+        if not text or not text.strip():
+            return None
+
+        # Try providers in order until one works
+        for tier in ["primary", "secondary", "fallback"]:
+            if tier not in self.providers:
+                continue
+
+            # Check if provider has embedding support configured
+            provider_cfg = PROVIDERS.get(tier, {})
+            embedding_model = provider_cfg.get("embedding_model", "text-embedding-3-small")
+
+            # Skip if provider explicitly disabled embeddings
+            if embedding_model is None or embedding_model == "":
+                continue
+
+            try:
+                client = self.providers[tier]
+                response = await asyncio.wait_for(
+                    client.embeddings.create(
+                        model=embedding_model,
+                        input=text[:8000]  # Truncate to avoid token limits
+                    ),
+                    timeout=30  # Shorter timeout for embeddings
+                )
+
+                if response and response.data and len(response.data) > 0:
+                    embedding = response.data[0].embedding
+                    log.debug(f"[{tier}] Generated embedding ({len(embedding)} dims) for: {text[:50]}...")
+                    return embedding
+
+            except Exception as e:
+                log.debug(f"[{tier}] Embedding generation failed: {e}")
+                continue
+
+        return None
+
 
 # Global instance
 provider_manager = AIProviderManager()

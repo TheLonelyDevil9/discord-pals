@@ -16,7 +16,10 @@ from config import (
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
 )
 from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
-from constants import MEMORY_SAVE_INTERVAL
+from constants import (
+    MEMORY_SAVE_INTERVAL, SEMANTIC_SIMILARITY_THRESHOLD,
+    TEXTUAL_SIMILARITY_THRESHOLD, KEY_TERM_OVERLAP_THRESHOLD
+)
 import logger as log
 
 
@@ -50,17 +53,38 @@ def _extract_key_terms(text: str) -> set:
     return words - stop_words
 
 
-def _is_duplicate_memory(new_content: str, existing_memories: list, threshold: float = 0.75) -> bool:
+def _cosine_similarity(vec1: list, vec2: list) -> float:
+    """Calculate cosine similarity between two embedding vectors (pure Python)."""
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = sum(a * a for a in vec1) ** 0.5
+    norm2 = sum(b * b for b in vec2) ** 0.5
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return dot / (norm1 * norm2)
+
+
+def _is_duplicate_memory(
+    new_content: str,
+    existing_memories: list,
+    new_embedding: list = None,
+    textual_threshold: float = TEXTUAL_SIMILARITY_THRESHOLD,
+    semantic_threshold: float = SEMANTIC_SIMILARITY_THRESHOLD
+) -> bool:
     """Check if new memory is semantically similar to existing ones.
 
-    Uses two-stage check:
-    1. Key term overlap (fast) - if <40% terms match, skip expensive check
+    Uses three-stage check:
+    1. Key term overlap (fast) - if <30% terms match, skip expensive checks
     2. Sequence similarity (accurate) - confirms with difflib
+    3. Semantic similarity (embeddings) - catches paraphrases
 
     Args:
         new_content: The new memory content to check
         existing_memories: List of existing memory dicts with 'content' key
-        threshold: Similarity threshold (0.0-1.0), default 0.75
+        new_embedding: Pre-computed embedding for new memory (or None)
+        textual_threshold: Similarity threshold for difflib (0.0-1.0)
+        semantic_threshold: Cosine similarity threshold for embeddings (0.0-1.0)
 
     Returns:
         True if duplicate found, False otherwise
@@ -82,13 +106,21 @@ def _is_duplicate_memory(new_content: str, existing_memories: list, threshold: f
         existing_terms = _extract_key_terms(existing_content)
         if new_terms and existing_terms:
             overlap = len(new_terms & existing_terms) / max(len(new_terms), len(existing_terms))
-            if overlap < 0.4:  # Not enough overlap, skip expensive check
+            if overlap < KEY_TERM_OVERLAP_THRESHOLD:
                 continue
 
-        # Stage 2: Sequence similarity
+        # Stage 2: Textual sequence similarity
         similarity = difflib.SequenceMatcher(None, new_normalized, existing_normalized).ratio()
-        if similarity >= threshold:
+        if similarity >= textual_threshold:
+            log.debug(f"Textual duplicate detected (sim={similarity:.3f}): '{new_content[:40]}' ~ '{existing_content[:40]}'")
             return True
+
+        # Stage 3: Semantic similarity via embeddings
+        if new_embedding and mem.get('embedding'):
+            semantic_sim = _cosine_similarity(new_embedding, mem['embedding'])
+            if semantic_sim >= semantic_threshold:
+                log.debug(f"Semantic duplicate detected (sim={semantic_sim:.3f}): '{new_content[:40]}' ~ '{existing_content[:40]}'")
+                return True
 
     return False
 
@@ -231,7 +263,8 @@ class MemoryManager:
 
     # --- Server Memories (shared) ---
 
-    def add_server_memory(self, guild_id: int, content: str, auto: bool = False) -> bool:
+    def add_server_memory(self, guild_id: int, content: str, auto: bool = False,
+                          embedding: list = None) -> bool:
         """Add a memory for a server.
 
         Returns True if memory was added, False if duplicate detected.
@@ -243,8 +276,8 @@ class MemoryManager:
         if key not in self.server_memories:
             self.server_memories[key] = []
 
-        # Check for duplicates before adding
-        if _is_duplicate_memory(content, self.server_memories[key]):
+        # Check for duplicates before adding (with semantic check if embedding provided)
+        if _is_duplicate_memory(content, self.server_memories[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate server memory: {content[:50]}...")
             return False
 
@@ -253,6 +286,8 @@ class MemoryManager:
             "timestamp": datetime.now().isoformat(),
             "auto": auto
         }
+        if embedding:
+            memory["embedding"] = embedding
         self.server_memories[key].append(memory)
 
         # Keep max 50 memories per server
@@ -280,7 +315,8 @@ class MemoryManager:
     # --- DM Memories (per-character) ---
 
     def add_dm_memory(self, user_id: int, content: str, auto: bool = False,
-                      character_name: str = None, user_name: str = None) -> bool:
+                      character_name: str = None, user_name: str = None,
+                      embedding: list = None) -> bool:
         """Add a memory for a DM conversation.
 
         Returns True if memory was added, False if duplicate detected.
@@ -295,8 +331,8 @@ class MemoryManager:
         if key not in dm_memories:
             dm_memories[key] = []
 
-        # Check for duplicates before adding
-        if _is_duplicate_memory(content, dm_memories[key]):
+        # Check for duplicates before adding (with semantic check if embedding provided)
+        if _is_duplicate_memory(content, dm_memories[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate DM memory: {content[:50]}...")
             return False
 
@@ -308,6 +344,8 @@ class MemoryManager:
         }
         if user_name:
             memory["user_name"] = user_name
+        if embedding:
+            memory["embedding"] = embedding
 
         dm_memories[key].append(memory)
 
@@ -373,7 +411,8 @@ class MemoryManager:
     # --- Per-User Server Memories (per-character) ---
 
     def add_user_memory(self, guild_id: int, user_id: int, content: str,
-                        auto: bool = False, user_name: str = None, character_name: str = None) -> bool:
+                        auto: bool = False, user_name: str = None, character_name: str = None,
+                        embedding: list = None) -> bool:
         """Add a memory about a specific user in a server.
 
         Returns True if memory was added, False if duplicate detected.
@@ -394,8 +433,8 @@ class MemoryManager:
         if user_key not in user_memories[guild_key]:
             user_memories[guild_key][user_key] = []
 
-        # Check for duplicates before adding
-        if _is_duplicate_memory(content, user_memories[guild_key][user_key]):
+        # Check for duplicates before adding (with semantic check if embedding provided)
+        if _is_duplicate_memory(content, user_memories[guild_key][user_key], new_embedding=embedding):
             log.debug(f"Skipping duplicate user memory: {content[:50]}...")
             return False
 
@@ -407,6 +446,8 @@ class MemoryManager:
         }
         if user_name:
             memory["user_name"] = user_name
+        if embedding:
+            memory["embedding"] = embedding
 
         user_memories[guild_key][user_key].append(memory)
 
@@ -486,7 +527,8 @@ class MemoryManager:
     # --- Global User Profiles (cross-server) ---
 
     def add_global_user_profile(self, user_id: int, content: str, auto: bool = False,
-                                 user_name: str = None, character_name: str = None) -> bool:
+                                 user_name: str = None, character_name: str = None,
+                                 embedding: list = None) -> bool:
         """Add a cross-server fact about a user (follows them everywhere).
 
         Returns True if memory was added, False if duplicate detected.
@@ -498,8 +540,8 @@ class MemoryManager:
         if key not in self.global_user_profiles:
             self.global_user_profiles[key] = []
 
-        # Check for duplicates before adding
-        if _is_duplicate_memory(content, self.global_user_profiles[key]):
+        # Check for duplicates before adding (with semantic check if embedding provided)
+        if _is_duplicate_memory(content, self.global_user_profiles[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate global profile: {content[:50]}...")
             return False
 
@@ -512,6 +554,8 @@ class MemoryManager:
             memory["user_name"] = user_name
         if character_name:
             memory["learned_from"] = character_name
+        if embedding:
+            memory["embedding"] = embedding
 
         self.global_user_profiles[key].append(memory)
 
@@ -640,23 +684,30 @@ Memory about {target_user} (or NOTHING):"""
                     log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")
                     return None
 
+                # Generate embedding ONCE for semantic deduplication across all stores
+                embedding = await provider_manager.get_embedding(result.strip())
+
                 if is_dm:
                     self.add_dm_memory(id_key, result.strip(), auto=True,
-                                       character_name=character_name, user_name=user_name)
+                                       character_name=character_name, user_name=user_name,
+                                       embedding=embedding)
                     # Also add to global profile (DM facts are always important)
                     self.add_global_user_profile(id_key, result.strip(), auto=True,
-                                                 user_name=user_name, character_name=character_name)
+                                                 user_name=user_name, character_name=character_name,
+                                                 embedding=embedding)
                 else:
                     # Add to server-wide memory (shared)
-                    self.add_server_memory(id_key, result.strip(), auto=True)
+                    self.add_server_memory(id_key, result.strip(), auto=True, embedding=embedding)
 
                     # Also add per-user memory (character-specific)
                     if user_id:
                         self.add_user_memory(id_key, user_id, result.strip(), auto=True,
-                                             user_name=user_name, character_name=character_name)
+                                             user_name=user_name, character_name=character_name,
+                                             embedding=embedding)
                         # Also add to global profile (cross-server)
                         self.add_global_user_profile(user_id, result.strip(), auto=True,
-                                                     user_name=user_name, character_name=character_name)
+                                                     user_name=user_name, character_name=character_name,
+                                                     embedding=embedding)
 
                 return result.strip()
         except Exception as e:

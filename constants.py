@@ -32,6 +32,14 @@ MAX_USER_MEMORIES_PER_SERVER = 20  # Max user memories per server per character
 MAX_GLOBAL_USER_FACTS = 20       # Max facts in global user profile
 
 # =============================================================================
+# SEMANTIC DEDUPLICATION
+# =============================================================================
+
+SEMANTIC_SIMILARITY_THRESHOLD = 0.85  # Cosine similarity threshold for semantic match
+TEXTUAL_SIMILARITY_THRESHOLD = 0.75   # SequenceMatcher ratio for textual match
+KEY_TERM_OVERLAP_THRESHOLD = 0.3      # Minimum term overlap to proceed with checks
+
+# =============================================================================
 # HISTORY
 # =============================================================================
 

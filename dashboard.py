@@ -1159,8 +1159,8 @@ def channels_page():
                         'history_count': history_count
                     }
     
-    # Sort channels by guild name, then channel name
-    sorted_channels = sorted(channels_data.values(), key=lambda c: (c['guild_name'], c['name']))
+    # Sort channels by autonomous (enabled first), then guild name, then channel name
+    sorted_channels = sorted(channels_data.values(), key=lambda c: (not c['autonomous'], c['guild_name'], c['name']))
     
     return render_template('channels.html',
         channels=sorted_channels,
