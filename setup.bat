@@ -234,7 +234,7 @@ if exist ".env" (
     echo # ============================================ >> .env
     echo # AI PROVIDER API KEYS >> .env
     echo # ============================================ >> .env
-    
+
     REM Add provider keys - use ACTUAL env var names entered
     if defined PROVIDER_KEYS (
         for %%k in (!PROVIDER_KEYS!) do (
@@ -244,7 +244,14 @@ if exist ".env" (
         echo OPENAI_API_KEY=your_key_here >> .env
         echo DEEPSEEK_API_KEY=your_key_here >> .env
     )
-    
+
+    echo. >> .env
+    echo # ============================================ >> .env
+    echo # LOCAL LLM ^(Ollama, LM Studio, llama.cpp, etc^) >> .env
+    echo # ============================================ >> .env
+    echo LOCAL_API_KEY=not-needed >> .env
+    echo # LOCAL_API_URL=http://localhost:11434/v1 >> .env
+
     echo.
     echo [OK] .env file created
     echo.
