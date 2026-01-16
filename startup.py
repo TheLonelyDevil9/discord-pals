@@ -83,21 +83,26 @@ def check_providers_config() -> Tuple[bool, List[str]]:
                 issues.append("empty providers list")
             else:
                 ok(f"  {len(providers)} provider(s) configured")
-                
+
                 # Check each provider
                 from dotenv import load_dotenv
                 load_dotenv()
-                
+
                 for i, p in enumerate(providers):
                     name = p.get("name", f"Provider {i+1}")
                     url = p.get("url", "")
                     key_env = p.get("key_env", "")
                     requires_key = p.get("requires_key", True)  # NEW: optional flag
-                    
+
+                    # Handle common mistake: "not-needed" as key_env instead of as value
+                    if key_env.lower() in ("not-needed", "not_needed", "none", ""):
+                        requires_key = False
+                        key_env = ""
+
                     if not url:
                         warn(f"  [{name}] No URL configured")
                         issues.append(f"{name}: no URL")
-                    
+
                     # Check API key (unless explicitly marked as not required)
                     if requires_key and key_env:
                         key_value = os.getenv(key_env, "")
