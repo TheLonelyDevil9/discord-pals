@@ -14,7 +14,23 @@ if ! command -v python3 &> /dev/null; then
     echo "  macOS: brew install python3"
     exit 1
 fi
-echo "[OK] Python found"
+
+# Check Python version
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+
+echo "[OK] Python $PYTHON_VERSION found"
+
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]); then
+    echo "ERROR: Python 3.10 or higher is required!"
+    echo "You have Python $PYTHON_VERSION"
+    exit 1
+fi
+
+if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 13 ]; then
+    echo "[INFO] Python 3.13+ detected - audioop-lts will be installed for compatibility"
+fi
 
 # Check if main.py exists
 if [ ! -f "main.py" ]; then
@@ -48,10 +64,19 @@ source venv/bin/activate
 echo "Installing dependencies..."
 pip install -r requirements.txt -q
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to install dependencies!"
-    exit 1
+    echo "WARNING: Some dependencies failed to install."
+    echo "Trying again without orjson (optional performance package)..."
+    grep -v "^orjson" requirements.txt > requirements_minimal.txt
+    pip install -r requirements_minimal.txt -q
+    rm requirements_minimal.txt
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to install dependencies!"
+        exit 1
+    fi
+    echo "[OK] Dependencies installed (without orjson)"
+else
+    echo "[OK] Dependencies installed"
 fi
-echo "[OK] Dependencies installed"
 
 echo
 echo "========================================"

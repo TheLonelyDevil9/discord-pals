@@ -78,6 +78,8 @@ The system instructions were authored by legendary chef @Geechan.
 ## Requirements
 
 1. **Python 3.10+** - [Download here](https://www.python.org/downloads/)
+   - **Recommended:** Python 3.11 or 3.12 for best compatibility
+   - Python 3.13+ is supported (audioop-lts is installed automatically)
 2. **A Discord Bot Token** - [Get one here](#step-3-create-your-discord-bot)
 3. **An AI Provider** - **Any** OpenAI-compatible API:
    - Cloud API (DeepSeek, OpenAI, Anthropic via OpenRouter)
@@ -90,12 +92,13 @@ All dependencies are listed in `requirements.txt` with pinned versions:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | discord.py | 2.3.2 | Discord API client |
-| openai | 1.12.0 | OpenAI-compatible API client |
+| openai | >=1.51.0 | OpenAI-compatible API client |
 | python-dotenv | 1.0.1 | Environment variable loading |
 | aiohttp | 3.9.3 | Async HTTP client |
 | flask | 3.1.2 | Web dashboard |
 | pyyaml | 6.0.2 | YAML configuration parsing |
 | prometheus-client | 0.20.0 | Metrics and monitoring |
+| audioop-lts | >=0.2.1 | Python 3.13+ compatibility |
 | orjson | 3.9.15 | Fast JSON parsing (optional) |
 
 Install with: `pip install -r requirements.txt`

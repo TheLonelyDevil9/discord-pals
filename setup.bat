@@ -17,7 +17,32 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-echo [OK] Python found
+
+REM Check Python version
+for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYTHON_VER=%%v
+for /f "tokens=1,2 delims=." %%a in ("!PYTHON_VER!") do (
+    set PYTHON_MAJOR=%%a
+    set PYTHON_MINOR=%%b
+)
+
+echo [OK] Python !PYTHON_VER! found
+
+if !PYTHON_MAJOR! LSS 3 (
+    echo ERROR: Python 3.10 or higher is required!
+    echo You have Python !PYTHON_VER!
+    pause
+    exit /b 1
+)
+if !PYTHON_MAJOR! EQU 3 if !PYTHON_MINOR! LSS 10 (
+    echo ERROR: Python 3.10 or higher is required!
+    echo You have Python !PYTHON_VER!
+    pause
+    exit /b 1
+)
+
+if !PYTHON_MAJOR! EQU 3 if !PYTHON_MINOR! GEQ 13 (
+    echo [INFO] Python 3.13+ detected - audioop-lts will be installed for compatibility
+)
 
 REM Check if main.py exists
 if not exist "main.py" (
@@ -53,11 +78,20 @@ call venv\Scripts\activate
 echo Installing dependencies...
 pip install -r requirements.txt -q
 if errorlevel 1 (
-    echo ERROR: Failed to install dependencies!
-    pause
-    exit /b 1
+    echo WARNING: Some dependencies failed to install.
+    echo Trying again without orjson ^(optional performance package^)...
+    findstr /v "^orjson" requirements.txt > requirements_minimal.txt
+    pip install -r requirements_minimal.txt -q
+    del requirements_minimal.txt
+    if errorlevel 1 (
+        echo ERROR: Failed to install dependencies!
+        pause
+        exit /b 1
+    )
+    echo [OK] Dependencies installed ^(without orjson^)
+) else (
+    echo [OK] Dependencies installed
 )
-echo [OK] Dependencies installed
 
 echo.
 echo ========================================
