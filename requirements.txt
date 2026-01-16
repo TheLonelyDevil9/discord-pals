@@ -12,8 +12,5 @@ audioop-lts>=0.2.1
 # Monitoring & Metrics
 prometheus-client==0.20.0
 
-# Performance (optional - comment out if build fails, bot works without it)
-orjson==3.9.15
-
 # Security scanning (dev dependencies)
 # pip install bandit safety  # Run: bandit -r . && safety check

@@ -99,7 +99,6 @@ All dependencies are listed in `requirements.txt` with pinned versions:
 | pyyaml | 6.0.2 | YAML configuration parsing |
 | prometheus-client | 0.20.0 | Metrics and monitoring |
 | audioop-lts | >=0.2.1 | Python 3.13+ compatibility |
-| orjson | 3.9.15 | Fast JSON parsing (optional) |
 
 Install with: `pip install -r requirements.txt`
 
