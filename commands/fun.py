@@ -13,7 +13,7 @@ from memory import memory_manager
 from discord_utils import (
     get_history, get_user_display_name,
     remove_thinking_tags, clean_bot_name_prefix, convert_emojis_in_text,
-    format_history_split
+    format_history_split, add_to_history
 )
 
 
@@ -125,7 +125,11 @@ Respond naturally based on your relationship with {user_name}."""
     
     if interaction.guild:
         response = convert_emojis_in_text(response, interaction.guild)
-    
+
+    # Add to conversation history
+    add_to_history(channel_id, "user", action_prompt, author_name=user_name)
+    add_to_history(channel_id, "assistant", response, author_name=bot_instance.character.name)
+
     await interaction.followup.send(response)
 
 
@@ -207,5 +211,10 @@ interactions. Include a rough affection percentage (0-100%) if it fits your char
         
         response = remove_thinking_tags(response)
         response = clean_bot_name_prefix(response, bot_instance.character.name)
-        
+
+        # Add to conversation history
+        user_prompt = f"How do you feel about {user_name}?"
+        add_to_history(interaction.channel_id, "user", user_prompt, author_name=user_name)
+        add_to_history(interaction.channel_id, "assistant", response, author_name=bot_instance.character.name)
+
         await interaction.followup.send(response)
