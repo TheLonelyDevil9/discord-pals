@@ -105,10 +105,48 @@
             font-size: 1rem;
             color: var(--text-primary);
             text-decoration: none;
+            position: relative;
         }
 
         .nav-brand-icon {
-            font-size: 1.25rem;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            object-fit: cover;
+        }
+
+        .nav-brand-text {
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: color 0.15s ease;
+        }
+
+        .nav-brand-text:hover {
+            color: var(--accent);
+        }
+
+        /* Banner hover preview */
+        .nav-brand-preview {
+            position: absolute;
+            top: calc(100% + 12px);
+            left: 0;
+            width: 400px;
+            max-width: 90vw;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px);
+            transition: all 0.2s ease;
+            z-index: 200;
+            pointer-events: none;
+        }
+
+        .nav-brand:hover .nav-brand-preview {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
         }
 
         .nav-links {
@@ -680,10 +718,11 @@
     <div class="toast-container" id="toast-container"></div>
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <nav>
-        <a href="/" class="nav-brand">
-            <span class="nav-brand-icon">🤖</span>
-            <span>Discord Pals</span>
-        </a>
+        <div class="nav-brand">
+            <img src="/static/banner.jpg" alt="Discord Pals" class="nav-brand-icon">
+            <a href="https://github.com/TheLonelyDevil9/discord-pals" target="_blank" rel="noopener" class="nav-brand-text">Discord Pals</a>
+            <img src="/static/banner.jpg" alt="Discord Pals Banner" class="nav-brand-preview">
+        </div>
         <div class="nav-links">
             <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}">Dashboard</a>
             <a href="/characters" class="nav-link {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}active{% endif %}">Characters</a>
