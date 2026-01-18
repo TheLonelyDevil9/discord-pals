@@ -1540,6 +1540,20 @@ def _get_github_repo_info():
     return None, None
 
 
+def _compare_versions(v1: str, v2: str) -> int:
+    """Compare semantic versions. Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal."""
+    def parse_version(v):
+        return [int(x) for x in (v or '').lstrip('v').split('.') if x.isdigit()]
+    try:
+        parts1, parts2 = parse_version(v1), parse_version(v2)
+        max_len = max(len(parts1), len(parts2))
+        parts1.extend([0] * (max_len - len(parts1)))
+        parts2.extend([0] * (max_len - len(parts2)))
+        return (parts1 > parts2) - (parts1 < parts2)
+    except (ValueError, AttributeError):
+        return 0
+
+
 def _check_github_latest_version():
     """Check GitHub API for latest release/tag version."""
     import urllib.request
@@ -1587,7 +1601,7 @@ def api_version():
     update_available = False
     latest_version = VERSION
 
-    if github_version and github_version != VERSION:
+    if github_version and _compare_versions(github_version, VERSION) > 0:
         update_available = True
         latest_version = github_version
     elif file_version != VERSION:

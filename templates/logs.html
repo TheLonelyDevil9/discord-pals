@@ -585,6 +585,19 @@
 </style>
 
 <script>
+// Local debounce fallback (in case base.html's debounce hasn't loaded yet)
+if (typeof debounce === 'undefined') {
+    function debounce(fn, delay) {
+        var timeout;
+        return function() {
+            var args = arguments;
+            var context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(function() { fn.apply(context, args); }, delay);
+        };
+    }
+}
+
 function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));

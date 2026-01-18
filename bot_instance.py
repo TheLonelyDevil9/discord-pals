@@ -370,10 +370,12 @@ class BotInstance:
                     sticker_info=sticker_info
                 )
             else:
-                add_to_history(
-                    channel_id, "user", message.content,
-                    author_name=user_name, reply_to=reply_to_name
-                )
+                # Only passively collect history for channels with autonomous mode enabled
+                if channel_id in autonomous_manager.enabled_channels:
+                    add_to_history(
+                        channel_id, "user", message.content,
+                        author_name=user_name, reply_to=reply_to_name
+                    )
 
         @self.client.event
         async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -533,6 +535,17 @@ class BotInstance:
 
         # Check for duplicate message - only skip if THIS BOT already processed it
         history = get_history(channel_id)
+
+        # Fetch Discord history on-demand if local history is empty/sparse
+        if len(history) < 5:
+            try:
+                recalled = await self._recall_channel_history(message.channel, limit=30)
+                if recalled > 0:
+                    log.info(f"Recalled {recalled} messages from Discord for context", self.name)
+                    history = get_history(channel_id)
+            except Exception as e:
+                log.warn(f"Failed to recall channel history: {e}", self.name)
+
         already_responded = False
         for i, m in enumerate(history):
             if m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user':
