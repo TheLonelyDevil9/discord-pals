@@ -59,10 +59,165 @@ RE_DEEPSEEK_THINK = re.compile(r'<\|think\|>.*?<\|/think\|>', re.DOTALL)
 RE_QWEN_THOUGHT = re.compile(r'<\|startofthought\|>.*?<\|endofthought\|>', re.DOTALL)
 RE_INTERNAL_MONOLOGUE = re.compile(r'\[Internal:.*?\]', re.DOTALL | re.IGNORECASE)
 
+# Chain-of-thought reasoning indicators (plain text, no tags)
+# These phrases indicate meta-reasoning about how to respond, not actual dialogue
+COT_REASONING_INDICATORS = [
+    # Self-referential / instruction-aware
+    "given the instructions",
+    "based on the instructions",
+    "according to my instructions",
+    "following the instructions",
+
+    # Response planning
+    "i should respond",
+    "i will respond",
+    "i can respond",
+    "i need to respond",
+    "i must respond",
+    "my response should",
+    "i should reply",
+
+    # Meta-analysis of user input
+    "in the user's message",
+    "the user is asking",
+    "the user wants",
+    "the user said",
+    "the user's request",
+
+    # Character/roleplay awareness
+    "stay in character",
+    "break character",
+    "in-character",
+    "my character would",
+
+    # Internal planning
+    "i should also note",
+    "i should consider",
+    "i need to consider",
+
+    # Instruction acknowledgment
+    "i must stay",
+    "i must not",
+    "i cannot break",
+    "i should not break",
+]
+
+# Quick markers for early exit optimization (subset of most distinctive indicators)
+COT_QUICK_MARKERS = [
+    "given the instructions",
+    "i should respond",
+    "stay in character",
+    "in the user's message",
+]
+
 
 # =============================================================================
 # RESPONSE SANITIZATION FUNCTIONS
 # =============================================================================
+
+def _check_single_paragraph_cot(text: str) -> str:
+    """Handle single-paragraph case with sentence-level analysis.
+
+    When text has no paragraph breaks, analyze sentences for reasoning indicators.
+    Strips leading sentences if 2+ consecutive sentences contain reasoning.
+    """
+    # Split on sentence boundaries (period followed by space or end)
+    sentences = text.split('. ')
+
+    if len(sentences) <= 2:
+        return text  # Too short to split safely
+
+    # Find where reasoning ends
+    reasoning_end = 0
+    consecutive_reasoning = 0
+
+    for i, sentence in enumerate(sentences):
+        sent_lower = sentence.lower()
+        indicator_count = sum(
+            1 for ind in COT_REASONING_INDICATORS
+            if ind in sent_lower
+        )
+
+        if indicator_count >= 1:
+            consecutive_reasoning += 1
+            if consecutive_reasoning >= 2:
+                reasoning_end = i + 1
+        else:
+            if consecutive_reasoning >= 2:
+                break
+            consecutive_reasoning = 0
+
+    if reasoning_end > 0 and reasoning_end < len(sentences):
+        remaining = sentences[reasoning_end:]
+        return '. '.join(remaining).strip()
+
+    return text
+
+
+def remove_cot_reasoning(text: str) -> str:
+    """Remove plain-text chain-of-thought reasoning from AI output.
+
+    Detects and strips leading paragraphs that contain multiple
+    meta-reasoning indicators (e.g., "I should respond...",
+    "Given the instructions...").
+
+    Only removes content if 2+ distinct indicators are found in
+    the leading paragraph(s), reducing false positives.
+    """
+    if not text or len(text) < 50:
+        return text
+
+    text_lower = text.lower()
+
+    # Quick check: does text contain any potential indicators?
+    if not any(marker in text_lower for marker in COT_QUICK_MARKERS):
+        return text
+
+    # Split into paragraphs (double newline)
+    paragraphs = text.split('\n\n')
+
+    if len(paragraphs) <= 1:
+        # Single paragraph - check sentences instead
+        return _check_single_paragraph_cot(text)
+
+    # Analyze leading paragraphs (up to first 3)
+    paragraphs_to_check = min(3, len(paragraphs))
+    reasoning_end_index = 0
+
+    for i in range(paragraphs_to_check):
+        para_lower = paragraphs[i].lower()
+
+        # Count reasoning indicators in this paragraph
+        indicator_count = sum(
+            1 for indicator in COT_REASONING_INDICATORS
+            if indicator in para_lower
+        )
+
+        if indicator_count >= 2:
+            # This paragraph is reasoning - mark for removal
+            reasoning_end_index = i + 1
+        elif indicator_count == 1 and i == 0:
+            # First paragraph with single indicator - check if next has any
+            if i + 1 < len(paragraphs):
+                next_para_lower = paragraphs[i + 1].lower()
+                next_count = sum(
+                    1 for ind in COT_REASONING_INDICATORS
+                    if ind in next_para_lower
+                )
+                if next_count >= 1:
+                    # Both paragraphs have indicators - remove first
+                    reasoning_end_index = 1
+        else:
+            # Clean paragraph - stop checking
+            break
+
+    if reasoning_end_index > 0:
+        # Remove leading reasoning paragraphs
+        remaining = paragraphs[reasoning_end_index:]
+        return '\n\n'.join(remaining).strip()
+
+    return text
+
 
 def remove_thinking_tags(text: str) -> str:
     """Remove all reasoning/thinking blocks from AI output.
@@ -86,9 +241,10 @@ def remove_thinking_tags(text: str) -> str:
     has_think_keyword = 'think' in text_lower
     has_reason_keyword = 'reason' in text_lower
     has_pipe_markers = '|' in text
+    has_cot_markers = any(marker in text_lower for marker in COT_QUICK_MARKERS)
 
     if not (has_angle_brackets or has_square_brackets or has_think_keyword or
-            has_reason_keyword or has_pipe_markers):
+            has_reason_keyword or has_pipe_markers or has_cot_markers):
         # Clean text - just normalize whitespace and return
         return text.strip()
 
@@ -154,6 +310,9 @@ def remove_thinking_tags(text: str) -> str:
     # Remove <output>/<response> wrappers
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
     text = RE_RESPONSE_WRAPPER.sub(r'\1', text)
+
+    # Remove plain-text chain-of-thought reasoning (untagged)
+    text = remove_cot_reasoning(text)
 
     # Clean up multiple newlines
     text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
