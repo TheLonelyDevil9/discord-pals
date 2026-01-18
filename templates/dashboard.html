@@ -562,18 +562,22 @@ function hideNewVersionBadge() {
     }
 }
 
-// Check for pending version update on page load
+// Check for pending version update on page load (checks GitHub for latest version)
 async function checkPendingUpdate() {
     try {
         const response = await fetch('/api/version');
         const data = await response.json();
         if (data.status === 'ok' && data.update_available) {
-            showNewVersionBadge(data.file_version);
+            // Show the latest available version (GitHub > file > running)
+            showNewVersionBadge(data.latest_version || data.github_version || data.file_version);
         }
     } catch (e) {
         // Silently ignore version check errors
     }
 }
+
+// Periodically check for updates (every 30 minutes)
+setInterval(checkPendingUpdate, 30 * 60 * 1000);
 
 // Update bot (git pull)
 async function updateBot() {

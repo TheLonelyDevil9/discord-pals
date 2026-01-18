@@ -1514,16 +1514,93 @@ def _get_file_version():
     return VERSION  # Fallback to imported version
 
 
+def _get_github_repo_info():
+    """Extract GitHub owner/repo from git remote origin URL."""
+    import subprocess
+    try:
+        bot_dir = os.path.dirname(os.path.abspath(__file__))
+        result = subprocess.run(
+            ['git', 'remote', 'get-url', 'origin'],
+            cwd=bot_dir,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            # Handle both HTTPS and SSH formats
+            # https://github.com/owner/repo.git
+            # git@github.com:owner/repo.git
+            import re
+            match = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', url)
+            if match:
+                return match.group(1), match.group(2)
+    except Exception:
+        pass
+    return None, None
+
+
+def _check_github_latest_version():
+    """Check GitHub API for latest release/tag version."""
+    import urllib.request
+    import json
+
+    owner, repo = _get_github_repo_info()
+    if not owner or not repo:
+        return None
+
+    # Try releases first, then tags
+    urls = [
+        f'https://api.github.com/repos/{owner}/{repo}/releases/latest',
+        f'https://api.github.com/repos/{owner}/{repo}/tags',
+    ]
+
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Discord-Pals'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+
+                if 'tag_name' in data:
+                    # Latest release response
+                    version = data['tag_name'].lstrip('v')
+                    return version
+                elif isinstance(data, list) and len(data) > 0:
+                    # Tags list response
+                    version = data[0]['name'].lstrip('v')
+                    return version
+        except Exception:
+            continue
+
+    return None
+
+
 @app.route('/api/version', methods=['GET'])
 @requires_auth
 def api_version():
-    """Get version information."""
+    """Get version information including GitHub latest version."""
     file_version = _get_file_version()
+    github_version = _check_github_latest_version()
+
+    # Determine if update is available
+    # Priority: GitHub version > file version > running version
+    update_available = False
+    latest_version = VERSION
+
+    if github_version and github_version != VERSION:
+        update_available = True
+        latest_version = github_version
+    elif file_version != VERSION:
+        update_available = True
+        latest_version = file_version
+
     return jsonify({
         'status': 'ok',
         'running_version': VERSION,
         'file_version': file_version,
-        'update_available': file_version != VERSION
+        'github_version': github_version,
+        'latest_version': latest_version,
+        'update_available': update_available
     })
 
 
