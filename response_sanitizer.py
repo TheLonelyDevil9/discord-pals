@@ -158,6 +158,33 @@ COT_REASONING_INDICATORS = [
     "draft:",
     "adding emoji",
     "adding reaction",
+
+    # Thinking/analysis starters (reasoning model leaks)
+    "alright, let's see",
+    "alright, let me",
+    "let's see here",
+    "let me think through",
+    "let me figure out",
+
+    # Meta-response planning (highly specific)
+    "needs to respond",
+    "should respond with",
+    "how to respond to",
+    "backhanded compliment fits",
+    "acknowledge their effort but",
+    "downplay it as merely",
+    "point out another flaw",
+    "keep them working a bit",
+    "adds a playful challenge",
+    "ties back to their interest",
+    "reinforces the playful dynamic",
+    "the key is balancing",
+    "keeping them engaged while",
+    "maintaining her mischievous",
+    "maintaining his",
+    "playful dynamic",
+    "fits her personality",
+    "fits his personality",
 ]
 
 # Quick markers for early exit optimization (subset of most distinctive indicators)
@@ -170,12 +197,81 @@ COT_QUICK_MARKERS = [
     "identify the intent",
     "drafting the response",
     "final polish",
+    # Added for reasoning model leaks
+    "alright, let's see",
+    "needs to respond",
+    "the key is balancing",
+    "backhanded compliment",
+    "playful dynamic",
 ]
 
 
 # =============================================================================
 # RESPONSE SANITIZATION FUNCTIONS
 # =============================================================================
+
+def _has_third_person_self_reference(text: str, character_name: str = None) -> bool:
+    """Detect if text refers to the character in third person (meta-reasoning signal).
+
+    When the LLM outputs reasoning like "Yae Miko needs to respond", it's clearly
+    meta-reasoning rather than in-character dialogue.
+    """
+    if not character_name:
+        return False
+
+    text_lower = text.lower()
+    name_lower = character_name.lower()
+
+    # Patterns like "Yae Miko needs to respond" or "Ellen should"
+    meta_patterns = [
+        f"{name_lower} needs to",
+        f"{name_lower} should",
+        f"{name_lower} would",
+        f"and {name_lower} needs",
+        f", {name_lower} needs",
+    ]
+
+    return any(p in text_lower for p in meta_patterns)
+
+
+def _is_full_reasoning_response(text: str, character_name: str = None) -> bool:
+    """Detect if the entire response is meta-reasoning with no actual output.
+
+    Returns True when the response appears to be pure chain-of-thought reasoning
+    rather than an actual in-character response. Used to catch cases where the
+    LLM outputs its thinking process instead of a proper response.
+    """
+    text_lower = text.lower().strip()
+
+    # Must start with a reasoning opener
+    reasoning_openers = ["alright,", "okay,", "let me", "let's", "first,", "so,", "hmm,"]
+    if not any(text_lower.startswith(p) for p in reasoning_openers):
+        return False
+
+    # Count strong meta-indicators (highly specific phrases)
+    strong_indicators = [
+        "needs to respond",
+        "should respond",
+        "how to respond",
+        "the key is balancing",
+        "keeping them engaged",
+        "reinforces the",
+        "fits her personality",
+        "fits his personality",
+        "backhanded compliment",
+        "playful dynamic",
+        "acknowledge their effort",
+        "point out another flaw",
+    ]
+
+    indicator_count = sum(1 for m in strong_indicators if m in text_lower)
+
+    # Third-person self-reference is a strong signal
+    has_self_ref = _has_third_person_self_reference(text, character_name)
+
+    # Require opener + (2 indicators OR 1 indicator + self-reference)
+    return indicator_count >= 2 or (indicator_count >= 1 and has_self_ref)
+
 
 def _check_single_paragraph_cot(text: str) -> str:
     """Handle single-paragraph case with sentence-level analysis.
@@ -335,7 +431,7 @@ def remove_cot_reasoning(text: str) -> str:
     return text
 
 
-def remove_thinking_tags(text: str) -> str:
+def remove_thinking_tags(text: str, character_name: str = None) -> str:
     """Remove all reasoning/thinking blocks from AI output.
 
     Handles:
@@ -345,9 +441,18 @@ def remove_thinking_tags(text: str) -> str:
     - Partial/unclosed tags at start or end of response
     - Various other reasoning formats from local LLMs
     - GLM 4.7 plain-text reasoning format (think:, Actual output:, Final Polish:)
+    - Full reasoning responses (entire output is meta-reasoning)
+
+    Args:
+        text: The text to sanitize
+        character_name: Optional character name for third-person self-reference detection
     """
     if not text:
         return text
+
+    # Check if entire response is reasoning (returns empty to trigger fallback)
+    if _is_full_reasoning_response(text, character_name):
+        return ""
 
     # EARLY EXIT: Skip expensive processing for clean text (majority of responses)
     # Only process if text contains markers that suggest reasoning blocks

@@ -720,8 +720,8 @@ class BotInstance:
             metrics_manager.record_error(bot_name=self.name, error_type='provider_failure')
             return None
 
-        # Sanitize response
-        response = remove_thinking_tags(response)
+        # Sanitize response (pass character name for third-person self-reference detection)
+        response = remove_thinking_tags(response, self.character.name)
         response = clean_bot_name_prefix(response, self.character.name)
         response = clean_em_dashes(response)
         response = self._strip_other_bot_prefixes(response, other_bot_names)
