@@ -1,5 +1,9 @@
 # Discord Pals
 
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![Discord.py](https://img.shields.io/badge/discord.py-2.3.2-7289da)
+
 Heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy) repo.
 
 Her tool was so easy to make work, it was amazing.
@@ -64,7 +68,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
 - **Impersonation prevention** - Bots won't roleplay as each other in multi-bot setups
 - **Context-aware commands** - Slash commands use chat history and memories
-- **18 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
+- **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
 - **Smart responses** - Tracks reply chains with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context with `/recall` (up to 200 messages)
@@ -94,7 +98,7 @@ All dependencies are listed in `requirements.txt` with pinned versions:
 | discord.py | 2.3.2 | Discord API client |
 | openai | >=1.51.0 | OpenAI-compatible API client |
 | python-dotenv | 1.0.1 | Environment variable loading |
-| aiohttp | 3.9.3 | Async HTTP client |
+| aiohttp | >=3.10.0 | Async HTTP client |
 | flask | 3.1.2 | Web dashboard |
 | pyyaml | 6.0.2 | YAML configuration parsing |
 | prometheus-client | 0.20.0 | Metrics and monitoring |
@@ -1047,7 +1051,7 @@ discord-pals/
 │   └── your-character.md
 ├── prompts/             # System prompt templates
 │   ├── system.md
-│   └── response_rules.md
+│   └── chatroom_context.md
 └── bot_data/            # Runtime data (memories, lore)
 ```
 
