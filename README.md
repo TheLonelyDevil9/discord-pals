@@ -22,16 +22,16 @@ The system instructions were authored by legendary chef @Geechan.
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [AI Provider Setup](#ai-provider-setup)
-- [Web Dashboard](#️-web-dashboard)
-- [Memory Architecture](#-memory-architecture)
-- [Commands](#-commands)
-- [Autonomous Mode](#-autonomous-mode)
-- [Bot-on-Bot Fall-off](#-bot-on-bot-fall-off)
-- [Impersonation Prevention](#-impersonation-prevention)
+- [Web Dashboard](#web-dashboard)
+- [Memory Architecture](#memory-architecture)
+- [Commands](#commands)
+- [Autonomous Mode](#autonomous-mode)
+- [Bot-on-Bot Fall-off](#bot-on-bot-fall-off)
+- [Impersonation Prevention](#impersonation-prevention)
 - [Creating Characters](#creating-characters)
 - [Running Multiple Bots](#running-multiple-bots)
-- [Runtime Configuration](#️-runtime-configuration)
-- [Deployment & Production](#-deployment--production)
+- [Runtime Configuration](#runtime-configuration)
+- [Deployment & Production](#deployment--production)
 - [File Structure](#file-structure)
 - [Troubleshooting](#troubleshooting)
 - [Tips](#tips)
@@ -163,15 +163,15 @@ The setup wizard will:
 
 ### Step 4: Configure AI Provider
 
-See [AI Provider Setup](#-ai-provider-setup) below for detailed instructions.
+See [AI Provider Setup](#ai-provider-setup) below for detailed instructions.
 
 ### Step 5: Configure the environment
 
 1. Copy the contents of `.env.example` to a new file called `.env`
 2. Add your tokens. Any of the below can be set up in .env:
 
-```
-Used by providers.json - add keys for your configured providers.
+```env
+# Used by providers.json - add keys for your configured providers.
 
 OPENAI_API_KEY=your_openai_api_key
 OPENROUTER_API_KEY=your_openrouter_api_key
@@ -181,11 +181,11 @@ LOCAL_API_KEY=optional
 
 ### Step 6: Run the Bot
 
-**Windows**
+#### Windows
 
 Double click `run.bat`.
 
-**Mac/Linux**
+#### Mac/Linux
 
 ```bash
 chmod +x run.sh
@@ -413,7 +413,7 @@ This checks:
 
 ---
 
-## 🖥️ Web Dashboard
+## Web Dashboard
 
 Discord Pals includes a full web dashboard for managing your bot without touching config files or restarting.
 
@@ -427,7 +427,7 @@ python main.py
 
 Open your browser to: **<http://localhost:5000>**
 
-> **Note:** The dashboard only accepts connections from localhost by default for security. See [Deployment & Production](#-deployment--production) for remote access options.
+> **Note:** The dashboard only accepts connections from localhost by default for security. See [Deployment & Production](#deployment--production) for remote access options.
 
 ### Dashboard Security
 
@@ -514,7 +514,7 @@ Adjust runtime settings without restarting:
 - **Provider Selection** - Switch between configured providers
 - **Single User Mode** - SillyTavern-style message formatting
 
-See [Runtime Configuration](#️-runtime-configuration) for details on each setting.
+See [Runtime Configuration](#runtime-configuration) for details on each setting.
 
 ### Logs & Stats Page
 
@@ -527,7 +527,7 @@ Monitor your bot in real-time:
 
 ---
 
-## 🧠 Memory Architecture
+## Memory Architecture
 
 The bot uses a layered memory system for intelligent context management:
 
@@ -547,7 +547,7 @@ When a user talks to the bot, context is loaded in priority order:
 
 ---
 
-## 💬 Commands
+## Commands
 
 ### Core Commands
 
@@ -585,7 +585,7 @@ When a user talks to the bot, context is loaded in priority order:
 
 ---
 
-## 🤖 Autonomous Mode
+## Autonomous Mode
 
 Autonomous mode allows bots to randomly join conversations without being explicitly mentioned. This feature is highly configurable per-channel via the web dashboard.
 
@@ -646,11 +646,11 @@ Click the ON/OFF badge in the Autonomous column to quickly enable/disable autono
 
 ---
 
-## 📉 Bot-on-Bot Fall-off
+## Bot-on-Bot Fall-off
 
 When running multiple bots, they can get into endless conversation loops. The fall-off system progressively reduces the probability of responding as bot-to-bot exchanges continue.
 
-### How It Works
+### How Fall-off Works
 
 1. **Consecutive Counter**: Tracks how many bot messages in a row have occurred in a channel
 2. **Progressive Decay**: Each consecutive bot message reduces response probability
@@ -685,11 +685,11 @@ With default settings (base: 0.8, decay: 0.15, min: 0.05):
 
 ---
 
-## 🎭 Impersonation Prevention
+## Impersonation Prevention
 
 In multi-bot setups, bots are automatically prevented from roleplaying as each other.
 
-### How It Works
+### How Prevention Works
 
 1. **Bot Detection**: The system detects all other bots in the current channel
 2. **System Prompt Injection**: Other bot names are added to the system prompt with instructions not to impersonate them
@@ -704,7 +704,7 @@ In multi-bot setups, bots are automatically prevented from roleplaying as each o
 
 This feature is automatic when running multiple bots. The system prompt includes:
 
-```
+```text
 IMPORTANT: Do NOT roleplay as or impersonate these other bots: [BotA, BotB, ...]
 ```
 
@@ -784,6 +784,7 @@ primary
 ```
 
 Valid values are:
+
 - `primary` - Use the first provider in your fallback chain
 - `secondary` - Use the second provider
 - `fallback` - Use the third provider
@@ -839,7 +840,7 @@ Starting 3 bot(s)...
 
 ---
 
-## ⚙️ Runtime Configuration
+## Runtime Configuration
 
 These settings can be adjusted via the web dashboard or by editing `bot_data/runtime_config.json`. Changes take effect immediately without restarting.
 
@@ -880,7 +881,7 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 
 ---
 
-## 🚀 Deployment & Production
+## Deployment & Production
 
 Run your bot 24/7 on a server or VPS.
 
@@ -1089,7 +1090,7 @@ discord-pals/
 
 ### Dashboard not accessible
 
-→ Dashboard only binds to localhost for security. Access via `http://localhost:5000` on the same machine. For remote access, use SSH tunneling or set up a reverse proxy (see [Deployment & Production](#-deployment--production)).
+→ Dashboard only binds to localhost for security. Access via `http://localhost:5000` on the same machine. For remote access, use SSH tunneling or set up a reverse proxy (see [Deployment & Production](#deployment--production)).
 
 ### Memories not saving
 
