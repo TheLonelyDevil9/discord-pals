@@ -32,6 +32,13 @@ RE_RE_PREFIX = re.compile(r'^\s*\(RE:?\s+[^)]+\)\s*', re.IGNORECASE | re.MULTILI
 RE_EM_DASH_BETWEEN_WORDS = re.compile(r'(\w)\s*—\s*(\w)')
 RE_EM_DASH_END = re.compile(r'—\s*$')
 
+# Corrupted reference patterns (model hallucination artifacts)
+# Catches patterns like "See爸爸妈妈" where ASCII text is followed by random CJK characters
+# Only matches at word boundaries to avoid false positives with legitimate mixed-script text
+RE_CORRUPTED_TRAILING_CJK = re.compile(
+    r'[,\s][A-Za-z]{2,10}[\u4e00-\u9fff\u3400-\u4dbf]{2,}$'  # separator + short ASCII + CJK at end
+)
+
 # Additional reasoning formats (local LLMs)
 RE_REASONING_TAG = re.compile(r'<reasoning>.*?</reasoning>', re.DOTALL | re.IGNORECASE)
 RE_REASON_TAG = re.compile(r'<reason>.*?</reason>', re.DOTALL | re.IGNORECASE)
@@ -437,6 +444,9 @@ def remove_thinking_tags(text: str) -> str:
     # Remove plain-text chain-of-thought reasoning (untagged)
     text = remove_cot_reasoning(text)
 
+    # Remove corrupted trailing references (e.g., "See爸爸妈妈" artifacts)
+    text = RE_CORRUPTED_TRAILING_CJK.sub('', text)
+
     # Clean up multiple newlines
     text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
 
@@ -507,4 +517,12 @@ def sanitize_response(text: str, character_name: str = None) -> str:
     text = remove_thinking_tags(text)
     text = clean_bot_name_prefix(text, character_name)
     text = clean_em_dashes(text)
+
+    # Remove corrupted trailing references (model hallucination artifacts)
+    # Done here to catch cases that bypass remove_thinking_tags early exit
+    text = RE_CORRUPTED_TRAILING_CJK.sub('', text)
+
+    # Clean up trailing punctuation left by artifact removal
+    text = text.rstrip(',;: ')
+
     return text.strip()
