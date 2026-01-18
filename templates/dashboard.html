@@ -82,6 +82,18 @@
             </div>
             <div class="control-item">
                 <div class="control-info">
+                    <div class="control-icon">⬇️</div>
+                    <div>
+                        <div class="control-label">Update Bot</div>
+                        <div class="control-desc">Pull latest from GitHub</div>
+                    </div>
+                </div>
+                <button type="button" id="update-btn" class="btn btn-secondary" onclick="updateBot()">
+                    <span class="toggle-status">Update</span>
+                </button>
+            </div>
+            <div class="control-item">
+                <div class="control-info">
                     <div class="control-icon">🔄</div>
                     <div>
                         <div class="control-label">Restart Bot</div>
@@ -518,6 +530,40 @@ document.addEventListener('visibilitychange', () => {
         statusPollInterval = setInterval(refreshStatus, 5000);
     }
 });
+
+// Update bot (git pull)
+async function updateBot() {
+    const btn = document.getElementById('update-btn');
+
+    btn.disabled = true;
+    btn.querySelector('.toggle-status').textContent = 'Updating...';
+
+    try {
+        const response = await fetch('/api/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            }
+        });
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+            if (data.updated) {
+                showToast('Update successful! Click Restart to apply changes.', 'success');
+            } else {
+                showToast(data.message || 'Already up to date', 'success');
+            }
+        } else {
+            showToast('Update failed: ' + (data.message || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        showToast('Failed to update - check connection', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.querySelector('.toggle-status').textContent = 'Update';
+    }
+}
 
 // Restart bot
 async function restartBot() {

@@ -125,6 +125,15 @@
             color: var(--accent);
         }
 
+        .nav-version {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            background: var(--bg-tertiary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 8px;
+        }
+
         /* Banner hover preview */
         .nav-brand-preview {
             position: absolute;
@@ -721,6 +730,7 @@
         <div class="nav-brand">
             <img src="/static/banner.jpg" alt="Discord Pals" class="nav-brand-icon">
             <a href="https://github.com/TheLonelyDevil9/discord-pals" target="_blank" rel="noopener" class="nav-brand-text">Discord Pals</a>
+            <span class="nav-version">v{{ version }}</span>
             <img src="/static/banner.jpg" alt="Discord Pals Banner" class="nav-brand-preview">
         </div>
         <div class="nav-links">

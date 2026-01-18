@@ -21,6 +21,7 @@ from security import (
 )
 from constants import ALLOWED_IMPORT_FILES
 from config import PROVIDERS, CHARACTER_PROVIDERS
+from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
 
@@ -52,11 +53,12 @@ app.jinja_env.globals['csrf_token'] = generate_csrf_token
 
 # Make auth status available in all templates
 @app.context_processor
-def inject_auth_status():
-    """Inject authentication status into all templates."""
+def inject_globals():
+    """Inject global variables into all templates."""
     return {
         'auth_enabled': is_auth_enabled(),
-        'is_logged_in': is_auth_enabled() and session.get('logged_in', False)
+        'is_logged_in': is_auth_enabled() and session.get('logged_in', False),
+        'version': VERSION
     }
 
 
@@ -1492,6 +1494,78 @@ def api_deduplicate_memories():
     except Exception as e:
         log.error(f"Error during memory deduplication: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# --- Update API ---
+
+@app.route('/api/update', methods=['POST'])
+@requires_csrf
+@requires_auth
+def api_update():
+    """Pull latest changes from git repository."""
+    import subprocess
+
+    log.info("Git update requested via dashboard")
+
+    try:
+        # Get the directory where the bot is running
+        bot_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Run git pull
+        result = subprocess.run(
+            ['git', 'pull'],
+            cwd=bot_dir,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        output = result.stdout.strip()
+        error = result.stderr.strip()
+
+        if result.returncode == 0:
+            # Check if already up to date
+            if 'Already up to date' in output or 'Already up-to-date' in output:
+                log.info("Git pull: Already up to date")
+                return jsonify({
+                    'status': 'ok',
+                    'message': 'Already up to date',
+                    'output': output,
+                    'updated': False
+                })
+            else:
+                log.info(f"Git pull successful: {output}")
+                return jsonify({
+                    'status': 'ok',
+                    'message': 'Update successful! Restart to apply changes.',
+                    'output': output,
+                    'updated': True
+                })
+        else:
+            log.error(f"Git pull failed: {error or output}")
+            return jsonify({
+                'status': 'error',
+                'message': error or output or 'Git pull failed'
+            }), 500
+
+    except subprocess.TimeoutExpired:
+        log.error("Git pull timed out")
+        return jsonify({
+            'status': 'error',
+            'message': 'Update timed out after 60 seconds'
+        }), 500
+    except FileNotFoundError:
+        log.error("Git not found")
+        return jsonify({
+            'status': 'error',
+            'message': 'Git is not installed or not in PATH'
+        }), 500
+    except Exception as e:
+        log.error(f"Update error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 # --- Restart API ---
