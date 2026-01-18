@@ -122,8 +122,35 @@ class Character:
         self.example_dialogue = example_dialogue
 
     def get_special_user_context(self, user_name: str) -> str:
-        """Get special context for a user if it exists."""
-        return self.special_users.get(user_name, "")
+        """Get special context for a user with fuzzy matching for Discord display names.
+
+        Matching order:
+        1. Exact match (fastest path)
+        2. Display name starts with special user name ("Kris WaWa" matches "Kris")
+        3. Special user name appears as a word in display name ("The Real Kris" matches "Kris")
+        """
+        # Exact match first
+        if user_name in self.special_users:
+            return self.special_users[user_name]
+
+        # Fuzzy matching for Discord display names
+        user_lower = user_name.lower()
+        for special_name, context in self.special_users.items():
+            special_lower = special_name.lower()
+
+            # Check if display name starts with special name + separator
+            # "Kris WaWa" matches "Kris", "Kris_Alt" matches "Kris"
+            if (user_lower.startswith(special_lower + " ") or
+                user_lower.startswith(special_lower + "_") or
+                user_lower == special_lower):
+                return context
+
+            # Check if special name appears as a complete word
+            # Handles "The Real Kris" matching "Kris"
+            if re.search(rf'\b{re.escape(special_lower)}\b', user_lower):
+                return context
+
+        return ""
 
 
 class CharacterManager:

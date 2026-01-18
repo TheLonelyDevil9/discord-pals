@@ -34,7 +34,8 @@ class RequestQueue:
         is_dm: bool,
         user_id: int,
         reply_to_name: tuple = None,
-        sticker_info: str = None
+        sticker_info: str = None,
+        from_interact_command: bool = False
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -69,7 +70,8 @@ class RequestQueue:
                 'is_dm': is_dm,
                 'user_id': user_id,
                 'reply_to_name': reply_to_name,
-                'sticker_info': sticker_info
+                'sticker_info': sticker_info,
+                'from_interact_command': from_interact_command
             }
 
             self.queues[channel_id].append(request)

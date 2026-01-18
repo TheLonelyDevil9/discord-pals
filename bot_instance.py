@@ -419,13 +419,18 @@ class BotInstance:
             lines = [response]
         
         sent_messages = []
-        
+        is_synthetic = hasattr(message, '_interaction')
+
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
             try:
                 if i == 0:
-                    sent_msg = await message.reply(line)
+                    if is_synthetic:
+                        # Use interaction followup for synthetic messages from /interact
+                        sent_msg = await message._interaction.followup.send(line)
+                    else:
+                        sent_msg = await message.reply(line)
                     sent_messages.append(sent_msg)
                 else:
                     # Add delay between lines (0.5-1 second)
@@ -434,7 +439,7 @@ class BotInstance:
                     sent_messages.append(sent_msg)
             except discord.HTTPException as e:
                 log.error(f"Failed to send: {e}", self.name)
-        
+
         return sent_messages
     
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
