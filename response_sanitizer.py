@@ -54,6 +54,29 @@ RE_READABLE_VERSION = re.compile(r'^readable\s+version:?\s*', re.MULTILINE | re.
 RE_INTERNAL_NOTE = re.compile(r'^\s*\[(?:internal|note|debug|processing)\].*$', re.MULTILINE | re.IGNORECASE)
 RE_STEP_LABELS = re.compile(r'^(?:step\s*\d+|phase\s*\d+|stage\s*\d+):.*$', re.MULTILINE | re.IGNORECASE)
 
+# Reasoning process labels (GLM structured thinking)
+RE_REASONING_PROCESS_LABELS = re.compile(
+    r'^(?:Identify the (?:User|Intent|Request)|'
+    r'Analyze (?:the |.*?Reaction)|'
+    r'(?:Drafting|Refining) (?:the |based on)|'
+    r'Option \d+.*?:|'
+    r'Draft:|'
+    r'Adding (?:Emoji|Reaction)|'
+    r'Check(?:ing)? constraints|'
+    r'Text generation process|'
+    r'System: Think silently|'
+    r'Selected Response):?.*$',
+    re.MULTILINE | re.IGNORECASE
+)
+
+# Final output extraction (after "Final Polish:" or similar)
+RE_FINAL_OUTPUT_LABEL = re.compile(
+    r'^(?:Final (?:Polish|Output|Response|Answer)|'
+    r'Selected Response|'
+    r'Actual (?:Output|Response)):?\s*',
+    re.MULTILINE | re.IGNORECASE
+)
+
 # Deepseek/Qwen style
 RE_DEEPSEEK_THINK = re.compile(r'<\|think\|>.*?<\|/think\|>', re.DOTALL)
 RE_QWEN_THOUGHT = re.compile(r'<\|startofthought\|>.*?<\|endofthought\|>', re.DOTALL)
@@ -100,6 +123,34 @@ COT_REASONING_INDICATORS = [
     "i must not",
     "i cannot break",
     "i should not break",
+
+    # Structured reasoning process (GLM/reasoning model style)
+    "text generation process",
+    "think silently",
+    "identify the user",
+    "identify the intent",
+    "analyze the",
+    "drafting the response",
+    "refining based on",
+    "final polish",
+    "selected response",
+    "check constraints",
+    "let's go with",
+    "let's try to",
+    "let's make it",
+    "let's stick to",
+    "let's verify",
+    "one more check",
+
+    # Option enumeration
+    "option 1",
+    "option 2",
+    "option 3",
+
+    # Draft markers
+    "draft:",
+    "adding emoji",
+    "adding reaction",
 ]
 
 # Quick markers for early exit optimization (subset of most distinctive indicators)
@@ -108,6 +159,10 @@ COT_QUICK_MARKERS = [
     "i should respond",
     "stay in character",
     "in the user's message",
+    "text generation process",
+    "identify the intent",
+    "drafting the response",
+    "final polish",
 ]
 
 
@@ -154,6 +209,54 @@ def _check_single_paragraph_cot(text: str) -> str:
     return text
 
 
+def _extract_final_output(text: str) -> str | None:
+    """Try to extract final output from structured reasoning.
+
+    Looks for patterns like:
+    - "Final Polish:" followed by the actual response
+    - "Selected Response:" followed by the actual response
+    - "Actual Output:" followed by the actual response
+
+    Returns extracted content or None if not found.
+    """
+    text_lower = text.lower()
+
+    # Look for final output markers
+    final_markers = [
+        'final polish:',
+        'final polish:\n',
+        'final output:',
+        'final response:',
+        'selected response:',
+        'actual output:',
+        'actual response:',
+    ]
+
+    for marker in final_markers:
+        idx = text_lower.rfind(marker)  # Use rfind to get the last occurrence
+        if idx != -1:
+            # Extract everything after the marker
+            after_marker = text[idx + len(marker):].strip()
+            if after_marker:
+                # Remove any remaining reasoning labels from the extracted text
+                lines = after_marker.split('\n')
+                clean_lines = []
+                for line in lines:
+                    line_lower = line.lower().strip()
+                    # Skip lines that look like reasoning labels
+                    if any(line_lower.startswith(p) for p in [
+                        'option ', 'draft:', 'check ', 'let\'s ', 'adding ',
+                        'relationship:', 'context:', 'analysis:', 'note:'
+                    ]):
+                        continue
+                    clean_lines.append(line)
+                result = '\n'.join(clean_lines).strip()
+                if result:
+                    return result
+
+    return None
+
+
 def remove_cot_reasoning(text: str) -> str:
     """Remove plain-text chain-of-thought reasoning from AI output.
 
@@ -172,6 +275,12 @@ def remove_cot_reasoning(text: str) -> str:
     # Quick check: does text contain any potential indicators?
     if not any(marker in text_lower for marker in COT_QUICK_MARKERS):
         return text
+
+    # First, try to extract final output if structured reasoning is detected
+    if any(marker in text_lower for marker in ['final polish:', 'selected response:', 'text generation process']):
+        extracted = _extract_final_output(text)
+        if extracted:
+            return extracted
 
     # Split into paragraphs (double newline)
     paragraphs = text.split('\n\n')
@@ -271,6 +380,14 @@ def remove_thinking_tags(text: str) -> str:
                 if last_part:
                     return last_part
 
+    # Try to extract clean output from structured reasoning (do this early!)
+    # This handles "Final Polish:", "Text generation process...", etc.
+    text_lower_check = text.lower()
+    if any(marker in text_lower_check for marker in ['final polish:', 'selected response:', 'text generation process', 'identify the intent']):
+        extracted = _extract_final_output(text)
+        if extracted:
+            text = extracted
+
     # Remove standard thinking tags
     text = RE_THINKING_OPEN.sub('', text)
     text = RE_THINK_OPEN.sub('', text)
@@ -301,6 +418,12 @@ def remove_thinking_tags(text: str) -> str:
     text = RE_READABLE_VERSION.sub('', text)
     text = RE_INTERNAL_NOTE.sub('', text)
     text = RE_STEP_LABELS.sub('', text)
+
+    # Remove reasoning process labels (GLM structured thinking)
+    text = RE_REASONING_PROCESS_LABELS.sub('', text)
+
+    # Remove "Final Polish:" and similar labels (keep content after)
+    text = RE_FINAL_OUTPUT_LABEL.sub('', text)
 
     # Remove Deepseek/Qwen style tags
     text = RE_DEEPSEEK_THINK.sub('', text)
