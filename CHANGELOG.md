@@ -4,9 +4,57 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v1.2.0] - 2026-01-18
+
+Add git tag creation and auto-changelog to bump script
+
+### Changes
+- Add version update indicator and bump script (v1.1.0)
+- Add dashboard update button and version display (v1.0.0)
+- Replace all fun slash commands with single /interact command
+- Fix markdown lint warnings in README
+- Improve documentation with fixes and new contributor files
+- Add corrupted CJK reference artifact removal
+- Improve reasoning filter for structured GLM thinking
+- Add plain-text chain-of-thought reasoning filter
+- Add banner image with hover preview and GitHub link
+- Add slash command interactions to conversation history
+
+## [v1.1.0] - 2025-01-18
 
 ### Added
+
+- Dashboard update button to pull latest changes from GitHub
+- Version display (v1.1.0) in navbar across all dashboard pages
+- `/api/update` endpoint for git pull functionality
+- `/api/version` endpoint to check running vs file version
+- "New version available" badge after successful update (pulses until restart)
+- `version.py` with VERSION constant
+- `bump_version.py` script for easy version management
+
+## [v1.0.0] - 2025-01-18
+
+### Changed
+
+- Replace 18 individual slash commands with single `/interact <action>` command
+- Process interactions through normal message pipeline for memory generation
+- Fix user recognition with fuzzy matching for Discord display names
+  - "Kris WaWa" now matches special user "Kris"
+
+### New Features
+
+- Free-form interaction system (`/interact hugs you`, `/interact tells you a secret`)
+- SyntheticMessage class to simulate Discord messages from slash commands
+
+### Removed
+
+- `/kiss`, `/hug`, `/bonk`, `/bite`, `/joke`, `/pat`, `/poke`, `/tickle`
+- `/slap`, `/cuddle`, `/compliment`, `/roast`, `/fortune`, `/challenge`
+- `/holdhands`, `/squish`, `/spank`, `/affection`
+
+## [Unreleased] - Initial Release
+
+### Initial Features
 
 - Initial public release
 - Multi-character support with markdown-based character files
@@ -19,7 +67,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Autonomous mode with per-channel configuration
 - Bot-on-bot fall-off to prevent infinite conversation loops
 - Impersonation prevention for multi-bot setups
-- 17 fun interaction commands (`/kiss`, `/hug`, `/bonk`, etc.)
 - History persistence across restarts
 - Rate limit handling with exponential backoff
 - Request queue with anti-spam protection
