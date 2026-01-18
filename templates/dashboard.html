@@ -85,12 +85,15 @@
                     <div class="control-icon">⬇️</div>
                     <div>
                         <div class="control-label">Update Bot</div>
-                        <div class="control-desc">Pull latest from GitHub</div>
+                        <div class="control-desc" id="update-desc">Pull latest from GitHub</div>
                     </div>
                 </div>
-                <button type="button" id="update-btn" class="btn btn-secondary" onclick="updateBot()">
-                    <span class="toggle-status">Update</span>
-                </button>
+                <div class="update-btn-container">
+                    <button type="button" id="update-btn" class="btn btn-secondary" onclick="updateBot()">
+                        <span class="toggle-status">Update</span>
+                    </button>
+                    <span id="new-version-badge" class="new-version-badge hidden"></span>
+                </div>
             </div>
             <div class="control-item">
                 <div class="control-info">
@@ -522,6 +525,9 @@ async function refreshStatus() {
 
 let statusPollInterval = setInterval(refreshStatus, 5000);
 
+// Check for pending updates on page load
+checkPendingUpdate();
+
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         clearInterval(statusPollInterval);
@@ -530,6 +536,44 @@ document.addEventListener('visibilitychange', () => {
         statusPollInterval = setInterval(refreshStatus, 5000);
     }
 });
+
+// Show new version badge
+function showNewVersionBadge(version) {
+    const badge = document.getElementById('new-version-badge');
+    const desc = document.getElementById('update-desc');
+    if (badge && version) {
+        badge.textContent = 'v' + version + ' available';
+        badge.classList.remove('hidden');
+        if (desc) {
+            desc.textContent = 'Restart to apply v' + version;
+        }
+    }
+}
+
+// Hide new version badge
+function hideNewVersionBadge() {
+    const badge = document.getElementById('new-version-badge');
+    const desc = document.getElementById('update-desc');
+    if (badge) {
+        badge.classList.add('hidden');
+    }
+    if (desc) {
+        desc.textContent = 'Pull latest from GitHub';
+    }
+}
+
+// Check for pending version update on page load
+async function checkPendingUpdate() {
+    try {
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        if (data.status === 'ok' && data.update_available) {
+            showNewVersionBadge(data.file_version);
+        }
+    } catch (e) {
+        // Silently ignore version check errors
+    }
+}
 
 // Update bot (git pull)
 async function updateBot() {
@@ -550,8 +594,14 @@ async function updateBot() {
 
         if (data.status === 'ok') {
             if (data.updated) {
-                showToast('Update successful! Click Restart to apply changes.', 'success');
+                if (data.new_version) {
+                    showNewVersionBadge(data.new_version);
+                    showToast('Update to v' + data.new_version + ' ready! Click Restart to apply.', 'success');
+                } else {
+                    showToast('Update successful! Click Restart to apply changes.', 'success');
+                }
             } else {
+                hideNewVersionBadge();
                 showToast(data.message || 'Already up to date', 'success');
             }
         } else {

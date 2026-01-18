@@ -1496,6 +1496,37 @@ def api_deduplicate_memories():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# --- Version API ---
+
+def _get_file_version():
+    """Read version from version.py file (may differ from running version after update)."""
+    try:
+        version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'version.py')
+        with open(version_file, 'r') as f:
+            content = f.read()
+        # Extract version string
+        import re
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return VERSION  # Fallback to imported version
+
+
+@app.route('/api/version', methods=['GET'])
+@requires_auth
+def api_version():
+    """Get version information."""
+    file_version = _get_file_version()
+    return jsonify({
+        'status': 'ok',
+        'running_version': VERSION,
+        'file_version': file_version,
+        'update_available': file_version != VERSION
+    })
+
+
 # --- Update API ---
 
 @app.route('/api/update', methods=['POST'])
@@ -1531,15 +1562,26 @@ def api_update():
                     'status': 'ok',
                     'message': 'Already up to date',
                     'output': output,
-                    'updated': False
+                    'updated': False,
+                    'running_version': VERSION,
+                    'new_version': None
                 })
             else:
+                # Check if version changed
+                new_version = _get_file_version()
+                version_changed = new_version != VERSION
+
                 log.info(f"Git pull successful: {output}")
+                if version_changed:
+                    log.info(f"Version update available: {VERSION} -> {new_version}")
+
                 return jsonify({
                     'status': 'ok',
-                    'message': 'Update successful! Restart to apply changes.',
+                    'message': f'Update successful! Restart to apply v{new_version}.' if version_changed else 'Update successful! Restart to apply changes.',
                     'output': output,
-                    'updated': True
+                    'updated': True,
+                    'running_version': VERSION,
+                    'new_version': new_version if version_changed else None
                 })
         else:
             log.error(f"Git pull failed: {error or output}")

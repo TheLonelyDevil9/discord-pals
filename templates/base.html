@@ -134,6 +134,31 @@
             margin-left: 8px;
         }
 
+        .update-btn-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .new-version-badge {
+            font-size: 0.7rem;
+            color: #fff;
+            background: var(--success, #22c55e);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            animation: pulse-badge 2s infinite;
+        }
+
+        .new-version-badge.hidden {
+            display: none;
+        }
+
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
         /* Banner hover preview */
         .nav-brand-preview {
             position: absolute;
