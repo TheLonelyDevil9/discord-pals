@@ -59,6 +59,11 @@ RE_DEEPSEEK_THINK = re.compile(r'<\|think\|>.*?<\|/think\|>', re.DOTALL)
 RE_QWEN_THOUGHT = re.compile(r'<\|startofthought\|>.*?<\|endofthought\|>', re.DOTALL)
 RE_INTERNAL_MONOLOGUE = re.compile(r'\[Internal:.*?\]', re.DOTALL | re.IGNORECASE)
 
+# Extended thinking / reasoning model patterns (o1, DeepSeek R1, etc.)
+RE_ATTEMPT_MARKER = re.compile(r'^(?:attempt|try)\s*\d+[:\s]', re.MULTILINE | re.IGNORECASE)
+RE_THINKING_ALOUD = re.compile(r'^(?:let me think|thinking aloud|internal thought)[:\s]', re.MULTILINE | re.IGNORECASE)
+RE_META_TRANSLATION = re.compile(r'\((?:translation|meaning|in other words)[:\s][^)]{10,}\)', re.IGNORECASE)
+
 
 # =============================================================================
 # RESPONSE SANITIZATION FUNCTIONS
@@ -159,7 +164,45 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
     text = RE_RESPONSE_WRAPPER.sub(r'\1', text)
 
+    # Remove extended thinking artifacts (o1, DeepSeek R1, etc.)
+    text = remove_extended_thinking_artifacts(text)
+
     # Clean up multiple newlines
+    text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
+
+    return text.strip()
+
+
+def remove_extended_thinking_artifacts(text: str) -> str:
+    """Remove artifacts from extended thinking/reasoning models.
+
+    Handles plain-text reasoning that doesn't use tags:
+    - Attempt markers ("attempt 1:", "try 2:")
+    - Thinking aloud markers
+    - Inline translation/explanation parentheticals
+
+    This is MORE CONSERVATIVE than the reverted CoT filters - it only
+    targets specific patterns unique to reasoning models, not general
+    meta-commentary that could be legitimate dialogue.
+    """
+    if not text or len(text) < 20:
+        return text
+
+    # Quick check: does text contain attempt markers?
+    text_lower = text.lower()
+    if 'attempt' not in text_lower and 'try' not in text_lower:
+        return text
+
+    # Remove attempt markers at start of lines
+    text = RE_ATTEMPT_MARKER.sub('', text)
+
+    # Remove thinking aloud markers
+    text = RE_THINKING_ALOUD.sub('', text)
+
+    # Remove inline translation/explanation parentheticals (but keep short ones)
+    text = RE_META_TRANSLATION.sub('', text)
+
+    # Clean up empty lines left behind
     text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
 
     return text.strip()
