@@ -98,6 +98,31 @@ Thank you for your interest in contributing to Discord Pals! This document provi
    - Be open to suggestions
    - Make requested changes promptly
 
+### Version Bumping
+
+**Important:** After your PR is merged, the maintainer will bump the version. If you're a maintainer merging changes:
+
+```bash
+# Bump patch version (1.2.3 -> 1.2.4) - for bug fixes
+python bump_version.py patch --tag
+
+# Bump minor version (1.2.3 -> 1.3.0) - for new features
+python bump_version.py minor --tag
+
+# Bump major version (1.2.3 -> 2.0.0) - for breaking changes
+python bump_version.py major --tag
+
+# With a custom changelog message
+python bump_version.py patch --tag --message "Fixed login bug"
+```
+
+This will:
+- Update `version.py`
+- Add an entry to `CHANGELOG.md` with recent commits
+- Create a git tag (e.g., `v1.2.4`)
+
+Don't forget to push the tag: `git push origin v1.2.4`
+
 ## Reporting Bugs
 
 When reporting bugs, please include:

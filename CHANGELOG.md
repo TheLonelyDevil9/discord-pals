@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.2.4] - 2026-01-19
+
+Fix interaction followup AttributeError and revert reasoning filters
+
+### Changes
+
+- Fix interaction followup AttributeError and revert reasoning filters
 ## [v1.2.0] - 2026-01-18
 
 Add git tag creation and auto-changelog to bump script
