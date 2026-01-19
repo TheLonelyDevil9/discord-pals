@@ -421,7 +421,7 @@ class BotInstance:
             lines = [response]
         
         sent_messages = []
-        is_synthetic = hasattr(message, '_interaction')
+        is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
 
         for i, line in enumerate(lines):
             if not line.strip():
