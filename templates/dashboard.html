@@ -538,11 +538,19 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Show new version badge
-function showNewVersionBadge(version) {
+function showNewVersionBadge(version, restartOnly = false) {
     const badge = document.getElementById('new-version-badge');
     const desc = document.getElementById('update-desc');
+    const updateBtn = document.getElementById('update-btn');
+
     if (badge && version) {
-        badge.textContent = 'v' + version + ' available';
+        if (restartOnly) {
+            badge.textContent = 'Restart for v' + version;
+            if (updateBtn) updateBtn.classList.add('hidden');
+        } else {
+            badge.textContent = 'v' + version + ' available';
+            if (updateBtn) updateBtn.classList.remove('hidden');
+        }
         badge.classList.remove('hidden');
         if (desc) {
             desc.textContent = 'Restart to apply v' + version;
@@ -554,12 +562,10 @@ function showNewVersionBadge(version) {
 function hideNewVersionBadge() {
     const badge = document.getElementById('new-version-badge');
     const desc = document.getElementById('update-desc');
-    if (badge) {
-        badge.classList.add('hidden');
-    }
-    if (desc) {
-        desc.textContent = 'Pull latest from GitHub';
-    }
+    const updateBtn = document.getElementById('update-btn');
+    if (badge) badge.classList.add('hidden');
+    if (desc) desc.textContent = 'Pull latest from GitHub';
+    if (updateBtn) updateBtn.classList.remove('hidden');
 }
 
 // Check for pending version update on page load (checks GitHub for latest version)
@@ -567,9 +573,16 @@ async function checkPendingUpdate() {
     try {
         const response = await fetch('/api/version');
         const data = await response.json();
-        if (data.status === 'ok' && data.update_available) {
-            // Show the latest available version (GitHub > file > running)
-            showNewVersionBadge(data.latest_version || data.github_version || data.file_version);
+        if (data.status === 'ok') {
+            if (data.update_available) {
+                // New version available on GitHub - show update badge
+                showNewVersionBadge(data.latest_version, false);
+            } else if (data.restart_required) {
+                // Already updated, just needs restart - show restart badge
+                showNewVersionBadge(data.latest_version, true);
+            } else {
+                hideNewVersionBadge();
+            }
         }
     } catch (e) {
         // Silently ignore version check errors

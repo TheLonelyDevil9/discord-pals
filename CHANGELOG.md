@@ -4,6 +4,14 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.2.5] - 2026-01-19
+
+### Changes
+
+- Add conservative extended thinking artifact removal
+- Change dashboard auto-refresh from 5s to 10s
+- Add CLAUDE.md with auto-commit/bump/push instructions
+- Add version bumping docs and bump to v1.2.4
 ## [v1.2.4] - 2026-01-19
 
 Fix interaction followup AttributeError and revert reasoning filters

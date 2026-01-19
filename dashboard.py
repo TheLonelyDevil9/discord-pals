@@ -1596,16 +1596,18 @@ def api_version():
     file_version = _get_file_version()
     github_version = _check_github_latest_version()
 
-    # Determine if update is available
-    # Priority: GitHub version > file version > running version
-    update_available = False
+    # Determine update status
+    update_available = False  # New version on GitHub to pull
+    restart_required = False  # Already updated locally, just need restart
     latest_version = VERSION
 
-    if github_version and _compare_versions(github_version, VERSION) > 0:
+    # Check if GitHub has a newer version than what's on disk
+    if github_version and _compare_versions(github_version, file_version) > 0:
         update_available = True
         latest_version = github_version
-    elif file_version != VERSION:
-        update_available = True
+    # Check if disk version is newer than running version (restart needed)
+    elif file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
+        restart_required = True
         latest_version = file_version
 
     return jsonify({
@@ -1614,7 +1616,8 @@ def api_version():
         'file_version': file_version,
         'github_version': github_version,
         'latest_version': latest_version,
-        'update_available': update_available
+        'update_available': update_available,
+        'restart_required': restart_required
     })
 
 
