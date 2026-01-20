@@ -47,6 +47,10 @@ RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
 RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
 RE_GLM_ACTUAL_OUTPUT = re.compile(r'(?:Actual\s*output|Final\s*Polish)\s*:\s*["\']?(.+?)["\']?\s*$', re.DOTALL | re.IGNORECASE)
 RE_GLM_QUOTED_OUTPUT = re.compile(r'^["\'](.+)["\']$', re.DOTALL)
+# Additional GLM reasoning patterns (from contributor)
+RE_GLM_REASONING_PREFIX = re.compile(r'^(?:Reasoning:|Analysis:|Thinking:|Internal:)\s*$', re.MULTILINE | re.IGNORECASE)
+RE_GLM_THINKING_PIPE = re.compile(r'\|\|thinking\|\|.*?\|\|/?end\|\|', re.DOTALL | re.IGNORECASE)
+RE_GLM_MULTILINE_THINK = re.compile(r'(?:\n|^)(?:Think|Reasoning|Analysis|Internal)[:\s].*?(?=\n\n|\Z)', re.DOTALL | re.IGNORECASE)
 
 # Internal processing labels
 RE_INTERNAL_LABELS = re.compile(r'^(?:message\s+)?(?:duplication\s+)?glitch:?\s*', re.MULTILINE | re.IGNORECASE)
@@ -95,11 +99,60 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
     has_think_keyword = 'think' in text_lower
     has_reason_keyword = 'reason' in text_lower
     has_pipe_markers = '|' in text
+    has_system_marker = 'system:' in text_lower or 'analyze' in text_lower
+
+    # Check for duplicate lines (GLM sometimes repeats the same line many times)
+    lines = text.split('\n')
+    has_duplicate_lines = len(lines) > 1 and len(set(line.strip().lower() for line in lines if line.strip())) < len([l for l in lines if l.strip()])
 
     if not (has_angle_brackets or has_square_brackets or has_think_keyword or
-            has_reason_keyword or has_pipe_markers):
+            has_reason_keyword or has_pipe_markers or has_system_marker or has_duplicate_lines):
         # Clean text - just normalize whitespace and return
         return text.strip()
+
+    # Store original for logging
+    original_length = len(text)
+
+    # GLM SYSTEM: prefix reasoning format - AGGRESSIVE EXTRACTION
+    # This handles cases where GLM ignores thinking:disabled and leaks reasoning
+    if 'SYSTEM:' in text or 'Thinking Process' in text or 'Analyze the' in text:
+        import logger as log
+        # Strategy: Extract the last substantial paragraph that doesn't look like reasoning
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+
+        if len(paragraphs) > 1:
+            # Work backwards to find the actual response
+            for para in reversed(paragraphs):
+                # Skip empty paragraphs
+                if not para or len(para) < 10:
+                    continue
+
+                # Check if this paragraph looks like reasoning (has colons in first 50 chars)
+                reasoning_markers = [
+                    'SYSTEM:', 'Analyze', 'Draft', 'Goal:', 'Target:', 'Reaction',
+                    'Context:', 'Character:', 'Mood:', 'Traits:', 'Relationship',
+                    'Refining', 'Final Polish:', 'Selected Response:', 'Decision:',
+                    'Step ', 'Phase ', 'Attempt ', 'Let\'s ', 'Actually,', 'Wait,'
+                ]
+
+                # If first line has reasoning markers, skip it
+                first_line = para.split('\n')[0]
+                is_reasoning = any(marker.lower() in first_line.lower()[:50] for marker in reasoning_markers)
+
+                # Also skip if it has a colon in the first 30 chars (likely a label)
+                has_early_colon = ':' in first_line[:30]
+
+                if not is_reasoning and not has_early_colon:
+                    # This looks like actual response content
+                    log.debug(f"GLM reasoning detected, extracted final response ({len(para)} chars)")
+                    return para
+
+            # Fallback: if all paragraphs look like reasoning, take the last one anyway
+            if paragraphs:
+                last_para = paragraphs[-1]
+                if len(last_para) > 20:
+                    log.warn(f"GLM reasoning detected but couldn't find clean response, using last paragraph")
+                    return last_para
 
     # GLM 4.7 plain-text reasoning format - check first as it's most specific
     if RE_GLM_THINK_START.match(text.strip()):
@@ -169,6 +222,34 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
 
     # Clean up multiple newlines
     text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
+
+    # Remove duplicate consecutive lines (GLM sometimes repeats the same line many times)
+    lines = text.split('\n')
+    deduplicated = []
+    prev_line_normalized = None
+
+    for line in lines:
+        line_normalized = line.strip().lower()
+
+        # Keep empty lines for formatting
+        if not line_normalized:
+            deduplicated.append(line)
+            prev_line_normalized = None
+            continue
+
+        # Skip if this is a duplicate of the previous line
+        if line_normalized == prev_line_normalized:
+            continue
+
+        deduplicated.append(line)
+        prev_line_normalized = line_normalized
+
+    text = '\n'.join(deduplicated)
+
+    # Log if we stripped significant content
+    if len(text) < original_length * 0.5:
+        import logger as log
+        log.debug(f"Stripped {original_length - len(text)} chars of thinking content (GLM leak)")
 
     return text.strip()
 

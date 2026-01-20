@@ -25,6 +25,9 @@ DEFAULTS = {
     "bot_falloff_decay_rate": 0.15,  # Decay per consecutive bot message (15%)
     "bot_falloff_min_chance": 0.05,  # Minimum probability floor (5%)
     "bot_falloff_hard_limit": 10,  # Hard cutoff after N consecutive bot messages
+    # Split replies feature
+    "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
+    "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots (requires restart)
 }
 
 # Config cache to avoid repeated file reads
