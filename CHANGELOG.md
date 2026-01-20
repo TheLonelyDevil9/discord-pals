@@ -4,6 +4,22 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.3.2] - 2026-01-20
+
+### Changes
+
+- Fix restart under systemd - use systemctl instead of os.execv
+## [v1.3.1] - 2026-01-20
+
+### Changes
+
+- Auto-restart after update + fix 5sâ†’10s reload timer
+## [v1.3.0] - 2026-01-20
+
+### Changes
+
+- Add split replies feature + fix GLM thinking parameter routing
+- Fix dashboard poll interval consistency (5s -> 10s)
 ## [v1.2.5] - 2026-01-19
 
 ### Changes
