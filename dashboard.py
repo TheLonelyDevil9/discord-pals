@@ -1713,9 +1713,9 @@ def api_restart():
     """Restart the bot application without terminal restart."""
     import sys
     import subprocess
-    
+
     log.warn("Application restart requested via dashboard")
-    
+
     # Save current state before restart
     try:
         from discord_utils import save_history
@@ -1725,16 +1725,29 @@ def api_restart():
         log.info("State saved before restart")
     except Exception as e:
         log.error(f"Failed to save state before restart: {e}")
-    
+
     def do_restart():
         """Perform the actual restart in a separate thread."""
         import time
         time.sleep(1)  # Give time for response to be sent
-        
+
+        # Check if running under systemd
+        if os.path.exists('/run/systemd/system') and os.environ.get('INVOCATION_ID'):
+            # Running under systemd - use systemctl to restart
+            log.info("Detected systemd environment, using systemctl restart")
+            try:
+                subprocess.run(['sudo', 'systemctl', 'restart', 'discord-pals'], check=True)
+                return  # systemd will handle the restart
+            except subprocess.CalledProcessError as e:
+                log.error(f"systemctl restart failed: {e}, falling back to os.execv")
+            except Exception as e:
+                log.error(f"systemctl restart error: {e}, falling back to os.execv")
+
+        # Fallback: Direct process restart (for non-systemd environments)
         # Get the current Python executable and script
         python = sys.executable
         script = os.path.abspath(sys.argv[0])
-        
+
         # Close all bot connections gracefully
         import asyncio
         for bot in bot_instances:
@@ -1742,16 +1755,15 @@ def api_restart():
                 asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
             except Exception:
                 pass
-        
+
         time.sleep(2)  # Wait for connections to close
-        
         # Restart the process
         os.execv(python, [python, script] + sys.argv[1:])
-    
+
     # Start restart in background thread
     restart_thread = threading.Thread(target=do_restart, daemon=True)
     restart_thread.start()
-    
+
     return jsonify({
         'status': 'ok',
         'message': 'Restart initiated. The dashboard will be unavailable for a few seconds.'
