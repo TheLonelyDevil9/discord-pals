@@ -27,6 +27,7 @@ DEFAULTS = {
     "bot_falloff_hard_limit": 10,  # Hard cutoff after N consecutive bot messages
     # Split replies feature
     "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
+    "split_replies_max_targets": 5,  # Max users to split replies for (prevents spam)
     "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots (requires restart)
 }
 

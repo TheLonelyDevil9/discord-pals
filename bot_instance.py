@@ -268,6 +268,24 @@ class BotInstance:
                 self._bot_conversation_tracker[channel_id]["last_human_message_time"] = time.time()
                 log.debug(f"Bot fall-off: Reset counter (human message)", self.name)
 
+    def _get_split_reply_targets(self, message: discord.Message, is_other_bot: bool) -> list:
+        """Get list of users to send individual replies to, or empty list for normal behavior."""
+        if not runtime_config.get("split_replies_enabled", False):
+            return []
+        if is_other_bot:  # Don't split for bot messages
+            return []
+
+        # Get mentioned users (excluding self and other bots)
+        targets = [m for m in message.mentions if m != self.client.user and not m.bot]
+
+        # Need 2+ users to split
+        if len(targets) < 2:
+            return []
+
+        # Cap at max targets
+        max_targets = runtime_config.get("split_replies_max_targets", 5)
+        return targets[:max_targets]
+
     def _setup_events(self):
         """Register event handlers."""
         
@@ -356,19 +374,39 @@ class BotInstance:
                     triggers["is_autonomous"], guild
                 )
 
-                # Add directly to request queue (no batching - respond to every message)
-                await self.request_queue.add_request(
-                    channel_id=channel_id,
-                    message=message,
-                    content=content,
-                    guild=guild,
-                    attachments=message.attachments if not is_other_bot else [],
-                    user_name=user_name,
-                    is_dm=is_dm,
-                    user_id=message.author.id,
-                    reply_to_name=reply_to_name,
-                    sticker_info=sticker_info
-                )
+                # Check for split reply targets
+                split_targets = self._get_split_reply_targets(message, is_other_bot)
+
+                if split_targets:
+                    # Queue separate request for each target user
+                    for target in split_targets:
+                        await self.request_queue.add_request(
+                            channel_id=channel_id,
+                            message=message,
+                            content=content,
+                            guild=guild,
+                            attachments=message.attachments if not is_other_bot else [],
+                            user_name=user_name,
+                            is_dm=is_dm,
+                            user_id=message.author.id,
+                            reply_to_name=reply_to_name,
+                            sticker_info=sticker_info,
+                            split_reply_target=target
+                        )
+                else:
+                    # Normal single request
+                    await self.request_queue.add_request(
+                        channel_id=channel_id,
+                        message=message,
+                        content=content,
+                        guild=guild,
+                        attachments=message.attachments if not is_other_bot else [],
+                        user_name=user_name,
+                        is_dm=is_dm,
+                        user_id=message.author.id,
+                 reply_to_name=reply_to_name,
+                        sticker_info=sticker_info
+                    )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
                 if channel_id in autonomous_manager.enabled_channels:
@@ -529,6 +567,15 @@ class BotInstance:
         is_dm = request['is_dm']
         user_id = request['user_id']
         reply_to_name = request.get('reply_to_name')
+        split_target = request.get('split_reply_target')
+
+        # For split replies, use target user for context instead of sender
+        if split_target:
+            target_user_name = get_user_display_name(split_target)
+            target_user_id = split_target.id
+        else:
+            target_user_name = user_name
+            target_user_id = user_id
 
         channel_id = message.channel.id
         guild_id = guild.id if guild else None
@@ -595,23 +642,23 @@ class BotInstance:
         emojis = get_guild_emojis(guild) if guild else ""
         lore = memory_manager.get_lore(guild_id) if guild_id else ""
 
-        # Get memories
-        global_profile = memory_manager.get_global_user_profile(user_id)
+        # Get memories (use target user for split replies)
+        global_profile = memory_manager.get_global_user_profile(target_user_id)
 
         if is_dm:
-            memories = memory_manager.get_dm_memories(user_id, character_name=char_name)
+            memories = memory_manager.get_dm_memories(target_user_id, character_name=char_name)
             if global_profile and memories:
                 memories = f"What you know about this user (cross-server):\n{global_profile}\n\nFrom DMs:\n{memories}"
             elif global_profile:
                 memories = f"What you know about this user:\n{global_profile}"
         elif guild_id:
             server_memories = memory_manager.get_server_memories(guild_id)
-            user_memories = memory_manager.get_user_memories(guild_id, user_id, character_name=char_name)
+            user_memories = memory_manager.get_user_memories(guild_id, target_user_id, character_name=char_name)
             memory_parts = []
             if global_profile:
-                memory_parts.append(f"What you know about {user_name} (cross-server):\n{global_profile}")
+                memory_parts.append(f"What you know about {target_user_name} (cross-server):\n{global_profile}")
             if user_memories:
-                memory_parts.append(f"About {user_name} (this server):\n{user_memories}")
+                memory_parts.append(f"About {target_user_name} (this server):\n{user_memories}")
             if server_memories:
                 memory_parts.append(f"General:\n{server_memories}")
             memories = "\n\n".join(memory_parts) if memory_parts else ""
@@ -624,10 +671,10 @@ class BotInstance:
         # Get active users (mentioned_context already gathered above in parallel)
         active_users = get_active_users(channel_id) if not is_dm else []
 
-        # Build system prompt
+        # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
             character=self.character,
-            user_name=user_name
+            user_name=target_user_name
         )
 
         # Split history into older context and immediate messages
@@ -640,14 +687,14 @@ class BotInstance:
             current_bot_name=self.character.name
         )
 
-        # Build chatroom context
+        # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
             emojis=emojis,
             lore=lore,
             memories=memories,
-            user_name=user_name,
+            user_name=target_user_name,
             active_users=active_users,
             mentioned_context=mentioned_context,
             other_bot_names=other_bot_names
@@ -677,7 +724,8 @@ class BotInstance:
             "is_dm": is_dm,
             "user_id": user_id,
             "user_name": user_name,
-            "content": content
+            "content": content,
+            "split_reply_target": split_target
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -754,6 +802,11 @@ class BotInstance:
         user_id = context["user_id"]
         user_name = context["user_name"]
         content = context["content"]
+        split_target = context.get("split_reply_target")
+
+        # Prepend mention for split replies
+        if split_target:
+            response = f"<@{split_target.id}> {response}"
 
         # Parse reactions
         response, reactions = parse_reactions(response)

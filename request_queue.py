@@ -35,7 +35,8 @@ class RequestQueue:
         user_id: int,
         reply_to_name: tuple = None,
         sticker_info: str = None,
-        from_interact_command: bool = False
+        from_interact_command: bool = False,
+        split_reply_target: discord.Member = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -49,7 +50,8 @@ class RequestQueue:
             for queued in self.queues[channel_id]:
                 if (queued['user_id'] == user_id and
                     current_time - queued['timestamp'] < 3 and
-                    queued['content_stripped'] == content_stripped):
+                    queued['content_stripped'] == content_stripped and
+                    queued.get('split_reply_target') == split_reply_target):
                     return False
 
             # Limit pending requests per user
@@ -71,7 +73,8 @@ class RequestQueue:
                 'user_id': user_id,
                 'reply_to_name': reply_to_name,
                 'sticker_info': sticker_info,
-                'from_interact_command': from_interact_command
+                'from_interact_command': from_interact_command,
+                'split_reply_target': split_reply_target
             }
 
             self.queues[channel_id].append(request)

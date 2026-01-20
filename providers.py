@@ -297,8 +297,23 @@ class AIProviderManager:
                     exclude_keys_by_yaml(request_kwargs, exclude_body)
                     log.debug(f"[{tier}] Applied exclude_body YAML")
 
+                # Move SDK-passthrough keys from request_kwargs to extra_body
+                # These are provider-specific params that OpenAI SDK doesn't recognize
+                SDK_PASSTHROUGH_KEYS = {'thinking', 'tools', 'tool_choice', 'response_format'}
+                passthrough_params = {}
+                for key in list(request_kwargs.keys()):
+                    if key in SDK_PASSTHROUGH_KEYS:
+                        passthrough_params[key] = request_kwargs.pop(key)
+
+                # Merge passthrough params into extra_body
+                if passthrough_params:
+                    if extra_body:
+                        extra_body = {**extra_body, **passthrough_params}
+                    else:
+                        extra_body = passthrough_params
+                    log.debug(f"[{tier}] Moved to extra_body: {list(passthrough_params.keys())}")
+
                 # Pass extra_body as SDK parameter (bypasses validation)
-                # This allows provider-specific params like GLM's "thinking"
                 if extra_body:
                     request_kwargs["extra_body"] = extra_body
                     log.debug(f"[{tier}] Using extra_body: {extra_body}")
