@@ -613,10 +613,12 @@ async function updateBot() {
             if (data.updated) {
                 if (data.new_version) {
                     showNewVersionBadge(data.new_version);
-                    showToast('Update to v' + data.new_version + ' ready! Click Restart to apply.', 'success');
+                    showToast('Updated to v' + data.new_version + '! Restarting...', 'success');
                 } else {
-                    showToast('Update successful! Click Restart to apply changes.', 'success');
+                    showToast('Update successful! Restarting...', 'success');
                 }
+                // Auto-restart after 2 seconds
+                setTimeout(() => restartBot(true), 2000);
             } else {
                 hideNewVersionBadge();
                 showToast(data.message || 'Already up to date', 'success');
@@ -633,10 +635,10 @@ async function updateBot() {
 }
 
 // Restart bot
-async function restartBot() {
+async function restartBot(skipConfirm = false) {
     const btn = document.getElementById('restart-btn');
 
-    if (!confirm('Are you sure you want to restart the bot? This will briefly disconnect all bots.')) {
+    if (!skipConfirm && !confirm('Are you sure you want to restart the bot? This will briefly disconnect all bots.')) {
         return;
     }
 
@@ -654,8 +656,8 @@ async function restartBot() {
         const data = await response.json();
 
         if (data.status === 'ok') {
-            showToast('Restart initiated. Page will reload in 5 seconds...', 'warning');
-            setTimeout(() => { location.reload(); }, 5000);
+            showToast('Restart initiated. Page will reload in 10 seconds...', 'warning');
+            setTimeout(() => { location.reload(); }, 10000);
         } else {
             showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
             btn.disabled = false;
