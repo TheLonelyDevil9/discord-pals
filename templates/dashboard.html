@@ -533,7 +533,7 @@ document.addEventListener('visibilitychange', () => {
         clearInterval(statusPollInterval);
     } else {
         refreshStatus();
-        statusPollInterval = setInterval(refreshStatus, 5000);
+        statusPollInterval = setInterval(refreshStatus, 10000);
     }
 });
 
