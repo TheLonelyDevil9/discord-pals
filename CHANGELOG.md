@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.3.3] - 2026-01-21
+
+### Changes
+
+- Fix GLM draft spam leak - extract final response from multiple drafts
+- Bump version to 1.3.2
 ## [v1.3.2] - 2026-01-20
 
 ### Changes
