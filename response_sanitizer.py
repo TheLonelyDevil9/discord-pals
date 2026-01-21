@@ -68,6 +68,9 @@ RE_ATTEMPT_MARKER = re.compile(r'^(?:attempt|try)\s*\d+[:\s]', re.MULTILINE | re
 RE_THINKING_ALOUD = re.compile(r'^(?:let me think|thinking aloud|internal thought)[:\s]', re.MULTILINE | re.IGNORECASE)
 RE_META_TRANSLATION = re.compile(r'\((?:translation|meaning|in other words)[:\s][^)]{10,}\)', re.IGNORECASE)
 
+# GLM draft spam pattern - multiple lines starting with "Name: " (drafting leak)
+RE_GLM_DRAFT_LINE = re.compile(r'^[A-Z][a-z]+:\s*.+$', re.MULTILINE)
+
 
 # =============================================================================
 # RESPONSE SANITIZATION FUNCTIONS
@@ -245,6 +248,24 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
         prev_line_normalized = line_normalized
 
     text = '\n'.join(deduplicated)
+
+    # GLM draft spam detection - if response has many lines starting with "Name: "
+    # this is GLM leaking its internal drafting process, extract just the last one
+    if character_name:
+        draft_pattern = re.compile(rf'^{re.escape(character_name)}:\s*', re.MULTILINE | re.IGNORECASE)
+        draft_matches = list(draft_pattern.finditer(text))
+        if len(draft_matches) > 2:
+            # Multiple drafts detected - extract content after the last "Name: " prefix
+            import logger as log
+            log.warn(f"GLM draft spam detected ({len(draft_matches)} drafts), extracting final response")
+            last_match = draft_matches[-1]
+            # Get everything after the last "Name: " prefix
+            final_response = text[last_match.end():].strip()
+            # If there's a newline, only take the first line (the actual response)
+            if '\n' in final_response:
+                final_response = final_response.split('\n')[0].strip()
+            if final_response and len(final_response) > 10:
+                text = final_response
 
     # Log if we stripped significant content
     if len(text) < original_length * 0.5:
