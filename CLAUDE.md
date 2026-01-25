@@ -22,7 +22,9 @@ Do not wait for the user to ask - complete all three steps immediately after any
 
 ## Commit Message Format
 
-Use clear, concise commit messages. End with:
+Use clear, concise commit messages. Always include the new version number in the commit message or push output so it's visible in the conversation.
+
+Example:
 ```
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+Fix restart logic for systemd environments (v1.4.1)
 ```

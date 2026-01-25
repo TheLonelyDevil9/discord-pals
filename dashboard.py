@@ -1729,21 +1729,42 @@ def api_restart():
     def do_restart():
         """Perform the actual restart in a separate thread."""
         import time
+        import signal
         time.sleep(1)  # Give time for response to be sent
 
-        # Check if running under systemd
-        if os.path.exists('/run/systemd/system') and os.environ.get('INVOCATION_ID'):
-            # Running under systemd - use systemctl to restart
-            log.info("Detected systemd environment, using systemctl restart")
-            try:
-                subprocess.run(['sudo', 'systemctl', 'restart', 'discord-pals'], check=True)
-                return  # systemd will handle the restart
-            except subprocess.CalledProcessError as e:
-                log.error(f"systemctl restart failed: {e}, falling back to os.execv")
-            except Exception as e:
-                log.error(f"systemctl restart error: {e}, falling back to os.execv")
+        # Check if running under systemd (simplified detection - don't require INVOCATION_ID)
+        is_systemd = os.path.exists('/run/systemd/system')
+        service_name = 'discord-pals'
 
-        # Fallback: Direct process restart (for non-systemd environments)
+        if is_systemd:
+            log.info("Detected systemd environment, attempting restart")
+
+            # Try multiple approaches in order of preference
+            restart_commands = [
+                ['systemctl', '--user', 'restart', service_name],      # User service
+                ['systemctl', 'restart', service_name],                 # System service (if running as root)
+                ['sudo', '-n', 'systemctl', 'restart', service_name],  # With passwordless sudo
+            ]
+
+            for cmd in restart_commands:
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        log.info(f"Restart successful with: {' '.join(cmd)}")
+                        return
+                    log.debug(f"Command {cmd} failed: {result.stderr}")
+                except Exception as e:
+                    log.debug(f"Command {cmd} error: {e}")
+                    continue
+
+            log.warn("All systemctl restart attempts failed, falling back to SIGTERM")
+
+            # Fallback: Send SIGTERM - systemd will restart us (if Restart=always)
+            log.info("Sending SIGTERM for systemd to restart us")
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+        # Non-systemd fallback: Direct process restart
         # Get the current Python executable and script
         python = sys.executable
         script = os.path.abspath(sys.argv[0])
