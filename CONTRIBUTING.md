@@ -77,6 +77,15 @@ Thank you for your interest in contributing to Discord Pals! This document provi
    - Test edge cases
    - Ensure existing functionality still works
 
+### Testing Multi-Bot Features
+
+When testing features that involve multiple bots:
+
+- The `coordinator.py` system manages concurrent AI requests
+- Test @mention features with `allow_bot_mentions` enabled
+- Be cautious with `allow_bot_to_bot_mentions` - can cause infinite loops
+- Use `/stop` command to halt bot-to-bot conversations during testing
+
 ## Submitting Changes
 
 ### Pull Request Process

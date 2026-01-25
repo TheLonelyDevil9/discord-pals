@@ -30,6 +30,8 @@ The system instructions were authored by legendary chef @Geechan.
 - [Impersonation Prevention](#impersonation-prevention)
 - [Creating Characters](#creating-characters)
 - [Running Multiple Bots](#running-multiple-bots)
+- [Multi-Bot Coordination](#multi-bot-coordination)
+- [Bot Mentions](#bot-mentions)
 - [Runtime Configuration](#runtime-configuration)
 - [Deployment & Production](#deployment--production)
 - [File Structure](#file-structure)
@@ -72,6 +74,10 @@ The system instructions were authored by legendary chef @Geechan.
 - **Smart responses** - Tracks reply chains with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context with `/recall` (up to 200 messages)
+- **Multi-bot coordination** - Global coordinator prevents crashes when multiple bots tagged simultaneously
+- **Bot @mentions** - Bots can mention users/other bots in responses (configurable)
+- **Split replies** - Send separate messages to multiple mentioned users
+- **Custom nicknames** - Define additional trigger words beyond bot name
 - **Autonomous mode** - Bot randomly joins conversations (configurable per-channel)
   - Name triggers (responding to nickname mentions) are now a subset of autonomous mode
   - Per-channel control over whether bots/apps can trigger responses
@@ -621,28 +627,44 @@ Channels with bot triggers enabled show a 🤖 icon in the status column.
 
 Click the ON/OFF badge in the Autonomous column to quickly enable/disable autonomous mode while preserving other settings.
 
-### Fun Commands (17 total!)
+### Custom Nicknames
 
-| Command        | Description                    |
-| -------------- | ------------------------------ |
-| `/affection`   | Check affection level          |
-| `/kiss`        | Kiss the bot                   |
-| `/hug`         | Hug the bot                    |
-| `/bonk`        | Bonk the bot                   |
-| `/bite`        | Bite the bot                   |
-| `/pat`         | Pat the bot's head             |
-| `/poke`        | Poke the bot                   |
-| `/tickle`      | Tickle the bot                 |
-| `/slap`        | Slap the bot                   |
-| `/cuddle`      | Cuddle with the bot            |
-| `/holdhands`   | Hold hands with the bot        |
-| `/squish`      | Squish the bot's face          |
-| `/spank`       | Spank the bot                  |
-| `/joke`        | Get a joke                     |
-| `/compliment`  | Get a compliment               |
-| `/roast`       | Get roasted (playfully)        |
-| `/fortune`     | Get your fortune told          |
-| `/challenge`   | Challenge the bot              |
+Add additional trigger words beyond the bot's Discord name:
+
+- Set via `custom_nicknames` in runtime config
+- Format: comma-separated list (e.g., "Sam,Sammy,Samuel")
+- Works with name trigger system (requires autonomous mode enabled)
+
+### Split Replies
+
+When enabled, the bot sends separate replies to each mentioned user instead of one combined message:
+
+- Enable via `split_replies_enabled: true` in runtime config
+- Limit targets with `split_replies_max_targets` (default: 5)
+- Useful for personalized responses in group conversations
+
+### Interaction Command
+
+All fun interactions use a single unified command:
+
+```text
+/interact <action> [target]
+```
+
+**Examples:**
+
+| Command | Description |
+| ------- | ----------- |
+| `/interact hugs you` | Hug the bot |
+| `/interact kisses your cheek` | Kiss the bot |
+| `/interact bonks you` | Bonk the bot |
+| `/interact tells you a joke` | Get a joke |
+| `/interact @User high fives` | Interact with another user |
+
+The bot processes these through the normal message pipeline, so interactions:
+- Generate memories like regular conversations
+- Use full chat history for context-aware responses
+- Support free-form actions (not limited to preset commands)
 
 ---
 
@@ -840,6 +862,44 @@ Starting 3 bot(s)...
 
 ---
 
+## Multi-Bot Coordination
+
+When running multiple bots, the global coordinator prevents system overload:
+
+- **Concurrent Request Limiting**: Maximum N bots can call AI simultaneously (default: 4)
+- **Response Staggering**: When multiple bots respond to same message, responses are delayed by 1.5s each
+- **Graceful Degradation**: If coordinator fails, bots continue anyway
+
+This prevents crashes when users @mention multiple bots at once.
+
+### Configuration
+
+Adjust via the web dashboard (Config page) or `bot_data/runtime_config.json`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `concurrency_limit` | 4 | Max concurrent AI requests across all bots |
+
+---
+
+## Bot Mentions
+
+Bots can generate Discord @mentions in their responses:
+
+- **User Mentions**: Bots can @mention users in autonomous mode (enabled by default)
+- **Bot-to-Bot Mentions**: Bots can @mention other bots (disabled by default to prevent loops)
+- **Context-Aware**: AI receives list of mentionable users from recent conversation
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `allow_bot_mentions` | true | Allow bots to generate @mentions for users |
+| `allow_bot_to_bot_mentions` | false | Allow bots to @mention other bots (can cause loops!) |
+| `mention_context_limit` | 10 | Max users to show in mention context for AI |
+
+---
+
 ## Runtime Configuration
 
 These settings can be adjusted via the web dashboard or by editing `bot_data/runtime_config.json`. Changes take effect immediately without restarting.
@@ -852,12 +912,19 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
 | `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
+| `custom_nicknames` | "" | Comma-separated list of additional nicknames for name triggers |
 | `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
 | `bot_falloff_enabled` | true | Enable progressive response decay for bot-to-bot conversations |
 | `bot_falloff_base_chance` | 0.8 | Starting probability (80%) for first bot response |
 | `bot_falloff_decay_rate` | 0.15 | Probability reduction per consecutive bot message |
 | `bot_falloff_min_chance` | 0.05 | Minimum probability floor (5%) before hard limit |
 | `bot_falloff_hard_limit` | 10 | Stop responding entirely after this many consecutive bot messages |
+| `split_replies_enabled` | false | Enable split replies to multiple mentioned users |
+| `split_replies_max_targets` | 5 | Max users to split replies for (prevents spam) |
+| `concurrency_limit` | 4 | Max concurrent AI requests across all bots |
+| `allow_bot_mentions` | true | Allow bots to generate @mentions for users |
+| `allow_bot_to_bot_mentions` | false | Allow bots to @mention other bots (can cause loops!) |
+| `mention_context_limit` | 10 | Max users to show in mention context for AI |
 
 ### When to Adjust Settings
 
@@ -1034,6 +1101,8 @@ Create password file: `sudo htpasswd -c /etc/nginx/.htpasswd admin`
 ```text
 discord-pals/
 ├── main.py              # Main bot code
+├── bot_instance.py      # Bot instance management
+├── coordinator.py       # Multi-bot request coordination
 ├── config.py            # Settings
 ├── providers.py         # AI providers
 ├── character.py         # Character loader
