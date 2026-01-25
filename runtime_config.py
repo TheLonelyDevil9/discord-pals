@@ -28,7 +28,11 @@ DEFAULTS = {
     # Split replies feature
     "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
     "split_replies_max_targets": 5,  # Max users to split replies for (prevents spam)
-    "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots (requires restart)
+    "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots
+    # Mention features
+    "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
+    "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
+    "mention_context_limit": 10,  # Max users to show in mention context for AI
 }
 
 # Config cache to avoid repeated file reads

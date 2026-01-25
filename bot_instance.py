@@ -95,7 +95,7 @@ class BotInstance:
         bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
         if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
             log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
-            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author))
+            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id)
             return True
         return False
 
@@ -109,7 +109,7 @@ class BotInstance:
 
         # Global stop-bot interactions
         if runtime_config.get("bot_interactions_paused", False):
-            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id)
             return True
 
         # Initialize or update conversation tracker
@@ -137,13 +137,13 @@ class BotInstance:
                 f"probability: {response_probability:.2%})",
                 self.name
             )
-            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id)
             return True
 
         # Keep existing 60-second cooldown as additional safeguard
         last_bot_response = self._last_bot_response.get(channel_id, 0)
         if time.time() - last_bot_response < 60:
-            add_to_history(channel_id, "user", message.content, author_name=user_name)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id)
             return True
 
         return False
@@ -307,6 +307,10 @@ class BotInstance:
             # Set up request processor
             self.request_queue.set_processor(self._process_request)
 
+            # Register this bot for cross-bot awareness (mention features)
+            from discord_utils import register_bot
+            register_bot(self)
+
             # Start periodic state cleanup task (every 5 minutes)
             asyncio.create_task(self._periodic_state_cleanup())
 
@@ -412,7 +416,7 @@ class BotInstance:
                 if channel_id in autonomous_manager.enabled_channels:
                     add_to_history(
                         channel_id, "user", message.content,
-                        author_name=user_name, reply_to=reply_to_name
+                        author_name=user_name, reply_to=reply_to_name, user_id=message.author.id
                     )
 
         @self.client.event
@@ -610,7 +614,7 @@ class BotInstance:
         # Only add to history if not already present
         recent = history[-5:]
         if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
-            add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name)
+            add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name, user_id=user_id)
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -671,6 +675,18 @@ class BotInstance:
         # Get active users (mentioned_context already gathered above in parallel)
         active_users = get_active_users(channel_id) if not is_dm else []
 
+        # Get mentionable users and bots for @mention feature
+        mentionable_users = []
+        mentionable_bots = []
+        if runtime_config.get("allow_bot_mentions", True) and not is_dm:
+            from discord_utils import get_mentionable_users, get_other_bots_mentionable
+            mention_limit = runtime_config.get("mention_context_limit", 10)
+            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit)
+
+            if runtime_config.get("allow_bot_to_bot_mentions", False):
+                bot_user_id = self.client.user.id if self.client.user else None
+                mentionable_bots = get_other_bots_mentionable(bot_user_id, guild)
+
         # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
             character=self.character,
@@ -697,7 +713,9 @@ class BotInstance:
             user_name=target_user_name,
             active_users=active_users,
             mentioned_context=mentioned_context,
-            other_bot_names=other_bot_names
+            other_bot_names=other_bot_names,
+            mentionable_users=mentionable_users,
+            mentionable_bots=mentionable_bots
         )
 
         # Handle attachment content in the last immediate message
@@ -725,7 +743,9 @@ class BotInstance:
             "user_id": user_id,
             "user_name": user_name,
             "content": content,
-            "split_reply_target": split_target
+            "split_reply_target": split_target,
+            "mentionable_users": mentionable_users,
+            "mentionable_bots": mentionable_bots
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -804,6 +824,13 @@ class BotInstance:
         content = context["content"]
         split_target = context.get("split_reply_target")
 
+        # Process outgoing mentions (@Name -> <@user_id>)
+        if runtime_config.get("allow_bot_mentions", True):
+            from discord_utils import process_outgoing_mentions
+            mentionable_users = context.get("mentionable_users")
+            mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
+            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
+
         # Prepend mention for split replies
         if split_target:
             response = f"<@{split_target.id}> {response}"
@@ -871,12 +898,15 @@ class BotInstance:
 
     async def _process_request(self, request: dict):
         """Process a single queued request."""
+        from coordinator import coordinator
+
         # GLOBAL KILLSWITCH: Skip all processing when paused
         if runtime_config.get("global_paused", False):
             log.debug("Request skipped - global killswitch active", self.name)
             return
 
         message = request['message']
+        message_id = message.id
 
         if not self.character:
             await message.channel.send("❌ No character loaded!", delete_after=ERROR_DELETE_AFTER)
@@ -888,14 +918,27 @@ class BotInstance:
             if context is None:
                 return  # Duplicate or should skip
 
-            # Generate AI response (handles provider call, sanitization)
-            response = await self._generate_ai_response(context, message)
-            if response is None:
-                await message.channel.send("Something went wrong - all providers failed.")
-                return
+            # Acquire global coordinator slot (limits concurrent AI requests across all bots)
+            await coordinator.acquire_slot(self.name, message_id)
 
-            # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
-            await self._send_and_finalize_response(response, context, message, request)
+            try:
+                # Generate AI response (handles provider call, sanitization)
+                response = await self._generate_ai_response(context, message)
+                if response is None:
+                    await message.channel.send("Something went wrong - all providers failed.")
+                    return
+
+                # Get stagger delay for multi-bot responses (prevents simultaneous sends)
+                stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
+                if stagger_delay > 0:
+                    log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name)
+                    await asyncio.sleep(stagger_delay)
+
+                # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
+                await self._send_and_finalize_response(response, context, message, request)
+            finally:
+                # Always release the slot, even on error
+                coordinator.release_slot(self.name, message_id)
 
         except asyncio.TimeoutError:
             log.warn("Request timed out", self.name)
@@ -1193,7 +1236,7 @@ class BotInstance:
             is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
-            add_to_history(channel.id, role, msg.content, author_name=user_name)
+            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id)
             count += 1
         
         return count

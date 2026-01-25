@@ -84,7 +84,9 @@ class PromptManager:
         user_name: str = "",
         active_users: str = "",
         mentioned_context: str = "",
-        other_bots: str = ""
+        other_bots: str = "",
+        mentionable_users: str = "",
+        mentionable_bots: str = ""
     ) -> str:
         """Build chatroom context (injected between history and immediate messages)."""
 
@@ -100,7 +102,9 @@ class PromptManager:
             "{{USER_NAME}}": user_name,
             "{{ACTIVE_USERS}}": active_users,
             "{{MENTIONED_CONTEXT}}": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else "",
-            "{{OTHER_BOTS}}": other_bots
+            "{{OTHER_BOTS}}": other_bots,
+            "{{MENTIONABLE_USERS}}": mentionable_users,
+            "{{MENTIONABLE_BOTS}}": mentionable_bots
         }
 
         for key, value in replacements.items():
@@ -287,9 +291,24 @@ class CharacterManager:
         user_name: str = "",
         active_users: list = None,
         mentioned_context: str = "",
-        other_bot_names: list = None
+        other_bot_names: list = None,
+        mentionable_users: list = None,
+        mentionable_bots: list = None
     ) -> str:
-        """Build chatroom context (injected between history and immediate)."""
+        """Build chatroom context (injected between history and immediate).
+
+        Args:
+            guild_name: Server name or "DM"
+            emojis: Available custom emojis
+            lore: Channel/server lore
+            memories: Relevant memories
+            user_name: Current user being replied to
+            active_users: List of active user names
+            mentioned_context: Context about mentioned users
+            other_bot_names: Names of other bots (to prevent impersonation)
+            mentionable_users: List of users that can be @mentioned
+            mentionable_bots: List of bots that can be @mentioned
+        """
 
         # Add active users for social awareness
         active_users_context = ""
@@ -303,6 +322,19 @@ class CharacterManager:
         if other_bot_names:
             other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
 
+        # Add mentionable users context (for @mention feature)
+        mentionable_users_context = ""
+        if mentionable_users:
+            user_list = [f"- {u['name']}: {u['mention_syntax']}" for u in mentionable_users[:10]]
+            mentionable_users_context = "Users you can @mention to get their attention:\n" + "\n".join(user_list)
+
+        # Add mentionable bots context (for bot-to-bot @mention feature)
+        mentionable_bots_context = ""
+        if mentionable_bots:
+            bot_list = [f"- {b['character_name']}: {b['mention_syntax']}" for b in mentionable_bots if b.get('character_name')]
+            if bot_list:
+                mentionable_bots_context = "Other bots you can @mention to summon them:\n" + "\n".join(bot_list)
+
         return self.prompt_manager.build_chatroom_context(
             guild_name=guild_name,
             emojis=emojis,
@@ -311,7 +343,9 @@ class CharacterManager:
             user_name=user_name,
             active_users=active_users_context,
             mentioned_context=mentioned_context,
-            other_bots=other_bots_context
+            other_bots=other_bots_context,
+            mentionable_users=mentionable_users_context,
+            mentionable_bots=mentionable_bots_context
         )
 
 

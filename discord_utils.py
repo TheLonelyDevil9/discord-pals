@@ -315,18 +315,27 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None):
-    """Add a message to conversation history."""
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None, user_id: int = None):
+    """Add a message to conversation history.
+
+    Args:
+        channel_id: Discord channel ID
+        role: Message role ('user' or 'assistant')
+        content: Message content
+        author_name: Display name of the author
+        reply_to: Tuple of (author_name, content) if this is a reply
+        user_id: Discord user ID (for mention features)
+    """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
-    
+
     # Track activity for this channel
     _channel_last_activity[channel_id] = time.time()
-    
+
     # Strip character name prefixes from bot/assistant messages
     if role == "user" and author_name:
         content = strip_character_prefix(content)
-    
+
     # Format content with reply context (author, replied_content)
     # Fix personality bleed: clearly separate quoted author from current speaker
     if reply_to and role == "user":
@@ -336,10 +345,12 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
             content = f'(replying to {reply_author}) {content}'
         else:
             content = f"(replying to {reply_author}) {content}"
-    
+
     msg = {"role": role, "content": content}
     if author_name:
         msg["author"] = author_name
+    if user_id:
+        msg["user_id"] = user_id
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
     msg_hash = hash((role, content, author_name or ''))
@@ -892,4 +903,145 @@ class AutonomousManager:
 
 
 autonomous_manager = AutonomousManager()
+
+
+# --- Bot Registry for Cross-Bot Awareness ---
+
+_bot_registry: Dict[int, dict] = {}  # bot_user_id -> {name, character_name, user_id}
+
+
+def register_bot(bot_instance):
+    """Register a bot instance for cross-bot awareness.
+
+    Called from BotInstance.on_ready() to make bots aware of each other.
+
+    Args:
+        bot_instance: BotInstance object with client and character attributes
+    """
+    if bot_instance.client.user:
+        _bot_registry[bot_instance.client.user.id] = {
+            "name": bot_instance.name,
+            "character_name": bot_instance.character.name if bot_instance.character else None,
+            "user_id": bot_instance.client.user.id
+        }
+        log.info(f"Registered bot '{bot_instance.name}' (ID: {bot_instance.client.user.id}) in bot registry")
+
+
+def unregister_bot(bot_user_id: int):
+    """Remove a bot from the registry.
+
+    Args:
+        bot_user_id: Discord user ID of the bot to remove
+    """
+    if bot_user_id in _bot_registry:
+        del _bot_registry[bot_user_id]
+
+
+def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
+    """Get list of other bots that can be mentioned.
+
+    Args:
+        current_bot_id: Discord user ID of the current bot (to exclude)
+        guild: Discord guild object to check membership
+
+    Returns:
+        List of dicts with 'character_name', 'user_id', 'mention_syntax'
+    """
+    bots = []
+    for bot_id, info in _bot_registry.items():
+        if bot_id == current_bot_id:
+            continue
+
+        # Check if bot is in this guild
+        if guild and guild.get_member(bot_id):
+            bots.append({
+                "character_name": info["character_name"],
+                "user_id": bot_id,
+                "mention_syntax": f"<@{bot_id}>"
+            })
+
+    return bots
+
+
+def get_mentionable_users(channel_id: int, limit: int = 10) -> List[dict]:
+    """Get list of users who can be mentioned based on conversation history.
+
+    Args:
+        channel_id: Discord channel ID
+        limit: Maximum number of users to return
+
+    Returns:
+        List of dicts with 'name', 'user_id', 'mention_syntax'
+    """
+    users = []
+    seen_ids = set()
+
+    # Get from recent message authors in history
+    history = get_history(channel_id)
+    for msg in reversed(history[-50:]):
+        user_id = msg.get("user_id")
+        author = msg.get("author")
+
+        if user_id and user_id not in seen_ids and author:
+            seen_ids.add(user_id)
+            users.append({
+                "name": author,
+                "user_id": user_id,
+                "mention_syntax": f"<@{user_id}>"
+            })
+            if len(users) >= limit:
+                break
+
+    return users
+
+
+def process_outgoing_mentions(content: str, mentionable_users: list = None,
+                               mentionable_bots: list = None) -> str:
+    """Process AI response to convert name-based mentions to Discord format.
+
+    The AI might generate "@Username" or "@username" - this converts them
+    to proper Discord mention format <@user_id>.
+
+    Args:
+        content: AI-generated response text
+        mentionable_users: List of user dicts from get_mentionable_users()
+        mentionable_bots: List of bot dicts from get_other_bots_mentionable()
+
+    Returns:
+        Content with @Name converted to <@user_id> where applicable
+    """
+    if not content:
+        return content
+
+    # Build lookup of name -> mention syntax (case-insensitive)
+    mention_lookup = {}
+
+    if mentionable_users:
+        for user in mentionable_users:
+            name_lower = user['name'].lower()
+            mention_lookup[name_lower] = user['mention_syntax']
+
+    if mentionable_bots:
+        for bot in mentionable_bots:
+            if bot.get('character_name'):
+                name_lower = bot['character_name'].lower()
+                mention_lookup[name_lower] = bot['mention_syntax']
+
+    if not mention_lookup:
+        return content
+
+    # Pattern: @name or @Name (word characters after @)
+    import re
+
+    def replace_mention(match):
+        name = match.group(1).lower()
+        if name in mention_lookup:
+            return mention_lookup[name]
+        return match.group(0)  # Keep original if not found
+
+    # Match @word patterns (handles @Username, @user_name, etc.)
+    pattern = r'@(\w+)'
+    content = re.sub(pattern, replace_mention, content)
+
+    return content
 
