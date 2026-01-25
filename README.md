@@ -70,7 +70,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
 - **Impersonation prevention** - Bots won't roleplay as each other in multi-bot setups
 - **Context-aware commands** - Slash commands use chat history and memories
-- **17 fun commands** - `/kiss`, `/hug`, `/bonk`, `/cuddle`, `/roast`, `/affection`, and more
+- **Flexible interactions** - `/interact` command for hugs, kisses, bonks, roasts, and any custom action
 - **Smart responses** - Tracks reply chains with full message context
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context with `/recall` (up to 200 messages)
