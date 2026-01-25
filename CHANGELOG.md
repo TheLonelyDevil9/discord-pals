@@ -4,6 +4,29 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.4.3] - 2026-01-25
+
+### Changes
+
+- Add missing settings UI to dashboard (Mention Settings, Split Replies, Performance)
+
+## [v1.4.2] - 2026-01-25
+
+### Changes
+
+- Fix coordinator asyncio event loop issues (v1.4.2)
+## [v1.4.1] - 2026-01-25
+
+### Changes
+
+- Fix systemd restart logic for dashboard update button
+## [v1.4.0] - 2026-01-25
+
+### Changes
+
+- Add global coordinator and @mention features
+- Fix audioop-lts for Python <3.13
+- Bump version to 1.3.3
 ## [v1.3.3] - 2026-01-21
 
 ### Changes

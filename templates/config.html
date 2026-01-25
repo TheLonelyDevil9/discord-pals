@@ -245,6 +245,105 @@
     </div>
 </div>
 
+<!-- Mention Settings -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Mention Settings</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Control how bots use @mentions in their messages</p>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="allow_bot_mentions" {% if config.allow_bot_mentions is not defined or config.allow_bot_mentions %}checked{% endif %}
+                    onchange="saveMentionSettings()">
+                <span>Allow Bot @Mentions</span>
+            </label>
+            <p class="form-hint">Allow bots to generate @mentions for users in their messages</p>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="allow_bot_to_bot_mentions" {% if config.allow_bot_to_bot_mentions %}checked{% endif %}
+                    onchange="saveMentionSettings()">
+                <span>Allow Bot-to-Bot @Mentions</span>
+            </label>
+            <p class="form-hint" style="color: var(--warning, #f59e0b);">Warning: Can cause conversation loops between bots!</p>
+        </div>
+
+        <div class="form-group">
+            <label for="mention_context_limit">Mention Context Limit</label>
+            <div class="slider-row">
+                <input type="range" id="mention_context_limit" min="1" max="50" step="1"
+                    value="{{ config.mention_context_limit or 10 }}"
+                    oninput="document.getElementById('mention_context_val').textContent = this.value"
+                    title="Max users in mention context">
+                <span class="slider-val" id="mention_context_val">{{ config.mention_context_limit or 10 }}</span>
+            </div>
+            <p class="form-hint">Maximum users to include in mention context for AI</p>
+        </div>
+
+        <button type="button" class="btn btn-primary" onclick="saveMentionSettings()">Save Mention Settings</button>
+    </div>
+</div>
+
+<!-- Split Replies -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Split Replies</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Send separate replies to multiple mentioned users</p>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="split_replies_enabled" {% if config.split_replies_enabled %}checked{% endif %}
+                    onchange="saveSplitReplySettings()">
+                <span>Enable Split Replies</span>
+            </label>
+            <p class="form-hint">When multiple users are mentioned, send individual replies to each</p>
+        </div>
+
+        <div class="form-group">
+            <label for="split_replies_max_targets">Max Split Targets</label>
+            <div class="slider-row">
+                <input type="range" id="split_replies_max_targets" min="1" max="10" step="1"
+                    value="{{ config.split_replies_max_targets or 5 }}"
+                    oninput="document.getElementById('split_targets_val').textContent = this.value"
+                    title="Max users to split replies for">
+                <span class="slider-val" id="split_targets_val">{{ config.split_replies_max_targets or 5 }}</span>
+            </div>
+            <p class="form-hint">Maximum users to split replies for (prevents spam)</p>
+        </div>
+
+        <button type="button" class="btn btn-primary" onclick="saveSplitReplySettings()">Save Split Reply Settings</button>
+    </div>
+</div>
+
+<!-- Performance Settings -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Performance</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Global performance and rate limiting settings</p>
+
+        <div class="form-group">
+            <label for="concurrency_limit">Concurrency Limit</label>
+            <div class="slider-row">
+                <input type="range" id="concurrency_limit" min="1" max="10" step="1"
+                    value="{{ config.concurrency_limit or 4 }}"
+                    oninput="document.getElementById('concurrency_val').textContent = this.value"
+                    title="Max concurrent AI requests">
+                <span class="slider-val" id="concurrency_val">{{ config.concurrency_limit or 4 }}</span>
+            </div>
+            <p class="form-hint">Maximum concurrent AI requests across all bots</p>
+        </div>
+
+        <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
+    </div>
+</div>
+
 <!-- Debug Settings -->
 <div class="card">
     <div class="card-header">
@@ -853,6 +952,75 @@ async function saveFalloffSettings() {
 
     if (response.ok) {
         showToast('Fall-off settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
+    }
+}
+
+// Save mention settings
+async function saveMentionSettings() {
+    const data = {
+        allow_bot_mentions: document.getElementById('allow_bot_mentions').checked,
+        allow_bot_to_bot_mentions: document.getElementById('allow_bot_to_bot_mentions').checked,
+        mention_context_limit: parseInt(document.getElementById('mention_context_limit').value)
+    };
+
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Mention settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
+    }
+}
+
+// Save split reply settings
+async function saveSplitReplySettings() {
+    const data = {
+        split_replies_enabled: document.getElementById('split_replies_enabled').checked,
+        split_replies_max_targets: parseInt(document.getElementById('split_replies_max_targets').value)
+    };
+
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Split reply settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
+    }
+}
+
+// Save concurrency settings
+async function saveConcurrencySettings() {
+    const data = {
+        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value)
+    };
+
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Performance settings saved', 'success');
     } else {
         showToast('Failed to save settings', 'error');
     }
