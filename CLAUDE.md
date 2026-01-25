@@ -4,21 +4,19 @@
 
 **Always do these steps automatically after completing any code changes:**
 
-1. **Commit** - Stage and commit all changes with a descriptive message
-2. **Bump version** - Run `python bump_version.py patch --tag` (use `minor` for new features, `major` for breaking changes)
-3. **Push to GitHub** - Push both the commits and the tag:
+1. **Bump version FIRST** - Run `python bump_version.py patch --tag` BEFORE committing
+   - Use `patch` for bug fixes
+   - Use `minor` for new features
+   - Use `major` for breaking changes
+2. **Commit** - Stage and commit all changes (including the bumped version.py) with a descriptive message
+3. **Push to GitHub** - Push both commits and tags:
    ```bash
-   git push origin main
-   git push origin v<version>
+   git push origin main && git push origin --tags
    ```
 
+**CRITICAL: Version bump MUST happen before commit.** If you commit first, the version.py file won't be included and the release will have the wrong version number.
+
 Do not wait for the user to ask - complete all three steps immediately after any fix or feature is done.
-
-## Version Bump Guidelines
-
-- `patch` - Bug fixes, small changes
-- `minor` - New features, non-breaking improvements
-- `major` - Breaking changes
 
 ## Commit Message Format
 
