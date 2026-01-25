@@ -32,14 +32,16 @@ class GlobalCoordinator:
             return
         self._initialized = True
 
-        # Global semaphore for AI request limiting
+        # Global semaphore for AI request limiting (created lazily)
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_limit: int = 0
 
         # Track which bots are processing which messages
         # message_id -> set of bot_names currently processing
         self._active_requests: Dict[int, Set[str]] = defaultdict(set)
-        self._request_lock = asyncio.Lock()
+
+        # Lock created lazily to avoid event loop issues
+        self._request_lock: Optional[asyncio.Lock] = None
 
         # Track response order for staggering
         # message_id -> list of (bot_name, queue_time)
@@ -50,11 +52,17 @@ class GlobalCoordinator:
         self._CLEANUP_INTERVAL = 300  # 5 minutes
         self._STALE_THRESHOLD = 60  # 1 minute
 
+    def _get_lock(self) -> asyncio.Lock:
+        """Get or create the request lock (lazy initialization for event loop safety)."""
+        if self._request_lock is None:
+            self._request_lock = asyncio.Lock()
+        return self._request_lock
+
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Get or create the global semaphore with current limit."""
         limit = runtime_config.get("concurrency_limit", 4)
 
-        # Recreate if limit changed
+        # Recreate if limit changed or not yet created
         if self._semaphore is None or self._semaphore_limit != limit:
             self._semaphore = asyncio.Semaphore(limit)
             self._semaphore_limit = limit
@@ -72,19 +80,24 @@ class GlobalCoordinator:
         Returns:
             True when slot is acquired
         """
-        semaphore = self._get_semaphore()
+        try:
+            semaphore = self._get_semaphore()
+            lock = self._get_lock()
 
-        async with self._request_lock:
-            # Register this bot as processing this message
-            self._active_requests[message_id].add(bot_name)
+            async with lock:
+                # Register this bot as processing this message
+                self._active_requests[message_id].add(bot_name)
 
-            # Queue for staggered response
-            self._response_queue[message_id].append((bot_name, time.time()))
+                # Queue for staggered response
+                self._response_queue[message_id].append((bot_name, time.time()))
 
-        # Acquire semaphore (blocks if at limit)
-        await semaphore.acquire()
-        log.debug(f"[{bot_name}] Acquired AI slot for message {message_id}")
-        return True
+            # Acquire semaphore (blocks if at limit)
+            await semaphore.acquire()
+            log.debug(f"[{bot_name}] Acquired AI slot for message {message_id}")
+            return True
+        except Exception as e:
+            log.error(f"[{bot_name}] Failed to acquire slot: {e}")
+            return True  # Continue anyway to not block the bot
 
     def release_slot(self, bot_name: str, message_id: int):
         """Release the AI request slot.
@@ -93,19 +106,22 @@ class GlobalCoordinator:
             bot_name: Name of the bot releasing the slot
             message_id: Discord message ID that was processed
         """
-        semaphore = self._get_semaphore()
-        semaphore.release()
+        try:
+            semaphore = self._get_semaphore()
+            semaphore.release()
 
-        # Clean up tracking
-        if message_id in self._active_requests:
-            self._active_requests[message_id].discard(bot_name)
-            if not self._active_requests[message_id]:
-                del self._active_requests[message_id]
+            # Clean up tracking
+            if message_id in self._active_requests:
+                self._active_requests[message_id].discard(bot_name)
+                if not self._active_requests[message_id]:
+                    del self._active_requests[message_id]
 
-        log.debug(f"[{bot_name}] Released AI slot for message {message_id}")
+            log.debug(f"[{bot_name}] Released AI slot for message {message_id}")
 
-        # Periodic cleanup
-        self._maybe_cleanup()
+            # Periodic cleanup
+            self._maybe_cleanup()
+        except Exception as e:
+            log.error(f"[{bot_name}] Failed to release slot: {e}")
 
     async def get_stagger_delay(self, bot_name: str, message_id: int) -> float:
         """Get delay before sending response to stagger multi-bot replies.
@@ -117,19 +133,24 @@ class GlobalCoordinator:
         Returns:
             Delay in seconds (0.0 if first responder, up to 5.0 for later ones)
         """
-        async with self._request_lock:
-            queue = self._response_queue.get(message_id, [])
+        try:
+            lock = self._get_lock()
+            async with lock:
+                queue = self._response_queue.get(message_id, [])
 
-            # Find position in queue
-            position = 0
-            for i, (name, _) in enumerate(queue):
-                if name == bot_name:
-                    position = i
-                    break
+                # Find position in queue
+                position = 0
+                for i, (name, _) in enumerate(queue):
+                    if name == bot_name:
+                        position = i
+                        break
 
-            # Stagger by 1.5 seconds per position
-            delay = position * 1.5
-            return min(delay, 5.0)  # Cap at 5 seconds
+                # Stagger by 1.5 seconds per position
+                delay = position * 1.5
+                return min(delay, 5.0)  # Cap at 5 seconds
+        except Exception as e:
+            log.error(f"[{bot_name}] Failed to get stagger delay: {e}")
+            return 0.0
 
     def get_active_bots_for_message(self, message_id: int) -> Set[str]:
         """Get set of bot names currently processing a message.
