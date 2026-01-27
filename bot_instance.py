@@ -28,6 +28,7 @@ from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
 import logger as log
+import user_ignores
 from prometheus_metrics import metrics_manager
 
 
@@ -155,6 +156,17 @@ class BotInstance:
         Returns dict with keys: mentioned, is_reply_to_bot, is_autonomous, name_triggered, should_respond
         """
         channel_id = message.channel.id
+
+        # Check if user has ignored this bot
+        char_name = self.character.name if self.character else ""
+        if char_name and user_ignores.is_ignored(str(message.author.id), char_name):
+            return {
+                "mentioned": False,
+                "is_reply_to_bot": False,
+                "is_autonomous": False,
+                "name_triggered": False,
+                "should_respond": False
+            }
 
         # Check direct mention
         mentioned = self.client.user in message.mentions if not is_dm else True

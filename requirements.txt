@@ -4,6 +4,7 @@ openai>=1.51.0
 python-dotenv==1.0.1
 aiohttp>=3.10.0
 flask==3.1.2
+waitress==3.0.0
 pyyaml==6.0.2
 
 # Python 3.13+ compatibility (audioop removed from stdlib)

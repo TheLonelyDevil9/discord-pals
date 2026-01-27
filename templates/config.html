@@ -380,6 +380,74 @@
     </div>
 </div>
 
+<!-- Provider Management -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Provider Management</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Drag to reorder providers. First available provider is used as fallback.</p>
+
+        <div id="provider-list" class="provider-list">
+            <!-- Populated by JavaScript -->
+        </div>
+
+        <div class="section-divider"></div>
+
+        <h4 class="subsection-title">Add New Provider</h4>
+        <form id="add-provider-form" class="provider-form">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="new-provider-type">Provider Type</label>
+                    <select id="new-provider-type" reqd onchange="updateProviderDefaults()">
+                        <option value="">Select type...</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="google">Google (Gemini)</option>
+                        <option value="openrouter">OpenRouter</option>
+                        <option value="local">Local / Custom</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="new-provider-name">Display Name</label>
+                    <input type="text" id="new-provider-name" placeholder="e.g., GPT-4o" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-provider-endpoint">API Endpoint</label>
+                    <input type="text" id="new-provider-endpoint" placeholder="https://api.openai.com/v1">
+                </div>
+                <div class="form-group">
+                    <label for="new-provider-key">API Key</label>
+                    <input type="password" id="new-provider-key" placeholder="sk-...">
+                </div>
+                <div class="form-group">
+                    <label for="new-provider-model">Model</label>
+                    <input type="text" id="new-provider-model" placeholder="gpt-4o">
+                </div>
+                <div class="form-group">
+                    <label for="new-provider-temp">Temperature</label>
+                    <input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Provider</button>
+        </form>
+
+        <div class="section-divider"></div>
+
+        <details class="config-editor">
+            <summary>Advanced: Edit JSON directly</summary>
+            <form action="/settings/providers/save" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <textarea name="content" id="providers-json-editor" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
+                <div class="editor-actions">
+                    <button type="submit" class="btn btn-primary">Save JSON</button>
+                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                </div>
+            </form>
+        </details>
+    </div>
+</div>
+
 <!-- JSON Configuration Editors -->
 <div class="card">
     <div class="card-header">
@@ -387,18 +455,6 @@
     </div>
     <div class="card-body">
         <p class="form-hint" style="margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a restart.</p>
-
-        <details class="config-editor">
-            <summary>providers.json</summary>
-            <form action="/settings/providers/save" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <textarea name="content" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
-                <div class="editor-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                </div>
-            </form>
-        </details>
 
         <details class="config-editor">
             <summary>bots.json</summary>
@@ -776,6 +832,97 @@ select:focus {
     font-size: 0.8125rem;
 }
 
+/* Provider List */
+.provider-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.provider-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    cursor: grab;
+    transition: all 0.15s ease;
+}
+
+.provider-item:hover {
+    border-color: var(--accent);
+}
+
+.provider-item.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+}
+
+.provider-item .drag-handle {
+    color: var(--text-muted);
+    cursor: grab;
+}
+
+.provider-item .provider-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.provider-item .provider-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.provider-item .provider-model {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.provider-item .provider-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.provider-item .btn-icon {
+    padding: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.provider-item .btn-icon:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.provider-item .btn-icon.delete:hover {
+    color: var(--error, #ef4444);
+}
+
+.provider-form input[type="text"],
+.provider-form input[type="password"],
+.provider-form input[type="number"] {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+}
+
+.provider-form input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .settings-grid {
@@ -1063,5 +1210,193 @@ async function saveNicknames(botName) {
         showToast('Failed to save nicknames', 'error');
     }
 }
+
+// ============ Provider Management ============
+
+let providersData = [];
+
+// Load providers on page load
+document.addEventListener('DOMContentLoaded', () => {
+    loadProviders();
+});
+
+function loadProviders() {
+    try {
+        const jsonEditor = document.getElementById('providers-json-editor');
+        if (jsonEditor) {
+            const data = JSON.parse(jsonEditor.value);
+            providersData = data.providers || [];
+            renderProviderList();
+        }
+    } catch (e) {
+        console.error('Failed to parse providers:', e);
+    }
+}
+
+function renderProviderList() {
+    const list = document.getElementById('provider-list');
+    if (!list) return;
+
+    if (providersData.length === 0) {
+        list.innerHTML = '<p class="text-muted">No providers configured. Add one below or edit the JSON directly.</p>';
+        return;
+    }
+
+    list.innerHTML = providersData.map((p, i) => `
+        <div class="provider-item" draggable="true" data-index="${i}">
+            <span class="drag-handle">&#9776;</span>
+            <div class="provider-info">
+                <span class="provider-name">${escapeHtml(p.name || 'Unnamed')}</span>
+                <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.base_url || 'Default endpoint')}</span>
+            </div>
+            <div class="provider-actions">
+                <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection">&#9889;</button>
+                <button type="button" class="btn-icon delete" onclick="deleteProvider(${i})" title="Delete">&times;</button>
+            </div>
+        </div>
+    `).join('');
+
+    // Add drag-and-drop handlers
+    setupDragAndDrop();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function setupDragAndDrop() {
+    const items = document.querySelectorAll('.provider-item');
+    let draggedItem = null;
+
+    items.forEach(item => {
+        item.addEventListener('dragstart', (e) => {
+            draggedItem = item;
+            item.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            draggedItem = null;
+        });
+
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        item.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (draggedItem && draggedItem !== item) {
+                const fromIndex = parseInt(draggedItem.dataset.index);
+                const toIndex = parseInt(item.dataset.index);
+                reorderProviders(fromIndex, toIndex);
+            }
+        });
+    });
+}
+
+async function reorderProviders(fromIndex, toIndex) {
+    // Reorder in local array
+    const [moved] = providersData.splice(fromIndex, 1);
+    providersData.splice(toIndex, 0, moved);
+
+    // Save to server
+    await saveProvidersToServer();
+    renderProviderList();
+}
+
+async function deleteProvider(index) {
+    if (!confirm('Delete this provider?')) return;
+
+    providersData.splice(index, 1);
+    await saveProvidersToServer();
+    renderProviderList();
+    showToast('Provider deleted', 'success');
+}
+
+async function testProvider(index) {
+    showToast('Testing provider...', 'success');
+    const response = await fetch(`/api/test-provider/${index}`, {
+        headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
+    });
+    const result = await response.json();
+    if (result.success) {
+        showToast('Provider is working!', 'success');
+    } else {
+        showToast('Provider test failed: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
+
+async function saveProvidersToServer() {
+    const data = { providers: providersData };
+    const jsonStr = JSON.stringify(data, null, 2);
+
+    // Update the JSON editor too
+    const jsonEditor = document.getElementById('providers-json-editor');
+    if (jsonEditor) {
+        jsonEditor.value = jsonStr;
+    }
+
+    const response = await fetch('/api/providers/save', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify({ content: jsonStr })
+    });
+
+    if (!response.ok) {
+        showToast('Failed to save providers', 'error');
+    }
+}
+
+// Provider type defaults
+const providerDefaults = {
+    openai: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o' },
+    anthropic: { base_url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
+    google: { base_url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-pro' },
+    openrouter: { base_url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o' },
+    local: { base_url: 'http://localhost:5000/v1', model: 'local-model' }
+};
+
+function updateProviderDefaults() {
+    const type = document.getElementById('new-provider-type').value;
+    if (type && providerDefaults[type]) {
+        document.getElementById('new-provider-endpoint').value = providerDefaults[type].base_url;
+        document.getElementById('new-provider-model').value = providerDefaults[type].model;
+    }
+}
+
+// Add provider form
+document.getElementById('add-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const name = document.getElementById('new-provider-name').value.trim();
+    const base_url = document.getElementById('new-provider-endpoint').value.trim();
+    const api_key = document.getElementById('new-provider-key').value.trim();
+    const model = document.getElementById('new-provider-model').value.trim();
+    const temperature = parseFloat(document.getElementById('new-provider-temp').value) || 0.7;
+
+    if (!name) {
+        showToast('Provider name is required', 'error');
+        return;
+    }
+
+    const newProvider = { name, model, temperature };
+    if (base_url) newProvider.base_url = base_url;
+    if (api_key) newProvider.api_key = api_key;
+
+    providersData.push(newProvider);
+    await saveProvidersToServer();
+    renderProviderList();
+
+    // Reset form
+    e.target.reset();
+    showToast('Provider added', 'success');
+});
 </script>
 {% endblock %}

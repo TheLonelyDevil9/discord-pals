@@ -1,6 +1,6 @@
 """
 Discord Pals - Core Commands
-Essential bot management commands: reload, switch, clear, recall, status, autonomous, stop, delete_messages
+Essential bot management commands: reload, switch, clear, recall, status, autonomous, stop, delete_messages, ignore
 """
 
 import discord
@@ -10,6 +10,7 @@ from typing import Optional, Set
 from discord_utils import clear_history, remove_assistant_from_history
 from character import character_manager
 import logger as log
+import user_ignores
 
 
 # Cache for owner/team member IDs (populated on first check)
@@ -208,5 +209,50 @@ def setup_core_commands(bot_instance) -> None:
                         break
                 except Exception as e:
                     log.debug(f"Failed to delete message: {e}", bot_instance.name)
-        
+
         await interaction.followup.send(f"✅ Deleted {deleted} messages", ephemeral=True)
+
+    @tree.command(name="ignore", description="Block a bot from responding to you")
+    @app_commands.describe(bot_name="Name of the bot/character to ignore")
+    async def cmd_ignore(interaction: discord.Interaction, bot_name: str) -> None:
+        user_id = str(interaction.user.id)
+
+        if user_ignores.add_ignore(user_id, bot_name):
+            await interaction.response.send_message(
+                f"✅ **{bot_name}** will no longer respond to your messages.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"ℹ️ You're already ignoring **{bot_name}**.", ephemeral=True
+            )
+
+    @tree.command(name="unignore", description="Allow a bot to respond to you again")
+    @app_commands.describe(bot_name="Name of the bot/character to unignore")
+    async def cmd_unignore(interaction: discord.Interaction, bot_name: str) -> None:
+        user_id = str(interaction.user.id)
+
+        if user_ignores.remove_ignore(user_id, bot_name):
+            await interaction.response.send_message(
+                f"✅ **{bot_name}** can now respond to your messages again.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"ℹ️ You weren't ignoring **{bot_name}**.", ephemeral=True
+            )
+
+    @tree.command(name="ignorelist", description="Show which bots you're ignoring")
+    async def cmd_ignorelist(interaction: discord.Interaction) -> None:
+        user_id = str(interaction.user.id)
+        ignores = user_ignores.get_ignores(user_id)
+
+        if ignores:
+            ignore_list = "\n".join([f"• **{name}**" for name in sorted(ignores)])
+            await interaction.response.send_message(
+                f"**Bots you're ignoring:**\n{ignore_list}\n\nUse `/unignore <name>` to allow responses again.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "You're not ignoring any bots. Use `/ignore <name>` to block a bot from responding to you.",
+                ephemeral=True
+            )

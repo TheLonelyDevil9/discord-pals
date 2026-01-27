@@ -71,6 +71,30 @@ RE_META_TRANSLATION = re.compile(r'\((?:translation|meaning|in other words)[:\s]
 # GLM draft spam pattern - multiple lines starting with "Name: " (drafting leak)
 RE_GLM_DRAFT_LINE = re.compile(r'^[A-Z][a-z]+:\s*.+$', re.MULTILINE)
 
+# Conversation history dump pattern - AI reproducing "Name: (replying to X)..." format
+RE_CONVERSATION_DUMP = re.compile(
+    r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*:\s*\(replying to [^)]+\).*$',
+    re.MULTILINE
+)
+
+# Meta-commentary about whether to respond (AI reasoning leaking)
+RE_SHOULD_NOT_RESPOND = re.compile(
+    r'^I\s+(?:should|will|would)\s+not\s+respond.*$',
+    re.MULTILINE | re.IGNORECASE
+)
+RE_UNNATURAL_META = re.compile(
+    r'^It\s+would\s+be\s+(?:unnatural|inappropriate|wrong)\s+(?:for|if)\s+\w+.*$',
+    re.MULTILINE | re.IGNORECASE
+)
+RE_ADDRESSING_META = re.compile(
+    r'^(?:Since|Because)\s+\w+\s+is\s+(?:specifically\s+)?(?:addressing|talking\s+to|asking).*$',
+    re.MULTILINE | re.IGNORECASE
+)
+RE_NOT_ADDRESSED = re.compile(
+    r'^(?:I\s+(?:am|was)\s+not\s+(?:addressed|mentioned|asked)|This\s+(?:message|question)\s+(?:is|was)\s+not\s+(?:for|directed\s+at)\s+me).*$',
+    re.MULTILINE | re.IGNORECASE
+)
+
 
 # =============================================================================
 # RESPONSE SANITIZATION FUNCTIONS
@@ -215,6 +239,15 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
     text = RE_DEEPSEEK_THINK.sub('', text)
     text = RE_QWEN_THOUGHT.sub('', text)
     text = RE_INTERNAL_MONOLOGUE.sub('', text)
+
+    # Remove conversation history dumps (AI reproducing "Name: (replying to X)..." format)
+    text = RE_CONVERSATION_DUMP.sub('', text)
+
+    # Remove meta-commentary about whether to respond
+    text = RE_SHOULD_NOT_RESPOND.sub('', text)
+    text = RE_UNNATURAL_META.sub('', text)
+    text = RE_ADDRESSING_META.sub('', text)
+    text = RE_NOT_ADDRESSED.sub('', text)
 
     # Remove <output>/<response> wrappers
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)

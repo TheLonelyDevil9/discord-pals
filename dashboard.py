@@ -461,6 +461,24 @@ def save_providers():
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
 
 
+@app.route('/api/providers/save', methods=['POST'])
+@requires_csrf
+def api_save_providers():
+    """API endpoint to save providers.json (for AJAX calls)."""
+    data = request.json or {}
+    content = data.get('content', '')
+    try:
+        json.loads(content)  # Validate JSON
+        with open('providers.json', 'w') as f:
+            f.write(content)
+        return jsonify({'status': 'ok'})
+    except json.JSONDecodeError as e:
+        return jsonify({'status': 'error', 'message': f'Invalid JSON: {e}'}), 400
+    except Exception as e:
+        log.error(f"Failed to save providers.json: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route('/settings/bots/save', methods=['POST'])
 @requires_csrf
 def save_bots():
@@ -1794,18 +1812,22 @@ def api_restart():
 # --- Dashboard Runner ---
 
 def start_dashboard(bots=None, host='127.0.0.1', port=5000):
-    """Start the dashboard in a background thread."""
+    """Start the dashboard in a background thread using Waitress production server."""
     global bot_instances
     if bots:
         bot_instances = bots
-    
+
     # Disable Flask's default logging
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    
+
+    # Use Waitress production WSGI server instead of Flask's dev server
+    # Waitress is thread-safe and handles concurrent requests properly
+    from waitress import serve
+
     thread = threading.Thread(
-        target=lambda: app.run(host=host, port=port, debug=False, use_reloader=False),
+        target=lambda: serve(app, host=host, port=port, threads=8, _quiet=True),
         daemon=True
     )
     thread.start()
