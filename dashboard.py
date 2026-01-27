@@ -1819,16 +1819,39 @@ def start_dashboard(bots=None, host='127.0.0.1', port=5000):
 
     # Disable Flask's default logging
     import logging
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
+    werkzeug_log = logging.getLogger('werkzeug')
+    werkzeug_log.setLevel(logging.ERROR)
 
-    # Use Waitress production WSGI server instead of Flask's dev server
-    # Waitress is thread-safe and handles concurrent requests properly
-    from waitress import serve
+    # Import waitress early to catch import errors
+    try:
+        from waitress import serve
+    except ImportError as e:
+        log.error(f"Waitress not installed: {e}")
+        log.error("Install with: pip install waitress")
+        return None
 
-    thread = threading.Thread(
-        target=lambda: serve(app, host=host, port=port, threads=8),
-        daemon=True
-    )
+    def run_server():
+        """Run Waitress server with error handling."""
+        try:
+            log.info(f"Starting Waitress server on {host}:{port}")
+            serve(app, host=host, port=port, threads=8)
+        except OSError as e:
+            err_str = str(e)
+            if "Address already in use" in err_str or "10048" in err_str:
+                log.error(f"Port {port} is already in use. Dashboard cannot start.")
+            else:
+                log.error(f"Waitress server error: {e}")
+        except Exception as e:
+            log.error(f"Dashboard server failed: {e}")
+
+    thread = threading.Thread(target=run_server, daemon=True)
     thread.start()
+
+    # Give server a moment to start and check if thread is still alive
+    import time
+    time.sleep(0.5)
+    if not thread.is_alive():
+        log.error("Dashboard thread died immediately - check for errors above")
+        return None
+
     return thread

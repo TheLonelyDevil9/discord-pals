@@ -92,8 +92,20 @@ async def run_bots():
     # Start web dashboard
     try:
         from dashboard import start_dashboard
-        start_dashboard(bots=instances, host='0.0.0.0', port=5000)
-        log.online("Dashboard running at http://localhost:5000")
+        import time
+        import urllib.request
+
+        dashboard_thread = start_dashboard(bots=instances, host='0.0.0.0', port=5000)
+
+        if dashboard_thread and dashboard_thread.is_alive():
+            time.sleep(1)  # Give server time to fully start
+            try:
+                urllib.request.urlopen('http://127.0.0.1:5000/', timeout=2)
+                log.online("Dashboard running at http://localhost:5000")
+            except Exception:
+                log.warn("Dashboard started but health check failed - may still be initializing")
+        else:
+            log.warn("Dashboard failed to start - check logs for errors")
     except Exception as e:
         log.warn(f"Dashboard failed to start: {e}")
     
