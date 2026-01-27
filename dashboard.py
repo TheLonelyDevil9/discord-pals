@@ -1645,7 +1645,7 @@ def api_version():
 @requires_csrf
 @requires_auth
 def api_update():
-    """Pull latest changes from git repository."""
+    """Pull latest changes from git repository and install dependencies."""
     import subprocess
 
     log.info("Git update requested via dashboard")
@@ -1679,6 +1679,31 @@ def api_update():
                     'new_version': None
                 })
             else:
+                # Install/update dependencies in venv
+                pip_output = ""
+                venv_pip = os.path.join(bot_dir, 'venv', 'bin', 'pip')
+                if not os.path.exists(venv_pip):
+                    # Windows path
+                    venv_pip = os.path.join(bot_dir, 'venv', 'Scripts', 'pip.exe')
+
+                if os.path.exists(venv_pip):
+                    requirements_file = os.path.join(bot_dir, 'requirements.txt')
+                    if os.path.exists(requirements_file):
+                        log.info("Installing dependencies from requirements.txt")
+                        pip_result = subprocess.run(
+                            [venv_pip, 'install', '-r', requirements_file, '-q'],
+                            cwd=bot_dir,
+                            capture_output=True,
+                            text=True,
+                            timeout=120
+                        )
+                        if pip_result.returncode == 0:
+                            log.info("Dependencies installed successfully")
+                            pip_output = " Dependencies updated."
+                        else:
+                            log.warn(f"pip install had issues: {pip_result.stderr}")
+                            pip_output = " (pip install had warnings)"
+
                 # Check if version changed
                 new_version = _get_file_version()
                 version_changed = new_version != VERSION
@@ -1689,7 +1714,8 @@ def api_update():
 
                 return jsonify({
                     'status': 'ok',
-                    'message': f'Update successful! Restart to apply v{new_version}.' if version_changed else 'Update successful! Restart to apply changes.',
+                    'message': (f'Update successful!{pip_output} Restart to apply v{new_version}.' if version_changed
+                                else f'Update successful!{pip_output} Restart to apply changes.'),
                     'output': output,
                     'updated': True,
                     'running_version': VERSION,
