@@ -1827,7 +1827,7 @@ def start_dashboard(bots=None, host='127.0.0.1', port=5000):
     from waitress import serve
 
     thread = threading.Thread(
-        target=lambda: serve(app, host=host, port=port, threads=8, _quiet=True),
+        target=lambda: serve(app, host=host, port=port, threads=8),
         daemon=True
     )
     thread.start()
