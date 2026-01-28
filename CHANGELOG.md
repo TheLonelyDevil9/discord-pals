@@ -4,6 +4,11 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.4.5] - 2026-01-28
+
+### Changes
+
+- Fix message duplication in LLM context (v1.4.4)
 ## [v1.4.4] - 2026-01-28
 
 ### Changes

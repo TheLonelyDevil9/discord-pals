@@ -466,6 +466,15 @@ class AIProviderManager:
                 effective_max_tokens = max_tokens if max_tokens is not None else provider_max_tokens
                 effective_temperature = temperature if temperature is not None else provider_temperature
 
+                # Model-specific max_tokens caps for verbose models (Discord chatroom style)
+                # Claude/Opus models tend to write very long responses; cap them to encourage brevity
+                model_lower = model.lower()
+                if "claude" in model_lower or "opus" in model_lower:
+                    CLAUDE_MAX_TOKENS_CAP = 450  # ~3-4 short messages worth
+                    if effective_max_tokens > CLAUDE_MAX_TOKENS_CAP:
+                        log.debug(f"[{tier}] Capping max_tokens from {effective_max_tokens} to {CLAUDE_MAX_TOKENS_CAP} for Claude model")
+                        effective_max_tokens = CLAUDE_MAX_TOKENS_CAP
+
                 try:
                     client = self.providers[tier]
                     result = await self._try_generate(
