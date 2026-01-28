@@ -125,8 +125,9 @@ HISTORY_SAVE_DEBOUNCE = 30.0  # Minimum seconds between saves (increased from 5s
 # Conversation history storage (in-memory, per channel/DM)
 conversation_history: Dict[int, List[dict]] = {}
 
-# Recent message hashes for fast duplicate detection (channel_id -> set of hashes)
-_recent_message_hashes: Dict[int, set] = {}
+# Recent message hashes for fast duplicate detection (channel_id -> OrderedDict of hashes)
+# Using OrderedDict instead of set to maintain insertion order for proper FIFO eviction
+_recent_message_hashes: Dict[int, OrderedDict] = {}
 _RECENT_HASH_LIMIT = 50  # Number of recent hashes to track per channel
 
 # Multi-part response tracking (message_id -> full_content)
@@ -355,17 +356,16 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
     msg_hash = hash((role, content, author_name or ''))
     if channel_id not in _recent_message_hashes:
-        _recent_message_hashes[channel_id] = set()
+        _recent_message_hashes[channel_id] = OrderedDict()
 
     if msg_hash in _recent_message_hashes[channel_id]:
         return  # Already added
 
-    # Add hash and maintain limit
-    _recent_message_hashes[channel_id].add(msg_hash)
-    if len(_recent_message_hashes[channel_id]) > _RECENT_HASH_LIMIT:
-        # Remove oldest (convert to list, remove first, convert back)
-        hash_list = list(_recent_message_hashes[channel_id])
-        _recent_message_hashes[channel_id] = set(hash_list[-_RECENT_HASH_LIMIT:])
+    # Add hash and maintain limit (OrderedDict preserves insertion order)
+    _recent_message_hashes[channel_id][msg_hash] = True
+    while len(_recent_message_hashes[channel_id]) > _RECENT_HASH_LIMIT:
+        # Remove oldest entry (first inserted)
+        _recent_message_hashes[channel_id].popitem(last=False)
 
     conversation_history[channel_id].append(msg)
 

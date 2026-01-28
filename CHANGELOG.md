@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.4.4] - 2026-01-28
+
+### Changes
+
+- Revert response sanitization patterns causing model confusion
+- Add pip install to web UI update endpoint
+- Add error handling and health check to dashboard startup
+- Fix Waitress serve() parameter (remove invalid _quiet)
+- Add response sanitization, Waitress server, provider UI, and /ignore command
+- Fix outdated feature description in README
+- Update documentation for v1.4.x features
+- Add missing settings UI to dashboard (v1.4.3)
+- Fix coordinator asyncio event loop issues (v1.4.2)
 ## [v1.4.3] - 2026-01-25
 
 ### Changes
