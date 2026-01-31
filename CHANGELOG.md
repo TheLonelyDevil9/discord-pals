@@ -4,24 +4,42 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.5.0] - 2026-02-01
+
+### Added
+- Fallback sanitizer for DMs where guild context is unavailable
+- Output safety net to strip raw Discord syntax from AI responses
+
+### Changed
+- Sanitize Discord syntax at storage time before sending to LLM (fix `<@id>` leaking to AI)
+- Mentionable context now shows `@Username` format instead of raw `<@id>`
+
+### Fixed
+- Mobile drag-and-drop for provider reordering (added Sortable.js touch options)
+
 ## [v1.4.5] - 2026-01-28
 
 ### Changes
 
-- Fix message duplication in LLM context (v1.4.4)
+- Cap max_tokens for Claude/Opus models to enforce chatroom brevity
+- Fix message duplication in LLM context
+
 ## [v1.4.4] - 2026-01-28
 
-### Changes
+### Added
+- Response sanitization to clean AI output artifacts
+- Waitress production server (replaces Flask dev server)
+- Provider drag-and-drop reordering in web UI
+- `/ignore`, `/unignore`, `/ignorelist` commands for user blocking
+- Auto pip install after git pull in dashboard update endpoint
+- Error handling and health check for dashboard startup
 
-- Revert response sanitization patterns causing model confusion
-- Add pip install to web UI update endpoint
-- Add error handling and health check to dashboard startup
-- Fix Waitress serve() parameter (remove invalid _quiet)
-- Add response sanitization, Waitress server, provider UI, and /ignore command
-- Fix outdated feature description in README
-- Update documentation for v1.4.x features
-- Add missing settings UI to dashboard (v1.4.3)
-- Fix coordinator asyncio event loop issues (v1.4.2)
+### Fixed
+- Waitress serve() parameter (removed invalid _quiet)
+
+### Reverted
+- Response sanitization patterns that caused model identity confusion
+
 ## [v1.4.3] - 2026-01-25
 
 ### Changes

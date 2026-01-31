@@ -877,6 +877,13 @@ select:focus {
     color: var(--text-primary);
 }
 
+.provider-item .provider-tier {
+    font-weight: normal;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: 4px;
+}
+
 .provider-item .provider-model {
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -1233,6 +1240,11 @@ function loadProviders() {
     }
 }
 
+function getTierName(index) {
+    const names = ['primary', 'secondary', 'fallback'];
+    return index < 3 ? names[index] : `tier_${index}`;
+}
+
 function renderProviderList() {
     const list = document.getElementById('provider-list');
     if (!list) return;
@@ -1246,7 +1258,7 @@ function renderProviderList() {
         <div class="provider-item" draggable="true" data-index="${i}">
             <span class="drag-handle">&#9776;</span>
             <div class="provider-info">
-                <span class="provider-name">${escapeHtml(p.name || 'Unnamed')}</span>
+                <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${getTierName(i)})</span></span>
                 <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.base_url || 'Default endpoint')}</span>
             </div>
             <div class="provider-actions">
@@ -1267,34 +1279,28 @@ function escapeHtml(text) {
 }
 
 function setupDragAndDrop() {
-    const items = document.querySelectorAll('.provider-item');
-    let draggedItem = null;
+    const list = document.getElementById('provider-list');
+    if (!list) return;
 
-    items.forEach(item => {
-        item.addEventListener('dragstart', (e) => {
-            draggedItem = item;
-            item.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-        });
+    // Destroy existing instance if any
+    if (list.sortableInstance) {
+        list.sortableInstance.destroy();
+    }
 
-        item.addEventListener('dragend', () => {
-            item.classList.remove('dragging');
-            draggedItem = null;
-        });
-
-        item.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        });
-
-        item.addEventListener('drop', (e) => {
-            e.preventDefault();
-            if (draggedItem && draggedItem !== item) {
-                const fromIndex = parseInt(draggedItem.dataset.index);
-                const toIndex = parseInt(item.dataset.index);
-                reorderProviders(fromIndex, toIndex);
+    // Use Sortable.js for cross-platform drag-and-drop (works on mobile)
+    list.sortableInstance = new Sortable(list, {
+        animation: 150,
+        handle: '.drag-handle',
+        ghostClass: 'dragging',
+        forceFallback: true,
+        touchStartThreshold: 5,
+        delayOnTouchOnly: true,
+        delay: 100,
+        onEnd: function(evt) {
+            if (evt.oldIndex !== evt.newIndex) {
+                reorderProviders(evt.oldIndex, evt.newIndex);
             }
-        });
+        }
     });
 }
 

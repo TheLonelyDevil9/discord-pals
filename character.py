@@ -323,15 +323,16 @@ class CharacterManager:
             other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
 
         # Add mentionable users context (for @mention feature)
+        # Show @Username format (not raw <@id>) - AI learns to use @Name, we convert on output
         mentionable_users_context = ""
         if mentionable_users:
-            user_list = [f"- {u['name']}: {u['mention_syntax']}" for u in mentionable_users[:10]]
+            user_list = [f"- @{u['name']}" for u in mentionable_users[:10]]
             mentionable_users_context = "Users you can @mention to get their attention:\n" + "\n".join(user_list)
 
         # Add mentionable bots context (for bot-to-bot @mention feature)
         mentionable_bots_context = ""
         if mentionable_bots:
-            bot_list = [f"- {b['character_name']}: {b['mention_syntax']}" for b in mentionable_bots if b.get('character_name')]
+            bot_list = [f"- @{b['character_name']}" for b in mentionable_bots if b.get('character_name')]
             if bot_list:
                 mentionable_bots_context = "Other bots you can @mention to summon them:\n" + "\n".join(bot_list)
 

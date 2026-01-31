@@ -156,7 +156,16 @@ RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
 RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*$')
 RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
 RE_EMPTY_ANGLE = re.compile(r'<>')
-RE_MALFORMED_EMOJI = re.compile(r'<(?!a?:[a-zA-Z0-9_]+:\d{17,21}>)[^>]{0,50}>')
+RE_MALFORMED_EMOJI = re.compile(
+    r'<(?!'
+    r'a?:[a-zA-Z0-9_]+:\d{17,21}>'  # Custom emoji: <:name:id> or <a:name:id>
+    r'|@!?\d{17,21}>'               # User mention: <@id> or <@!id>
+    r'|@&\d{17,21}>'                # Role mention: <@&id>
+    r'|#\d{17,21}>'                 # Channel mention: <#id>
+    r'|/[a-zA-Z0-9_-]+:\d{17,21}>'  # Slash command: </command:id>
+    r'|t:\d+(?::[tTdDfFR])?>'       # Timestamp: <t:unix> or <t:unix:style>
+    r')[^>]{0,50}>'
+)
 
 # Pre-compiled patterns for parse_reactions
 # Matches [REACT: emoji], [REACT emoji], or [REACT:emoji] (colon is optional)
@@ -316,7 +325,42 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None, user_id: int = None):
+def sanitize_discord_syntax_fallback(content: str) -> str:
+    """Sanitize Discord syntax when guild context is unavailable (e.g., DMs).
+
+    This is a fallback that removes IDs but preserves readable format:
+    - <:emoji_name:123> → :emoji_name:
+    - <@123456> → @user
+    - <#123456> → #channel
+    - <@&123456> → @role
+    - <t:123:R> → readable timestamp
+    """
+    # Custom emojis: <:name:id> or <a:name:id> → :name:
+    content = RE_CUSTOM_EMOJI.sub(r':\1:', content)
+
+    # User mentions without guild: <@123> or <@!123> → @user
+    content = RE_USER_MENTION.sub('@user', content)
+
+    # Channel mentions without guild: <#123> → #channel
+    content = RE_CHANNEL_MENTION.sub('#channel', content)
+
+    # Role mentions without guild: <@&123> → @role
+    content = RE_ROLE_MENTION.sub('@role', content)
+
+    # Timestamps: <t:123:R> → readable date
+    def resolve_timestamp(match):
+        try:
+            timestamp = int(match.group(1))
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except:
+            return match.group(0)
+    content = RE_TIMESTAMP.sub(resolve_timestamp, content)
+
+    return content
+
+
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None, user_id: int = None, guild=None):
     """Add a message to conversation history.
 
     Args:
@@ -326,12 +370,19 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         author_name: Display name of the author
         reply_to: Tuple of (author_name, content) if this is a reply
         user_id: Discord user ID (for mention features)
+        guild: Discord guild object for resolving mentions (optional)
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
 
     # Track activity for this channel
     _channel_last_activity[channel_id] = time.time()
+
+    # Sanitize Discord syntax before storage (fix before sending to LLM)
+    if guild:
+        content = resolve_discord_formatting(content, guild)
+    else:
+        content = sanitize_discord_syntax_fallback(content)
 
     # Strip character name prefixes from bot/assistant messages
     if role == "user" and author_name:
@@ -1042,6 +1093,12 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     # Match @word patterns (handles @Username, @user_name, etc.)
     pattern = r'@(\w+)'
     content = re.sub(pattern, replace_mention, content)
+
+    # Safety net: Strip any raw Discord syntax that slipped through
+    # This prevents the AI from accidentally outputting raw <@id> patterns
+    content = re.sub(r'<@!?\d+>', '', content)   # Raw user mentions
+    content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions
+    content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions
 
     return content
 

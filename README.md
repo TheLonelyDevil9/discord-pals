@@ -810,7 +810,10 @@ Valid values are:
 - `primary` - Use the first provider in your fallback chain
 - `secondary` - Use the second provider
 - `fallback` - Use the third provider
+- `tier_3`, `tier_4`, etc. - Use the 4th, 5th, etc. provider (unlimited)
 - (empty/omitted) - Use default fallback order
+
+**Note:** Discord Pals supports **unlimited providers** in your fallback chain. The first three get named tiers for convenience, but you can add as many as you need. The web dashboard shows tier names next to each provider for clarity.
 
 This is useful when different characters work better with different models. For example, you might want a complex character to always use your best model, while simpler characters can use faster/cheaper providers.
 
