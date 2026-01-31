@@ -1035,11 +1035,24 @@ def api_test_provider(index):
             return jsonify({'success': False, 'error': 'Provider index out of range'})
 
         p = providers[index]
-        key_env = p.get('key_env', '')
-        key = os.getenv(key_env, 'not-needed') if key_env else 'not-needed'
+
+        # Support both 'url' and 'base_url' for backwards compatibility
+        url = p.get('url') or p.get('base_url')
+        if not url:
+            return jsonify({'success': False, 'error': 'Provider missing URL'})
+
+        # Support both key_env (env var name) and api_key (direct key)
+        key = None
+        if p.get('api_key'):
+            key = p['api_key']
+        elif p.get('key_env'):
+            key = os.getenv(p['key_env'], '')
+
+        if not key:
+            key = 'not-needed'  # For local LLMs that don't require auth
 
         # Use sync client instead of asyncio.run() which can block Flask
-        client = OpenAI(base_url=p['url'], api_key=key, timeout=10)
+        client = OpenAI(base_url=url, api_key=key, timeout=10)
         client.models.list()
         return jsonify({'success': True})
     except Exception as e:

@@ -91,26 +91,28 @@ def load_providers() -> tuple[dict, int, dict]:
         
         for i, p in enumerate(provider_list):
             tier = ["primary", "secondary", "fallback"][i] if i < 3 else f"tier_{i}"
-            
-            # Validate required fields
-            if not p.get("url"):
+
+            # Validate required fields - support both 'url' and 'base_url'
+            url = p.get("url") or p.get("base_url")
+            if not url:
                 log.warn(f"Provider {i+1} missing 'url', skipping")
                 continue
-            
-            # Support requires_key=false for local LLMs
-            # Auto-detect: if key_env is empty or not set, assume no key needed
-            key_env = p.get("key_env", "")
-            requires_key = p.get("requires_key", bool(key_env))  # Auto-detect based on key_env
-            
-            if requires_key and key_env:
-                key = os.getenv(key_env, "")
-            else:
-                # Use placeholder for keyless providers (e.g., local llama.cpp)
-                key = os.getenv(key_env, "") if key_env else "not-needed"
-            
+
+            # Support both api_key (direct) and key_env (env var name)
+            # Priority: api_key > key_env > not-needed
+            key = None
+            if p.get("api_key"):
+                key = p["api_key"]
+            elif p.get("key_env"):
+                key = os.getenv(p["key_env"], "")
+
+            # Fallback for keyless providers (e.g., local llama.cpp)
+            if not key:
+                key = "not-needed"
+
             providers[tier] = {
                 "name": _validate_provider_value(p.get("name"), str, f"Provider {i+1}", name="name"),
-                "url": p.get("url"),  # Already validated above
+                "url": url,  # Use the resolved URL
                 "key": key,
                 "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
                 "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),

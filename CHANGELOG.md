@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.5.1] - 2026-02-01
+
+### Added
+- Provider edit functionality in web UI (edit button on each provider)
+- Support for direct `api_key` in providers.json (in addition to `key_env`)
+
+### Fixed
+- Provider test failing with KeyError when using `base_url` instead of `url`
+- Backwards compatibility for both `url` and `base_url` in provider config
+
 ## [v1.5.0] - 2026-02-01
 
 ### Added

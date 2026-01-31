@@ -448,6 +448,49 @@
     </div>
 </div>
 
+<!-- Edit Provider Modal -->
+<div id="edit-provider-modal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Edit Provider</h3>
+            <button type="button" class="modal-close" onclick="closeEditModal()">&times;</button>
+        </div>
+        <form id="edit-provider-form" class="provider-form">
+            <input type="hidden" id="edit-provider-index">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="edit-provider-name">Display Name</label>
+                    <input type="text" id="edit-provider-name" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-endpoint">API Endpoint</label>
+                    <input type="text" id="edit-provider-endpoint" placeholder="https://api.openai.com/v1">
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-key">API Key</label>
+                    <input type="password" id="edit-provider-key" placeholder="Leave blank to keep current">
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-model">Model</label>
+                    <input type="text" id="edit-provider-model">
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-temp">Temperature</label>
+                    <input type="number" id="edit-provider-temp" min="0" max="2" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-max-tokens">Max Tokens (optional)</label>
+                    <input type="number" id="edit-provider-max-tokens" min="1" placeholder="Leave blank for default">
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px; margin-top: 16px;">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- JSON Configuration Editors -->
 <div class="card">
     <div class="card-header">
@@ -912,6 +955,62 @@ select:focus {
     color: var(--error, #ef4444);
 }
 
+.provider-item .btn-icon.edit:hover {
+    color: var(--accent);
+}
+
+/* Edit Provider Modal */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+.modal-content {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.modal-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
 .provider-form input[type="text"],
 .provider-form input[type="password"],
 .provider-form input[type="number"] {
@@ -1259,9 +1358,10 @@ function renderProviderList() {
             <span class="drag-handle">&#9776;</span>
             <div class="provider-info">
                 <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${getTierName(i)})</span></span>
-                <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.base_url || 'Default endpoint')}</span>
+                <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.url || 'Default endpoint')}</span>
             </div>
             <div class="provider-actions">
+                <button type="button" class="btn-icon edit" onclick="editProvider(${i})" title="Edit">&#9998;</button>
                 <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection">&#9889;</button>
                 <button type="button" class="btn-icon delete" onclick="deleteProvider(${i})" title="Delete">&times;</button>
             </div>
@@ -1336,6 +1436,65 @@ async function testProvider(index) {
     }
 }
 
+function editProvider(index) {
+    const provider = providersData[index];
+    if (!provider) return;
+
+    document.getElementById('edit-provider-index').value = index;
+    document.getElementById('edit-provider-name').value = provider.name || '';
+    document.getElementById('edit-provider-endpoint').value = provider.url || '';  // Use 'url' not 'base_url'
+    document.getElementById('edit-provider-key').value = '';  // Don't show existing key
+    document.getElementById('edit-provider-model').value = provider.model || '';
+    document.getElementById('edit-provider-temp').value = provider.temperature ?? 0.7;
+    document.getElementById('edit-provider-max-tokens').value = provider.max_tokens || '';
+
+    document.getElementById('edit-provider-modal').classList.add('active');
+}
+
+function closeEditModal() {
+    document.getElementById('edit-provider-modal').classList.remove('active');
+}
+
+document.getElementById('edit-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const index = parseInt(document.getElementById('edit-provider-index').value);
+    const provider = providersData[index];
+    if (!provider) return;
+
+    provider.name = document.getElementById('edit-provider-name').value.trim();
+    provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;  // Use 'url' not 'base_url'
+    provider.model = document.getElementById('edit-provider-model').value.trim();
+    provider.temperature = parseFloat(document.getElementById('edit-provider-temp').value) || 0.7;
+
+    const newKey = document.getElementById('edit-provider-key').value.trim();
+    if (newKey) {
+        provider.api_key = newKey;
+    }
+
+    const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
+    if (maxTokens) {
+        provider.max_tokens = parseInt(maxTokens);
+    } else {
+        delete provider.max_tokens;
+    }
+
+    // Clean up undefined values
+    if (!provider.url) delete provider.url;
+
+    await saveProvidersToServer();
+    renderProviderList();
+    closeEditModal();
+    showToast('Provider updated', 'success');
+});
+
+// Close modal on outside click
+document.getElementById('edit-provider-modal')?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) {
+        closeEditModal();
+    }
+});
+
 async function saveProvidersToServer() {
     const data = { providers: providersData };
     const jsonStr = JSON.stringify(data, null, 2);
@@ -1362,17 +1521,17 @@ async function saveProvidersToServer() {
 
 // Provider type defaults
 const providerDefaults = {
-    openai: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { base_url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
-    google: { base_url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-pro' },
-    openrouter: { base_url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o' },
-    local: { base_url: 'http://localhost:5000/v1', model: 'local-model' }
+    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
+    anthropic: { url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
+    google: { url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-pro' },
+    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o' },
+    local: { url: 'http://localhost:5000/v1', model: 'local-model' }
 };
 
 function updateProviderDefaults() {
     const type = document.getElementById('new-provider-type').value;
     if (type && providerDefaults[type]) {
-        document.getElementById('new-provider-endpoint').value = providerDefaults[type].base_url;
+        document.getElementById('new-provider-endpoint').value = providerDefaults[type].url;
         document.getElementById('new-provider-model').value = providerDefaults[type].model;
     }
 }
@@ -1382,7 +1541,7 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     e.preventDefault();
 
     const name = document.getElementById('new-provider-name').value.trim();
-    const base_url = document.getElementById('new-provider-endpoint').value.trim();
+    const url = document.getElementById('new-provider-endpoint').value.trim();
     const api_key = document.getElementById('new-provider-key').value.trim();
     const model = document.getElementById('new-provider-model').value.trim();
     const temperature = parseFloat(document.getElementById('new-provider-temp').value) || 0.7;
@@ -1393,7 +1552,7 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     }
 
     const newProvider = { name, model, temperature };
-    if (base_url) newProvider.base_url = base_url;
+    if (url) newProvider.url = url;
     if (api_key) newProvider.api_key = api_key;
 
     providersData.push(newProvider);
