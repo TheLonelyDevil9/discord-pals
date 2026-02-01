@@ -1527,6 +1527,235 @@ def api_deduplicate_memories():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# --- Memory Card UI API ---
+
+@app.route('/api/memories/<file_name>/entries')
+def api_get_memory_entries(file_name):
+    """Get parsed memory entries for card-based UI display."""
+    from datetime import datetime
+
+    try:
+        file_path = safe_path(DATA_DIR, file_name, '.json')
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid file'}), 400
+
+    if not file_path.exists():
+        return jsonify({'entries': [], 'total': 0})
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    # Get optional filters
+    search = request.args.get('search', '').lower()
+    auto_filter = request.args.get('auto')  # 'true', 'false', or None
+
+    # Flatten and parse entries
+    entries = []
+
+    def process_memory_list(key, memories, parent_key=None):
+        """Process a list of memories and add to entries."""
+        if not isinstance(memories, list):
+            return
+        for idx, item in enumerate(memories):
+            if isinstance(item, dict):
+                entry = {
+                    'key': key,
+                    'parent_key': parent_key,
+                    'index': idx,
+                    'content': item.get('content', ''),
+                    'timestamp': item.get('timestamp', ''),
+                    'auto': item.get('auto', False),
+                    'user_name': item.get('user_name', ''),
+                    'character': item.get('character', ''),
+                    'learned_from': item.get('learned_from', '')
+                }
+
+                # Apply filters
+                if search and search not in entry['content'].lower():
+                    continue
+                if auto_filter == 'true' and not entry['auto']:
+                    continue
+                if auto_filter == 'false' and entry['auto']:
+                    continue
+
+                entries.append(entry)
+
+    # Handle different memory file structures
+    for key, value in data.items():
+        if isinstance(value, list):
+            # Simple list: {key: [memories]}
+            process_memory_list(key, value)
+        elif isinstance(value, dict):
+            # Nested dict: {guild_id: {user_id: [memories]}}
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, list):
+                    process_memory_list(sub_key, sub_value, parent_key=key)
+        elif isinstance(value, str):
+            # Lore-style: {guild_id: "text"}
+            entry = {
+                'key': key,
+                'parent_key': None,
+                'index': 0,
+                'content': value,
+                'timestamp': '',
+                'auto': False,
+                'user_name': '',
+                'character': '',
+                'learned_from': '',
+                'is_lore': True
+            }
+            if not search or search in value.lower():
+                entries.append(entry)
+
+    # Sort by timestamp (newest first)
+    entries.sort(key=lambda x: x.get('timestamp', '') or '', reverse=True)
+
+    return jsonify({
+        'entries': entries,
+        'total': len(entries)
+    })
+
+
+@app.route('/api/memories/<file_name>/entry/<key>/<int:index>', methods=['GET', 'PUT', 'DELETE'])
+@requires_csrf
+def api_memory_entry_item(file_name, key, index):
+    """CRUD operations on individual memory items."""
+    from datetime import datetime
+
+    try:
+        file_path = safe_path(DATA_DIR, file_name, '.json')
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid file'}), 400
+
+    if not file_path.exists():
+        return jsonify({'status': 'error', 'message': 'File not found'}), 404
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    # Handle nested structure (check for parent_key in query params)
+    parent_key = request.args.get('parent_key')
+
+    if parent_key:
+        # Nested: data[parent_key][key][index]
+        if parent_key not in data or key not in data[parent_key]:
+            return jsonify({'status': 'error', 'message': 'Key not found'}), 404
+        target_list = data[parent_key][key]
+    else:
+        # Simple: data[key][index]
+        if key not in data:
+            return jsonify({'status': 'error', 'message': 'Key not found'}), 404
+        target_list = data[key]
+
+    if not isinstance(target_list, list):
+        return jsonify({'status': 'error', 'message': 'Not a list'}), 400
+
+    if request.method == 'GET':
+        if 0 <= index < len(target_list):
+            return jsonify(target_list[index])
+        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
+
+    elif request.method == 'PUT':
+        payload = request.json or {}
+        if 0 <= index < len(target_list):
+            entry = target_list[index]
+            if 'content' in payload:
+                entry['content'] = payload['content']
+            if 'auto' in payload:
+                entry['auto'] = payload['auto']
+            if 'character' in payload:
+                if payload['character']:
+                    entry['character'] = payload['character']
+                elif 'character' in entry:
+                    del entry['character']
+            entry['timestamp'] = datetime.now().isoformat()
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
+
+    elif request.method == 'DELETE':
+        if 0 <= index < len(target_list):
+            del target_list[index]
+
+            # Clean up empty structures
+            if not target_list:
+                if parent_key:
+                    del data[parent_key][key]
+                    if not data[parent_key]:
+                        del data[parent_key]
+                else:
+                    del data[key]
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
+
+
+@app.route('/api/memories/stats')
+def api_memory_stats():
+    """Get memory statistics across all types."""
+    files = get_memory_files()
+
+    stats = {
+        'total': 0,
+        'auto': 0,
+        'manual': 0,
+        'by_type': {}
+    }
+
+    for name, path in files.items():
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            type_stats = {'total': 0, 'auto': 0, 'manual': 0}
+
+            def count_memories(memories):
+                if isinstance(memories, list):
+                    for item in memories:
+                        if isinstance(item, dict):
+                            type_stats['total'] += 1
+                            stats['total'] += 1
+                            if item.get('auto'):
+                                type_stats['auto'] += 1
+                                stats['auto'] += 1
+                            else:
+                                type_stats['manual'] += 1
+                                stats['manual'] += 1
+                elif isinstance(memories, str):
+                    # Lore entries
+                    type_stats['total'] += 1
+                    type_stats['manual'] += 1
+                    stats['total'] += 1
+                    stats['manual'] += 1
+
+            for key, value in data.items():
+                if isinstance(value, list):
+                    count_memories(value)
+                elif isinstance(value, dict):
+                    for sub_value in value.values():
+                        count_memories(sub_value)
+                elif isinstance(value, str):
+                    count_memories(value)
+
+            stats['by_type'][name] = type_stats
+        except Exception:
+            pass
+
+    return jsonify(stats)
+
+
 # --- Version API ---
 
 def _get_file_version():

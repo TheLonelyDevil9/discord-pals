@@ -16,71 +16,75 @@
 
 <!-- Memory Files Tab -->
 <div id="tab-files" class="tab-content active">
+    <!-- Statistics Overview -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <span class="stat-value" id="total-memories">0</span>
+            <span class="stat-label">Total Memories</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value" id="auto-memories">0</span>
+            <span class="stat-label">Auto-Generated</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-value" id="manual-memories">0</span>
+            <span class="stat-label">Manual</span>
+        </div>
+    </div>
+
+    <!-- Filter Controls -->
+    <div class="filter-row">
+        <div class="form-group">
+            <label for="type-filter">Type</label>
+            <select id="type-filter" onchange="filterMemories()" title="Filter by memory type">
+                <option value="">All Types</option>
+                <option value="memories">Server</option>
+                <option value="user_profiles">Global Profiles</option>
+                <option value="dm_memories">DM</option>
+                <option value="user_memories">User</option>
+                <option value="lore">Lore</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="auto-filter">Source</label>
+            <select id="auto-filter" onchange="filterMemories()" title="Filter by source">
+                <option value="">All</option>
+                <option value="auto">Auto</option>
+                <option value="manual">Manual</option>
+            </select>
+        </div>
+        <div class="form-group flex-1">
+            <label for="memory-search">Search</label>
+            <input type="text" id="memory-search" placeholder="Search memories..." oninput="filterMemories()" title="Search memory content">
+        </div>
+        <div class="form-group">
+            <label for="sort-by">Sort</label>
+            <select id="sort-by" onchange="sortMemories()" title="Sort memories">
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+            </select>
+        </div>
+    </div>
+
     {% if memories %}
     {% for file_name, data in memories.items() %}
-    <div class="card memory-file-card" data-file="{{ file_name }}">
+    <div class="card memory-file-card memory-section" data-file="{{ file_name }}">
         <div class="card-header clickable" onclick="toggleMemoryCard('{{ file_name }}')">
             <span class="card-title">
                 <span class="collapse-icon">▼</span>
-                {{ file_name }}
+                {{ file_name }} <span class="badge badge-muted memory-count">0</span>
             </span>
-            <a href="/memories/{{ file_name }}/edit" class="btn btn-ghost" onclick="event.stopPropagation()">Edit Raw JSON</a>
+            <div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); openAddMemoryModal('{{ file_name }}')">Add</button>
+                <a href="/memories/{{ file_name }}/edit" class="btn btn-ghost btn-sm" onclick="event.stopPropagation()">Raw JSON</a>
+            </div>
         </div>
 
-        {% if data.error %}
-        <div class="card-body collapsible">
-            <div class="empty">Error: {{ data.error }}</div>
+        <div class="card-body collapsible" id="section-{{ file_name }}">
+            <div class="memory-list" id="list-{{ file_name }}">
+                <div class="memory-loading">Loading memories...</div>
+            </div>
         </div>
-        {% elif data %}
-        <div class="table-responsive collapsible">
-            <table class="memories-table">
-                <thead>
-                    <tr>
-                        <th class="col-checkbox">
-                            <input type="checkbox" id="select-all-{{ file_name }}" onchange="toggleSelectAll('{{ file_name }}')" title="Select all">
-                        </th>
-                        <th class="col-key">Key / Type</th>
-                        <th class="col-content">Content</th>
-                        <th class="col-action">Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for key, value in data.items() %}
-                    <tr>
-                        <td>
-                            <input type="checkbox" class="memory-checkbox" data-file="{{ file_name }}" data-key="{{ key }}" title="Select this memory">
-                        </td>
-                        <td>
-                            <code>{{ key }}</code>
-                            {% if key in user_names %}
-                            <div class="user-name-hint">{{ user_names[key] }}</div>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if value is string %}
-                            <span class="memory-text">{{ value[:200] }}{% if value|length > 200 %}...{% endif %}</span>
-                            {% else %}
-                            <pre class="memory-content">{{ value | tojson(indent=2) }}</pre>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <button type="button" class="btn btn-danger" onclick="confirmDeleteMemory('{{ file_name }}', '{{ key }}')">Delete</button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="card-body bulk-actions collapsible">
-            <button type="button" class="btn btn-danger" onclick="deleteSelectedMemories('{{ file_name }}')">Delete Selected</button>
-            <button type="button" class="btn btn-danger" onclick="clearAllMemories('{{ file_name }}')">Clear All</button>
-        </div>
-        {% else %}
-        <div class="card-body collapsible">
-            <div class="empty">No memories stored</div>
-        </div>
-        {% endif %}
     </div>
     {% endfor %}
     {% else %}
@@ -172,6 +176,49 @@
             <div class="empty">No servers available. Make sure your bots are online.</div>
             {% endif %}
         </div>
+    </div>
+</div>
+
+<!-- Memory Edit/Add Modal -->
+<div id="memory-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Edit Memory</h3>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="closeModal()" style="margin-left: auto;">&times;</button>
+        </div>
+        <div class="form-group">
+            <label for="modal-content-input">Content</label>
+            <textarea id="modal-content-input" rows="4" placeholder="Enter memory content..."></textarea>
+        </div>
+        <div style="display: flex; gap: 16px;">
+            <div class="form-group" style="flex: 1;">
+                <label for="modal-character">Character</label>
+                <select id="modal-character">
+                    <option value="">None</option>
+                    {% if characters %}
+                    {% for char in characters %}
+                    <option value="{{ char }}">{{ char }}</option>
+                    {% endfor %}
+                    {% endif %}
+                </select>
+            </div>
+            <div class="form-group" style="flex: 1;">
+                <label for="modal-auto">Type</label>
+                <select id="modal-auto">
+                    <option value="false">Manual</option>
+                    <option value="true">Auto</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-buttons" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px;">
+            <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="saveMemory()">Save</button>
+        </div>
+        <input type="hidden" id="modal-file">
+        <input type="hidden" id="modal-key">
+        <input type="hidden" id="modal-index">
+        <input type="hidden" id="modal-parent-key">
+        <input type="hidden" id="modal-mode" value="edit">
     </div>
 </div>
 
@@ -321,6 +368,100 @@
         width: 120px;
     }
 }
+
+/* Memory Card UI */
+.memory-card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+.memory-card:hover { border-color: var(--border); }
+
+.memory-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+.memory-card-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.memory-card-content { font-size: 0.875rem; line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap; word-wrap: break-word; }
+.memory-card-footer { font-size: 0.75rem; color: var(--text-muted); }
+.memory-card-actions { display: flex; gap: 8px; }
+
+/* Badges */
+.badge-auto { background: var(--accent-muted, rgba(99, 102, 241, 0.15)); color: var(--accent, #6366f1); }
+.badge-manual { background: var(--success-muted, rgba(34, 197, 94, 0.15)); color: var(--success, #22c55e); }
+.badge-muted { background: var(--bg-tertiary); color: var(--text-muted); }
+
+/* Stats Row */
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+}
+.stat-value { font-size: 2rem; font-weight: 600; display: block; }
+.stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
+
+/* Filter Controls */
+.filter-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+}
+.filter-row .form-group {
+    margin: 0;
+}
+.filter-row .form-group.flex-1 {
+    flex: 1;
+    min-width: 200px;
+}
+
+/* Memory List Container */
+.memory-list {
+    display: flex;
+    flex-direction: column;
+}
+.memory-list-empty {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+}
+
+/* Loading state */
+.memory-loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+    .filter-row {
+        flex-direction: column;
+    }
+    .memory-card-header {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .memory-card-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+}
 </style>
 
 <script>
@@ -357,10 +498,9 @@ function initCollapsedState() {
 
     document.querySelectorAll('.memory-file-card').forEach(card => {
         const fileName = card.dataset.file;
-        const rowCount = card.querySelectorAll('tbody tr').length;
 
-        // Default: collapse cards with >10 entries, or use saved state
-        let shouldCollapse = rowCount > 10;
+        // Use saved state if available
+        let shouldCollapse = false;
         if (fileName in collapsedCards) {
             shouldCollapse = collapsedCards[fileName];
         }
@@ -647,5 +787,284 @@ function clearAllMemories(fileName) {
         }
     );
 }
+
+// ===== NEW MEMORY CARD UI FUNCTIONS =====
+
+// HTML escaping utility
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Render memory card HTML
+function renderMemoryCard(memory, fileType, key, index) {
+    const timestamp = memory.timestamp
+        ? new Date(memory.timestamp).toLocaleString()
+        : 'Unknown';
+    const isAuto = memory.auto === true;
+    const character = memory.character || memory.learned_from || '';
+    const userName = memory.user_name || '';
+    const parentKey = memory.parent_key || '';
+
+    return `
+        <div class="memory-card" data-file="${fileType}" data-key="${escapeHtml(key)}" data-index="${index}" data-parent-key="${escapeHtml(parentKey)}">
+            <div class="memory-card-header">
+                <div class="memory-card-meta">
+                    <span class="badge ${isAuto ? 'badge-auto' : 'badge-manual'}">
+                        ${isAuto ? 'Auto' : 'Manual'}
+                    </span>
+                    ${character ? `<span class="badge badge-muted">${escapeHtml(character)}</span>` : ''}
+                    ${userName ? `<span style="color: var(--text-muted); font-size: 0.75rem;">from ${escapeHtml(userName)}</span>` : ''}
+                </div>
+                <div class="memory-card-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="editMemory('${escapeHtml(fileType)}', '${escapeHtml(key)}', ${index}, '${escapeHtml(parentKey)}')">Edit</button>
+                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteMemoryItem('${escapeHtml(fileType)}', '${escapeHtml(key)}', ${index}, '${escapeHtml(parentKey)}')">Delete</button>
+                </div>
+            </div>
+            <div class="memory-card-content">${escapeHtml(memory.content)}</div>
+            <div class="memory-card-footer">${timestamp}</div>
+        </div>
+    `;
+}
+
+// Load and render all memories on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Load memories if we're on the files tab
+    if (document.getElementById('tab-files').classList.contains('active')) {
+        loadAllMemories();
+    }
+});
+
+// Load all memory sections
+async function loadAllMemories() {
+    const sections = document.querySelectorAll('.memory-section');
+    for (const section of sections) {
+        const fileType = section.dataset.file;
+        await loadMemorySection(fileType);
+    }
+    updateStats();
+}
+
+// Load a single memory section
+async function loadMemorySection(fileType) {
+    const list = document.getElementById(`list-${fileType}`);
+    if (!list) return;
+
+    try {
+        const response = await fetch(`/api/memories/${fileType}/entries`);
+        const data = await response.json();
+
+        if (data.entries && data.entries.length > 0) {
+            list.innerHTML = data.entries.map(e =>
+                renderMemoryCard(e, fileType, e.key, e.index)
+            ).join('');
+        } else {
+            list.innerHTML = '<p class="memory-list-empty">No memories stored</p>';
+        }
+
+        // Update count badge
+        const section = document.querySelector(`.memory-section[data-file="${fileType}"]`);
+        if (section) {
+            const badge = section.querySelector('.memory-count');
+            if (badge) {
+                badge.textContent = data.entries.length;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading memories:', error);
+        list.innerHTML = '<p class="memory-list-empty" style="color: var(--danger)">Error loading memories</p>';
+    }
+}
+
+// Filter memories based on controls
+function filterMemories() {
+    const typeFilter = document.getElementById('type-filter').value;
+    const autoFilter = document.getElementById('auto-filter').value;
+    const search = document.getElementById('memory-search').value.toLowerCase();
+
+    // Filter sections by type
+    document.querySelectorAll('.memory-section').forEach(section => {
+        const fileType = section.dataset.file;
+        section.style.display = (!typeFilter || fileType.includes(typeFilter)) ? '' : 'none';
+    });
+
+    // Filter cards by auto/manual and search
+    document.querySelectorAll('.memory-card').forEach(card => {
+        const content = card.querySelector('.memory-card-content').textContent.toLowerCase();
+        const isAuto = card.querySelector('.badge-auto') !== null;
+
+        let show = true;
+        if (autoFilter === 'auto' && !isAuto) show = false;
+        if (autoFilter === 'manual' && isAuto) show = false;
+        if (search && !content.includes(search)) show = false;
+
+        card.style.display = show ? '' : 'none';
+    });
+
+    updateStats();
+}
+
+// Sort memories
+function sortMemories() {
+    const sortBy = document.getElementById('sort-by').value;
+    document.querySelectorAll('.memory-list').forEach(list => {
+        const cards = Array.from(list.querySelectorAll('.memory-card'));
+        cards.sort((a, b) => {
+            const aTime = a.querySelector('.memory-card-footer').textContent;
+            const bTime = b.querySelector('.memory-card-footer').textContent;
+            if (sortBy === 'newest') {
+                return bTime.localeCompare(aTime);
+            } else {
+                return aTime.localeCompare(bTime);
+            }
+        });
+        cards.forEach(card => list.appendChild(card));
+    });
+}
+
+// Update statistics
+function updateStats() {
+    let total = 0, auto = 0, manual = 0;
+    document.querySelectorAll('.memory-card:not([style*="display: none"])').forEach(card => {
+        total++;
+        card.querySelector('.badge-auto') ? auto++ : manual++;
+    });
+    document.getElementById('total-memories').textContent = total;
+    document.getElementById('auto-memories').textContent = auto;
+    document.getElementById('manual-memories').textContent = manual;
+}
+
+// Open modal for adding new memory
+function openAddMemoryModal(fileType) {
+    document.getElementById('modal-title').textContent = 'Add Memory';
+    document.getElementById('modal-content-input').value = '';
+    document.getElementById('modal-character').value = '';
+    document.getElementById('modal-auto').value = 'false';
+    document.getElementById('modal-file').value = fileType;
+    document.getElementById('modal-key').value = '';
+    document.getElementById('modal-index').value = '-1';
+    document.getElementById('modal-parent-key').value = '';
+    document.getElementById('modal-mode').value = 'add';
+    document.getElementById('memory-modal').style.display = 'flex';
+}
+
+// Edit memory
+async function editMemory(fileType, key, index, parentKey = '') {
+    try {
+        let url = `/api/memories/${fileType}/entry/${key}/${index}`;
+        if (parentKey) {
+            url += `?parent_key=${encodeURIComponent(parentKey)}`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        document.getElementById('modal-title').textContent = 'Edit Memory';
+        document.getElementById('modal-content-input').value = data.content || '';
+        document.getElementById('modal-character').value = data.character || data.learned_from || '';
+        document.getElementById('modal-auto').value = data.auto ? 'true' : 'false';
+        document.getElementById('modal-file').value = fileType;
+        document.getElementById('modal-key').value = key;
+        document.getElementById('modal-index').value = index;
+        document.getElementById('modal-parent-key').value = parentKey || '';
+        document.getElementById('modal-mode').value = 'edit';
+        document.getElementById('memory-modal').style.display = 'flex';
+    } catch (error) {
+        console.error('Error loading memory:', error);
+        showToast('Error loading memory', 'error');
+    }
+}
+
+// Save memory (edit or add)
+async function saveMemory() {
+    const mode = document.getElementById('modal-mode').value;
+    const fileType = document.getElementById('modal-file').value;
+    const key = document.getElementById('modal-key').value;
+    const index = parseInt(document.getElementById('modal-index').value);
+    const parentKey = document.getElementById('modal-parent-key').value;
+
+    const payload = {
+        content: document.getElementById('modal-content-input').value,
+        character: document.getElementById('modal-character').value,
+        auto: document.getElementById('modal-auto').value === 'true'
+    };
+
+    if (!payload.content.trim()) {
+        showToast('Please enter memory content', 'error');
+        return;
+    }
+
+    try {
+        if (mode === 'edit') {
+            // Update existing memory
+            let url = `/api/memories/${fileType}/entry/${key}/${index}`;
+            if (parentKey) {
+                url += `?parent_key=${encodeURIComponent(parentKey)}`;
+            }
+
+            await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': '{{ csrf_token() }}'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            showToast('Memory updated', 'success');
+        } else {
+            // Add new memory - use existing add API
+            showToast('Adding new memories through the modal is not yet implemented. Please use the "Add Memory" tab.', 'info');
+            closeModal();
+            return;
+        }
+
+        closeModal();
+        loadMemorySection(fileType);
+        updateStats();
+    } catch (error) {
+        console.error('Error saving memory:', error);
+        showToast('Error saving memory', 'error');
+    }
+}
+
+// Delete memory item
+async function deleteMemoryItem(fileType, key, index, parentKey = '') {
+    if (!confirm('Delete this memory?')) return;
+
+    try {
+        let url = `/api/memories/${fileType}/entry/${key}/${index}`;
+        if (parentKey) {
+            url += `?parent_key=${encodeURIComponent(parentKey)}`;
+        }
+
+        await fetch(url, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
+        });
+
+        showToast('Memory deleted', 'success');
+        loadMemorySection(fileType);
+        updateStats();
+    } catch (error) {
+        console.error('Error deleting memory:', error);
+        showToast('Error deleting memory', 'error');
+    }
+}
+
+// Close modal
+function closeModal() {
+    document.getElementById('memory-modal').style.display = 'none';
+}
+
+// Close modal when clicking outside
+document.addEventListener('click', function(event) {
+    const modal = document.getElementById('memory-modal');
+    if (event.target === modal) {
+        closeModal();
+    }
+});
 </script>
 {% endblock %}

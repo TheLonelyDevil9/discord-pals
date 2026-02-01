@@ -4,6 +4,22 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.0] - 2026-02-01
+
+### Added
+- Memory card UI - Replace raw JSON textareas with structured memory cards
+- Statistics dashboard showing total, auto, and manual memory counts
+- Filter controls for memory type, source (Auto/Manual), and search
+- Inline memory editing with modal dialog
+- Sort memories by newest or oldest first
+- Individual memory delete buttons on each card
+- Add memory button per file section
+
+### Changed
+- Memories page now uses card-based layout instead of table view
+- Memory display shows readable badges, timestamps, and metadata
+- Improved visual distinction between auto and manual memories
+
 ## [v1.5.1] - 2026-02-01
 
 ### Added
