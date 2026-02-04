@@ -14,5 +14,5 @@ Server: {{GUILD_NAME}}
 {{MENTIONED_CONTEXT}}
 
 --- CURRENT REPLY TARGET ---
-You are replying to: {{USER_NAME}}
+Respond to: {{USER_NAME}}
 Do NOT confuse {{USER_NAME}} with other people in the chat history.
