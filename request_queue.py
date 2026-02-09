@@ -33,7 +33,6 @@ class RequestQueue:
         user_name: str,
         is_dm: bool,
         user_id: int,
-        reply_to_name: tuple = None,
         sticker_info: str = None,
         from_interact_command: bool = False,
         split_reply_target: discord.Member = None
@@ -71,7 +70,6 @@ class RequestQueue:
                 'user_name': user_name,
                 'is_dm': is_dm,
                 'user_id': user_id,
-                'reply_to_name': reply_to_name,
                 'sticker_info': sticker_info,
                 'from_interact_command': from_interact_command,
                 'split_reply_target': split_reply_target

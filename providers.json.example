@@ -35,6 +35,42 @@
       "max_tokens": 8192,
       "temperature": 1.0,
       "include_body": "thinking:\n  type: disabled"
+    },
+    {
+      "name": "DeepSeek Chat (no thinking, default)",
+      "url": "https://api.deepseek.com/v1",
+      "key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat",
+      "max_tokens": 8192,
+      "temperature": 1.0
+    },
+    {
+      "name": "DeepSeek Chat - Thinking Enabled",
+      "url": "https://api.deepseek.com/v1",
+      "key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "include_body": "thinking:\n  type: enabled"
+    },
+    {
+      "name": "Kimi K2.5 (Moonshot) - Thinking disabled (self-hosted only)",
+      "url": "https://api.moonshot.cn/v1",
+      "key_env": "MOONSHOT_API_KEY",
+      "model": "kimi-k2.5",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "include_body": "chat_template_kwargs:\n  thinking: false",
+      "_comment": "chat_template_kwargs only works on self-hosted vLLM/SGLang. Moonshot hosted API may not support disabling thinking."
+    },
+    {
+      "name": "Custom Headers Example",
+      "url": "https://api.example.com/v1",
+      "key_env": "EXAMPLE_API_KEY",
+      "model": "example-model",
+      "max_tokens": 4096,
+      "temperature": 1.0,
+      "include_headers": "X-Custom-Auth: bearer-token-here\nX-Request-Source: discord-pals"
     }
   ],
   "timeout": 60,

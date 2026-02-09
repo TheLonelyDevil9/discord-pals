@@ -14,12 +14,12 @@ from typing import Optional, Dict
 from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
 from providers import provider_manager
 from character import character_manager, Character
-from memory import memory_manager, ensure_data_dir
+from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
-    get_reply_context, get_user_display_name, get_sticker_info,
+    get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names
 )
@@ -365,7 +365,6 @@ class BotInstance:
                 return
 
             user_name = get_user_display_name(message.author)
-            reply_to_name = get_reply_context(message)
             sticker_info = get_sticker_info(message) if not is_other_bot else None
 
             # Bot chain prevention - don't respond to bots if we recently responded to a bot
@@ -405,7 +404,6 @@ class BotInstance:
                             user_name=user_name,
                             is_dm=is_dm,
                             user_id=message.author.id,
-                            reply_to_name=reply_to_name,
                             sticker_info=sticker_info,
                             split_reply_target=target
                         )
@@ -420,7 +418,6 @@ class BotInstance:
                         user_name=user_name,
                         is_dm=is_dm,
                         user_id=message.author.id,
-                 reply_to_name=reply_to_name,
                         sticker_info=sticker_info
                     )
             else:
@@ -428,7 +425,7 @@ class BotInstance:
                 if channel_id in autonomous_manager.enabled_channels:
                     add_to_history(
                         channel_id, "user", message.content,
-                        author_name=user_name, reply_to=reply_to_name, user_id=message.author.id, guild=message.guild
+                        author_name=user_name, user_id=message.author.id, guild=message.guild
                     )
 
         @self.client.event
@@ -582,7 +579,6 @@ class BotInstance:
         user_name = request['user_name']
         is_dm = request['is_dm']
         user_id = request['user_id']
-        reply_to_name = request.get('reply_to_name')
         split_target = request.get('split_reply_target')
 
         # For split replies, use target user for context instead of sender
@@ -626,7 +622,7 @@ class BotInstance:
         # Only add to history if not already present
         recent = history[-5:]
         if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
-            add_to_history(channel_id, "user", content, author_name=user_name, reply_to=reply_to_name, user_id=user_id, guild=guild)
+            add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild)
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -664,20 +660,38 @@ class BotInstance:
         if is_dm:
             memories = memory_manager.get_dm_memories(target_user_id, character_name=char_name)
             if global_profile and memories:
-                memories = f"What you know about this user (cross-server):\n{global_profile}\n\nFrom DMs:\n{memories}"
+                # Deduplicate across stores
+                all_lines = global_profile.split('\n') + memories.split('\n')
+                deduped = deduplicate_memory_strings(all_lines)
+                memories = f"What you know about this user:\n" + "\n".join(deduped)
             elif global_profile:
                 memories = f"What you know about this user:\n{global_profile}"
         elif guild_id:
             server_memories = memory_manager.get_server_memories(guild_id)
             user_memories = memory_manager.get_user_memories(guild_id, target_user_id, character_name=char_name)
-            memory_parts = []
+
+            # Collect all memory lines across stores for cross-store dedup
+            all_lines = []
             if global_profile:
-                memory_parts.append(f"What you know about {target_user_name} (cross-server):\n{global_profile}")
+                all_lines.extend(global_profile.split('\n'))
             if user_memories:
-                memory_parts.append(f"About {target_user_name} (this server):\n{user_memories}")
+                all_lines.extend(user_memories.split('\n'))
             if server_memories:
-                memory_parts.append(f"General:\n{server_memories}")
-            memories = "\n\n".join(memory_parts) if memory_parts else ""
+                all_lines.extend(server_memories.split('\n'))
+
+            if all_lines:
+                deduped = deduplicate_memory_strings(all_lines)
+                # Rebuild with sections — assign each deduped line to its original section
+                # For simplicity, present as a single unified block
+                memory_parts = []
+                if global_profile:
+                    memory_parts.append(f"What you know about {target_user_name} (cross-server):")
+                if user_memories:
+                    memory_parts.append(f"About {target_user_name} (this server):")
+                memory_parts.append("\n".join(deduped))
+                memories = "\n".join(memory_parts)
+            else:
+                memories = ""
         else:
             memories = ""
 

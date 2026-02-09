@@ -360,7 +360,7 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, reply_to: tuple = None, user_id: int = None, guild=None):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None):
     """Add a message to conversation history.
 
     Args:
@@ -368,7 +368,6 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         role: Message role ('user' or 'assistant')
         content: Message content
         author_name: Display name of the author
-        reply_to: Tuple of (author_name, content) if this is a reply
         user_id: Discord user ID (for mention features)
         guild: Discord guild object for resolving mentions (optional)
     """
@@ -387,16 +386,6 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     # Strip character name prefixes from bot/assistant messages
     if role == "user" and author_name:
         content = strip_character_prefix(content)
-
-    # Format content with reply context (author, replied_content)
-    # Fix personality bleed: clearly separate quoted author from current speaker
-    if reply_to and role == "user":
-        reply_author, reply_content = reply_to
-        if reply_content:
-            # Use parentheses (not brackets) to prevent LLM from learning bracket patterns
-            content = f'(replying to {reply_author}) {content}'
-        else:
-            content = f"(replying to {reply_author}) {content}"
 
     msg = {"role": role, "content": content}
     if author_name:
@@ -588,31 +577,6 @@ def get_other_bot_names(channel_id: int, current_bot_name: str) -> List[str]:
             if author and author.lower() != current_bot_name.lower():
                 other_bots.add(author)
     return list(other_bots)
-
-
-# --- Reply Context ---
-
-def get_reply_context(message: discord.Message) -> Optional[tuple]:
-    """Extract who the user is replying to and what that message said.
-    Returns: (author_name, message_content) or None
-    """
-    if not message.reference or not message.reference.resolved:
-        return None
-    
-    replied = message.reference.resolved
-    
-    # Get author name
-    if hasattr(replied.author, 'display_name') and replied.author.display_name:
-        author = replied.author.display_name
-    elif hasattr(replied.author, 'global_name') and replied.author.global_name:
-        author = replied.author.global_name
-    else:
-        author = replied.author.name
-    
-    # Get message content (truncated if too long)
-    content = replied.content[:300] if replied.content else ""
-    
-    return (author, content)
 
 
 def get_user_display_name(user: discord.User | discord.Member) -> str:

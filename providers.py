@@ -273,7 +273,8 @@ class AIProviderManager:
         tier: str,
         extra_body: Optional[dict] = None,
         include_body: str = "",
-        exclude_body: str = ""
+        exclude_body: str = "",
+        include_headers: str = ""
     ) -> str | None:
         """Try to generate with retries on rate limit."""
         
@@ -299,7 +300,7 @@ class AIProviderManager:
 
                 # Move SDK-passthrough keys from request_kwargs to extra_body
                 # These are provider-specific params that OpenAI SDK doesn't recognize
-                SDK_PASSTHROUGH_KEYS = {'thinking', 'tools', 'tool_choice', 'response_format'}
+                SDK_PASSTHROUGH_KEYS = {'thinking', 'tools', 'tool_choice', 'response_format', 'chat_template_kwargs'}
                 passthrough_params = {}
                 for key in list(request_kwargs.keys()):
                     if key in SDK_PASSTHROUGH_KEYS:
@@ -317,6 +318,27 @@ class AIProviderManager:
                 if extra_body:
                     request_kwargs["extra_body"] = extra_body
                     log.debug(f"[{tier}] Using extra_body: {extra_body}")
+
+                # Parse and pass custom headers (YAML string -> dict)
+                if include_headers and include_headers.strip():
+                    if YAML_AVAILABLE:
+                        try:
+                            parsed = yaml.safe_load(include_headers)
+                            if isinstance(parsed, dict):
+                                request_kwargs["extra_headers"] = {str(k): str(v) for k, v in parsed.items()}
+                                log.debug(f"[{tier}] Using extra_headers: {list(request_kwargs['extra_headers'].keys())}")
+                            elif isinstance(parsed, list):
+                                headers = {}
+                                for item in parsed:
+                                    if isinstance(item, dict):
+                                        headers.update({str(k): str(v) for k, v in item.items()})
+                                if headers:
+                                    request_kwargs["extra_headers"] = headers
+                                    log.debug(f"[{tier}] Using extra_headers: {list(headers.keys())}")
+                        except Exception as e:
+                            log.warn(f"[{tier}] Failed to parse include_headers YAML: {e}")
+                    else:
+                        log.warn(f"[{tier}] include_headers configured but PyYAML not installed")
                 
                 log.debug(f"[{tier}] Requesting {model} with {len(messages)} messages, max_tokens={max_tokens}")
                 
@@ -448,6 +470,7 @@ class AIProviderManager:
                 extra_body = PROVIDERS[tier].get("extra_body", {})
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
+                include_headers = PROVIDERS[tier].get("include_headers", "")
 
                 # Check if provider supports vision (default True, set false for text-only models)
                 supports_vision = PROVIDERS[tier].get("supports_vision", True)
@@ -481,7 +504,8 @@ class AIProviderManager:
                         client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
                         extra_body=extra_body if extra_body else None,
                         include_body=include_body,
-                        exclude_body=exclude_body
+                        exclude_body=exclude_body,
+                        include_headers=include_headers
                     )
                     
                     if result:

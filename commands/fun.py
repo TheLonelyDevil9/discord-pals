@@ -71,7 +71,6 @@ async def handle_interact_command(bot_instance, interaction: discord.Interaction
         user_name=user_name,
         is_dm=isinstance(channel, discord.DMChannel),
         user_id=user.id,
-        reply_to_name=None,
         sticker_info=None,
         from_interact_command=True
     )

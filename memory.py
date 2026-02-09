@@ -125,6 +125,44 @@ def _is_duplicate_memory(
     return False
 
 
+def deduplicate_memory_strings(memory_strings: list) -> list:
+    """Deduplicate a list of memory strings across different stores.
+
+    Takes raw memory lines (strings) and removes near-duplicates using
+    the same textual similarity logic as _is_duplicate_memory().
+    Returns a list with duplicates removed (keeps first occurrence).
+    """
+    if not memory_strings:
+        return memory_strings
+
+    unique = []
+    for line in memory_strings:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        # Check against already-accepted lines
+        is_dup = False
+        new_normalized = _normalize_memory(line_stripped)
+        new_terms = _extract_key_terms(line_stripped)
+        for accepted in unique:
+            accepted_normalized = _normalize_memory(accepted.strip())
+            accepted_terms = _extract_key_terms(accepted.strip())
+            # Quick key term check
+            if new_terms and accepted_terms:
+                overlap = len(new_terms & accepted_terms) / max(len(new_terms), len(accepted_terms))
+                if overlap < KEY_TERM_OVERLAP_THRESHOLD:
+                    continue
+            # Textual similarity
+            similarity = difflib.SequenceMatcher(None, new_normalized, accepted_normalized).ratio()
+            if similarity >= TEXTUAL_SIMILARITY_THRESHOLD:
+                is_dup = True
+                break
+        if not is_dup:
+            unique.append(line_stripped)
+
+    return unique
+
+
 def get_character_dm_file(character_name: str) -> str:
     """Get the DM memories file path for a specific character."""
     safe_name = character_name.lower().replace(" ", "_")
@@ -171,6 +209,10 @@ class MemoryManager:
         # Debounce tracking
         self._dirty_files: set = set()  # Track which files need saving
         self._last_save = time.time()
+
+        # Global channel-level memory generation cooldown (prevents multi-bot duplication)
+        self._channel_memory_cooldown: Dict[int, float] = {}
+        self._MEMORY_COOLDOWN_SECONDS = 30  # Min seconds between memory generation per channel
 
     def _ensure_legacy_loaded(self):
         """Lazy-load legacy memory files only when needed."""
@@ -622,6 +664,16 @@ class MemoryManager:
         """Generate a memory summary from conversation using AI."""
         if len(messages) < 5:
             return None
+
+        # Global channel-level cooldown: prevent multiple bots from generating
+        # memories for the same channel within the cooldown window
+        channel_key = id_key  # guild_id for servers, user_id for DMs
+        now = time.time()
+        last_gen = self._channel_memory_cooldown.get(channel_key, 0)
+        if now - last_gen < self._MEMORY_COOLDOWN_SECONDS:
+            log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {self._MEMORY_COOLDOWN_SECONDS}s)")
+            return None
+        self._channel_memory_cooldown[channel_key] = now
 
         # Build context with explicit user attribution (using author from history)
         context_lines = []
