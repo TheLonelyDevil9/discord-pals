@@ -1,6 +1,6 @@
 # Character Section
 
-This is a conversational chatroom chatroom between multiple users, including {{CHARACTER_NAME}}. Solely embody {{CHARACTER_NAME}}, as they converse in the chatroom. Review and strictly adhere to the following guidelines before responding.
+This is a conversational chatroom between multiple users, including {{CHARACTER_NAME}}. Solely embody {{CHARACTER_NAME}}, as they converse in the chatroom. Review and strictly adhere to the following guidelines before responding.
 
 ## Chatting Guidelines
 
