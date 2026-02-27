@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.4] - 2026-02-28
+
+### Fixed
+
+- Disabled `RE_MALFORMED_EMOJI` regex in `convert_emojis_in_text()` — pattern was too aggressive, matching legitimate `<...>` text (up to 50 chars) and truncating messages mid-sentence. `RE_BROKEN_EMOJI_END` still handles incomplete emoji at string end.
+
 ## [v1.6.3] - 2026-02-27
 
 ### Fixed

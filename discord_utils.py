@@ -687,8 +687,11 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     # Remove empty angle bracket pairs
     result = RE_EMPTY_ANGLE.sub('', result)
 
-    # Remove malformed tags that have colons but no valid emoji structure
-    result = RE_MALFORMED_EMOJI.sub('', result)
+    # Disabled: RE_MALFORMED_EMOJI is too aggressive — it can match legitimate
+    # text between < and > (up to 50 chars) and truncate messages mid-sentence.
+    # RE_BROKEN_EMOJI_END (applied elsewhere) handles the common case of
+    # incomplete emoji at string end, which is sufficient.
+    # result = RE_MALFORMED_EMOJI.sub('', result)
 
     return result.strip()
 
