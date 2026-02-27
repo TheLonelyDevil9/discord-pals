@@ -1072,6 +1072,9 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not mention_lookup:
         return content
 
+    # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
+    content = re.sub(r'<@!?([^>\d][^>]*)>', r'@\1', content)
+
     # Track which mention IDs we intentionally insert (so the safety net doesn't strip them)
     inserted_mention_ids = set()
 

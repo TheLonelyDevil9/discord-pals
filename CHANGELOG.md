@@ -4,6 +4,14 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.2] - 2026-02-27
+
+### Fixed
+
+- Dashboard memory stats no longer count history cache messages as "manual" memories — `history_cache.json` was not excluded due to filename mismatch in filter
+- @mention conversion now handles AI-generated `<@Name>` patterns — normalizes to `@Name` before conversion, preventing malformed `<<@id>>` output
+- Bot's own responses now resolve mentions back to display names in history — passes guild context so the AI sees `@DisplayName` instead of generic `@user` in its own past messages
+
 ## [v1.6.1] - 2026-02-27
 
 ### Fixed

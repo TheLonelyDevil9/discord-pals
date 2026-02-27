@@ -929,7 +929,7 @@ class BotInstance:
         self._update_mood(channel_id, content, response)
 
         # Add to history and send
-        add_to_history(channel_id, "assistant", response, author_name=self.character.name)
+        add_to_history(channel_id, "assistant", response, author_name=self.character.name, guild=guild)
         sent_messages = await self._send_organic_response(message, response)
 
         # Update activity

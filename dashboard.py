@@ -100,7 +100,7 @@ def check_login():
 def get_memory_files():
     """Get all memory JSON files."""
     # Files that are NOT memories and should be excluded
-    excluded = {"autonomous", "runtime_config", "stats", "history"}
+    excluded = {"autonomous", "runtime_config", "stats", "history_cache"}
     files = {}
     if DATA_DIR.exists():
         for f in DATA_DIR.glob("*.json"):
