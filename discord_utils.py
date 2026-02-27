@@ -360,7 +360,7 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None):
     """Add a message to conversation history.
 
     Args:
@@ -370,6 +370,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         author_name: Display name of the author
         user_id: Discord user ID (for mention features)
         guild: Discord guild object for resolving mentions (optional)
+        message_id: Discord message ID (for precise duplicate detection)
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
@@ -392,6 +393,8 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["author"] = author_name
     if user_id:
         msg["user_id"] = user_id
+    if message_id:
+        msg["message_id"] = message_id
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
     msg_hash = hash((role, content, author_name or ''))
@@ -485,10 +488,25 @@ def remove_assistant_from_history(channel_id: int, count: int = 1):
             removed += 1
 
 
+# Channels where history was explicitly cleared (suppresses auto-recall)
+_cleared_channels: set = set()
+
+
 def clear_history(channel_id: int):
     """Clear conversation history for a channel."""
     if channel_id in conversation_history:
         del conversation_history[channel_id]
+    _cleared_channels.add(channel_id)
+
+
+def was_recently_cleared(channel_id: int) -> bool:
+    """Check if a channel's history was explicitly cleared (suppresses auto-recall)."""
+    return channel_id in _cleared_channels
+
+
+def acknowledge_cleared(channel_id: int):
+    """Remove the cleared flag after the first successful message exchange."""
+    _cleared_channels.discard(channel_id)
 
 
 def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
@@ -568,14 +586,23 @@ def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
 
 
 def get_other_bot_names(channel_id: int, current_bot_name: str) -> List[str]:
-    """Get names of other bot characters from history."""
-    history = get_history(channel_id)
+    """Get names of other bot characters from history and the bot registry."""
     other_bots = set()
+
+    # From history (bots that have spoken in this channel)
+    history = get_history(channel_id)
     for msg in history:
         if msg.get("role") == "assistant":
             author = msg.get("author")
             if author and author.lower() != current_bot_name.lower():
                 other_bots.add(author)
+
+    # From bot registry (all registered bots, even if they haven't spoken yet)
+    for bot_id, info in _bot_registry.items():
+        char_name = info.get("character_name")
+        if char_name and char_name.lower() != current_bot_name.lower():
+            other_bots.add(char_name)
+
     return list(other_bots)
 
 
@@ -1045,24 +1072,37 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not mention_lookup:
         return content
 
-    # Pattern: @name or @Name (word characters after @)
-    import re
+    # Track which mention IDs we intentionally insert (so the safety net doesn't strip them)
+    inserted_mention_ids = set()
 
-    def replace_mention(match):
-        name = match.group(1).lower()
-        if name in mention_lookup:
-            return mention_lookup[name]
-        return match.group(0)  # Keep original if not found
+    # Replace @Name patterns with Discord mention syntax
+    # Sort by longest name first to avoid partial matches (e.g. "@The Devil" before "@The")
+    sorted_names = sorted(mention_lookup.keys(), key=len, reverse=True)
 
-    # Match @word patterns (handles @Username, @user_name, etc.)
-    pattern = r'@(\w+)'
-    content = re.sub(pattern, replace_mention, content)
+    for name in sorted_names:
+        mention_syntax = mention_lookup[name]
+        # Match @Name with word boundary awareness (case-insensitive)
+        # Handles both single-word and multi-word names
+        pattern = re.compile(r'@' + re.escape(name) + r'\b', re.IGNORECASE)
+        if pattern.search(content):
+            content = pattern.sub(mention_syntax, content)
+            # Extract the user ID from the mention syntax to protect it from the safety net
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                inserted_mention_ids.add(id_match.group(1))
 
-    # Safety net: Strip any raw Discord syntax that slipped through
-    # This prevents the AI from accidentally outputting raw <@id> patterns
-    content = re.sub(r'<@!?\d+>', '', content)   # Raw user mentions
-    content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions
-    content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions
+    # Safety net: Strip any raw Discord syntax the AI hallucinated,
+    # but preserve mentions we just intentionally inserted
+    def strip_if_not_inserted(match):
+        # Extract the numeric ID from the match
+        id_match = re.search(r'\d+', match.group(0))
+        if id_match and id_match.group(0) in inserted_mention_ids:
+            return match.group(0)  # Keep - we inserted this
+        return ''  # Strip - AI hallucinated this
+
+    content = re.sub(r'<@!?\d+>', strip_if_not_inserted, content)
+    content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions (always strip)
+    content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions (always strip)
 
     return content
 

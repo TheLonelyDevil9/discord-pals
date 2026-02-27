@@ -21,7 +21,8 @@ from discord_utils import (
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
-    resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names
+    resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
+    was_recently_cleared, acknowledge_cleared
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
@@ -96,7 +97,7 @@ class BotInstance:
         bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
         if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
             log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
-            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id, guild=message.guild)
+            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id, guild=message.guild, message_id=message.id)
             return True
         return False
 
@@ -110,7 +111,7 @@ class BotInstance:
 
         # Global stop-bot interactions
         if runtime_config.get("bot_interactions_paused", False):
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
             return True
 
         # Initialize or update conversation tracker
@@ -138,18 +139,18 @@ class BotInstance:
                 f"probability: {response_probability:.2%})",
                 self.name
             )
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
             return True
 
         # Keep existing 60-second cooldown as additional safeguard
         last_bot_response = self._last_bot_response.get(channel_id, 0)
         if time.time() - last_bot_response < 60:
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
             return True
 
         return False
 
-    def _detect_response_triggers(self, message: discord.Message, is_dm: bool,
+    async def _detect_response_triggers(self, message: discord.Message, is_dm: bool,
                                    is_other_bot: bool, guild: discord.Guild) -> dict:
         """Detect all ways a message might trigger a response.
 
@@ -178,6 +179,14 @@ class BotInstance:
                 ref_msg = message.reference.cached_message
                 if ref_msg and ref_msg.author == self.client.user:
                     is_reply_to_bot = True
+                elif ref_msg is None:
+                    # Cache miss — fetch the referenced message to check authorship
+                    try:
+                        fetched = await message.channel.fetch_message(message.reference.message_id)
+                        if fetched and fetched.author == self.client.user:
+                            is_reply_to_bot = True
+                    except Exception:
+                        pass  # Message deleted or inaccessible
             except Exception:
                 pass
 
@@ -188,8 +197,7 @@ class BotInstance:
         name_triggered = False
         name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
 
-        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
-            and channel_id in autonomous_manager.enabled_channels):
+        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm):
 
             # Check if bot triggers are allowed for this channel when message is from a bot
             if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
@@ -372,7 +380,7 @@ class BotInstance:
                 return
 
             # Detect all response triggers
-            triggers = self._detect_response_triggers(message, is_dm, is_other_bot, guild)
+            triggers = await self._detect_response_triggers(message, is_dm, is_other_bot, guild)
 
             # Debug: log why this bot is responding
             if triggers["should_respond"]:
@@ -425,7 +433,8 @@ class BotInstance:
                 if channel_id in autonomous_manager.enabled_channels:
                     add_to_history(
                         channel_id, "user", message.content,
-                        author_name=user_name, user_id=message.author.id, guild=message.guild
+                        author_name=user_name, user_id=message.author.id, guild=message.guild,
+                        message_id=message.id
                     )
 
         @self.client.event
@@ -596,7 +605,8 @@ class BotInstance:
         history = get_history(channel_id)
 
         # Fetch Discord history on-demand if local history is empty/sparse
-        if len(history) < 5:
+        # Skip if history was explicitly cleared (user wants a fresh start)
+        if len(history) < 5 and not was_recently_cleared(channel_id):
             try:
                 recalled = await self._recall_channel_history(message.channel, limit=30)
                 if recalled > 0:
@@ -605,9 +615,26 @@ class BotInstance:
             except Exception as e:
                 log.warn(f"Failed to recall channel history: {e}", self.name)
 
+        # Clear the "recently cleared" flag now that we're processing a new message
+        acknowledge_cleared(channel_id)
+
+        # Duplicate detection: check if THIS specific message was already processed
+        # Use message ID for precision — content+author matching can falsely collide
+        # across different users or repeated messages
+        message_id = message.id
         already_responded = False
         for i, m in enumerate(history):
-            if m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user':
+            # Match by message_id if available (most precise)
+            if m.get('message_id') == message_id:
+                for j in range(i + 1, len(history)):
+                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
+                        already_responded = True
+                        break
+                if already_responded:
+                    break
+            # Fallback: match by content + author (for history entries without message_id)
+            elif (m.get('message_id') is None and
+                  m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user'):
                 for j in range(i + 1, len(history)):
                     if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
                         already_responded = True
@@ -621,8 +648,8 @@ class BotInstance:
 
         # Only add to history if not already present
         recent = history[-5:]
-        if not any(m.get('content') == content and m.get('author') == user_name for m in recent):
-            add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild)
+        if not any(m.get('message_id') == message_id or (m.get('content') == content and m.get('author') == user_name) for m in recent):
+            add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild, message_id=message_id)
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -1037,14 +1064,20 @@ class BotInstance:
         return max(probability, min_chance)
 
     def _strip_other_bot_prefixes(self, response: str, other_bot_names: list) -> str:
-        """Remove any other bot's name prefix from response to prevent impersonation.
+        """Remove any other bot's name prefix or impersonation from response.
+
+        Handles:
+        - "OtherBot: dialogue" at start of response
+        - Lines starting with "OtherBot:" mid-response
+        - "*OtherBot: dialogue*" or "*OtherBot says ...*" roleplay patterns
+        - Quoted dialogue blocks attributed to other bots
 
         Args:
             response: The bot's response text
             other_bot_names: List of other bot character names in the channel
 
         Returns:
-            Response with any other bot name prefixes removed
+            Response with impersonation content removed
         """
         if not other_bot_names:
             return response
@@ -1058,21 +1091,41 @@ class BotInstance:
                     log.warn(f"Stripped impersonation prefix '{pattern}' from response", self.name)
                     break
 
-        # Check for mid-response impersonation (lines starting with "OtherBot:")
+        # Build combined pattern for all other bot names
+        escaped_names = [re.escape(name) for name in other_bot_names]
+        names_pattern = '|'.join(escaped_names)
+
+        # Check for mid-response impersonation (lines starting with "OtherBot:" or "*OtherBot:" patterns)
         lines = response.split('\n')
         cleaned_lines = []
         for line in lines:
             skip = False
             for name in other_bot_names:
-                # Check if line starts with "OtherBot:" pattern
+                # "OtherBot:" or "OtherBot :" at line start
                 if re.match(rf'^{re.escape(name)}\s*:', line, re.IGNORECASE):
                     log.warn(f"Stripped mid-response impersonation line for '{name}'", self.name)
+                    skip = True
+                    break
+                # "*OtherBot:" or "*OtherBot :" (roleplay asterisk prefix)
+                if re.match(rf'^\*{re.escape(name)}\s*:', line, re.IGNORECASE):
+                    log.warn(f"Stripped roleplay impersonation line for '{name}'", self.name)
                     skip = True
                     break
             if not skip:
                 cleaned_lines.append(line)
 
-        return '\n'.join(cleaned_lines)
+        response = '\n'.join(cleaned_lines)
+
+        # Strip inline roleplay impersonation: *OtherBot says "..."* or *OtherBot: "..."*
+        response = re.sub(
+            rf'\*(?:{names_pattern})\s+(?:says?|whispers?|replies?|responds?|asks?|shouts?|murmurs?|mutters?)\b[^*]*\*',
+            '', response, flags=re.IGNORECASE
+        )
+
+        # Clean up any double-newlines left behind
+        response = re.sub(r'\n{3,}', '\n\n', response)
+
+        return response.strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
@@ -1262,7 +1315,7 @@ class BotInstance:
             is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
-            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id, guild=guild)
+            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id, guild=guild, message_id=msg.id)
             count += 1
         
         return count

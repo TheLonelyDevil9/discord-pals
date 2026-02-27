@@ -4,6 +4,15 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.1] - 2026-02-27
+
+### Fixed
+
+- Dynamic provider tier ordering — tiers beyond "primary/secondary/fallback" now work correctly instead of silently falling back to primary
+- @mention replacement handles multi-word display names and no longer strips valid mentions via the safety net
+- Bot responds after `/clear` — auto-recall from Discord API is suppressed when history was explicitly cleared
+- Impersonation stripping enhanced — catches mid-response `Name:` lines, `*Name says*` roleplay patterns, and sources other bot names from the registry (not just history)
+- Reply detection falls back to `fetch_message()` when Discord cache misses, name triggers work without autonomous mode, and duplicate detection uses message IDs instead of content matching
 ## [v1.6.0] - 2026-02-01
 
 ### Added

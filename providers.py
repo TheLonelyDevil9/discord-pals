@@ -248,11 +248,11 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
 
 
 class AIProviderManager:
-    """Manages 3-tier AI provider fallback with retry logic."""
-    
+    """Manages multi-tier AI provider fallback with retry logic."""
+
     def __init__(self):
         self.providers: Dict[str, AsyncOpenAI] = {}
-        self.status: Dict[str, str] = {"primary": "unknown", "secondary": "unknown", "fallback": "unknown"}
+        self.status: Dict[str, str] = {tier: "unknown" for tier in PROVIDERS}
         
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
@@ -452,8 +452,8 @@ class AIProviderManager:
         if has_images:
             text_only_messages = strip_images_from_messages(full_messages)
 
-        # Build tier order - put preferred tier first if specified
-        tier_order = ["primary", "secondary", "fallback"]
+        # Build tier order dynamically from all configured providers
+        tier_order = list(PROVIDERS.keys())
         if preferred_tier and preferred_tier in tier_order:
             tier_order.remove(preferred_tier)
             tier_order.insert(0, preferred_tier)
@@ -555,7 +555,7 @@ class AIProviderManager:
             return None
 
         # Try providers in order until one works
-        for tier in ["primary", "secondary", "fallback"]:
+        for tier in PROVIDERS.keys():
             if tier not in self.providers:
                 continue
 
