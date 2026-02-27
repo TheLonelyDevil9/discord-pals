@@ -734,7 +734,10 @@ class BotInstance:
         if runtime_config.get("allow_bot_mentions", True) and not is_dm:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
             mention_limit = runtime_config.get("mention_context_limit", 10)
-            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit)
+            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit, guild=guild)
+            log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mentionable users for channel {channel_id}")
+            if mentionable_users:
+                log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")
 
             if runtime_config.get("allow_bot_to_bot_mentions", False):
                 bot_user_id = self.client.user.id if self.client.user else None

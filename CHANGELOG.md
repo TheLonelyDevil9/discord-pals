@@ -4,6 +4,15 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.3] - 2026-02-27
+
+### Fixed
+
+- @mention system now includes comprehensive debug logging — logs mentionable user list, lookup table, pattern matches, and conversion results for troubleshooting
+- @mention regex now uses lookahead `(?=\W|$)` instead of `\b` word boundary — fixes matching issues with display names containing emojis or special characters
+- `get_mentionable_users()` now falls back to guild members when history is sparse (< 3 users) — ensures mentionable list is populated even in new channels or after history clears
+- `get_mentionable_users()` now accepts optional `guild` parameter for member fallback — passed from `bot_instance.py` context
+
 ## [v1.6.2] - 2026-02-27
 
 ### Fixed

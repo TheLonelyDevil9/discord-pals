@@ -1005,12 +1005,13 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
     return bots
 
 
-def get_mentionable_users(channel_id: int, limit: int = 10) -> List[dict]:
+def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[dict]:
     """Get list of users who can be mentioned based on conversation history.
 
     Args:
         channel_id: Discord channel ID
         limit: Maximum number of users to return
+        guild: Optional guild object for fallback member lookup
 
     Returns:
         List of dicts with 'name', 'user_id', 'mention_syntax'
@@ -1018,7 +1019,7 @@ def get_mentionable_users(channel_id: int, limit: int = 10) -> List[dict]:
     users = []
     seen_ids = set()
 
-    # Get from recent message authors in history
+    # Primary: Get from recent message authors in history
     history = get_history(channel_id)
     for msg in reversed(history[-50:]):
         user_id = msg.get("user_id")
@@ -1033,6 +1034,23 @@ def get_mentionable_users(channel_id: int, limit: int = 10) -> List[dict]:
             })
             if len(users) >= limit:
                 break
+
+    # Fallback: If history is sparse and guild is provided, add recent active members
+    if len(users) < 3 and guild:
+        log.debug(f"[MENTIONS] History sparse ({len(users)} users), checking guild members")
+        # Get members who are online or recently active
+        for member in guild.members:
+            if member.bot:
+                continue  # Skip bots
+            if member.id not in seen_ids:
+                seen_ids.add(member.id)
+                users.append({
+                    "name": get_user_display_name(member),
+                    "user_id": member.id,
+                    "mention_syntax": f"<@{member.id}>"
+                })
+                if len(users) >= limit:
+                    break
 
     return users
 
@@ -1062,6 +1080,9 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
         for user in mentionable_users:
             name_lower = user['name'].lower()
             mention_lookup[name_lower] = user['mention_syntax']
+        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users: {list(mention_lookup.keys())}")
+    else:
+        log.debug(f"[MENTIONS] mentionable_users is empty or None")
 
     if mentionable_bots:
         for bot in mentionable_bots:
@@ -1070,7 +1091,10 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
                 mention_lookup[name_lower] = bot['mention_syntax']
 
     if not mention_lookup:
+        log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
         return content
+
+    log.debug(f"[MENTIONS] Processing content: {content[:100]}...")
 
     # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
     content = re.sub(r'<@!?([^>\d][^>]*)>', r'@\1', content)
@@ -1086,13 +1110,18 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
         mention_syntax = mention_lookup[name]
         # Match @Name with word boundary awareness (case-insensitive)
         # Handles both single-word and multi-word names
-        pattern = re.compile(r'@' + re.escape(name) + r'\b', re.IGNORECASE)
+        pattern = re.compile(r'@' + re.escape(name) + r'(?=\W|$)', re.IGNORECASE)
         if pattern.search(content):
+            log.debug(f"[MENTIONS] Matched @{name} -> {mention_syntax}")
             content = pattern.sub(mention_syntax, content)
             # Extract the user ID from the mention syntax to protect it from the safety net
             id_match = re.search(r'<@!?(\d+)>', mention_syntax)
             if id_match:
                 inserted_mention_ids.add(id_match.group(1))
+        else:
+            log.debug(f"[MENTIONS] No match for @{name}")
+
+    log.debug(f"[MENTIONS] Final content: {content[:100]}...")
 
     # Safety net: Strip any raw Discord syntax the AI hallucinated,
     # but preserve mentions we just intentionally inserted
