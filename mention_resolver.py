@@ -294,15 +294,20 @@ def _extract_request_terms(request_content: str) -> List[str]:
                     seen.add(phrase_canonical)
                     terms.append(phrase_canonical)
 
-    for token in re.findall(r"(?<!<)@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", text):
-        t = token.strip().lower()
-        if t and len(t) >= 3 and t not in STOPWORDS and t not in seen:
-            seen.add(t)
-            terms.append(t)
-        canonical = _canonical_token(t)
-        if canonical and len(canonical) >= 3 and canonical not in STOPWORDS and canonical not in seen:
-            seen.add(canonical)
-            terms.append(canonical)
+    # Only consider explicit @targets from tag-intent segments when intent exists.
+    # This avoids misreading leading reply mentions (e.g. "@Kris ... can you tag Febs")
+    # as the intended target.
+    mention_scopes = segments if has_intent else [text]
+    for scope in mention_scopes:
+        for token in re.findall(r"(?<!<)@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", scope):
+            t = token.strip().lower()
+            if t and len(t) >= 3 and t not in STOPWORDS and t not in seen:
+                seen.add(t)
+                terms.append(t)
+            canonical = _canonical_token(t)
+            if canonical and len(canonical) >= 3 and canonical not in STOPWORDS and canonical not in seen:
+                seen.add(canonical)
+                terms.append(canonical)
 
     return terms[:24]
 

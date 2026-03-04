@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.8] - 2026-03-04
+
+### Changes
+
+- Fix tag-target parsing so leading reply mentions (for example `@Kris ... tag febs`)
+  no longer override the requested target
+- Add regression coverage for leading-mention tag requests to keep tagging deterministic
 ## [v1.6.7] - 2026-03-04
 
 ### Changes

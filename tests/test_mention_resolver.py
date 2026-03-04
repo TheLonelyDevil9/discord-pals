@@ -152,6 +152,24 @@ class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("@got", result.text.lower())
         self.assertNotIn("@heads", result.text.lower())
 
+    async def test_ignores_leading_reply_mention_for_target_extraction(self):
+        febs = FakeMember(300300300300300300, "febs_wawa", "Febs WaWa", bot=False)
+        kris = FakeMember(400400400400400400, "kriswawa", "Kris WaWa", bot=False)
+        guild = FakeGuild(members=[febs, kris], query_pool=[febs, kris])
+
+        result = await resolve_mentions_unified(
+            response="Sure, on it.",
+            request_content="@Kris WaWa collei, can you tag febs?",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertIn("<@300300300300300300>", result.text)
+        self.assertNotIn("<@400400400400400400>", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()

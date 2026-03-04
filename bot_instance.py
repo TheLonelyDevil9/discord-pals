@@ -1887,16 +1887,21 @@ class BotInstance:
                             seen.add(phrase_canonical)
                             terms.append(phrase_canonical)
 
-            # Also capture explicit @targets from user request.
-            for mention_token in re.findall(r"@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", source):
-                t = mention_token.strip().lower()
-                if t and t not in stopwords and len(t) >= 3 and t not in seen:
-                    seen.add(t)
-                    terms.append(t)
-                canonical = _canonical_token(t)
-                if canonical and canonical not in stopwords and len(canonical) >= 3 and canonical not in seen:
-                    seen.add(canonical)
-                    terms.append(canonical)
+            # Also capture explicit @targets, but only from tag-intent segments
+            # when a tag verb exists. This avoids treating leading reply mentions
+            # as the intended tag target.
+            has_intent = bool(re.search(rf'\b(?:{mention_verbs})\b', source, re.IGNORECASE))
+            mention_scopes = segments if has_intent else [source]
+            for scope in mention_scopes:
+                for mention_token in re.findall(r"@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", scope):
+                    t = mention_token.strip().lower()
+                    if t and t not in stopwords and len(t) >= 3 and t not in seen:
+                        seen.add(t)
+                        terms.append(t)
+                    canonical = _canonical_token(t)
+                    if canonical and canonical not in stopwords and len(canonical) >= 3 and canonical not in seen:
+                        seen.add(canonical)
+                        terms.append(canonical)
 
             return terms[:16]
 
