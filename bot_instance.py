@@ -615,19 +615,14 @@ class BotInstance:
             except Exception as e:
                 log.warn(f"Failed to recall channel history: {e}", self.name)
 
-        # Duplicate detection: check if THIS specific message was already processed.
-        # Use message ID only for precision; content-based matching can collide.
+        # Duplicate detection: only skip if THIS bot already replied to THIS message ID.
         message_id = message.id
-        already_responded = False
-        for i, m in enumerate(history):
-            # Match by message_id if available (most precise)
-            if m.get('message_id') == message_id:
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
+        already_responded = any(
+            m.get('role') == 'assistant'
+            and m.get('author') == self.character.name
+            and m.get('reply_to_message_id') == message_id
+            for m in history
+        )
 
         if already_responded:
             log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
@@ -941,7 +936,14 @@ class BotInstance:
         self._update_mood(channel_id, content, response)
 
         # Add to history and send
-        add_to_history(channel_id, "assistant", response, author_name=self.character.name, guild=guild)
+        add_to_history(
+            channel_id,
+            "assistant",
+            response,
+            author_name=self.character.name,
+            guild=guild,
+            reply_to_message_id=request['message'].id
+        )
         sent_messages = await self._send_organic_response(message, response)
 
         # We now have a successful post-clear exchange, so history recall can resume.

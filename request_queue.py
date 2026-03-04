@@ -54,9 +54,11 @@ class RequestQueue:
                     queued.get('split_reply_target') == split_reply_target):
                     return False
 
-            # Limit pending requests per user
+            # Limit pending requests per user.
+            # Allow a small burst so users can send follow-up messages while the
+            # bot is still generating without immediately dropping them.
             user_pending = sum(1 for req in self.queues[channel_id] if req['user_id'] == user_id)
-            if user_pending >= 2:
+            if user_pending >= 5:
                 return False
 
             # Add request to queue

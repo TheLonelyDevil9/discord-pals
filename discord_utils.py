@@ -360,7 +360,9 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None,
+                   user_id: int = None, guild=None, message_id: int = None,
+                   reply_to_message_id: int = None):
     """Add a message to conversation history.
 
     Args:
@@ -371,6 +373,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         user_id: Discord user ID (for mention features)
         guild: Discord guild object for resolving mentions (optional)
         message_id: Discord message ID (for precise duplicate detection)
+        reply_to_message_id: For assistant messages, the source user message ID replied to
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
@@ -395,9 +398,11 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["user_id"] = user_id
     if message_id:
         msg["message_id"] = message_id
+    if reply_to_message_id:
+        msg["reply_to_message_id"] = reply_to_message_id
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
-    msg_hash = hash((role, content, author_name or ''))
+    msg_hash = hash((role, content, author_name or '', message_id or 0, reply_to_message_id or 0))
     if channel_id not in _recent_message_hashes:
         _recent_message_hashes[channel_id] = OrderedDict()
 
