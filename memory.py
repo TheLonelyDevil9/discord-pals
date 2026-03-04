@@ -450,6 +450,63 @@ class MemoryManager:
         self._dirty_files.clear()
         self._last_save = time.time()
 
+    def clear_all_memories(self, include_global_profiles: bool = True) -> dict:
+        """Clear all memory stores across shared and per-character files.
+
+        Returns a summary dict with rough counts of cleared stores/files.
+        """
+        summary = {
+            "server_keys": len(self.server_memories),
+            "lore_keys": len(self.lore),
+            "global_profile_keys": len(self.global_user_profiles) if include_global_profiles else 0,
+            "dm_files": 0,
+            "user_files": 0
+        }
+
+        # Reset in-memory shared stores.
+        self.server_memories = {}
+        self.lore = {}
+        if include_global_profiles:
+            self.global_user_profiles = {}
+
+        # Reset legacy + per-character caches.
+        self._legacy_dm_memories = {}
+        self._legacy_user_memories = {}
+        self._legacy_loaded = True
+        self._dm_memory_cache = {}
+        self._user_memory_cache = {}
+        self._dirty_files.clear()
+        self._recent_generated_facts.clear()
+        self._channel_memory_cooldown.clear()
+
+        # Persist shared stores immediately.
+        safe_json_save(MEMORIES_FILE, {})
+        safe_json_save(LORE_FILE, {})
+        if include_global_profiles:
+            safe_json_save(GLOBAL_USER_PROFILES_FILE, {})
+
+        # Reset legacy files for backwards compatibility.
+        safe_json_save(DM_MEMORIES_FILE, {})
+        safe_json_save(USER_MEMORIES_FILE, {})
+
+        # Remove all per-character memory files.
+        for folder, counter_key in ((DM_MEMORIES_DIR, "dm_files"), (USER_MEMORIES_DIR, "user_files")):
+            if not os.path.isdir(folder):
+                continue
+            for filename in os.listdir(folder):
+                if not filename.endswith(".json"):
+                    continue
+                file_path = os.path.join(folder, filename)
+                try:
+                    os.remove(file_path)
+                    summary[counter_key] += 1
+                except OSError:
+                    # Fallback to blank JSON if unlink fails.
+                    safe_json_save(file_path, {})
+
+        self._last_save = time.time()
+        return summary
+
     # --- Server Memories (shared) ---
 
     def add_server_memory(self, guild_id: int, content: str, auto: bool = False,

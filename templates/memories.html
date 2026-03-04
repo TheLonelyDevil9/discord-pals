@@ -65,6 +65,12 @@
             </select>
         </div>
     </div>
+    <div class="danger-row">
+        <div class="danger-copy">
+            <strong>Danger Zone:</strong> Clears every memory store, including global user profiles.
+        </div>
+        <button type="button" class="btn btn-danger" onclick="clearAllMemoryStores()">Clear All Memories + Profiles</button>
+    </div>
 
     {% if memories %}
     {% for file_name, data in memories.items() %}
@@ -431,6 +437,22 @@
     min-width: 200px;
 }
 
+.danger-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    border: 1px solid var(--danger, #ef4444);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.08);
+}
+.danger-copy {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
 /* Memory List Container */
 .memory-list {
     display: flex;
@@ -452,6 +474,10 @@
 @media (max-width: 768px) {
     .filter-row {
         flex-direction: column;
+    }
+    .danger-row {
+        flex-direction: column;
+        align-items: flex-start;
     }
     .memory-card-header {
         flex-direction: column;
@@ -783,6 +809,38 @@ function clearAllMemories(fileName) {
                 }
             } catch (e) {
                 showToast('Error clearing memories', 'error');
+            }
+        }
+    );
+}
+
+// Clear all memory stores (including global user profiles)
+function clearAllMemoryStores() {
+    showConfirm(
+        'Clear All Memories',
+        'This will permanently delete ALL server memories, lore, DM memories, user memories, and global user profiles. This cannot be undone. Continue?',
+        async function() {
+            try {
+                const response = await fetch('/api/memories/clear-all-stores', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({
+                        include_user_profiles: true
+                    })
+                });
+
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    showToast('All memories and profiles cleared', 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast(data.message || 'Failed to clear memories', 'error');
+                }
+            } catch (e) {
+                showToast('Error clearing all memories', 'error');
             }
         }
     );
