@@ -84,6 +84,54 @@ def _memory_fingerprint(content: str) -> str:
     return digest[:24]
 
 
+def _normalize_person_label(value: str) -> str:
+    """Normalize a display name/user label for robust matching."""
+    if not isinstance(value, str):
+        return ""
+    value = value.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+    value = value.strip().lstrip('@')
+    value = re.sub(r'\s+', ' ', value)
+    return value.lower()
+
+
+def _memory_mentions_target_user(result: str, user_name: str) -> bool:
+    """Best-effort check that generated memory references the target user."""
+    target = _normalize_person_label(user_name)
+    content = _normalize_person_label(result)
+    if not target or not content:
+        return False
+
+    if target in content:
+        return True
+
+    # Allow first-token/full-word matches for display names like "Kris WaWa".
+    target_tokens = [t for t in re.findall(r"[a-z0-9][a-z0-9_.\-']{1,31}", target) if len(t) >= 3]
+    if not target_tokens:
+        return False
+
+    content_tokens = set(re.findall(r"[a-z0-9][a-z0-9_.\-']{1,31}", content))
+    return any(token in content_tokens for token in target_tokens)
+
+
+def _ensure_memory_prefixed_with_user(result: str, user_name: str) -> str:
+    """Prefix memory with target user name if it's not explicitly included."""
+    cleaned = _sanitize_memory_content(result)
+    if not cleaned:
+        return ""
+    if not user_name:
+        return cleaned
+
+    if _memory_mentions_target_user(cleaned, user_name):
+        return cleaned
+
+    # Remove common leading pronouns so prefixed sentence reads naturally.
+    cleaned = re.sub(r'^(they|them|their|the user)\b\s*(?:said|mentioned|shared|likes?|dislikes?)?\s*',
+                     '', cleaned, flags=re.IGNORECASE).strip()
+    if not cleaned:
+        return ""
+    return f"{user_name} {cleaned}".strip()
+
+
 def _memory_entry_is_valid(entry: dict) -> bool:
     """Check if a memory entry has minimally valid structure."""
     if not isinstance(entry, dict):
@@ -985,10 +1033,14 @@ Memory about {target_user} (or NOTHING):"""
                 if not result:
                     return None
 
-                # Validate memory is about the correct user - must mention their name
-                if user_name and user_name.lower() not in result.lower():
-                    log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")
-                    return None
+                # Ensure the memory remains anchored to the correct user, while
+                # being tolerant of partial-name outputs from the model.
+                if user_name and not _memory_mentions_target_user(result, user_name):
+                    patched = _ensure_memory_prefixed_with_user(result, user_name)
+                    if not patched:
+                        log.debug(f"Rejected memory - unable to normalize target user reference: {result[:100]}")
+                        return None
+                    result = patched
 
                 # Short-lived idempotency guard for concurrent generators.
                 fact_scope = f"{'dm' if is_dm else 'server'}:{channel_key}:{character_name}:{user_id or id_key}"

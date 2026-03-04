@@ -2003,7 +2003,7 @@ class BotInstance:
         
         char_name = self.character.name if self.character else "the character"
         # Send more context to LLM (last 10 messages instead of 5)
-        await memory_manager.generate_memory(
+        generated_memory = await memory_manager.generate_memory(
             provider_manager,
             history[-10:],
             is_dm,
@@ -2013,6 +2013,8 @@ class BotInstance:
             user_name=user_name,
             cooldown_scope_id=channel_id
         )
+        if generated_memory:
+            log.info(f"Auto-memory saved: {generated_memory[:120]}", self.name)
 
     def _setup_commands(self) -> None:
         """Register slash commands from commands module."""
