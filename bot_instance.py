@@ -17,12 +17,19 @@ from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split,
+    format_history_split_structured,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared
+)
+from context_protocol import (
+    attach_protocol_handles,
+    build_context_envelope,
+    render_context_block,
+    extract_and_resolve_mentions
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
@@ -732,6 +739,14 @@ class BotInstance:
                 bot_user_id = self.client.user.id if self.client.user else None
                 mentionable_bots = get_other_bots_mentionable(bot_user_id, guild)
 
+        context_protocol_enabled = runtime_config.get("context_protocol_enabled", True)
+        mention_handle_mode = runtime_config.get("mention_handle_mode", "id_handles_v1")
+        if context_protocol_enabled and mention_handle_mode == "id_handles_v1":
+            mentionable_users, mentionable_bots = attach_protocol_handles(
+                mentionable_users,
+                mentionable_bots
+            )
+
         # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
             character=self.character,
@@ -741,12 +756,21 @@ class BotInstance:
         # Split history into older context and immediate messages
         total_limit = runtime_config.get('history_limit', 200)
         immediate_count = runtime_config.get('immediate_message_count', 5)
-        history_msgs, immediate = format_history_split(
-            channel_id,
-            total_limit=total_limit,
-            immediate_count=immediate_count,
-            current_bot_name=self.character.name
-        )
+        history_snapshot = get_history(channel_id)[-total_limit:]
+        if context_protocol_enabled:
+            history_msgs, immediate = format_history_split_structured(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
+            )
+        else:
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
+            )
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
@@ -763,6 +787,22 @@ class BotInstance:
             mentionable_bots=mentionable_bots
         )
 
+        context_envelope = {}
+        context_envelope_block = ""
+        if context_protocol_enabled and mention_handle_mode == "id_handles_v1":
+            context_envelope = build_context_envelope(
+                channel_id=channel_id,
+                guild_name=guild.name if guild else "DM",
+                reply_target_user_id=target_user_id,
+                reply_target_name=target_user_name,
+                current_bot_name=self.character.name,
+                mentionable_users=mentionable_users,
+                mentionable_bots=mentionable_bots,
+                history_messages=history_snapshot,
+                active_users=active_users
+            )
+            context_envelope_block = render_context_block(context_envelope)
+
         # Handle attachment content in the last immediate message
         if attachment_content and immediate:
             log.info(f"[DEBUG] Attaching multimodal content to last immediate message")
@@ -775,12 +815,16 @@ class BotInstance:
         messages_for_api.extend(history_msgs)
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context})
+        if context_envelope_block:
+            messages_for_api.append({"role": "system", "content": context_envelope_block})
         messages_for_api.extend(immediate)
 
         return {
             "system_prompt": system_prompt,
             "messages_for_api": messages_for_api,
             "chatroom_context": chatroom_context,
+            "context_envelope_block": context_envelope_block,
+            "context_envelope": context_envelope,
             "other_bot_names": other_bot_names,
             "channel_id": channel_id,
             "guild_id": guild_id,
@@ -802,6 +846,7 @@ class BotInstance:
         system_prompt = context["system_prompt"]
         messages_for_api = context["messages_for_api"]
         chatroom_context = context["chatroom_context"]
+        context_envelope_block = context.get("context_envelope_block", "")
         other_bot_names = context["other_bot_names"]
 
         async with message.channel.typing():
@@ -814,7 +859,12 @@ class BotInstance:
                     return sum(len(p.get('text', '')) for p in content if p.get('type') == 'text')
                 return 0
 
-            token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
+            token_estimate = (
+                len(system_prompt or "") // 4
+                + len(chatroom_context or "") // 4
+                + len(context_envelope_block or "") // 4
+                + sum(_get_content_len(m) for m in messages_for_api) // 4
+            )
             runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
 
             # Track response time
@@ -822,6 +872,11 @@ class BotInstance:
 
             # Get preferences
             use_single_user = runtime_config.get("use_single_user", False)
+            structured_payload_preferred = runtime_config.get("structured_payload_preferred", True)
+            structured_payload_fallback_enabled = runtime_config.get("structured_payload_fallback_enabled", True)
+            if use_single_user:
+                # Preserve legacy dashboard behavior if explicitly enabled.
+                structured_payload_preferred = False
             preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
 
             response = await provider_manager.generate(
@@ -830,6 +885,8 @@ class BotInstance:
                 temperature=None,
                 max_tokens=None,
                 use_single_user=use_single_user,
+                structured_payload_preferred=structured_payload_preferred,
+                structured_payload_fallback_enabled=structured_payload_fallback_enabled,
                 preferred_tier=preferred_tier
             )
 
@@ -881,6 +938,12 @@ class BotInstance:
             if allow_mentions and runtime_config.get("allow_bot_to_bot_mentions", False)
             else None
         )
+        if allow_mentions:
+            response = extract_and_resolve_mentions(
+                response,
+                context.get("context_envelope"),
+                guild
+            )
         response = process_outgoing_mentions(
             response,
             mentionable_users,

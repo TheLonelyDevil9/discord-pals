@@ -414,8 +414,10 @@ class AIProviderManager:
         system_prompt: str,
         temperature: float = None,
         max_tokens: int = None,
-        use_single_user: bool = True,  # SillyTavern-style by default
-        preferred_tier: str = ""  # Per-character provider preference
+        use_single_user: bool = False,  # Legacy override from dashboard toggle
+        preferred_tier: str = "",  # Per-character provider preference
+        structured_payload_preferred: bool = True,
+        structured_payload_fallback_enabled: bool = True
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
 
@@ -424,33 +426,44 @@ class AIProviderManager:
             system_prompt: System prompt / character definition
             temperature: Response randomness (0-2). If None, uses per-provider config.
             max_tokens: Max response length. If None, uses per-provider config.
-            use_single_user: If True (default), format as single user message
-                             like SillyTavern's "Single user message (no tools)"
+            use_single_user: If True, prefer legacy single-user flattened format first.
             preferred_tier: If set (primary/secondary/fallback), try this tier first
+            structured_payload_preferred: If True, send system/user/assistant payload first
+            structured_payload_fallback_enabled: If True, fallback across payload modes
         """
 
         # Check if we have multimodal content
         has_images = has_multimodal_message(messages)
 
-        # Format messages based on mode
-        if use_single_user:
-            # SillyTavern-style: combine everything into one user message
-            # Returns None if messages contain multimodal content (images)
-            full_messages = format_as_single_user(messages, system_prompt)
-            if full_messages is None:
-                # Multimodal content detected - fall back to multi-message format
-                log.info("Multimodal content detected, using multi-message format")
-                full_messages = [{"role": "system", "content": system_prompt}] + messages
-                full_messages = validate_messages(full_messages)
-        else:
-            # Legacy multi-message format with roles
-            full_messages = [{"role": "system", "content": system_prompt}] + messages
-            full_messages = validate_messages(full_messages)
+        # Build structured payload (always available).
+        structured_messages = validate_messages([{"role": "system", "content": system_prompt}] + messages)
 
-        # Prepare text-only version for non-vision providers
-        text_only_messages = None
-        if has_images:
-            text_only_messages = strip_images_from_messages(full_messages)
+        # Build flattened payload when requested or used as fallback.
+        flattened_messages = None
+        if use_single_user or structured_payload_fallback_enabled:
+            flattened_messages = format_as_single_user(messages, system_prompt)
+            if flattened_messages is not None:
+                flattened_messages = validate_messages(flattened_messages)
+            elif use_single_user:
+                # Flattened mode can't carry images, so structured becomes primary.
+                log.info("Multimodal content detected, cannot use single-user format; using structured payload")
+
+        # Decide per-tier payload mode order.
+        mode_plan = []
+        if structured_payload_preferred:
+            mode_plan.append(("structured", structured_messages))
+            if structured_payload_fallback_enabled and flattened_messages:
+                mode_plan.append(("flattened_fallback", flattened_messages))
+        else:
+            if flattened_messages:
+                mode_plan.append(("flattened_primary", flattened_messages))
+                if structured_payload_fallback_enabled:
+                    mode_plan.append(("structured_fallback", structured_messages))
+            else:
+                mode_plan.append(("structured", structured_messages))
+
+        if not mode_plan:
+            mode_plan = [("structured", structured_messages)]
 
         # Build tier order dynamically from all configured providers
         tier_order = list(PROVIDERS.keys())
@@ -475,12 +488,6 @@ class AIProviderManager:
                 # Check if provider supports vision (default True, set false for text-only models)
                 supports_vision = PROVIDERS[tier].get("supports_vision", True)
 
-                # Use text-only messages for non-vision providers
-                messages_to_send = full_messages
-                if has_images and not supports_vision:
-                    log.info(f"[{tier}] Provider doesn't support vision, using text-only")
-                    messages_to_send = text_only_messages
-
                 # Use per-provider settings, with fallback to function args or defaults
                 provider_max_tokens = PROVIDERS[tier].get("max_tokens", 8192)
                 provider_temperature = PROVIDERS[tier].get("temperature", 1.0)
@@ -489,33 +496,54 @@ class AIProviderManager:
                 effective_max_tokens = max_tokens if max_tokens is not None else provider_max_tokens
                 effective_temperature = temperature if temperature is not None else provider_temperature
 
-                try:
-                    client = self.providers[tier]
-                    result = await self._try_generate(
-                        client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
-                        extra_body=extra_body if extra_body else None,
-                        include_body=include_body,
-                        exclude_body=exclude_body,
-                        include_headers=include_headers
-                    )
-                    
-                    if result:
-                        self.status[tier] = "ok"
-                        return result
-                    else:
-                        self.status[tier] = "empty response"
+                client = self.providers[tier]
+                hard_fail = False
+
+                for mode_index, (mode_name, payload_messages) in enumerate(mode_plan):
+                    messages_to_send = payload_messages
+                    if has_images and not supports_vision:
+                        log.info(f"[{tier}] Provider doesn't support vision, using text-only for mode={mode_name}")
+                        messages_to_send = strip_images_from_messages(payload_messages)
+
+                    try:
+                        result = await self._try_generate(
+                            client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
+                            extra_body=extra_body if extra_body else None,
+                            include_body=include_body,
+                            exclude_body=exclude_body,
+                            include_headers=include_headers
+                        )
+
+                        if result:
+                            self.status[tier] = "ok"
+                            log.debug(f"[{tier}] Success with context_mode={mode_name}")
+                            return result
+
+                        self.status[tier] = f"empty response ({mode_name})"
                         continue
-                    
-                except asyncio.TimeoutError:
-                    self.status[tier] = "timeout"
-                    log.error(f"[{tier}] Timeout after {API_TIMEOUT}s")
-                    continue
-                except RateLimitError:
-                    self.status[tier] = "rate limited"
-                    continue
-                except Exception as e:
-                    self.status[tier] = "error"
-                    log.error(f"[{tier}] {str(e)[:100]}")
+
+                    except asyncio.TimeoutError:
+                        self.status[tier] = "timeout"
+                        log.error(f"[{tier}] Timeout after {API_TIMEOUT}s (mode={mode_name})")
+                        hard_fail = True
+                        break
+                    except RateLimitError:
+                        self.status[tier] = "rate limited"
+                        hard_fail = True
+                        break
+                    except Exception as e:
+                        error_preview = str(e)[:120]
+                        if mode_index < len(mode_plan) - 1:
+                            log.warn(
+                                f"[{tier}] mode={mode_name} failed ({error_preview}); "
+                                f"trying {mode_plan[mode_index + 1][0]}"
+                            )
+                            continue
+                        self.status[tier] = "error"
+                        log.error(f"[{tier}] mode={mode_name} failed: {error_preview}")
+                        break
+
+                if hard_fail:
                     continue
             
             # Wait before next cycle

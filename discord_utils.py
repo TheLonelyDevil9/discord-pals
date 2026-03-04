@@ -581,6 +581,51 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
     return history, immediate
 
 
+def format_history_split_structured(channel_id: int, total_limit: int = 200,
+                                    immediate_count: int = 5,
+                                    current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+    """
+    Split history for structured payload mode.
+
+    Unlike format_history_split(), this keeps message content raw and carries
+    speaker metadata in side fields. This avoids training the model to mimic
+    "Name: ..." transcript formatting while preserving identity context.
+
+    Returns: (history_messages, immediate_messages)
+    """
+    all_history = get_history(channel_id)[-total_limit:]
+    formatted = []
+
+    for msg in all_history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        author = msg.get("author")
+        author_id = msg.get("user_id")
+
+        # Treat other bots as user role to avoid assistant-role personality bleed.
+        if role == "assistant" and author and current_bot_name and author.lower() != current_bot_name.lower():
+            role = "user"
+
+        entry = {"role": role, "content": content}
+        if author:
+            entry["author"] = author
+        if author_id:
+            entry["author_id"] = author_id
+        if msg.get("message_id"):
+            entry["message_id"] = msg.get("message_id")
+        if msg.get("reply_to_message_id"):
+            entry["reply_to_message_id"] = msg.get("reply_to_message_id")
+
+        formatted.append(entry)
+
+    if len(formatted) <= immediate_count:
+        return [], formatted
+
+    history = formatted[:-immediate_count]
+    immediate = formatted[-immediate_count:]
+    return history, immediate
+
+
 def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
     """Get list of unique users who have participated recently."""
     history = get_history(channel_id)[-limit:]

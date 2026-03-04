@@ -34,6 +34,11 @@ DEFAULTS = {
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
     "mention_context_limit": 10,  # Max users to show in mention context for AI
+    # Context protocol + payload formatting
+    "context_protocol_enabled": True,  # Inject deterministic context envelope for mentions/speaker identity
+    "mention_handle_mode": "id_handles_v1",  # Mention protocol handle scheme
+    "structured_payload_preferred": True,  # Try structured role payload first
+    "structured_payload_fallback_enabled": True,  # Fallback to single-user flattening when needed
 }
 
 # Config cache to avoid repeated file reads

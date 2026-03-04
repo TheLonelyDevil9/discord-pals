@@ -323,19 +323,43 @@ class CharacterManager:
             other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
 
         # Add mentionable users context (for @mention feature)
-        # Show @Username format (not raw <@id>) - AI learns to use @Name, we convert on output
-        mentionable_users_context = (
-            "Mention formatting rule: Use plain @Name only. "
-            "Never output raw Discord mention syntax like <@123>, <@!123>, or <@ Name>."
+        # Context protocol mode: deterministic @u_<id> / @b_<id> handles.
+        has_protocol_handles = any(u.get("handle") for u in (mentionable_users or [])) or any(
+            b.get("handle") for b in (mentionable_bots or [])
         )
+
+        mentionable_users_context = ""
+        if has_protocol_handles:
+            mentionable_users_context = (
+                "Mention formatting rule: Use ONLY protocol handles.\n"
+                "- Humans: @u_<user_id>\n"
+                "- Bots: @b_<user_id>\n"
+                "Never output raw Discord mention syntax like <@123>, <@!123>, or <@ Name>."
+            )
+        else:
+            mentionable_users_context = (
+                "Mention formatting rule: Use plain @Name only. "
+                "Never output raw Discord mention syntax like <@123>, <@!123>, or <@ Name>."
+            )
+
         if mentionable_users:
-            user_list = [f"- @{u['name']}" for u in mentionable_users[:10]]
+            user_list = []
+            for u in mentionable_users[:10]:
+                handle = u.get("handle")
+                name = u.get("name") or u.get("username") or "unknown"
+                user_list.append(f"- {handle} ({name})" if handle else f"- @{name}")
             mentionable_users_context += "\n\nUsers you can @mention to get their attention:\n" + "\n".join(user_list)
 
         # Add mentionable bots context (for bot-to-bot @mention feature)
         mentionable_bots_context = ""
         if mentionable_bots:
-            bot_list = [f"- @{b['character_name']}" for b in mentionable_bots if b.get('character_name')]
+            bot_list = []
+            for b in mentionable_bots:
+                char_name = b.get("character_name")
+                if not char_name:
+                    continue
+                handle = b.get("handle")
+                bot_list.append(f"- {handle} ({char_name})" if handle else f"- @{char_name}")
             if bot_list:
                 mentionable_bots_context = "Other bots you can @mention to summon them:\n" + "\n".join(bot_list)
 
