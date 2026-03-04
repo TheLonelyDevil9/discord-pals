@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.11] - 2026-03-04
+
+### Fixed
+
+- Mention resolver now finds members by display name/nick when `guild.query_members()` misses them (it only matches usernames without presences intent) — the `fetch_members` fallback was gated behind an early return that skipped it when other terms had results
+- Added missing stopwords (`for`, `this`, `that`, `its`, `with`, `from`, `not`, `but`, `just`, `like`) to prevent wasteful guild member queries on common words
+
+### Added
+
+- Debug logging when a request term fails to resolve in `resolve_mentions_unified()`
 ## [v1.6.10] - 2026-03-04
 
 ### Fixed

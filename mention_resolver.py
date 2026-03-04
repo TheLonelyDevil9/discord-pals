@@ -18,7 +18,8 @@ TAG_VERBS_RE = r"(?:tag|mention|ping|summon|notify|call|bring|get)"
 STOPWORDS = {
     "please", "pls", "pleasee", "me", "you", "them", "him", "her", "someone", "anyone",
     "tag", "mention", "ping", "summon", "notify", "call", "bring", "get", "can", "could",
-    "would", "and", "or", "to", "the", "a", "an", "my", "your", "here", "there", "now"
+    "would", "and", "or", "to", "the", "a", "an", "my", "your", "here", "there", "now",
+    "for", "this", "that", "its", "with", "from", "not", "but", "just", "like",
 }
 
 RELATION_GROUPS = [
@@ -344,6 +345,7 @@ async def _query_members_for_terms(guild, terms: List[str], include_bots: bool) 
     out = []
     seen_ids = set()
     seen_queries = set()
+    unresolved_terms: List[str] = []
     for term in terms[:20]:
         query = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
         if len(query) < 3:
@@ -365,6 +367,9 @@ async def _query_members_for_terms(guild, terms: List[str], include_bots: bool) 
                 except Exception:
                     queried = []
 
+        if not queried:
+            unresolved_terms.append(term)
+
         for member in queried or []:
             rec = _make_record_from_member(member)
             if not rec:
@@ -376,9 +381,10 @@ async def _query_members_for_terms(guild, terms: List[str], include_bots: bool) 
             seen_ids.add(rec.user_id)
             out.append(member)
 
-    # Fallback for stale cache / offline users: do a bounded fetch pass only
-    # when query_members found nothing.
-    if out:
+    # Fallback for stale cache / offline users: run a bounded fetch pass when
+    # any term went unresolved by query_members (which only matches usernames
+    # without the presences intent — display names and nicks are missed).
+    if not unresolved_terms:
         return out
 
     if not hasattr(guild, "fetch_members"):
@@ -670,6 +676,12 @@ async def resolve_mentions_unified(
         if selected_id and selected_id not in seen_ids:
             seen_ids.add(selected_id)
             requested_ids.append(selected_id)
+        elif not selected_id:
+            log.debug(
+                f"[MENTION-RESOLVER] request_term '{term}' unresolved "
+                f"(score={round(score, 3)}, reasons={reasons}, "
+                f"records_count={len(records)})"
+            )
 
     candidate_to_id = {}
     unresolved_candidates = []

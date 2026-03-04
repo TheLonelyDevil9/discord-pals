@@ -1808,7 +1808,8 @@ class BotInstance:
             "please", "me", "you", "them", "him", "her", "someone", "anyone",
             "tag", "mention", "ping", "summon", "notify", "call", "bring", "get",
             "can", "could", "would", "and", "or", "to", "the", "a", "an", "my",
-            "your", "here", "there", "now", "pls", "pleasee"
+            "your", "here", "there", "now", "pls", "pleasee",
+            "for", "this", "that", "its", "with", "from", "not", "but", "just", "like",
         }
 
         def _canonical_token(value: str) -> str:
