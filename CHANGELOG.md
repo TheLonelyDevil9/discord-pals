@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.7] - 2026-03-04
+
+### Changes
+
+- Harden user tagging pipeline with strict no-ambiguity mention resolution (`no_tag`)
+- Always apply explicit tag-request fallback so requested mentions are injected reliably
+- Add durable per-guild alias cache to resolve users not currently in active context
+- Strip unresolved plaintext `@...` artifacts while preserving valid Discord `<@id>` mentions
+- Add mention sanitizer regression tests for conversational `@word` leak cases
+
 ## [v1.6.6] - 2026-03-04
 
 ### Changes

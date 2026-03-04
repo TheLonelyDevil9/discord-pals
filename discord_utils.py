@@ -135,9 +135,16 @@ multipart_responses: Dict[int, Dict[int, str]] = {}
 
 # History persistence file
 HISTORY_CACHE_FILE = os.path.join(DATA_DIR, "history_cache.json")
+USER_ALIAS_CACHE_FILE = os.path.join(DATA_DIR, "user_alias_cache.json")
 
 # Channel name mapping (channel_id -> name) for readable storage
 channel_names: Dict[int, str] = {}
+
+# Durable per-guild alias cache to keep mention resolution working when
+# members are offline or not present in the immediate context window.
+_user_alias_cache: Dict[str, Dict[str, dict]] = {}
+_user_alias_cache_loaded = False
+_user_alias_cache_lock = threading.Lock()
 
 # Conversation history limits
 _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
@@ -396,6 +403,17 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
     # Track activity for this channel
     _channel_last_activity[channel_id] = time.time()
+
+    # Keep a durable alias map for deterministic mention fallback.
+    if guild and user_id:
+        try:
+            _update_user_alias_cache_from_context(
+                guild=guild,
+                user_id=int(user_id),
+                author_name=author_name
+            )
+        except Exception:
+            pass
 
     # Sanitize Discord syntax before storage (fix before sending to LLM)
     if guild:
@@ -1073,6 +1091,118 @@ def _build_mention_aliases(*names: Optional[str]) -> List[str]:
     return aliases
 
 
+def _load_user_alias_cache() -> Dict[str, Dict[str, dict]]:
+    """Load alias cache from disk once per process."""
+    global _user_alias_cache_loaded, _user_alias_cache
+    with _user_alias_cache_lock:
+        if _user_alias_cache_loaded:
+            return _user_alias_cache
+
+        raw = safe_json_load(USER_ALIAS_CACHE_FILE, default={})
+        if isinstance(raw, dict):
+            _user_alias_cache = raw
+        else:
+            _user_alias_cache = {}
+        _user_alias_cache_loaded = True
+        return _user_alias_cache
+
+
+def _persist_user_alias_cache():
+    """Persist alias cache to disk."""
+    safe_json_save(USER_ALIAS_CACHE_FILE, _user_alias_cache)
+
+
+def _record_user_aliases(guild_id: int, user_id: int, aliases: List[str], *, is_bot: bool = False):
+    """Record aliases for a guild member in the durable alias cache."""
+    if guild_id <= 0 or user_id <= 0:
+        return
+
+    cache = _load_user_alias_cache()
+    guild_key = str(guild_id)
+    user_key = str(user_id)
+    normalized = _build_mention_aliases(*(aliases or []))
+    if not normalized:
+        return
+
+    with _user_alias_cache_lock:
+        guild_bucket = cache.setdefault(guild_key, {})
+        existing = guild_bucket.get(user_key) or {}
+        merged = _build_mention_aliases(*(existing.get("aliases") or []), *normalized)
+        guild_bucket[user_key] = {
+            "aliases": merged,
+            "is_bot": bool(is_bot),
+            "updated_at": time.time(),
+        }
+    _persist_user_alias_cache()
+
+
+def _update_user_alias_cache_from_context(guild, user_id: int, author_name: Optional[str] = None):
+    """Update durable alias cache using current guild/member context."""
+    if not guild or user_id <= 0:
+        return
+
+    member = None
+    try:
+        member = guild.get_member(int(user_id))
+    except Exception:
+        member = None
+
+    aliases = []
+    is_bot = False
+    if member:
+        is_bot = bool(getattr(member, "bot", False))
+        aliases = _build_mention_aliases(
+            get_user_display_name(member),
+            getattr(member, "name", None),
+            getattr(member, "global_name", None),
+            getattr(member, "nick", None),
+            author_name,
+        )
+    else:
+        aliases = _build_mention_aliases(author_name)
+
+    _record_user_aliases(int(getattr(guild, "id", 0)), int(user_id), aliases, is_bot=is_bot)
+
+
+def get_cached_mention_alias_entries(guild_id: int, include_bots: bool = True) -> List[dict]:
+    """Return cached alias entries for mention fallback in a guild."""
+    if guild_id <= 0:
+        return []
+
+    cache = _load_user_alias_cache()
+    guild_bucket = cache.get(str(guild_id))
+    if not isinstance(guild_bucket, dict):
+        return []
+
+    out = []
+    for user_key, payload in guild_bucket.items():
+        if not isinstance(payload, dict):
+            continue
+        try:
+            user_id = int(user_key)
+        except (TypeError, ValueError):
+            continue
+        if user_id <= 0:
+            continue
+
+        is_bot = bool(payload.get("is_bot"))
+        if is_bot and not include_bots:
+            continue
+
+        aliases = _build_mention_aliases(*((payload.get("aliases") or [])))
+        if not aliases:
+            continue
+
+        out.append({
+            "user_id": user_id,
+            "is_bot": is_bot,
+            "aliases": aliases,
+            "mention_syntax": f"<@{user_id}>"
+        })
+
+    return out
+
+
 def get_other_bots_mentionable(current_bot_id: int, guild, limit: int = 15) -> List[dict]:
     """Get list of other bots that can be mentioned.
 
@@ -1294,6 +1424,20 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             for alias in aliases:
                 register_alias(alias, mention_syntax)
 
+    # Durable alias fallback: supports users not currently present in context
+    # (for example offline members or sparse history windows).
+    include_cached_bots = mentionable_bots is not None
+    if guild:
+        for cached in get_cached_mention_alias_entries(guild.id, include_bots=include_cached_bots):
+            mention_syntax = cached.get('mention_syntax')
+            if not mention_syntax:
+                continue
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
+            for alias in cached.get('aliases') or []:
+                register_alias(alias, mention_syntax)
+
     # Fallback: include real guild members in alias lookup so @DisplayName can
     # still resolve even when mentionable_users context is sparse/stale.
     if guild:
@@ -1390,3 +1534,40 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     content = normalize_malformed_mentions(content)
 
     return content.strip()
+
+
+def strip_unresolved_plain_mentions(content: str) -> str:
+    """Demote unresolved plaintext @mentions while preserving valid numeric mentions."""
+    if not content:
+        return content
+
+    placeholders = {}
+
+    def _protect_valid_mention(match: re.Match) -> str:
+        token = f"__VALID_USER_MENTION_{len(placeholders)}__"
+        placeholders[token] = match.group(0)
+        return token
+
+    cleaned = re.sub(r"<@!?(\d{15,22})>", _protect_valid_mention, content)
+    cleaned = re.sub(r"(?<!<)@{2,}(?=[A-Za-z0-9_])", "@", cleaned)
+
+    def _demote_plain_mention(match: re.Match) -> str:
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip().rstrip(" >.,!?;:")
+        if not candidate:
+            return ""
+        return candidate
+
+    # Match plain @name tokens without touching emails or valid Discord syntax.
+    cleaned = re.sub(
+        r"(?<![\w<])@([A-Za-z0-9][A-Za-z0-9_.\'-]*(?:\s+[A-Za-z0-9][A-Za-z0-9_.\'-]*){0,7})(?=[^A-Za-z0-9_]|$)",
+        _demote_plain_mention,
+        cleaned
+    )
+
+    cleaned = re.sub(r"(^|[\s(\[{])@(?=[\s)\]}.,!?;:]|$)", r"\1", cleaned)
+    cleaned = re.sub(r"@\s*>", "", cleaned)
+
+    for token, original in placeholders.items():
+        cleaned = cleaned.replace(token, original)
+
+    return cleaned.strip()

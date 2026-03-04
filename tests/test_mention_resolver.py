@@ -139,6 +139,19 @@ class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hopefully that works for you!", result.text.lower())
         self.assertNotIn("@hopefully", result.text.lower())
 
+    async def test_drops_conversational_plain_mentions(self):
+        result = await resolve_mentions_unified(
+            response="@yo @got someone looking for you 👀 and @heads up",
+            request_content="starlord can you tag febs",
+            context_envelope={},
+            guild=None,
+            include_bots=True,
+        )
+
+        self.assertNotIn("@yo", result.text.lower())
+        self.assertNotIn("@got", result.text.lower())
+        self.assertNotIn("@heads", result.text.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

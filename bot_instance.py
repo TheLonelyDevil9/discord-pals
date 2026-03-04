@@ -23,7 +23,8 @@ from discord_utils import (
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
-    was_recently_cleared, acknowledge_cleared
+    was_recently_cleared, acknowledge_cleared, strip_unresolved_plain_mentions,
+    get_cached_mention_alias_entries
 )
 from context_protocol import (
     attach_protocol_handles,
@@ -1003,8 +1004,11 @@ class BotInstance:
         mention_resolver_enabled = runtime_config.get("mention_resolver_enabled", True)
         mention_resolver_include_bots = runtime_config.get("mention_resolver_include_bots", True)
         mention_resolver_ambiguity_policy = (
-            runtime_config.get("mention_resolver_ambiguity_policy", "best_match") or "best_match"
+            runtime_config.get("mention_resolver_ambiguity_policy", "no_tag") or "no_tag"
         )
+        mention_resolver_ambiguity_policy = str(mention_resolver_ambiguity_policy).lower()
+        if mention_resolver_ambiguity_policy not in {"no_tag", "clarify"}:
+            mention_resolver_ambiguity_policy = "no_tag"
         try:
             mention_resolver_min_score = float(runtime_config.get("mention_resolver_min_score", 5.0))
         except (TypeError, ValueError):
@@ -1037,7 +1041,7 @@ class BotInstance:
                 context_envelope=context.get("context_envelope"),
                 guild=guild,
                 include_bots=bool(mention_resolver_include_bots),
-                ambiguity_policy=str(mention_resolver_ambiguity_policy).lower(),
+                ambiguity_policy=mention_resolver_ambiguity_policy,
                 min_score=mention_resolver_min_score,
                 relation_corpus=self._build_relation_corpus_for_mentions(),
             )
@@ -1061,6 +1065,11 @@ class BotInstance:
             )
             response = self._resolve_protocol_handles_failsafe(response, context, guild)
 
+        # Intent fallback: if the user explicitly requested a tag/mention/ping,
+        # inject resolved mentions directly so model wording cannot drop them.
+        if allow_mentions:
+            response = await self._inject_requested_mentions_failsafe(response, context, guild)
+
         # Final safety pass: drop any transcript-style "User: ..." lines that
         # would make the bot speak as someone else after mention processing.
         response = self._strip_user_attribution_lines(response, context)
@@ -1071,11 +1080,10 @@ class BotInstance:
         # Prepend mention for split replies
         if split_target:
             response = f"<@{split_target.id}> {response}"
-
-        # Intent fallback: if the user explicitly requested a tag/mention/ping,
-        # inject resolved mentions directly so model wording cannot drop them.
-        if allow_mentions and not mention_resolver_enabled:
-            response = await self._inject_requested_mentions_failsafe(response, context, guild)
+        # Strict final pass: unresolved plaintext mentions should never leak as
+        # fake pings like "@yo" or dangling "@". Keep valid numeric mentions.
+        if allow_mentions:
+            response = strip_unresolved_plain_mentions(response)
 
         # Parse reactions
         response, reactions = parse_reactions(response)
@@ -1795,8 +1803,6 @@ class BotInstance:
         envelope = context.get("context_envelope") or {}
         candidates = envelope.get("mention_candidates") or []
 
-        text = request_content.lower()
-        compact_text = re.sub(r"[^a-z0-9]+", "", text)
         stopwords = {
             "please", "me", "you", "them", "him", "her", "someone", "anyone",
             "tag", "mention", "ping", "summon", "notify", "call", "bring", "get",
@@ -1999,46 +2005,118 @@ class BotInstance:
                 return next(iter(prefix.values()))
             return None
 
-        terms = _extract_terms(request_content)
-        term_set = set(terms)
-        requested_ids = []
-        seen_ids = set()
-        for candidate in candidates:
-            try:
-                user_id = int(candidate.get("user_id"))
-            except (TypeError, ValueError):
-                continue
-
-            aliases = candidate.get("aliases") or []
-            matched = False
-            for alias in aliases:
+        def _candidate_aliases(candidate: dict) -> set[str]:
+            aliases = set()
+            for alias in (candidate.get("aliases") or []):
                 if not isinstance(alias, str):
                     continue
-                normalized = alias.strip().lstrip("@").lower()
-                if not normalized:
+                aliases.update(_alias_variants(alias))
+            return aliases
+
+        def _candidate_is_bot(candidate: dict) -> bool:
+            handle = str(candidate.get("handle") or "").lower()
+            return handle.startswith("@b_") or str(candidate.get("priority") or "").lower() == "bot"
+
+        def _pick_unique_candidate_id(
+            term: str,
+            candidate_rows: list[dict],
+            *,
+            include_bots: bool = True
+        ) -> int | None:
+            term_variants = _alias_variants(term)
+            if not term_variants:
+                return None
+
+            exact = {}
+            prefix = {}
+
+            for candidate in candidate_rows:
+                try:
+                    user_id = int(candidate.get("user_id"))
+                except (TypeError, ValueError):
                     continue
-                if re.fullmatch(r'[ub]_\d{3,22}', normalized):
+                if user_id <= 0:
                     continue
-                if len(normalized) < 3 or normalized in stopwords:
+                if _candidate_is_bot(candidate) and not include_bots:
                     continue
 
-                alias_variants = _alias_variants(normalized)
-                if alias_variants.intersection(term_set):
-                    matched = True
-                    break
+                aliases = _candidate_aliases(candidate)
+                if aliases.intersection(term_variants):
+                    exact[user_id] = user_id
+                    continue
 
-                if re.search(rf'(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])', text):
-                    matched = True
-                    break
+                for alias in aliases:
+                    if any(len(variant) >= 3 and alias.startswith(variant) for variant in term_variants):
+                        prefix[user_id] = user_id
+                        break
 
-                alias_canonical = _canonical_token(normalized)
-                if len(alias_canonical) >= 3 and alias_canonical in compact_text:
-                    matched = True
-                    break
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(prefix) == 1:
+                return next(iter(prefix.values()))
+            return None
 
-            if matched and user_id not in seen_ids:
-                seen_ids.add(user_id)
-                requested_ids.append(user_id)
+        def _pick_unique_cached_id(
+            term: str,
+            cached_rows: list[dict],
+            *,
+            include_bots: bool = True
+        ) -> int | None:
+            term_variants = _alias_variants(term)
+            if not term_variants:
+                return None
+
+            exact = {}
+            prefix = {}
+            self_id = self.client.user.id if self.client and self.client.user else None
+
+            for row in cached_rows:
+                try:
+                    user_id = int(row.get("user_id"))
+                except (TypeError, ValueError):
+                    continue
+                if user_id <= 0:
+                    continue
+                if self_id and user_id == self_id:
+                    continue
+
+                is_bot = bool(row.get("is_bot"))
+                if is_bot and not include_bots:
+                    continue
+
+                aliases = set()
+                for alias in (row.get("aliases") or []):
+                    if not isinstance(alias, str):
+                        continue
+                    aliases.update(_alias_variants(alias))
+
+                if aliases.intersection(term_variants):
+                    exact[user_id] = user_id
+                    continue
+
+                for alias in aliases:
+                    if any(len(variant) >= 3 and alias.startswith(variant) for variant in term_variants):
+                        prefix[user_id] = user_id
+                        break
+
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(prefix) == 1:
+                return next(iter(prefix.values()))
+            return None
+
+        terms = _extract_terms(request_content)
+        requested_ids = []
+        seen_ids = set()
+        for term in terms:
+            selected_id = _pick_unique_candidate_id(term, candidates, include_bots=True)
+            if selected_id and selected_id not in seen_ids:
+                seen_ids.add(selected_id)
+                requested_ids.append(selected_id)
 
         # Relation fallback: resolve vague requests like "tag your sister/creator"
         # by matching known candidate names near relationship terms in character text.
@@ -2069,6 +2147,25 @@ class BotInstance:
             self_id = self.client.user.id if self.client and self.client.user else None
             base_members = [m for m in guild.members if not m.bot]
             base_bots = [m for m in guild.members if m.bot and m.id != self_id]
+            cached_rows = get_cached_mention_alias_entries(guild.id, include_bots=True)
+            fetched_user_pool = None
+            fetched_bot_pool = None
+
+            async def _fetch_members_pool(include_bots: bool) -> list[discord.Member]:
+                if not hasattr(guild, "fetch_members"):
+                    return []
+                out = []
+                try:
+                    async for member_row in guild.fetch_members(limit=1200):
+                        if include_bots:
+                            if member_row.bot and (not self_id or member_row.id != self_id):
+                                out.append(member_row)
+                        else:
+                            if not member_row.bot:
+                                out.append(member_row)
+                except Exception:
+                    return []
+                return out
 
             for term in terms:
                 member = _pick_unique_member(term, base_members, include_bots=False)
@@ -2093,6 +2190,18 @@ class BotInstance:
                         if not m.bot:
                             merged[m.id] = m
                     member = _pick_unique_member(term, list(merged.values()), include_bots=False)
+                    if member is None:
+                        if fetched_user_pool is None:
+                            fetched_user_pool = await _fetch_members_pool(include_bots=False)
+                        if fetched_user_pool:
+                            fetched_merged = {m.id: m for m in base_members}
+                            for fetched_member in fetched_user_pool:
+                                fetched_merged[fetched_member.id] = fetched_member
+                            member = _pick_unique_member(
+                                term,
+                                list(fetched_merged.values()),
+                                include_bots=False
+                            )
 
                 if member is None:
                     member = _pick_unique_member(term, base_bots, include_bots=True)
@@ -2117,10 +2226,34 @@ class BotInstance:
                             if m.bot and (not self_id or m.id != self_id):
                                 merged[m.id] = m
                         member = _pick_unique_member(term, list(merged.values()), include_bots=True)
+                        if member is None:
+                            if fetched_bot_pool is None:
+                                fetched_bot_pool = await _fetch_members_pool(include_bots=True)
+                            if fetched_bot_pool:
+                                fetched_merged = {m.id: m for m in base_bots}
+                                for fetched_member in fetched_bot_pool:
+                                    fetched_merged[fetched_member.id] = fetched_member
+                                member = _pick_unique_member(
+                                    term,
+                                    list(fetched_merged.values()),
+                                    include_bots=True
+                                )
 
                 if member and member.id not in seen_ids:
                     seen_ids.add(member.id)
                     requested_ids.append(member.id)
+                    continue
+
+                cached_user_id = _pick_unique_cached_id(term, cached_rows, include_bots=False)
+                if cached_user_id and cached_user_id not in seen_ids:
+                    seen_ids.add(cached_user_id)
+                    requested_ids.append(cached_user_id)
+                    continue
+
+                cached_bot_id = _pick_unique_cached_id(term, cached_rows, include_bots=True)
+                if cached_bot_id and cached_bot_id not in seen_ids:
+                    seen_ids.add(cached_bot_id)
+                    requested_ids.append(cached_bot_id)
 
         if not requested_ids:
             return response

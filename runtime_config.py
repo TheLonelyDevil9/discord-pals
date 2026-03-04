@@ -39,7 +39,7 @@ DEFAULTS = {
     # Unified mention resolver
     "mention_resolver_enabled": True,  # Use deterministic resolver for request/response mentions
     "mention_resolver_include_bots": True,  # Resolve bot mentions as well as user mentions
-    "mention_resolver_ambiguity_policy": "best_match",  # best_match | no_tag | clarify
+    "mention_resolver_ambiguity_policy": "no_tag",  # best_match | no_tag | clarify
     "mention_resolver_min_score": 5.0,  # Minimum confidence to auto-resolve a mention
     # Auto-memory generation
     "auto_memory_enabled": True,  # Enable automatic memory extraction after responses
