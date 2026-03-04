@@ -4,6 +4,37 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.5] - 2026-03-04
+
+### Changes
+
+- Stabilize per-request context and harden anti-impersonation
+- Fix tagging consistency, thread triggers, auto-memory, and unignore matching
+- Unify mention resolution for consistent user and bot tagging
+- Restore reliable auto-memory generation and successful-save cooldown
+- Harden tag intent resolution for off-context members
+- Add relation-based tag fallback and normalize raw emoji IDs
+- Fix auto-memory rejection for partial display-name outputs
+- Improve explicit tag fallback for bot and punctuation variants
+- Add dashboard button to clear all memories and profiles
+- Resolve tag requests via guild lookup and coerce numeric YAML params
+- Inject requested mentions when user asks to tag someone
+- Fix protocol-handle fallback when envelope is sparse
+- Convert protocol handles via guild member fallback
+- Force-convert trusted protocol handles before send
+- Fix unresolved protocol handle mentions before send
+- Rework context pipeline with deterministic mention handles
+- Resolve short-name @mentions to real Discord user tags
+- Enforce @Name mention style in context and send path
+- Add hard final cleanup for malformed mention stubs
+- Fix speaker leakage and offline mention resolution
+- Strip user-attribution output and remove system prompt guard edits
+- Fix multi-message reply tracking and queue burst handling
+- Fix plaintext @user mention fallback for guild members
+- Harden bot mention sanitization and bot discovery fallback
+- Fix malformed '<@ Name' mention normalization
+- Fix multibot timeout, mention handling, clear-state, and memory dedupe
+- Disable aggressive RE_MALFORMED_EMOJI regex that truncated messages (v1.6.4)
 ## [v1.6.4] - 2026-02-28
 
 ### Fixed

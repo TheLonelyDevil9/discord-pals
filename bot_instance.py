@@ -17,6 +17,7 @@ from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split,
+    format_history_split_structured,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
@@ -24,6 +25,13 @@ from discord_utils import (
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared
 )
+from context_protocol import (
+    attach_protocol_handles,
+    build_context_envelope,
+    render_context_block,
+    extract_and_resolve_mentions
+)
+from mention_resolver import resolve_mentions_unified
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -157,10 +165,26 @@ class BotInstance:
         Returns dict with keys: mentioned, is_reply_to_bot, is_autonomous, name_triggered, should_respond
         """
         channel_id = message.channel.id
+        is_thread = isinstance(message.channel, discord.Thread)
+        thread_policy = str(runtime_config.get("thread_response_policy", "mention_or_reply") or "mention_or_reply").lower()
+        thread_policy_disabled = is_thread and thread_policy in {"disabled", "off", "none"}
+        thread_policy_strict = is_thread and thread_policy in {
+            "mention_or_reply", "mentionreply", "mention_only", "mentiononly", "strict"
+        }
 
         # Check if user has ignored this bot
         char_name = self.character.name if self.character else ""
         if char_name and user_ignores.is_ignored(str(message.author.id), char_name):
+            return {
+                "mentioned": False,
+                "is_reply_to_bot": False,
+                "is_autonomous": False,
+                "name_triggered": False,
+                "should_respond": False
+            }
+
+        # Optional thread kill switch.
+        if thread_policy_disabled:
             return {
                 "mentioned": False,
                 "is_reply_to_bot": False,
@@ -192,12 +216,24 @@ class BotInstance:
 
         # Autonomous mode check
         is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
+        if is_autonomous and is_other_bot and runtime_config.get("autonomous_pause_while_channel_busy", True):
+            try:
+                from coordinator import coordinator
+                if coordinator.is_channel_busy(channel_id):
+                    log.debug("Suppressing autonomous bot trigger while channel has in-flight generation", self.name)
+                    is_autonomous = False
+            except Exception:
+                # Fail open if coordinator isn't available.
+                pass
+        if thread_policy_strict:
+            # In threads, only direct @mention or reply should trigger.
+            is_autonomous = False
 
         # Name/nickname trigger
         name_triggered = False
         name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
 
-        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm):
+        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm and not thread_policy_strict):
 
             # Check if bot triggers are allowed for this channel when message is from a bot
             if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
@@ -413,7 +449,8 @@ class BotInstance:
                             is_dm=is_dm,
                             user_id=message.author.id,
                             sticker_info=sticker_info,
-                            split_reply_target=target
+                            split_reply_target=target,
+                            history_cutoff_message_id=message.id
                         )
                 else:
                     # Normal single request
@@ -426,7 +463,8 @@ class BotInstance:
                         user_name=user_name,
                         is_dm=is_dm,
                         user_id=message.author.id,
-                        sticker_info=sticker_info
+                        sticker_info=sticker_info,
+                        history_cutoff_message_id=message.id
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -486,6 +524,13 @@ class BotInstance:
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
+
+            # Last possible guardrail before sending: never leak malformed
+            # mention fragments like "<@" to Discord output.
+            line = self._cleanup_malformed_mentions_final(line)
+            if not line.strip():
+                continue
+
             try:
                 if i == 0:
                     if is_synthetic:
@@ -589,6 +634,8 @@ class BotInstance:
         is_dm = request['is_dm']
         user_id = request['user_id']
         split_target = request.get('split_reply_target')
+        history_cutoff_message_id = request.get('history_cutoff_message_id') or getattr(message, 'id', None)
+        history_cutoff_ts = request.get('history_cutoff_ts')
 
         # For split replies, use target user for context instead of sender
         if split_target:
@@ -615,32 +662,14 @@ class BotInstance:
             except Exception as e:
                 log.warn(f"Failed to recall channel history: {e}", self.name)
 
-        # Clear the "recently cleared" flag now that we're processing a new message
-        acknowledge_cleared(channel_id)
-
-        # Duplicate detection: check if THIS specific message was already processed
-        # Use message ID for precision — content+author matching can falsely collide
-        # across different users or repeated messages
+        # Duplicate detection: only skip if THIS bot already replied to THIS message ID.
         message_id = message.id
-        already_responded = False
-        for i, m in enumerate(history):
-            # Match by message_id if available (most precise)
-            if m.get('message_id') == message_id:
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
-            # Fallback: match by content + author (for history entries without message_id)
-            elif (m.get('message_id') is None and
-                  m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user'):
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
+        already_responded = any(
+            m.get('role') == 'assistant'
+            and m.get('author') == self.character.name
+            and m.get('reply_to_message_id') == message_id
+            for m in history
+        )
 
         if already_responded:
             log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
@@ -650,6 +679,30 @@ class BotInstance:
         recent = history[-5:]
         if not any(m.get('message_id') == message_id or (m.get('content') == content and m.get('author') == user_name) for m in recent):
             add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild, message_id=message_id)
+
+        # Build a stable history snapshot for this queued request so later
+        # channel activity cannot change the context mid-queue.
+        history = get_history(channel_id)
+        request_history = history
+        cutoff_idx = None
+        if history_cutoff_message_id is not None:
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].get('message_id') == history_cutoff_message_id:
+                    cutoff_idx = i
+                    break
+        if cutoff_idx is not None:
+            request_history = history[:cutoff_idx + 1]
+        elif history_cutoff_ts is not None:
+            try:
+                cutoff_ts = float(history_cutoff_ts)
+                request_history = [
+                    msg for msg in history
+                    if float(msg.get('history_ts', 0) or 0) <= cutoff_ts
+                ]
+            except (TypeError, ValueError):
+                request_history = history
+        if not request_history and history:
+            request_history = history[-min(len(history), 20):]
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -726,7 +779,7 @@ class BotInstance:
             memories = remove_thinking_tags(memories)
 
         # Get active users (mentioned_context already gathered above in parallel)
-        active_users = get_active_users(channel_id) if not is_dm else []
+        active_users = get_active_users(channel_id, history_override=request_history) if not is_dm else []
 
         # Get mentionable users and bots for @mention feature
         mentionable_users = []
@@ -734,7 +787,12 @@ class BotInstance:
         if runtime_config.get("allow_bot_mentions", True) and not is_dm:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
             mention_limit = runtime_config.get("mention_context_limit", 10)
-            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit, guild=guild)
+            mentionable_users = get_mentionable_users(
+                channel_id,
+                limit=mention_limit,
+                guild=guild,
+                history_override=request_history
+            )
             log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mentionable users for channel {channel_id}")
             if mentionable_users:
                 log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")
@@ -742,6 +800,14 @@ class BotInstance:
             if runtime_config.get("allow_bot_to_bot_mentions", False):
                 bot_user_id = self.client.user.id if self.client.user else None
                 mentionable_bots = get_other_bots_mentionable(bot_user_id, guild)
+
+        context_protocol_enabled = runtime_config.get("context_protocol_enabled", True)
+        mention_handle_mode = runtime_config.get("mention_handle_mode", "id_handles_v1")
+        if context_protocol_enabled and mention_handle_mode == "id_handles_v1":
+            mentionable_users, mentionable_bots = attach_protocol_handles(
+                mentionable_users,
+                mentionable_bots
+            )
 
         # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
@@ -752,15 +818,30 @@ class BotInstance:
         # Split history into older context and immediate messages
         total_limit = runtime_config.get('history_limit', 200)
         immediate_count = runtime_config.get('immediate_message_count', 5)
-        history_msgs, immediate = format_history_split(
-            channel_id,
-            total_limit=total_limit,
-            immediate_count=immediate_count,
-            current_bot_name=self.character.name
-        )
+        history_snapshot = request_history[-total_limit:]
+        if context_protocol_enabled:
+            history_msgs, immediate = format_history_split_structured(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name,
+                history_override=history_snapshot
+            )
+        else:
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name,
+                history_override=history_snapshot
+            )
 
         # Build chatroom context (use target user for split replies)
-        other_bot_names = get_other_bot_names(channel_id, self.character.name)
+        other_bot_names = get_other_bot_names(
+            channel_id,
+            self.character.name,
+            history_override=history_snapshot
+        )
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
             emojis=emojis,
@@ -774,6 +855,22 @@ class BotInstance:
             mentionable_bots=mentionable_bots
         )
 
+        context_envelope = {}
+        context_envelope_block = ""
+        if context_protocol_enabled and mention_handle_mode == "id_handles_v1":
+            context_envelope = build_context_envelope(
+                channel_id=channel_id,
+                guild_name=guild.name if guild else "DM",
+                reply_target_user_id=target_user_id,
+                reply_target_name=target_user_name,
+                current_bot_name=self.character.name,
+                mentionable_users=mentionable_users,
+                mentionable_bots=mentionable_bots,
+                history_messages=history_snapshot,
+                active_users=active_users
+            )
+            context_envelope_block = render_context_block(context_envelope)
+
         # Handle attachment content in the last immediate message
         if attachment_content and immediate:
             log.info(f"[DEBUG] Attaching multimodal content to last immediate message")
@@ -786,12 +883,16 @@ class BotInstance:
         messages_for_api.extend(history_msgs)
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context})
+        if context_envelope_block:
+            messages_for_api.append({"role": "system", "content": context_envelope_block})
         messages_for_api.extend(immediate)
 
         return {
             "system_prompt": system_prompt,
             "messages_for_api": messages_for_api,
             "chatroom_context": chatroom_context,
+            "context_envelope_block": context_envelope_block,
+            "context_envelope": context_envelope,
             "other_bot_names": other_bot_names,
             "channel_id": channel_id,
             "guild_id": guild_id,
@@ -801,7 +902,8 @@ class BotInstance:
             "content": content,
             "split_reply_target": split_target,
             "mentionable_users": mentionable_users,
-            "mentionable_bots": mentionable_bots
+            "mentionable_bots": mentionable_bots,
+            "active_users": active_users
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -812,6 +914,7 @@ class BotInstance:
         system_prompt = context["system_prompt"]
         messages_for_api = context["messages_for_api"]
         chatroom_context = context["chatroom_context"]
+        context_envelope_block = context.get("context_envelope_block", "")
         other_bot_names = context["other_bot_names"]
 
         async with message.channel.typing():
@@ -824,7 +927,12 @@ class BotInstance:
                     return sum(len(p.get('text', '')) for p in content if p.get('type') == 'text')
                 return 0
 
-            token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
+            token_estimate = (
+                len(system_prompt or "") // 4
+                + len(chatroom_context or "") // 4
+                + len(context_envelope_block or "") // 4
+                + sum(_get_content_len(m) for m in messages_for_api) // 4
+            )
             runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
 
             # Track response time
@@ -832,6 +940,11 @@ class BotInstance:
 
             # Get preferences
             use_single_user = runtime_config.get("use_single_user", False)
+            structured_payload_preferred = runtime_config.get("structured_payload_preferred", True)
+            structured_payload_fallback_enabled = runtime_config.get("structured_payload_fallback_enabled", True)
+            if use_single_user:
+                # Preserve legacy dashboard behavior if explicitly enabled.
+                structured_payload_preferred = False
             preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
 
             response = await provider_manager.generate(
@@ -840,6 +953,8 @@ class BotInstance:
                 temperature=None,
                 max_tokens=None,
                 use_single_user=use_single_user,
+                structured_payload_preferred=structured_payload_preferred,
+                structured_payload_fallback_enabled=structured_payload_fallback_enabled,
                 preferred_tier=preferred_tier
             )
 
@@ -862,6 +977,7 @@ class BotInstance:
         response = clean_bot_name_prefix(response, self.character.name)
         response = clean_em_dashes(response)
         response = self._strip_other_bot_prefixes(response, other_bot_names)
+        response = self._strip_user_attribution_lines(response, context)
 
         return response
 
@@ -880,19 +996,93 @@ class BotInstance:
         content = context["content"]
         split_target = context.get("split_reply_target")
 
-        # Process outgoing mentions (@Name -> <@user_id>)
-        if runtime_config.get("allow_bot_mentions", True):
-            from discord_utils import process_outgoing_mentions
-            mentionable_users = context.get("mentionable_users")
-            mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
-            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
+        # Process/sanitize outgoing mention syntax.
+        # Run this even when mentions are disabled so malformed fragments like "<@" are cleaned.
+        from discord_utils import process_outgoing_mentions
+        allow_mentions = runtime_config.get("allow_bot_mentions", True)
+        mention_resolver_enabled = runtime_config.get("mention_resolver_enabled", True)
+        mention_resolver_include_bots = runtime_config.get("mention_resolver_include_bots", True)
+        mention_resolver_ambiguity_policy = (
+            runtime_config.get("mention_resolver_ambiguity_policy", "best_match") or "best_match"
+        )
+        try:
+            mention_resolver_min_score = float(runtime_config.get("mention_resolver_min_score", 5.0))
+        except (TypeError, ValueError):
+            mention_resolver_min_score = 5.0
+        mention_resolver_min_score = max(0.1, min(mention_resolver_min_score, 20.0))
+
+        mentionable_users = context.get("mentionable_users") if allow_mentions else None
+        mentionable_bots = (
+            context.get("mentionable_bots")
+            if allow_mentions and runtime_config.get("allow_bot_to_bot_mentions", False)
+            else None
+        )
+        if allow_mentions:
+            response = extract_and_resolve_mentions(
+                response,
+                context.get("context_envelope"),
+                guild
+            )
+        response = process_outgoing_mentions(
+            response,
+            mentionable_users,
+            mentionable_bots,
+            guild=guild if allow_mentions else None
+        )
+
+        if allow_mentions and mention_resolver_enabled:
+            resolver_result = await resolve_mentions_unified(
+                response=response,
+                request_content=content,
+                context_envelope=context.get("context_envelope"),
+                guild=guild,
+                include_bots=bool(mention_resolver_include_bots),
+                ambiguity_policy=str(mention_resolver_ambiguity_policy).lower(),
+                min_score=mention_resolver_min_score,
+                relation_corpus=self._build_relation_corpus_for_mentions(),
+            )
+            response = resolver_result.text
+            if resolver_result.resolved_ids:
+                log.debug(
+                    f"[MENTION-RESOLVER] Resolved ids: {resolver_result.resolved_ids}"
+                )
+        else:
+            # Legacy fallback path for unresolved "@Name" user mentions.
+            if allow_mentions and guild:
+                response = await self._resolve_unresolved_user_mentions(response, guild)
+
+        # Last protocol-handle pass: if @u_<id> or @b_<id> survived earlier
+        # mention processing, resolve them from the context envelope now.
+        if allow_mentions:
+            response = extract_and_resolve_mentions(
+                response,
+                context.get("context_envelope"),
+                guild
+            )
+            response = self._resolve_protocol_handles_failsafe(response, context, guild)
+
+        # Final safety pass: drop any transcript-style "User: ..." lines that
+        # would make the bot speak as someone else after mention processing.
+        response = self._strip_user_attribution_lines(response, context)
+        # Hard fail-safe: remove/normalize malformed mention markers so raw "<@"
+        # fragments never leak to Discord output.
+        response = self._cleanup_malformed_mentions_final(response)
 
         # Prepend mention for split replies
         if split_target:
             response = f"<@{split_target.id}> {response}"
 
+        # Intent fallback: if the user explicitly requested a tag/mention/ping,
+        # inject resolved mentions directly so model wording cannot drop them.
+        if allow_mentions and not mention_resolver_enabled:
+            response = await self._inject_requested_mentions_failsafe(response, context, guild)
+
         # Parse reactions
         response, reactions = parse_reactions(response)
+
+        # Normalize raw custom emoji syntax from model output to :name: first.
+        # This avoids leaking invalid cross-server emoji IDs as plaintext.
+        response = re.sub(r'<a?:([A-Za-z0-9_]+):\d{15,22}>', r':\1:', response)
 
         # Convert emojis
         if guild:
@@ -932,8 +1122,18 @@ class BotInstance:
         self._update_mood(channel_id, content, response)
 
         # Add to history and send
-        add_to_history(channel_id, "assistant", response, author_name=self.character.name, guild=guild)
+        add_to_history(
+            channel_id,
+            "assistant",
+            response,
+            author_name=self.character.name,
+            guild=guild,
+            reply_to_message_id=request['message'].id
+        )
         sent_messages = await self._send_organic_response(message, response)
+
+        # We now have a successful post-clear exchange, so history recall can resume.
+        acknowledge_cleared(channel_id)
 
         # Update activity
         runtime_config.update_last_activity(self.name)
@@ -975,9 +1175,16 @@ class BotInstance:
                 return  # Duplicate or should skip
 
             # Acquire global coordinator slot (limits concurrent AI requests across all bots)
-            await coordinator.acquire_slot(self.name, message_id)
+            await coordinator.acquire_slot(self.name, message_id, message.channel.id)
 
+            # Global per-request timeout (covers generation + stagger + send path)
             try:
+                timeout_seconds = int(runtime_config.get("request_timeout_seconds", 60))
+            except (TypeError, ValueError):
+                timeout_seconds = 60
+            timeout_seconds = max(10, min(timeout_seconds, 300))
+
+            async def _run_request_pipeline():
                 # Generate AI response (handles provider call, sanitization)
                 response = await self._generate_ai_response(context, message)
                 if response is None:
@@ -992,9 +1199,15 @@ class BotInstance:
 
                 # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
                 await self._send_and_finalize_response(response, context, message, request)
+
+            try:
+                await asyncio.wait_for(_run_request_pipeline(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                log.warn(f"Request timed out after {timeout_seconds}s", self.name)
+                await self._send_user_error(message.channel, "timeout")
             finally:
                 # Always release the slot, even on error
-                coordinator.release_slot(self.name, message_id)
+                coordinator.release_slot(self.name, message_id, message.channel.id)
 
         except asyncio.TimeoutError:
             log.warn("Request timed out", self.name)
@@ -1086,12 +1299,15 @@ class BotInstance:
             return response
 
         for name in other_bot_names:
-            # Check for "Name:" or "Name :" at start
-            patterns = [f"{name}:", f"{name} :"]
-            for pattern in patterns:
-                if response.lower().startswith(pattern.lower()):
-                    response = response[len(pattern):].strip()
-                    log.warn(f"Stripped impersonation prefix '{pattern}' from response", self.name)
+            # Prefix impersonation at response start: "Name:", "Name -", "Name says:"
+            start_patterns = [
+                rf'^\s*["“]?{re.escape(name)}["”]?\s*[:\-–]\s*',
+                rf'^\s*["“]?\*?{re.escape(name)}\*?["”]?\s+(?:says?|asks?|replies?|responds?)\s*[:\-–]?\s*'
+            ]
+            for pattern in start_patterns:
+                if re.match(pattern, response, re.IGNORECASE):
+                    response = re.sub(pattern, '', response, count=1, flags=re.IGNORECASE).strip()
+                    log.warn(f"Stripped impersonation prefix for '{name}'", self.name)
                     break
 
         # Build combined pattern for all other bot names
@@ -1104,13 +1320,12 @@ class BotInstance:
         for line in lines:
             skip = False
             for name in other_bot_names:
-                # "OtherBot:" or "OtherBot :" at line start
-                if re.match(rf'^{re.escape(name)}\s*:', line, re.IGNORECASE):
-                    log.warn(f"Stripped mid-response impersonation line for '{name}'", self.name)
-                    skip = True
-                    break
-                # "*OtherBot:" or "*OtherBot :" (roleplay asterisk prefix)
-                if re.match(rf'^\*{re.escape(name)}\s*:', line, re.IGNORECASE):
+                # Mid-response impersonation line with name prefix or speech attribution
+                if re.match(
+                    rf'^\s*["“]?\*?{re.escape(name)}\*?["”]?\s*(?:[:\-–]|(?:says?|asks?|replies?|responds?)\b)',
+                    line,
+                    re.IGNORECASE
+                ):
                     log.warn(f"Stripped roleplay impersonation line for '{name}'", self.name)
                     skip = True
                     break
@@ -1129,6 +1344,793 @@ class BotInstance:
         response = re.sub(r'\n{3,}', '\n\n', response)
 
         return response.strip()
+
+    def _strip_user_attribution_lines(self, response: str, context: dict) -> str:
+        """Remove lines where the bot incorrectly speaks as a user (e.g., 'UserName: ...')."""
+        if not response:
+            return response
+
+        def _normalize_name(value: str) -> str:
+            """Normalize display/user names for robust matching."""
+            if not isinstance(value, str):
+                return ""
+            value = value.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+            value = re.sub(r'\s+', ' ', value.strip().lstrip('@'))
+            return value
+
+        known_user_names = set()
+
+        # Current message author
+        user_name = _normalize_name(context.get("user_name") or "")
+        if user_name:
+            known_user_names.add(user_name)
+
+        # Split-reply target (if present)
+        split_target = context.get("split_reply_target")
+        if split_target:
+            target_name = _normalize_name(get_user_display_name(split_target))
+            if target_name:
+                known_user_names.add(target_name)
+
+        # Active users seen in recent history
+        for active in context.get("active_users") or []:
+            normalized = _normalize_name(active)
+            if normalized:
+                known_user_names.add(normalized)
+
+        # Mentionable users aliases from context builder
+        for user in context.get("mentionable_users") or []:
+            aliases = user.get("aliases") or [user.get("name"), user.get("username")]
+            for alias in aliases:
+                normalized = _normalize_name(alias)
+                if normalized:
+                    known_user_names.add(normalized)
+
+        # Also pull recent history authors to handle queue/concurrency cases where
+        # this request may have been triggered by another bot message.
+        channel_id = context.get("channel_id")
+        if channel_id:
+            for msg in get_history(channel_id)[-60:]:
+                if msg.get("role") != "user":
+                    continue
+                normalized = _normalize_name(msg.get("author"))
+                if normalized:
+                    known_user_names.add(normalized)
+
+        # Never strip the bot's own character name
+        own_name = ""
+        if self.character and self.character.name:
+            own_name = _normalize_name(self.character.name)
+            if own_name:
+                known_user_names.discard(own_name)
+
+        # Filter tiny/invalid names
+        known_user_names = {n for n in known_user_names if len(n) >= 2}
+        if not known_user_names:
+            return response
+        known_user_names_lower = {n.lower() for n in known_user_names}
+        known_other_bot_names = set()
+        for bot_name in context.get("other_bot_names") or []:
+            normalized = _normalize_name(bot_name)
+            if normalized and (not own_name or normalized.lower() != own_name.lower()):
+                known_other_bot_names.add(normalized)
+
+        cleaned_lines = []
+        removed_count = 0
+
+        for line in response.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                cleaned_lines.append(line)
+                continue
+
+            # Normalize weird invisible chars + malformed "@Name>" speaker stubs.
+            normalized_line = line.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+            normalized_line = re.sub(
+                r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>\s*:',
+                r'@\1:',
+                normalized_line
+            )
+
+            # If a line starts with a raw mention speaker label ("<@123>: ..."),
+            # treat it as transcript leakage and drop it.
+            if re.match(r'^\s*<@!?\d+>\s*:\s+\S+', normalized_line):
+                removed_count += 1
+                continue
+
+            is_user_attribution = False
+            for name in known_user_names:
+                escaped = re.escape(name)
+                # Matches:
+                # - "Name: ..."
+                # - "@Name: ..."
+                # - "[Name]: ..."
+                if (
+                    re.match(rf'^\s*["“]?`?(?:@)?{escaped}>?["”]?`?\s*:\s+\S+', normalized_line, re.IGNORECASE)
+                    or re.match(rf'^\s*\[{escaped}\]\s*:\s+\S+', normalized_line, re.IGNORECASE)
+                ):
+                    is_user_attribution = True
+                    break
+
+            # Generic speaker-line fallback for known participants with wrappers.
+            # Catches variants like "*User Name*: text" that bypass simple patterns.
+            if not is_user_attribution:
+                speaker_match = re.match(
+                    r'^\s*["“”\'`\[\]\(\)\*_]*\s*(?:@)?([A-Za-z0-9][A-Za-z0-9 _.\'-]{0,63})'
+                    r'\s*["“”\'`\[\]\(\)\*_]*\s*:\s+\S+',
+                    normalized_line
+                )
+                if speaker_match:
+                    speaker = _normalize_name(speaker_match.group(1))
+                    if speaker and (not own_name or speaker.lower() != own_name.lower()):
+                        if speaker.lower() in known_user_names_lower:
+                            is_user_attribution = True
+
+            if is_user_attribution:
+                removed_count += 1
+                continue
+
+            cleaned_lines.append(line)
+
+        cleaned = '\n'.join(cleaned_lines).strip()
+
+        # Stage 2: strip inline speaker labels that can appear mid-paragraph
+        # during concurrent generations (e.g., "... Kris: ...", "<@123>: ...").
+        inline_removed = 0
+
+        def _strip_inline_speaker_stubs(text: str, names: set[str]) -> str:
+            nonlocal inline_removed
+            out = text
+            # Strip raw mention speaker stubs.
+            out, count = re.subn(
+                r'(^|[\n\r]|[.!?]\s+|[)\]>"“”]\s+)\s*<@!?\d+>\s*:\s*',
+                lambda m: m.group(1),
+                out
+            )
+            inline_removed += count
+
+            for speaker_name in sorted(names, key=len, reverse=True):
+                escaped = re.escape(speaker_name)
+                pattern = (
+                    rf'(^|[\n\r]|[.!?]\s+|[)\]>"“”]\s+)'
+                    rf'["“”\'`\[\]\(\)\*_]*\s*(?:@)?{escaped}>?\s*["“”\'`\[\]\(\)\*_]*\s*:\s*'
+                )
+                out, count = re.subn(pattern, lambda m: m.group(1), out, flags=re.IGNORECASE)
+                inline_removed += count
+            return out
+
+        cleaned = _strip_inline_speaker_stubs(cleaned, known_user_names)
+        if known_other_bot_names:
+            cleaned = _strip_inline_speaker_stubs(cleaned, known_other_bot_names)
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+
+        if removed_count > 0 or inline_removed > 0:
+            log.warn(
+                f"Stripped {removed_count} line-attribution and {inline_removed} inline-speaker fragment(s) from response",
+                self.name
+            )
+
+        # If we intentionally removed attribution lines and nothing remains, keep
+        # it empty so caller can use normal empty-response fallback.
+        if removed_count > 0 or inline_removed > 0:
+            return cleaned
+        return cleaned or response.strip()
+
+    def _build_relation_corpus_for_mentions(self) -> str:
+        """Build character text corpus used for relation-term mention disambiguation."""
+        if not self.character:
+            return ""
+
+        parts = []
+        if self.character.persona:
+            parts.append(self.character.persona)
+        if self.character.example_dialogue:
+            parts.append(self.character.example_dialogue)
+
+        for special_name, special_context in (self.character.special_users or {}).items():
+            if special_name:
+                parts.append(str(special_name))
+            if special_context:
+                parts.append(str(special_context))
+
+        return "\n".join(parts)
+
+    async def _resolve_unresolved_user_mentions(self, response: str, guild: discord.Guild) -> str:
+        """Resolve remaining plaintext @mentions to Discord IDs via guild lookup/query."""
+        if not response or not guild:
+            return response
+
+        def _normalize_alias(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r'\s+', ' ', value.strip().lstrip('@')).lower()
+
+        def _member_aliases(member: discord.Member) -> set[str]:
+            aliases = {
+                get_user_display_name(member),
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None),
+            }
+            return {a for a in (_normalize_alias(v) for v in aliases) if a}
+
+        def _select_unique_member(candidates: list[discord.Member], target: str) -> discord.Member | None:
+            """Resolve target name conservatively: exact first, then unique short-prefix."""
+            target_norm = _normalize_alias(target)
+            if len(target_norm) < 2:
+                return None
+
+            exact = {}
+            short = {}
+            token = {}
+
+            for m in candidates:
+                if m.bot:
+                    continue
+                aliases = _member_aliases(m)
+
+                if target_norm in aliases:
+                    exact[m.id] = m
+                    continue
+
+                if len(target_norm) < 3:
+                    continue
+
+                for alias in aliases:
+                    if (alias.startswith(target_norm + ' ')
+                            or alias.startswith(target_norm + '_')
+                            or alias.startswith(target_norm + '-')
+                            or alias.startswith(target_norm + '.')):
+                        short[m.id] = m
+                        break
+
+                if m.id in short:
+                    continue
+
+                for part in re.split(r'[\s._-]+', ' '.join(aliases)):
+                    if part == target_norm:
+                        token[m.id] = m
+                        break
+
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(short) == 1:
+                return next(iter(short.values()))
+            if len(short) > 1:
+                return None
+            if len(token) == 1:
+                return next(iter(token.values()))
+            return None
+
+        # Normalize malformed mention stubs to plaintext @Name first.
+        response = re.sub(
+            r'<@!?\s*([A-Za-z][^>\n\r,!?;:.]{0,32}?)(?=[,!?;:.>|]|$)',
+            r'@\1',
+            response
+        )
+        response = re.sub(r'<@!?(?=\s|$)', '', response)
+
+        at_pattern = re.compile(r'(?<!<)@([A-Za-z0-9][A-Za-z0-9 _.\'-]{1,63})')
+        candidates = []
+
+        for match in at_pattern.finditer(response):
+            candidate = re.sub(r'\s+', ' ', match.group(1)).strip()
+            candidate = candidate.rstrip(' >.,!?;:')
+            if len(candidate) >= 2:
+                candidates.append(candidate)
+
+        if not candidates:
+            return response.strip()
+
+        for candidate in sorted(set(candidates), key=len, reverse=True):
+            lower = candidate.lower()
+            member = None
+
+            pool = [m for m in guild.members if not m.bot]
+            member = _select_unique_member(pool, lower)
+
+            # Slow path: query members from API to catch offline/not-cached users.
+            if member is None:
+                query_text = candidate[:100].strip()
+                try:
+                    queried = await guild.query_members(query=query_text, limit=100, cache=True) if query_text else []
+                except Exception:
+                    queried = []
+                if not queried and ' ' in query_text:
+                    first_token = query_text.split()[0].strip()
+                    if len(first_token) >= 3:
+                        try:
+                            queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                        except Exception:
+                            queried = []
+
+                merged = {m.id: m for m in pool}
+                for m in queried:
+                    if not m.bot:
+                        merged[m.id] = m
+                member = _select_unique_member(list(merged.values()), lower)
+
+            if member is None:
+                continue
+
+            mention = f"<@{member.id}>"
+            name_pattern = re.compile(r'(?<!<)@' + re.escape(candidate) + r'(?=[\W]|$)', re.IGNORECASE)
+            response = name_pattern.sub(mention, response)
+
+        # Remove any remaining malformed fragments.
+        response = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', response)
+        return response.strip()
+
+    def _cleanup_malformed_mentions_final(self, response: str) -> str:
+        """Final output cleanup for malformed mention fragments.
+
+        Preserves valid numeric user mentions (<@123...> / <@!123...>) and
+        normalizes/removes invalid AI-generated variants like "<@ Name".
+        """
+        if not response:
+            return response
+
+        placeholders = {}
+
+        def _protect_valid_user_mention(match: re.Match) -> str:
+            token = f"__VALID_USER_MENTION_{len(placeholders)}__"
+            placeholders[token] = match.group(0)
+            return token
+
+        # Protect valid user mentions first so broad cleanup can't touch them.
+        cleaned = re.sub(r'<@!?(\d{17,21})>', _protect_valid_user_mention, response)
+
+        # Strip raw role/channel mentions that should never be generated directly.
+        cleaned = re.sub(r'<@&\d{17,21}>', '', cleaned)
+        cleaned = re.sub(r'<#\d{17,21}>', '', cleaned)
+
+        # Convert malformed closed tags (e.g. "<@ Febs>") to plaintext "@Febs".
+        cleaned = re.sub(
+            r'<@!?\s*([^>\n\r]{1,80})>',
+            lambda m: '@' + re.sub(r'\s+', ' ', m.group(1)).strip(),
+            cleaned
+        )
+
+        # Convert malformed open stubs (e.g. "<@ Febs, hello") to "@Febs, hello".
+        cleaned = re.sub(
+            r'<@!?\s*([A-Za-z][A-Za-z0-9 _.\'-]{1,63})(?=[,!?;:.]|\s|$)',
+            lambda m: '@' + m.group(1).strip(),
+            cleaned
+        )
+
+        # Remove any remaining invalid "<@" markers.
+        cleaned = re.sub(r'<@!?', '', cleaned)
+
+        # Cleanup stray trailing ">" from malformed mention attempts.
+        cleaned = re.sub(r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>', r'@\1', cleaned)
+        # Collapse doubled plaintext markers like "@@name" -> "@name".
+        cleaned = re.sub(r'(?<!<)@{2,}(?=[A-Za-z0-9_])', '@', cleaned)
+        # Remove standalone/dangling "@" artifacts.
+        cleaned = re.sub(r'(^|[\s(\[{])@(?=[\s)\]}.,!?;:]|$)', r'\1', cleaned)
+        cleaned = re.sub(r'@\s*>', '', cleaned)
+
+        # Restore protected valid mentions.
+        for token, original in placeholders.items():
+            cleaned = cleaned.replace(token, original)
+
+        return cleaned.strip()
+
+    def _resolve_protocol_handles_failsafe(self, response: str, context: dict, guild: discord.Guild = None) -> str:
+        """Hard fallback: convert protocol @u_<id>/@b_<id> handles to <@id>.
+
+        Prefers trusted IDs from context envelope, with guild-membership fallback
+        so valid handles still convert even when envelope candidates are sparse.
+        """
+        if not response:
+            return response
+
+        trusted_ids = set()
+        envelope = context.get("context_envelope") or {}
+
+        for candidate in envelope.get("mention_candidates", []):
+            try:
+                trusted_ids.add(int(candidate.get("user_id")))
+            except (TypeError, ValueError):
+                pass
+
+        for participant in envelope.get("participants", []):
+            try:
+                trusted_ids.add(int(participant.get("user_id")))
+            except (TypeError, ValueError):
+                pass
+
+        if not trusted_ids and not guild:
+            return response
+
+        def _replace(match: re.Match) -> str:
+            try:
+                user_id = int(match.group(1))
+            except (TypeError, ValueError):
+                return match.group(0)
+            # Always convert numeric protocol handles to Discord mention syntax.
+            # If the ID is invalid for this guild, Discord will render it harmlessly
+            # as plain unresolved mention text, but this avoids leaking raw @u_... tokens.
+            mention = f"<@{user_id}>"
+            if user_id in trusted_ids:
+                return mention
+            if guild:
+                try:
+                    if guild.get_member(user_id):
+                        return mention
+                except Exception:
+                    pass
+            return mention
+
+        # Handle malformed bracketed form: <@u_123...>
+        response = re.sub(r'<@[ub]_(\d{15,22})>', _replace, response, flags=re.IGNORECASE)
+        # Handle plain form (including occasional invisible chars after "@")
+        response = re.sub(
+            r'@[\u200b\u2060\ufeff\s]*[ub]_(\d{15,22})(?=[^A-Za-z0-9_]|$)',
+            _replace,
+            response,
+            flags=re.IGNORECASE
+        )
+        return response
+
+    async def _inject_requested_mentions_failsafe(self, response: str, context: dict,
+                                                  guild: discord.Guild = None) -> str:
+        """Inject mentions when user explicitly asks to tag/mention/ping someone.
+
+        Resolves from context candidates first, then queries guild members for
+        unresolved names so non-recent/offline members can still be tagged.
+        """
+        if not response:
+            return response
+
+        request_content = (context.get("content") or "").strip()
+        if not request_content:
+            return response
+
+        mention_verbs = r'tag|mention|ping|summon|notify|call|bring|get'
+        if not re.search(rf'\b(?:{mention_verbs})\b', request_content, re.IGNORECASE):
+            return response
+
+        envelope = context.get("context_envelope") or {}
+        candidates = envelope.get("mention_candidates") or []
+
+        text = request_content.lower()
+        compact_text = re.sub(r"[^a-z0-9]+", "", text)
+        stopwords = {
+            "please", "me", "you", "them", "him", "her", "someone", "anyone",
+            "tag", "mention", "ping", "summon", "notify", "call", "bring", "get",
+            "can", "could", "would", "and", "or", "to", "the", "a", "an", "my",
+            "your", "here", "there", "now", "pls", "pleasee"
+        }
+
+        def _canonical_token(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+        def _alias_variants(value: str) -> set[str]:
+            variants = set()
+            if not isinstance(value, str):
+                return variants
+
+            normalized = re.sub(r"\s+", " ", value.strip().lstrip("@")).lower()
+            if not normalized:
+                return variants
+
+            variants.add(normalized)
+            canonical = _canonical_token(normalized)
+            if len(canonical) >= 3:
+                variants.add(canonical)
+
+            for part in re.split(r"[\s._-]+", normalized):
+                if len(part) >= 3 and part not in stopwords:
+                    variants.add(part)
+                    part_canonical = _canonical_token(part)
+                    if len(part_canonical) >= 3:
+                        variants.add(part_canonical)
+
+            return variants
+
+        def _extract_terms(source: str) -> list[str]:
+            terms = []
+            seen = set()
+
+            # Prefer words after explicit action keywords.
+            segments = re.findall(
+                rf'\b(?:{mention_verbs})\b([^.!?\n\r]*)',
+                source,
+                flags=re.IGNORECASE
+            )
+            if not segments:
+                segments = [source]
+
+            for segment in segments:
+                segment_tokens = []
+                for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.\-']{1,31}", segment):
+                    t = token.strip().lower()
+                    if not t or t in stopwords or len(t) < 3:
+                        continue
+                    if t not in seen:
+                        seen.add(t)
+                        terms.append(t)
+                        segment_tokens.append(t)
+
+                    canonical = _canonical_token(t)
+                    if canonical and canonical not in seen and len(canonical) >= 3 and canonical not in stopwords:
+                        seen.add(canonical)
+                        terms.append(canonical)
+
+                # Keep short multi-word phrases for exact display-name matching.
+                for i in range(len(segment_tokens)):
+                    for n in (2, 3):
+                        if i + n > len(segment_tokens):
+                            continue
+                        phrase = " ".join(segment_tokens[i:i + n]).strip()
+                        if len(phrase) < 3 or phrase in seen:
+                            continue
+                        seen.add(phrase)
+                        terms.append(phrase)
+                        phrase_canonical = _canonical_token(phrase)
+                        if (
+                            phrase_canonical
+                            and len(phrase_canonical) >= 3
+                            and phrase_canonical not in seen
+                            and phrase_canonical not in stopwords
+                        ):
+                            seen.add(phrase_canonical)
+                            terms.append(phrase_canonical)
+
+            # Also capture explicit @targets from user request.
+            for mention_token in re.findall(r"@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", source):
+                t = mention_token.strip().lower()
+                if t and t not in stopwords and len(t) >= 3 and t not in seen:
+                    seen.add(t)
+                    terms.append(t)
+                canonical = _canonical_token(t)
+                if canonical and canonical not in stopwords and len(canonical) >= 3 and canonical not in seen:
+                    seen.add(canonical)
+                    terms.append(canonical)
+
+            return terms[:16]
+
+        def _detect_relation_terms(source: str) -> set[str]:
+            groups = [
+                {"sis", "sister", "bro", "brother", "sibling"},
+                {"creator", "owner", "maker", "developer", "dev", "author"}
+            ]
+            lowered = source.lower()
+            selected = set()
+            for group in groups:
+                if any(re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', lowered) for term in group):
+                    selected.update(group)
+            return selected
+
+        def _build_character_relation_corpus() -> str:
+            if not self.character:
+                return ""
+
+            pieces = []
+            if self.character.persona:
+                pieces.append(self.character.persona)
+            if self.character.example_dialogue:
+                pieces.append(self.character.example_dialogue)
+
+            for special_name, special_context in (self.character.special_users or {}).items():
+                if special_name:
+                    pieces.append(special_name)
+                if special_context:
+                    pieces.append(special_context)
+
+            return "\n".join(pieces).lower()
+
+        def _candidate_matches_relation_terms(candidate_aliases: list, relation_terms: set[str], corpus: str) -> bool:
+            if not corpus or not relation_terms:
+                return False
+
+            for alias in candidate_aliases:
+                if not isinstance(alias, str):
+                    continue
+                for alias_variant in _alias_variants(alias):
+                    if len(alias_variant) < 3:
+                        continue
+                    if re.fullmatch(r'[ub]_\d{3,22}', alias_variant):
+                        continue
+
+                    for match in re.finditer(re.escape(alias_variant), corpus):
+                        start = max(0, match.start() - 96)
+                        end = min(len(corpus), match.end() + 96)
+                        window = corpus[start:end]
+                        if any(
+                            re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', window)
+                            for term in relation_terms
+                        ):
+                            return True
+            return False
+
+        def _member_aliases(member: discord.Member) -> set[str]:
+            values = {
+                get_user_display_name(member),
+                member.name,
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+            }
+            aliases = set()
+            for value in values:
+                if not value:
+                    continue
+                aliases.update(_alias_variants(value))
+            return aliases
+
+        def _pick_unique_member(
+            term: str,
+            members: list[discord.Member],
+            *,
+            include_bots: bool = False
+        ) -> discord.Member | None:
+            exact = {}
+            prefix = {}
+            term_variants = _alias_variants(term)
+            if not term_variants:
+                return None
+
+            self_id = self.client.user.id if self.client and self.client.user else None
+            for member in members:
+                if include_bots and not member.bot:
+                    continue
+                if not include_bots and member.bot:
+                    continue
+                if self_id and member.id == self_id:
+                    continue
+                aliases = _member_aliases(member)
+                if aliases.intersection(term_variants):
+                    exact[member.id] = member
+                    continue
+                for alias in aliases:
+                    if any(len(variant) >= 3 and alias.startswith(variant) for variant in term_variants):
+                        prefix[member.id] = member
+                        break
+
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(prefix) == 1:
+                return next(iter(prefix.values()))
+            return None
+
+        terms = _extract_terms(request_content)
+        term_set = set(terms)
+        requested_ids = []
+        seen_ids = set()
+        for candidate in candidates:
+            try:
+                user_id = int(candidate.get("user_id"))
+            except (TypeError, ValueError):
+                continue
+
+            aliases = candidate.get("aliases") or []
+            matched = False
+            for alias in aliases:
+                if not isinstance(alias, str):
+                    continue
+                normalized = alias.strip().lstrip("@").lower()
+                if not normalized:
+                    continue
+                if re.fullmatch(r'[ub]_\d{3,22}', normalized):
+                    continue
+                if len(normalized) < 3 or normalized in stopwords:
+                    continue
+
+                alias_variants = _alias_variants(normalized)
+                if alias_variants.intersection(term_set):
+                    matched = True
+                    break
+
+                if re.search(rf'(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])', text):
+                    matched = True
+                    break
+
+                alias_canonical = _canonical_token(normalized)
+                if len(alias_canonical) >= 3 and alias_canonical in compact_text:
+                    matched = True
+                    break
+
+            if matched and user_id not in seen_ids:
+                seen_ids.add(user_id)
+                requested_ids.append(user_id)
+
+        # Relation fallback: resolve vague requests like "tag your sister/creator"
+        # by matching known candidate names near relationship terms in character text.
+        relation_terms = _detect_relation_terms(request_content)
+        if relation_terms and not requested_ids:
+            relation_corpus = _build_character_relation_corpus()
+            relation_ids = []
+            relation_seen = set()
+            for candidate in candidates:
+                try:
+                    user_id = int(candidate.get("user_id"))
+                except (TypeError, ValueError):
+                    continue
+
+                aliases = candidate.get("aliases") or []
+                if _candidate_matches_relation_terms(aliases, relation_terms, relation_corpus):
+                    if user_id not in relation_seen:
+                        relation_seen.add(user_id)
+                        relation_ids.append(user_id)
+
+            # Use only an unambiguous single relation match.
+            if len(relation_ids) == 1 and relation_ids[0] not in seen_ids:
+                seen_ids.add(relation_ids[0])
+                requested_ids.append(relation_ids[0])
+
+        # Guild lookup fallback for terms not covered by mention candidates.
+        if guild and terms:
+            self_id = self.client.user.id if self.client and self.client.user else None
+            base_members = [m for m in guild.members if not m.bot]
+            base_bots = [m for m in guild.members if m.bot and m.id != self_id]
+
+            for term in terms:
+                member = _pick_unique_member(term, base_members, include_bots=False)
+                if member is None:
+                    query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
+                    if query_term:
+                        try:
+                            queried = await guild.query_members(query=query_term[:100], limit=100, cache=True)
+                        except Exception:
+                            queried = []
+                    else:
+                        queried = []
+                    if not queried and " " in query_term:
+                        first_token = query_term.split()[0].strip()
+                        if len(first_token) >= 3:
+                            try:
+                                queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                            except Exception:
+                                queried = []
+                    merged = {m.id: m for m in base_members}
+                    for m in queried:
+                        if not m.bot:
+                            merged[m.id] = m
+                    member = _pick_unique_member(term, list(merged.values()), include_bots=False)
+
+                if member is None:
+                    member = _pick_unique_member(term, base_bots, include_bots=True)
+                    if member is None:
+                        query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
+                        if query_term:
+                            try:
+                                queried = await guild.query_members(query=query_term[:100], limit=100, cache=True)
+                            except Exception:
+                                queried = []
+                        else:
+                            queried = []
+                        if not queried and " " in query_term:
+                            first_token = query_term.split()[0].strip()
+                            if len(first_token) >= 3:
+                                try:
+                                    queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                                except Exception:
+                                    queried = []
+                        merged = {m.id: m for m in base_bots}
+                        for m in queried:
+                            if m.bot and (not self_id or m.id != self_id):
+                                merged[m.id] = m
+                        member = _pick_unique_member(term, list(merged.values()), include_bots=True)
+
+                if member and member.id not in seen_ids:
+                    seen_ids.add(member.id)
+                    requested_ids.append(member.id)
+
+        if not requested_ids:
+            return response
+
+        existing_ids = {int(mid) for mid in re.findall(r'<@!?(\d{15,22})>', response)}
+        prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]
+        if not prefixes:
+            return response
+
+        return f"{' '.join(prefixes)} {response}".strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
@@ -1271,29 +2273,61 @@ class BotInstance:
     
     async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
-        # Quick pre-filter: skip very short messages (reduced from 20 to 10)
-        if len(last_message) < 10:
-            return
-        
-        # Cooldown: don't check for memories too frequently
-        history = get_history(channel_id)
-        if len(history) < 2:  # Reduced from 3 to 2
-            return
-        
-        # Check if we recently analyzed for memories (every 2 messages instead of 3)
-        last_memory_check = getattr(self, '_last_memory_check', {})
-        msg_count = len(history)
-        last_checked = last_memory_check.get(channel_id, 0)
-        if msg_count - last_checked < 2:  # Reduced from 3 to 2
-            return
-        last_memory_check[channel_id] = msg_count
-        self._last_memory_check = last_memory_check
-        
-        char_name = self.character.name if self.character else "the character"
-        # Send more context to LLM (last 10 messages instead of 5)
-        await memory_manager.generate_memory(
-            provider_manager, history[-10:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
-        )
+        try:
+            if not runtime_config.get("auto_memory_enabled", True):
+                return
+
+            try:
+                min_chars = int(runtime_config.get("auto_memory_min_message_chars", 2))
+            except (TypeError, ValueError):
+                min_chars = 2
+            min_chars = max(1, min(min_chars, 80))
+
+            # Quick pre-filter: skip only extremely short pings/noise.
+            if len(last_message or "") < min_chars:
+                return
+
+            history = get_history(channel_id)
+            try:
+                min_history = int(runtime_config.get("auto_memory_min_history_messages", 3))
+            except (TypeError, ValueError):
+                min_history = 3
+            min_history = max(2, min(min_history, 20))
+            if len(history) < min_history:
+                return
+
+            # Analyze once per assistant response; generation-level cooldowns handle spam.
+            last_memory_check = getattr(self, '_last_memory_check', {})
+            msg_count = len(history)
+            last_checked = last_memory_check.get(channel_id, 0)
+            if msg_count - last_checked < 1:
+                return
+            last_memory_check[channel_id] = msg_count
+            self._last_memory_check = last_memory_check
+
+            try:
+                context_window = int(runtime_config.get("auto_memory_context_window", 24))
+            except (TypeError, ValueError):
+                context_window = 24
+            context_window = max(8, min(context_window, 60))
+
+            char_name = self.character.name if self.character else "the character"
+            generated_memory = await memory_manager.generate_memory(
+                provider_manager,
+                history[-context_window:],
+                is_dm,
+                id_key,
+                char_name,
+                user_id=user_id,
+                user_name=user_name,
+                cooldown_scope_id=channel_id
+            )
+            if generated_memory:
+                log.info(f"Auto-memory saved: {generated_memory[:120]}", self.name)
+            else:
+                log.debug("Auto-memory check completed without new memory", self.name)
+        except Exception as e:
+            log.warn(f"Auto-memory pipeline failed: {e}", self.name)
 
     def _setup_commands(self) -> None:
         """Register slash commands from commands module."""

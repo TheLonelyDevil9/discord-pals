@@ -17,6 +17,7 @@ DEFAULTS = {
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
+    "thread_response_policy": "mention_or_reply",  # normal | mention_or_reply | disabled
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
     # Bot-on-bot conversation fall-off settings
@@ -29,10 +30,29 @@ DEFAULTS = {
     "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
     "split_replies_max_targets": 5,  # Max users to split replies for (prevents spam)
     "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots
+    "autonomous_pause_while_channel_busy": True,  # Suppress autonomous bot-on-bot triggers while any bot is generating in channel
+    "request_timeout_seconds": 60,  # Global timeout for a bot request (generation + send)
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
     "mention_context_limit": 10,  # Max users to show in mention context for AI
+    # Unified mention resolver
+    "mention_resolver_enabled": True,  # Use deterministic resolver for request/response mentions
+    "mention_resolver_include_bots": True,  # Resolve bot mentions as well as user mentions
+    "mention_resolver_ambiguity_policy": "best_match",  # best_match | no_tag | clarify
+    "mention_resolver_min_score": 5.0,  # Minimum confidence to auto-resolve a mention
+    # Auto-memory generation
+    "auto_memory_enabled": True,  # Enable automatic memory extraction after responses
+    "auto_memory_min_message_chars": 2,  # Skip only tiny/noise messages
+    "auto_memory_min_history_messages": 3,  # Minimum chat lines before attempting memory generation
+    "auto_memory_context_window": 24,  # Number of recent messages passed to memory extractor
+    "auto_memory_channel_cooldown_seconds": 10,  # Shared per-channel cooldown (seconds)
+    "auto_memory_fallback_on_nothing": True,  # Retry with a broader pass when first extraction returns NOTHING
+    # Context protocol + payload formatting
+    "context_protocol_enabled": True,  # Inject deterministic context envelope for mentions/speaker identity
+    "mention_handle_mode": "id_handles_v1",  # Mention protocol handle scheme
+    "structured_payload_preferred": True,  # Try structured role payload first
+    "structured_payload_fallback_enabled": True,  # Fallback to single-user flattening when needed
 }
 
 # Config cache to avoid repeated file reads

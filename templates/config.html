@@ -155,6 +155,22 @@
             <p class="form-hint">Chance to respond when bot name is mentioned</p>
         </div>
 
+        <div class="form-group">
+            <label for="thread_response_policy">Thread Response Policy</label>
+            <select id="thread_response_policy" title="How bots respond inside Discord threads">
+                <option value="mention_or_reply" {% if (config.thread_response_policy or 'mention_or_reply') == 'mention_or_reply' %}selected{% endif %}>
+                    Only @mention or reply
+                </option>
+                <option value="normal" {% if config.thread_response_policy == 'normal' %}selected{% endif %}>
+                    Normal behavior (name trigger + autonomous allowed)
+                </option>
+                <option value="disabled" {% if config.thread_response_policy == 'disabled' %}selected{% endif %}>
+                    Disabled in threads
+                </option>
+            </select>
+            <p class="form-hint">Recommended: only respond in threads when directly pinged or replied to</p>
+        </div>
+
         <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
 
         <div class="section-divider"></div>
@@ -340,6 +356,27 @@
             <p class="form-hint">Maximum concurrent AI requests across all bots</p>
         </div>
 
+        <div class="form-group">
+            <label for="request_timeout_seconds">Bot Request Timeout</label>
+            <div class="slider-row">
+                <input type="range" id="request_timeout_seconds" min="10" max="300" step="5"
+                    value="{{ config.request_timeout_seconds or 60 }}"
+                    oninput="document.getElementById('request_timeout_val').textContent = this.value + 's'"
+                    title="Max seconds for one bot request">
+                <span class="slider-val" id="request_timeout_val">{{ config.request_timeout_seconds or 60 }}s</span>
+            </div>
+            <p class="form-hint">Max time allowed for generate+send before request is canceled</p>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="autonomous_pause_while_channel_busy"
+                    {% if config.autonomous_pause_while_channel_busy is not defined or config.autonomous_pause_while_channel_busy %}checked{% endif %}>
+                <span>Pause Autonomous While Busy</span>
+            </label>
+            <p class="form-hint">Prevents autonomous bot-on-bot triggers while another bot is still generating in that channel</p>
+        </div>
+
         <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
     </div>
 </div>
@@ -358,6 +395,79 @@
             </label>
             <p class="form-hint">Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</p>
         </div>
+    </div>
+</div>
+
+<!-- Auto Memory Settings -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Auto Memory</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 20px;">Control how aggressively bots auto-save memories from conversation</p>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="auto_memory_enabled" {% if config.auto_memory_enabled is not defined or config.auto_memory_enabled %}checked{% endif %}>
+                <span>Enable Auto Memories</span>
+            </label>
+        </div>
+
+        <div class="settings-grid">
+            <div class="form-group">
+                <label for="auto_memory_channel_cooldown_seconds">Channel Cooldown</label>
+                <div class="slider-row">
+                    <input type="range" id="auto_memory_channel_cooldown_seconds" min="0" max="60" step="1"
+                        value="{{ config.auto_memory_channel_cooldown_seconds or 10 }}"
+                        oninput="document.getElementById('auto_memory_cooldown_val').textContent = this.value + 's'"
+                        title="Shared cooldown before another auto-memory is generated in a channel">
+                    <span class="slider-val" id="auto_memory_cooldown_val">{{ config.auto_memory_channel_cooldown_seconds or 10 }}s</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="auto_memory_min_history_messages">Min History Messages</label>
+                <div class="slider-row">
+                    <input type="range" id="auto_memory_min_history_messages" min="2" max="20" step="1"
+                        value="{{ config.auto_memory_min_history_messages or 3 }}"
+                        oninput="document.getElementById('auto_memory_min_history_val').textContent = this.value"
+                        title="Minimum messages required before attempting extraction">
+                    <span class="slider-val" id="auto_memory_min_history_val">{{ config.auto_memory_min_history_messages or 3 }}</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="auto_memory_context_window">Context Window</label>
+                <div class="slider-row">
+                    <input type="range" id="auto_memory_context_window" min="8" max="60" step="1"
+                        value="{{ config.auto_memory_context_window or 24 }}"
+                        oninput="document.getElementById('auto_memory_context_window_val').textContent = this.value"
+                        title="How many recent messages are sent to memory extraction">
+                    <span class="slider-val" id="auto_memory_context_window_val">{{ config.auto_memory_context_window or 24 }}</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="auto_memory_min_message_chars">Min Message Length</label>
+                <div class="slider-row">
+                    <input type="range" id="auto_memory_min_message_chars" min="1" max="40" step="1"
+                        value="{{ config.auto_memory_min_message_chars or 2 }}"
+                        oninput="document.getElementById('auto_memory_min_chars_val').textContent = this.value + ' chars'"
+                        title="Ignore messages shorter than this length">
+                    <span class="slider-val" id="auto_memory_min_chars_val">{{ config.auto_memory_min_message_chars or 2 }} chars</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="auto_memory_fallback_on_nothing" {% if config.auto_memory_fallback_on_nothing is not defined or config.auto_memory_fallback_on_nothing %}checked{% endif %}>
+                <span>Retry On NOTHING</span>
+            </label>
+            <p class="form-hint">When first extraction returns NOTHING, run one broader fallback pass.</p>
+        </div>
+
+        <button type="button" class="btn btn-primary" onclick="saveAutoMemorySettings()">Save Auto Memory Settings</button>
     </div>
 </div>
 {% endif %}
@@ -1165,7 +1275,8 @@ async function saveCharacterProvider(charName) {
 // Save name trigger settings
 async function saveNameTriggerSettings() {
     const data = {
-        name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100
+        name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100,
+        thread_response_policy: document.getElementById('thread_response_policy').value
     };
 
     const response = await fetch('/api/config', {
@@ -1179,6 +1290,33 @@ async function saveNameTriggerSettings() {
 
     if (response.ok) {
         showToast('Name trigger chance saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
+    }
+}
+
+// Save auto-memory settings
+async function saveAutoMemorySettings() {
+    const data = {
+        auto_memory_enabled: document.getElementById('auto_memory_enabled').checked,
+        auto_memory_channel_cooldown_seconds: parseInt(document.getElementById('auto_memory_channel_cooldown_seconds').value),
+        auto_memory_min_history_messages: parseInt(document.getElementById('auto_memory_min_history_messages').value),
+        auto_memory_context_window: parseInt(document.getElementById('auto_memory_context_window').value),
+        auto_memory_min_message_chars: parseInt(document.getElementById('auto_memory_min_message_chars').value),
+        auto_memory_fallback_on_nothing: document.getElementById('auto_memory_fallback_on_nothing').checked
+    };
+
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('Auto-memory settings saved', 'success');
     } else {
         showToast('Failed to save settings', 'error');
     }
@@ -1260,7 +1398,9 @@ async function saveSplitReplySettings() {
 // Save concurrency settings
 async function saveConcurrencySettings() {
     const data = {
-        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value)
+        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value),
+        request_timeout_seconds: parseInt(document.getElementById('request_timeout_seconds').value),
+        autonomous_pause_while_channel_busy: document.getElementById('autonomous_pause_while_channel_busy').checked
     };
 
     const response = await fetch('/api/config', {

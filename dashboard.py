@@ -1474,6 +1474,32 @@ def api_clear_all_memories(file_name):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@app.route('/api/memories/clear-all-stores', methods=['POST'])
+@requires_csrf
+def api_clear_all_memory_stores():
+    """Clear all memory stores, including global user profiles."""
+    from memory import memory_manager
+
+    data = request.json or {}
+    include_profiles = bool(data.get('include_user_profiles', True))
+
+    try:
+        summary = memory_manager.clear_all_memories(include_global_profiles=include_profiles)
+        log.warn(
+            "Cleared all memory stores via dashboard "
+            f"(include_profiles={include_profiles}, summary={summary})"
+        )
+        return jsonify({
+            'status': 'ok',
+            'message': 'All memories cleared',
+            'include_user_profiles': include_profiles,
+            'summary': summary
+        })
+    except Exception as e:
+        log.error(f"Error clearing all memory stores: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 # --- Memory Deduplication API ---
 
 @app.route('/api/memories/deduplicate', methods=['POST'])

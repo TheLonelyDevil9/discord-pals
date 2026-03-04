@@ -72,7 +72,8 @@ async def handle_interact_command(bot_instance, interaction: discord.Interaction
         is_dm=isinstance(channel, discord.DMChannel),
         user_id=user.id,
         sticker_info=None,
-        from_interact_command=True
+        from_interact_command=True,
+        history_cutoff_message_id=synthetic_message.id
     )
 
 

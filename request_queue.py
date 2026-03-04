@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Callable, Any
 from collections import defaultdict
 import discord
+import logger as log
 
 
 class RequestQueue:
@@ -35,7 +36,9 @@ class RequestQueue:
         user_id: int,
         sticker_info: str = None,
         from_interact_command: bool = False,
-        split_reply_target: discord.Member = None
+        split_reply_target: discord.Member = None,
+        history_cutoff_message_id: int = None,
+        history_cutoff_ts: float = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -53,9 +56,11 @@ class RequestQueue:
                     queued.get('split_reply_target') == split_reply_target):
                     return False
 
-            # Limit pending requests per user
+            # Limit pending requests per user.
+            # Allow a small burst so users can send follow-up messages while the
+            # bot is still generating without immediately dropping them.
             user_pending = sum(1 for req in self.queues[channel_id] if req['user_id'] == user_id)
-            if user_pending >= 2:
+            if user_pending >= 5:
                 return False
 
             # Add request to queue
@@ -72,7 +77,17 @@ class RequestQueue:
                 'user_id': user_id,
                 'sticker_info': sticker_info,
                 'from_interact_command': from_interact_command,
-                'split_reply_target': split_reply_target
+                'split_reply_target': split_reply_target,
+                'history_cutoff_message_id': (
+                    history_cutoff_message_id
+                    if history_cutoff_message_id is not None
+                    else getattr(message, 'id', None)
+                ),
+                'history_cutoff_ts': (
+                    float(history_cutoff_ts)
+                    if history_cutoff_ts is not None
+                    else current_time
+                )
             }
 
             self.queues[channel_id].append(request)
@@ -101,7 +116,13 @@ class RequestQueue:
                 
                 # Process the request
                 if self.process_callback:
-                    await self.process_callback(request)
+                    try:
+                        await self.process_callback(request)
+                    except Exception as e:
+                        # Keep queue moving even if one request fails.
+                        req_id = request.get('id')
+                        channel = request.get('message').channel.id if request.get('message') else channel_id
+                        log.error(f"Request queue callback failed (channel={channel}, request={req_id}): {e}")
                 
                 # Small delay between requests
                 await asyncio.sleep(0.5)

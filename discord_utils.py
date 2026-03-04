@@ -143,6 +143,7 @@ channel_names: Dict[int, str] = {}
 _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
 _STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
 _channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
+_channel_history_seq: Dict[int, int] = {}  # Monotonic sequence per channel (stable snapshots)
 
 # Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
@@ -226,11 +227,13 @@ def flush_pending_history():
 
 def load_history():
     """Load conversation history from disk on startup."""
-    global conversation_history, channel_names
+    global conversation_history, channel_names, _channel_history_seq
 
     data = safe_json_load(HISTORY_CACHE_FILE, default={})
+    conversation_history = {}
+    channel_names = {}
+    _channel_history_seq = {}
     if not data:
-        conversation_history = {}
         return
 
     # Handle both old format (list) and new format (dict with name/messages)
@@ -238,12 +241,25 @@ def load_history():
         channel_id = int(k)
         if isinstance(v, dict) and "messages" in v:
             # New format with name
-            conversation_history[channel_id] = v["messages"]
+            messages = v["messages"] if isinstance(v["messages"], list) else []
+            conversation_history[channel_id] = messages
             if "name" in v:
                 channel_names[channel_id] = v["name"]
         else:
             # Old format - just list of messages
-            conversation_history[channel_id] = v
+            messages = v if isinstance(v, list) else []
+            conversation_history[channel_id] = messages
+
+        # Restore per-channel history sequence counter (or infer fallback).
+        max_seq = 0
+        for msg in conversation_history[channel_id]:
+            seq = msg.get("history_seq")
+            if isinstance(seq, int) and seq > max_seq:
+                max_seq = seq
+        if max_seq <= 0 and conversation_history[channel_id]:
+            max_seq = len(conversation_history[channel_id])
+        if max_seq > 0:
+            _channel_history_seq[channel_id] = max_seq
 
     log.info(f"Loaded history for {len(conversation_history)} channels")
 
@@ -360,7 +376,9 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None,
+                   user_id: int = None, guild=None, message_id: int = None,
+                   reply_to_message_id: int = None):
     """Add a message to conversation history.
 
     Args:
@@ -371,6 +389,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         user_id: Discord user ID (for mention features)
         guild: Discord guild object for resolving mentions (optional)
         message_id: Discord message ID (for precise duplicate detection)
+        reply_to_message_id: For assistant messages, the source user message ID replied to
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
@@ -395,14 +414,22 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["user_id"] = user_id
     if message_id:
         msg["message_id"] = message_id
+    if reply_to_message_id:
+        msg["reply_to_message_id"] = reply_to_message_id
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
-    msg_hash = hash((role, content, author_name or ''))
+    msg_hash = hash((role, content, author_name or '', message_id or 0, reply_to_message_id or 0))
     if channel_id not in _recent_message_hashes:
         _recent_message_hashes[channel_id] = OrderedDict()
 
     if msg_hash in _recent_message_hashes[channel_id]:
         return  # Already added
+
+    # Stamp stable ordering metadata only for newly-added messages.
+    next_seq = _channel_history_seq.get(channel_id, 0) + 1
+    _channel_history_seq[channel_id] = next_seq
+    msg["history_seq"] = next_seq
+    msg["history_ts"] = time.time()
 
     # Add hash and maintain limit (OrderedDict preserves insertion order)
     _recent_message_hashes[channel_id][msg_hash] = True
@@ -451,6 +478,7 @@ def cleanup_stale_conversation_history():
         conversation_history.pop(ch, None)
         _recent_message_hashes.pop(ch, None)
         _channel_last_activity.pop(ch, None)
+        _channel_history_seq.pop(ch, None)
         channel_names.pop(ch, None)
 
     if channels_to_remove:
@@ -494,9 +522,14 @@ _cleared_channels: set = set()
 
 def clear_history(channel_id: int):
     """Clear conversation history for a channel."""
-    if channel_id in conversation_history:
-        del conversation_history[channel_id]
+    conversation_history.pop(channel_id, None)
+    _recent_message_hashes.pop(channel_id, None)
+    _channel_last_activity.pop(channel_id, None)
+    _channel_history_seq.pop(channel_id, None)
+    channel_names.pop(channel_id, None)
+    multipart_responses.pop(channel_id, None)
     _cleared_channels.add(channel_id)
+    save_history(force=True)
 
 
 def was_recently_cleared(channel_id: int) -> bool:
@@ -527,54 +560,93 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
-def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5, 
-                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
-    """
-    Split history into two parts for the new context structure:
-    - history: older messages (background context)
-    - immediate: recent messages (placed after chatroom context for focused response)
-    
-    If current_bot_name is provided, other bots' messages will be tagged with their name
-    (like user messages) to prevent personality bleed.
-    
-    Returns: (history_messages, immediate_messages)
-    """
-    all_history = get_history(channel_id)[-total_limit:]  # Apply total limit
-    
-    # Format all messages
+def format_history_split_from_messages(messages: List[dict], immediate_count: int = 5,
+                                       current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+    """Format and split a provided history snapshot (legacy transcript mode)."""
     formatted = []
-    for msg in all_history:
+    for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
 
         if role == "user" and author:
-            # User messages get Author: prefix (no brackets)
             content = f"{author}: {content}"
         elif role == "assistant":
-            # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
             if author and current_bot_name and author.lower() != current_bot_name.lower():
-                # Different bot - treat as "user" role with name prefix to prevent personality bleed
                 role = "user"
                 content = f"{author}: {content}"
-            # If same bot or no author field, keep as assistant (no prefix)
 
         formatted.append({"role": role, "content": content})
-    
-    # Split into history and immediate
+
     if len(formatted) <= immediate_count:
-        # Not enough messages - everything goes to immediate
         return [], formatted
-    
-    history = formatted[:-immediate_count]
-    immediate = formatted[-immediate_count:]
-    
-    return history, immediate
+    return formatted[:-immediate_count], formatted[-immediate_count:]
 
 
-def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
+def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5,
+                         current_bot_name: str = None,
+                         history_override: Optional[List[dict]] = None) -> Tuple[List[dict], List[dict]]:
+    """Split history into background + immediate sections (legacy transcript mode)."""
+    source = history_override if history_override is not None else get_history(channel_id)
+    all_history = source[-total_limit:]
+    return format_history_split_from_messages(all_history, immediate_count=immediate_count, current_bot_name=current_bot_name)
+
+
+def format_history_split_structured_from_messages(messages: List[dict], immediate_count: int = 5,
+                                                  current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+    """Format and split a provided history snapshot (structured mode)."""
+    formatted = []
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        author = msg.get("author")
+        author_id = msg.get("user_id")
+
+        speaker_kind = "assistant"
+        if role == "assistant" and author and current_bot_name and author.lower() != current_bot_name.lower():
+            role = "user"
+            speaker_kind = "bot"
+        elif role == "user":
+            speaker_kind = "user"
+
+        # Add deterministic speaker marker in structured mode so identity survives
+        # provider-side metadata stripping.
+        if role == "user" and author:
+            marker = f"[speaker={author}|kind={speaker_kind}]"
+            content = f"{marker} {content}".strip()
+
+        entry = {"role": role, "content": content}
+        if author:
+            entry["author"] = author
+        if author_id:
+            entry["author_id"] = author_id
+        if msg.get("message_id"):
+            entry["message_id"] = msg.get("message_id")
+        if msg.get("reply_to_message_id"):
+            entry["reply_to_message_id"] = msg.get("reply_to_message_id")
+
+        formatted.append(entry)
+
+    if len(formatted) <= immediate_count:
+        return [], formatted
+    return formatted[:-immediate_count], formatted[-immediate_count:]
+
+
+def format_history_split_structured(channel_id: int, total_limit: int = 200,
+                                    immediate_count: int = 5,
+                                    current_bot_name: str = None,
+                                    history_override: Optional[List[dict]] = None) -> Tuple[List[dict], List[dict]]:
+    """Split history for structured payload mode."""
+    source = history_override if history_override is not None else get_history(channel_id)
+    all_history = source[-total_limit:]
+    return format_history_split_structured_from_messages(all_history, immediate_count=immediate_count, current_bot_name=current_bot_name)
+
+
+def get_active_users(channel_id: int, limit: int = 20, history_override: Optional[List[dict]] = None) -> List[str]:
     """Get list of unique users who have participated recently."""
-    history = get_history(channel_id)[-limit:]
+    source = history_override if history_override is not None else get_history(channel_id)
+    history = source[-limit:]
     users = set()
 
     for msg in history:
@@ -585,12 +657,13 @@ def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
     return list(users)
 
 
-def get_other_bot_names(channel_id: int, current_bot_name: str) -> List[str]:
+def get_other_bot_names(channel_id: int, current_bot_name: str,
+                        history_override: Optional[List[dict]] = None) -> List[str]:
     """Get names of other bot characters from history and the bot registry."""
     other_bots = set()
 
     # From history (bots that have spoken in this channel)
-    history = get_history(channel_id)
+    history = history_override if history_override is not None else get_history(channel_id)
     for msg in history:
         if msg.get("role") == "assistant":
             author = msg.get("author")
@@ -982,33 +1055,89 @@ def unregister_bot(bot_user_id: int):
         del _bot_registry[bot_user_id]
 
 
-def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
+def _build_mention_aliases(*names: Optional[str]) -> List[str]:
+    """Build a de-duplicated alias list for @mention matching."""
+    aliases = []
+    seen = set()
+    for name in names:
+        if not name or not isinstance(name, str):
+            continue
+        cleaned = re.sub(r'\s+', ' ', name.strip().lstrip('@'))
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(cleaned)
+    return aliases
+
+
+def get_other_bots_mentionable(current_bot_id: int, guild, limit: int = 15) -> List[dict]:
     """Get list of other bots that can be mentioned.
 
     Args:
         current_bot_id: Discord user ID of the current bot (to exclude)
         guild: Discord guild object to check membership
+        limit: Maximum bots to return
 
     Returns:
-        List of dicts with 'character_name', 'user_id', 'mention_syntax'
+        List of dicts with 'character_name', 'name', 'aliases', 'user_id', 'mention_syntax'
     """
     bots = []
+    seen_ids = set()
     for bot_id, info in _bot_registry.items():
         if bot_id == current_bot_id:
             continue
 
         # Check if bot is in this guild
         if guild and guild.get_member(bot_id):
+            aliases = _build_mention_aliases(
+                info.get("character_name"),
+                info.get("name")
+            )
+            seen_ids.add(bot_id)
             bots.append({
                 "character_name": info["character_name"],
+                "name": info.get("name"),
                 "user_id": bot_id,
-                "mention_syntax": f"<@{bot_id}>"
+                "mention_syntax": f"<@{bot_id}>",
+                "aliases": aliases
             })
+            if len(bots) >= limit:
+                return bots
+
+    # Fallback: include other bot accounts visible in the guild even if they
+    # are not in the local registry (e.g., bots from another process/host).
+    if guild:
+        for member in guild.members:
+            if not member.bot:
+                continue
+            if member.id == current_bot_id or member.id in seen_ids:
+                continue
+
+            display_name = get_user_display_name(member)
+            aliases = _build_mention_aliases(
+                display_name,
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None)
+            )
+            bots.append({
+                "character_name": display_name,
+                "name": member.name,
+                "user_id": member.id,
+                "mention_syntax": f"<@{member.id}>",
+                "aliases": aliases
+            })
+            if len(bots) >= limit:
+                break
 
     return bots
 
 
-def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[dict]:
+def get_mentionable_users(channel_id: int, limit: int = 10, guild=None,
+                          history_override: Optional[List[dict]] = None) -> List[dict]:
     """Get list of users who can be mentioned based on conversation history.
 
     Args:
@@ -1017,21 +1146,41 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
         guild: Optional guild object for fallback member lookup
 
     Returns:
-        List of dicts with 'name', 'user_id', 'mention_syntax'
+        List of dicts with 'name', 'username', 'aliases', 'user_id', 'mention_syntax'
     """
     users = []
     seen_ids = set()
 
     # Primary: Get from recent message authors in history
-    history = get_history(channel_id)
+    history = history_override if history_override is not None else get_history(channel_id)
     for msg in reversed(history[-50:]):
         user_id = msg.get("user_id")
         author = msg.get("author")
 
         if user_id and user_id not in seen_ids and author:
             seen_ids.add(user_id)
+
+            display_name = author
+            username = None
+            aliases = _build_mention_aliases(author)
+
+            if guild:
+                member = guild.get_member(user_id)
+                if member:
+                    display_name = get_user_display_name(member)
+                    username = member.name
+                    aliases = _build_mention_aliases(
+                        display_name,
+                        member.name,
+                        getattr(member, 'global_name', None),
+                        getattr(member, 'nick', None),
+                        author
+                    )
+
             users.append({
-                "name": author,
+                "name": display_name,
+                "username": username,
+                "aliases": aliases,
                 "user_id": user_id,
                 "mention_syntax": f"<@{user_id}>"
             })
@@ -1047,8 +1196,16 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
                 continue  # Skip bots
             if member.id not in seen_ids:
                 seen_ids.add(member.id)
+                display_name = get_user_display_name(member)
                 users.append({
-                    "name": get_user_display_name(member),
+                    "name": display_name,
+                    "username": member.name,
+                    "aliases": _build_mention_aliases(
+                        display_name,
+                        member.name,
+                        getattr(member, 'global_name', None),
+                        getattr(member, 'nick', None)
+                    ),
                     "user_id": member.id,
                     "mention_syntax": f"<@{member.id}>"
                 })
@@ -1059,7 +1216,7 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
 
 
 def process_outgoing_mentions(content: str, mentionable_users: list = None,
-                               mentionable_bots: list = None) -> str:
+                               mentionable_bots: list = None, guild=None) -> str:
     """Process AI response to convert name-based mentions to Discord format.
 
     The AI might generate "@Username" or "@username" - this converts them
@@ -1069,6 +1226,7 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
         content: AI-generated response text
         mentionable_users: List of user dicts from get_mentionable_users()
         mentionable_bots: List of bot dicts from get_other_bots_mentionable()
+        guild: Optional guild object to validate existing numeric mentions
 
     Returns:
         Content with @Name converted to <@user_id> where applicable
@@ -1076,37 +1234,123 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not content:
         return content
 
-    # Build lookup of name -> mention syntax (case-insensitive)
+    def normalize_malformed_mentions(text: str) -> str:
+        """Normalize malformed mention stubs like '<@ Name' into '@Name' or remove them."""
+        # Convert "<@ Name" / "<@! Name" (without closing bracket) into "@Name"
+        text = re.sub(
+            r'<@!?\s*([A-Za-z][^>\n\r,!?;:.]{0,32}?)(?=[,!?;:.>|]|$)',
+            r'@\1',
+            text
+        )
+        # Clean stray trailing ">" after plaintext mentions (e.g. "@Name>")
+        text = re.sub(r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>', r'@\1', text)
+        # Remove dangling "<@" / "<@!" markers
+        text = re.sub(r'<@!?(?=\s|$)', '', text)
+        # Clean remaining incomplete fragments (but keep valid numeric mentions like <@123>)
+        text = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', text)
+        return text
+
+    # Build lookup of alias -> mention syntax (case-insensitive)
     mention_lookup = {}
+    known_mention_ids = set()
+
+    def register_alias(alias: str, mention_syntax: str):
+        if not alias or not mention_syntax:
+            return
+        normalized = re.sub(r'\s+', ' ', alias.strip().lstrip('@')).lower()
+        if not normalized:
+            return
+        # Keep first mapping for stability.
+        if normalized not in mention_lookup:
+            mention_lookup[normalized] = mention_syntax
 
     if mentionable_users:
         for user in mentionable_users:
-            name_lower = user['name'].lower()
-            mention_lookup[name_lower] = user['mention_syntax']
-        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users: {list(mention_lookup.keys())}")
+            mention_syntax = user.get('mention_syntax')
+            if not mention_syntax:
+                continue
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
+
+            aliases = user.get('aliases') or [user.get('name'), user.get('username')]
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
+        log.debug(f"[MENTIONS] Built lookup for {len(mention_lookup)} user aliases")
     else:
         log.debug(f"[MENTIONS] mentionable_users is empty or None")
 
     if mentionable_bots:
         for bot in mentionable_bots:
-            if bot.get('character_name'):
-                name_lower = bot['character_name'].lower()
-                mention_lookup[name_lower] = bot['mention_syntax']
+            mention_syntax = bot.get('mention_syntax')
+            if not mention_syntax:
+                continue
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
 
-    if not mention_lookup:
+            aliases = bot.get('aliases') or [bot.get('character_name'), bot.get('name')]
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
+    # Fallback: include real guild members in alias lookup so @DisplayName can
+    # still resolve even when mentionable_users context is sparse/stale.
+    if guild:
+        for member in guild.members:
+            if member.bot:
+                continue
+            mention_syntax = f"<@{member.id}>"
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
+
+            aliases = _build_mention_aliases(
+                get_user_display_name(member),
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None)
+            )
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
+    # Short-name fallback: if an alias is multi-part (e.g. "Febs WaWa"), allow
+    # "@Febs" only when that short alias maps to exactly one mention target.
+    short_alias_to_targets = {}
+    for alias, mention_syntax in mention_lookup.items():
+        if len(alias) < 3:
+            continue
+        if not re.search(r'[\s._-]', alias):
+            continue
+        short = re.split(r'[\s._-]+', alias, maxsplit=1)[0].strip()
+        if len(short) < 3:
+            continue
+        short_alias_to_targets.setdefault(short, set()).add(mention_syntax)
+
+    for short, targets in short_alias_to_targets.items():
+        if short in mention_lookup:
+            continue
+        if len(targets) == 1:
+            mention_lookup[short] = next(iter(targets))
+
+    # Normalize malformed tags before deciding whether to return early.
+    content = normalize_malformed_mentions(content)
+
+    if not mention_lookup and not re.search(r'<@!?\d+>', content) and not guild:
         log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
-        return content
+        return content.strip()
 
     log.debug(f"[MENTIONS] Processing content: {content[:100]}...")
 
     # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
-    content = re.sub(r'<@!?([^>\d][^>]*)>', r'@\1', content)
+    content = re.sub(r'<@!?([A-Za-z][^>]*)>', r'@\1', content)
+    content = normalize_malformed_mentions(content)
 
-    # Track which mention IDs we intentionally insert (so the safety net doesn't strip them)
+    # Track which mention IDs we intentionally insert (for safety-net preservation)
     inserted_mention_ids = set()
 
-    # Replace @Name patterns with Discord mention syntax
-    # Sort by longest name first to avoid partial matches (e.g. "@The Devil" before "@The")
+    # Replace @Alias patterns with Discord mention syntax.
+    # Sort by longest alias first to avoid partial replacements.
     sorted_names = sorted(mention_lookup.keys(), key=len, reverse=True)
 
     for name in sorted_names:
@@ -1126,18 +1370,23 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
 
     log.debug(f"[MENTIONS] Final content: {content[:100]}...")
 
-    # Safety net: Strip any raw Discord syntax the AI hallucinated,
-    # but preserve mentions we just intentionally inserted
-    def strip_if_not_inserted(match):
-        # Extract the numeric ID from the match
-        id_match = re.search(r'\d+', match.group(0))
-        if id_match and id_match.group(0) in inserted_mention_ids:
-            return match.group(0)  # Keep - we inserted this
-        return ''  # Strip - AI hallucinated this
+    # Safety net: strip unknown/hallucinated raw Discord syntax,
+    # but preserve IDs we inserted, known candidates, or valid guild members.
+    def strip_if_untrusted(match):
+        mention_id = match.group(1)
+        if mention_id in inserted_mention_ids or mention_id in known_mention_ids:
+            return match.group(0)
+        if guild:
+            try:
+                if guild.get_member(int(mention_id)):
+                    return match.group(0)
+            except Exception:
+                pass
+        return ''
 
-    content = re.sub(r'<@!?\d+>', strip_if_not_inserted, content)
+    content = re.sub(r'<@!?(\d+)>', strip_if_untrusted, content)
     content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions (always strip)
     content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions (always strip)
+    content = normalize_malformed_mentions(content)
 
-    return content
-
+    return content.strip()

@@ -9,6 +9,7 @@ import os
 import re
 import time
 import difflib
+import hashlib
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
@@ -21,6 +22,7 @@ from constants import (
     TEXTUAL_SIMILARITY_THRESHOLD, KEY_TERM_OVERLAP_THRESHOLD
 )
 import logger as log
+import runtime_config
 
 
 def ensure_data_dir():
@@ -63,6 +65,132 @@ def _cosine_similarity(vec1: list, vec2: list) -> float:
     if norm1 == 0 or norm2 == 0:
         return 0.0
     return dot / (norm1 * norm2)
+
+
+def _sanitize_memory_content(content: str) -> str:
+    """Normalize/sanitize memory text before storing."""
+    if not isinstance(content, str):
+        return ""
+    cleaned = remove_thinking_tags(content).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
+
+def _memory_fingerprint(content: str) -> str:
+    """Build a stable idempotency key for memory text."""
+    normalized = _normalize_memory(content)
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    return digest[:24]
+
+
+def _normalize_person_label(value: str) -> str:
+    """Normalize a display name/user label for robust matching."""
+    if not isinstance(value, str):
+        return ""
+    value = value.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+    value = value.strip().lstrip('@')
+    value = re.sub(r'\s+', ' ', value)
+    return value.lower()
+
+
+def _memory_mentions_target_user(result: str, user_name: str) -> bool:
+    """Best-effort check that generated memory references the target user."""
+    target = _normalize_person_label(user_name)
+    content = _normalize_person_label(result)
+    if not target or not content:
+        return False
+
+    if target in content:
+        return True
+
+    # Allow first-token/full-word matches for display names like "Kris WaWa".
+    target_tokens = [t for t in re.findall(r"[a-z0-9][a-z0-9_.\-']{1,31}", target) if len(t) >= 3]
+    if not target_tokens:
+        return False
+
+    content_tokens = set(re.findall(r"[a-z0-9][a-z0-9_.\-']{1,31}", content))
+    return any(token in content_tokens for token in target_tokens)
+
+
+def _ensure_memory_prefixed_with_user(result: str, user_name: str) -> str:
+    """Prefix memory with target user name if it's not explicitly included."""
+    cleaned = _sanitize_memory_content(result)
+    if not cleaned:
+        return ""
+    if not user_name:
+        return cleaned
+
+    if _memory_mentions_target_user(cleaned, user_name):
+        return cleaned
+
+    # Remove common leading pronouns so prefixed sentence reads naturally.
+    cleaned = re.sub(r'^(they|them|their|the user)\b\s*(?:said|mentioned|shared|likes?|dislikes?)?\s*',
+                     '', cleaned, flags=re.IGNORECASE).strip()
+    if not cleaned:
+        return ""
+    return f"{user_name} {cleaned}".strip()
+
+
+def _memory_entry_is_valid(entry: dict) -> bool:
+    """Check if a memory entry has minimally valid structure."""
+    if not isinstance(entry, dict):
+        return False
+    content = entry.get('content')
+    timestamp = entry.get('timestamp')
+    if not isinstance(content, str) or not content.strip():
+        return False
+    if timestamp is not None and not isinstance(timestamp, str):
+        return False
+    embedding = entry.get('embedding')
+    if embedding is not None and not isinstance(embedding, list):
+        return False
+    return True
+
+
+def _sanitize_memory_entries(entries: list) -> list:
+    """Drop malformed entries and normalize content/fingerprint fields."""
+    if not isinstance(entries, list):
+        return []
+
+    cleaned_entries = []
+    seen_fingerprints = set()
+    for entry in entries:
+        if not _memory_entry_is_valid(entry):
+            continue
+
+        content = _sanitize_memory_content(entry.get('content', ''))
+        if not content:
+            continue
+
+        fingerprint = entry.get('fingerprint')
+        if not isinstance(fingerprint, str) or not fingerprint:
+            fingerprint = _memory_fingerprint(content)
+
+        if fingerprint and fingerprint in seen_fingerprints:
+            continue
+        if fingerprint:
+            seen_fingerprints.add(fingerprint)
+
+        cleaned = {
+            "content": content,
+            "timestamp": entry.get("timestamp") or datetime.now().isoformat(),
+            "auto": bool(entry.get("auto", False)),
+            "fingerprint": fingerprint
+        }
+
+        # Preserve optional metadata when valid
+        for key in ("character", "user_name", "learned_from"):
+            value = entry.get(key)
+            if isinstance(value, str) and value:
+                cleaned[key] = value
+        if isinstance(entry.get("embedding"), list):
+            cleaned["embedding"] = entry["embedding"]
+
+        cleaned_entries.append(cleaned)
+
+    return cleaned_entries
 
 
 def _is_duplicate_memory(
@@ -191,11 +319,23 @@ class MemoryManager:
     def __init__(self):
         ensure_data_dir()
         # Shared across all characters
-        self.server_memories: Dict[str, List[dict]] = safe_json_load(MEMORIES_FILE)
+        raw_server_memories = safe_json_load(MEMORIES_FILE, default={})
+        if not isinstance(raw_server_memories, dict):
+            raw_server_memories = {}
+        self.server_memories: Dict[str, List[dict]] = {
+            str(guild_id): _sanitize_memory_entries(memories)
+            for guild_id, memories in raw_server_memories.items()
+        }
         self.lore: Dict[str, str] = safe_json_load(LORE_FILE)
 
         # Global user profiles (cross-server, follows users everywhere)
-        self.global_user_profiles: Dict[str, List[dict]] = safe_json_load(GLOBAL_USER_PROFILES_FILE)
+        raw_profiles = safe_json_load(GLOBAL_USER_PROFILES_FILE, default={})
+        if not isinstance(raw_profiles, dict):
+            raw_profiles = {}
+        self.global_user_profiles: Dict[str, List[dict]] = {
+            str(user_id): _sanitize_memory_entries(memories)
+            for user_id, memories in raw_profiles.items()
+        }
 
         # Per-character memory caches (loaded on demand)
         self._dm_memory_cache: Dict[str, Dict[str, List[dict]]] = {}
@@ -213,6 +353,46 @@ class MemoryManager:
         # Global channel-level memory generation cooldown (prevents multi-bot duplication)
         self._channel_memory_cooldown: Dict[int, float] = {}
         self._MEMORY_COOLDOWN_SECONDS = 30  # Min seconds between memory generation per channel
+        self._channel_memory_inflight: set[int] = set()
+
+        # Recently generated facts (short-lived idempotency guard for async overlaps)
+        self._recent_generated_facts: Dict[str, float] = {}
+        self._RECENT_FACT_WINDOW_SECONDS = 300
+
+    def _cleanup_recent_generated_facts(self):
+        """Purge stale entries from short-lived generation idempotency map."""
+        now = time.time()
+        stale_keys = [
+            key for key, ts in self._recent_generated_facts.items()
+            if now - ts > self._RECENT_FACT_WINDOW_SECONDS
+        ]
+        for key in stale_keys:
+            self._recent_generated_facts.pop(key, None)
+
+    def _mark_recent_fact(self, fact_key: str):
+        """Mark a generated fact key to prevent rapid duplicate writes."""
+        if not fact_key:
+            return
+        self._cleanup_recent_generated_facts()
+        self._recent_generated_facts[fact_key] = time.time()
+
+    def _is_recent_fact(self, fact_key: str) -> bool:
+        """Check if an identical generated fact was recently processed."""
+        if not fact_key:
+            return False
+        self._cleanup_recent_generated_facts()
+        ts = self._recent_generated_facts.get(fact_key, 0)
+        return (time.time() - ts) < self._RECENT_FACT_WINDOW_SECONDS
+
+    @staticmethod
+    def _contains_fingerprint(memories: list, fingerprint: str) -> bool:
+        """Check if a memory list already contains the same fingerprint."""
+        if not fingerprint:
+            return False
+        for entry in memories:
+            if isinstance(entry, dict) and entry.get('fingerprint') == fingerprint:
+                return True
+        return False
 
     def _ensure_legacy_loaded(self):
         """Lazy-load legacy memory files only when needed."""
@@ -265,14 +445,31 @@ class MemoryManager:
         """Load DM memories for a character (with caching)."""
         if character_name not in self._dm_memory_cache:
             filepath = get_character_dm_file(character_name)
-            self._dm_memory_cache[character_name] = safe_json_load(filepath)
+            raw = safe_json_load(filepath, default={})
+            if not isinstance(raw, dict):
+                raw = {}
+            self._dm_memory_cache[character_name] = {
+                str(user_id): _sanitize_memory_entries(memories)
+                for user_id, memories in raw.items()
+            }
         return self._dm_memory_cache[character_name]
 
     def _get_user_memories_for_character(self, character_name: str) -> Dict[str, Dict[str, List[dict]]]:
         """Load user memories for a character (with caching)."""
         if character_name not in self._user_memory_cache:
             filepath = get_character_user_file(character_name)
-            self._user_memory_cache[character_name] = safe_json_load(filepath)
+            raw = safe_json_load(filepath, default={})
+            if not isinstance(raw, dict):
+                raw = {}
+            cleaned = {}
+            for guild_id, users in raw.items():
+                if not isinstance(users, dict):
+                    continue
+                cleaned[str(guild_id)] = {
+                    str(user_id): _sanitize_memory_entries(memories)
+                    for user_id, memories in users.items()
+                }
+            self._user_memory_cache[character_name] = cleaned
         return self._user_memory_cache[character_name]
 
     def _save_character_dm_memories(self, character_name: str):
@@ -303,6 +500,64 @@ class MemoryManager:
         self._dirty_files.clear()
         self._last_save = time.time()
 
+    def clear_all_memories(self, include_global_profiles: bool = True) -> dict:
+        """Clear all memory stores across shared and per-character files.
+
+        Returns a summary dict with rough counts of cleared stores/files.
+        """
+        summary = {
+            "server_keys": len(self.server_memories),
+            "lore_keys": len(self.lore),
+            "global_profile_keys": len(self.global_user_profiles) if include_global_profiles else 0,
+            "dm_files": 0,
+            "user_files": 0
+        }
+
+        # Reset in-memory shared stores.
+        self.server_memories = {}
+        self.lore = {}
+        if include_global_profiles:
+            self.global_user_profiles = {}
+
+        # Reset legacy + per-character caches.
+        self._legacy_dm_memories = {}
+        self._legacy_user_memories = {}
+        self._legacy_loaded = True
+        self._dm_memory_cache = {}
+        self._user_memory_cache = {}
+        self._dirty_files.clear()
+        self._recent_generated_facts.clear()
+        self._channel_memory_cooldown.clear()
+        self._channel_memory_inflight.clear()
+
+        # Persist shared stores immediately.
+        safe_json_save(MEMORIES_FILE, {})
+        safe_json_save(LORE_FILE, {})
+        if include_global_profiles:
+            safe_json_save(GLOBAL_USER_PROFILES_FILE, {})
+
+        # Reset legacy files for backwards compatibility.
+        safe_json_save(DM_MEMORIES_FILE, {})
+        safe_json_save(USER_MEMORIES_FILE, {})
+
+        # Remove all per-character memory files.
+        for folder, counter_key in ((DM_MEMORIES_DIR, "dm_files"), (USER_MEMORIES_DIR, "user_files")):
+            if not os.path.isdir(folder):
+                continue
+            for filename in os.listdir(folder):
+                if not filename.endswith(".json"):
+                    continue
+                file_path = os.path.join(folder, filename)
+                try:
+                    os.remove(file_path)
+                    summary[counter_key] += 1
+                except OSError:
+                    # Fallback to blank JSON if unlink fails.
+                    safe_json_save(file_path, {})
+
+        self._last_save = time.time()
+        return summary
+
     # --- Server Memories (shared) ---
 
     def add_server_memory(self, guild_id: int, content: str, auto: bool = False,
@@ -311,12 +566,20 @@ class MemoryManager:
 
         Returns True if memory was added, False if duplicate detected.
         """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         key = str(guild_id)
         if key not in self.server_memories:
             self.server_memories[key] = []
+        else:
+            self.server_memories[key] = _sanitize_memory_entries(self.server_memories[key])
+
+        fingerprint = _memory_fingerprint(content)
+        if self._contains_fingerprint(self.server_memories[key], fingerprint):
+            log.debug(f"Skipping duplicate server memory by fingerprint: {content[:50]}...")
+            return False
 
         # Check for duplicates before adding (with semantic check if embedding provided)
         if _is_duplicate_memory(content, self.server_memories[key], new_embedding=embedding):
@@ -326,7 +589,8 @@ class MemoryManager:
         memory = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto
+            "auto": auto,
+            "fingerprint": fingerprint
         }
         if embedding:
             memory["embedding"] = embedding
@@ -367,11 +631,22 @@ class MemoryManager:
             # Fallback to legacy shared file
             return self._add_legacy_dm_memory(user_id, content, auto)
 
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
+
         dm_memories = self._get_dm_memories_for_character(character_name)
         key = str(user_id)
 
         if key not in dm_memories:
             dm_memories[key] = []
+        else:
+            dm_memories[key] = _sanitize_memory_entries(dm_memories[key])
+
+        fingerprint = _memory_fingerprint(content)
+        if self._contains_fingerprint(dm_memories[key], fingerprint):
+            log.debug(f"Skipping duplicate DM memory by fingerprint: {content[:50]}...")
+            return False
 
         # Check for duplicates before adding (with semantic check if embedding provided)
         if _is_duplicate_memory(content, dm_memories[key], new_embedding=embedding):
@@ -382,7 +657,8 @@ class MemoryManager:
             "content": content,
             "timestamp": datetime.now().isoformat(),
             "auto": auto,
-            "character": character_name
+            "character": character_name,
+            "fingerprint": fingerprint
         }
         if user_name:
             memory["user_name"] = user_name
@@ -400,6 +676,9 @@ class MemoryManager:
 
     def _add_legacy_dm_memory(self, user_id: int, content: str, auto: bool = False):
         """Add to legacy shared DM memories (backwards compatibility)."""
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
         self._ensure_legacy_loaded()
         key = str(user_id)
         if key not in self._legacy_dm_memories:
@@ -415,6 +694,7 @@ class MemoryManager:
             self._legacy_dm_memories[key] = self._legacy_dm_memories[key][-30:]
 
         self._mark_dirty('legacy_dm')
+        return True
 
     def get_dm_memories(self, user_id: int, limit: int = 10, character_name: str = None) -> str:
         """Get formatted memories for a DM."""
@@ -459,8 +739,9 @@ class MemoryManager:
 
         Returns True if memory was added, False if duplicate detected.
         """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         if not character_name:
             # Fallback to legacy shared file
@@ -474,6 +755,13 @@ class MemoryManager:
             user_memories[guild_key] = {}
         if user_key not in user_memories[guild_key]:
             user_memories[guild_key][user_key] = []
+        else:
+            user_memories[guild_key][user_key] = _sanitize_memory_entries(user_memories[guild_key][user_key])
+
+        fingerprint = _memory_fingerprint(content)
+        if self._contains_fingerprint(user_memories[guild_key][user_key], fingerprint):
+            log.debug(f"Skipping duplicate user memory by fingerprint: {content[:50]}...")
+            return False
 
         # Check for duplicates before adding (with semantic check if embedding provided)
         if _is_duplicate_memory(content, user_memories[guild_key][user_key], new_embedding=embedding):
@@ -484,7 +772,8 @@ class MemoryManager:
             "content": content,
             "timestamp": datetime.now().isoformat(),
             "auto": auto,
-            "character": character_name
+            "character": character_name,
+            "fingerprint": fingerprint
         }
         if user_name:
             memory["user_name"] = user_name
@@ -503,6 +792,9 @@ class MemoryManager:
     def _add_legacy_user_memory(self, guild_id: int, user_id: int, content: str,
                                  auto: bool = False, user_name: str = None):
         """Add to legacy shared user memories (backwards compatibility)."""
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
         self._ensure_legacy_loaded()
         guild_key = str(guild_id)
         user_key = str(user_id)
@@ -526,6 +818,7 @@ class MemoryManager:
             self._legacy_user_memories[guild_key][user_key] = self._legacy_user_memories[guild_key][user_key][-20:]
 
         self._mark_dirty('legacy_user')
+        return True
 
     def get_user_memories(self, guild_id: int, user_id: int, limit: int = 5,
                           character_name: str = None) -> str:
@@ -575,12 +868,20 @@ class MemoryManager:
 
         Returns True if memory was added, False if duplicate detected.
         """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         key = str(user_id)
         if key not in self.global_user_profiles:
             self.global_user_profiles[key] = []
+        else:
+            self.global_user_profiles[key] = _sanitize_memory_entries(self.global_user_profiles[key])
+
+        fingerprint = _memory_fingerprint(content)
+        if self._contains_fingerprint(self.global_user_profiles[key], fingerprint):
+            log.debug(f"Skipping duplicate global profile by fingerprint: {content[:50]}...")
+            return False
 
         # Check for duplicates before adding (with semantic check if embedding provided)
         if _is_duplicate_memory(content, self.global_user_profiles[key], new_embedding=embedding):
@@ -590,7 +891,8 @@ class MemoryManager:
         memory = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto
+            "auto": auto,
+            "fingerprint": fingerprint
         }
         if user_name:
             memory["user_name"] = user_name
@@ -659,21 +961,33 @@ class MemoryManager:
         id_key: int,
         character_name: str = "the character",
         user_id: int = None,
-        user_name: str = None
+        user_name: str = None,
+        cooldown_scope_id: int = None
     ) -> Optional[str]:
         """Generate a memory summary from conversation using AI."""
-        if len(messages) < 5:
+        if len(messages) < 4:
+            log.debug("Memory generation skipped - not enough context messages")
             return None
 
         # Global channel-level cooldown: prevent multiple bots from generating
         # memories for the same channel within the cooldown window
-        channel_key = id_key  # guild_id for servers, user_id for DMs
-        now = time.time()
-        last_gen = self._channel_memory_cooldown.get(channel_key, 0)
-        if now - last_gen < self._MEMORY_COOLDOWN_SECONDS:
-            log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {self._MEMORY_COOLDOWN_SECONDS}s)")
+        channel_key = cooldown_scope_id if cooldown_scope_id is not None else id_key
+        if channel_key in self._channel_memory_inflight:
+            log.debug("Memory generation skipped - already in progress for this channel")
             return None
-        self._channel_memory_cooldown[channel_key] = now
+
+        now = time.time()
+        try:
+            cooldown_seconds = int(runtime_config.get("auto_memory_channel_cooldown_seconds", self._MEMORY_COOLDOWN_SECONDS))
+        except (TypeError, ValueError):
+            cooldown_seconds = self._MEMORY_COOLDOWN_SECONDS
+        cooldown_seconds = max(0, min(cooldown_seconds, 300))
+        last_gen = self._channel_memory_cooldown.get(channel_key, 0)
+        if cooldown_seconds > 0 and now - last_gen < cooldown_seconds:
+            log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {cooldown_seconds}s)")
+            return None
+
+        self._channel_memory_inflight.add(channel_key)
 
         # Build context with explicit user attribution (using author from history)
         context_lines = []
@@ -727,14 +1041,50 @@ Memory about {target_user} (or NOTHING):"""
                 system_prompt="You are a memory analyzer. Create brief, factual summaries."
             )
 
+            if result and "NOTHING" in result.upper() and runtime_config.get("auto_memory_fallback_on_nothing", True):
+                # Broader second pass: still favor user-authored facts, but recover from
+                # over-strict first-pass misses so auto-memories keep flowing.
+                fallback_prompt = f"""Extract ONE concise memory about {target_user} from this conversation.
+
+Prefer facts {target_user} said about themselves in their own messages.
+If none are clear, you may capture one stable preference or recurring trait from context.
+Do not include roleplay dialogue as literal fact.
+
+If there is truly nothing worth keeping, respond with ONLY "NOTHING".
+Otherwise return one short sentence starting with "{target_user}".
+
+Conversation:
+{context}
+
+Memory about {target_user} (or NOTHING):"""
+
+                result = await provider_manager.generate(
+                    messages=[{"role": "user", "content": fallback_prompt}],
+                    system_prompt="You extract concise memory facts from chat logs."
+                )
+
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):
                 # Sanitize before storing - remove any reasoning tags
-                result = remove_thinking_tags(result)
-
-                # Validate memory is about the correct user - must mention their name
-                if user_name and user_name.lower() not in result.lower():
-                    log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")
+                result = _sanitize_memory_content(result)
+                if not result:
                     return None
+
+                # Ensure the memory remains anchored to the correct user, while
+                # being tolerant of partial-name outputs from the model.
+                if user_name and not _memory_mentions_target_user(result, user_name):
+                    patched = _ensure_memory_prefixed_with_user(result, user_name)
+                    if not patched:
+                        log.debug(f"Rejected memory - unable to normalize target user reference: {result[:100]}")
+                        return None
+                    result = patched
+
+                # Short-lived idempotency guard for concurrent generators.
+                fact_scope = f"{'dm' if is_dm else 'server'}:{channel_key}:{character_name}:{user_id or id_key}"
+                fact_key = f"{fact_scope}:{_memory_fingerprint(result)}"
+                if self._is_recent_fact(fact_key):
+                    log.debug("Memory generation skipped - duplicate fact generated recently")
+                    return None
+                self._mark_recent_fact(fact_key)
 
                 # Generate embedding ONCE for semantic deduplication across all stores
                 embedding = await provider_manager.get_embedding(result.strip())
@@ -761,9 +1111,22 @@ Memory about {target_user} (or NOTHING):"""
                                                      user_name=user_name, character_name=character_name,
                                                      embedding=embedding)
 
+                # Apply cooldown only on successful write so failed/NOTHING runs
+                # don't suppress future attempts.
+                self._channel_memory_cooldown[channel_key] = time.time()
+                # Persist immediately so dashboard/file checks reflect new memories.
+                self.flush()
                 return result.strip()
+            if result and "NOTHING" in result.upper():
+                log.debug("Memory generation returned NOTHING")
+            elif result and result.startswith("❌"):
+                log.debug("Memory generation returned provider error marker")
+            else:
+                log.debug("Memory generation returned empty result")
         except Exception as e:
             log.warn(f"Memory generation failed: {e}")
+        finally:
+            self._channel_memory_inflight.discard(channel_key)
 
         return None
 

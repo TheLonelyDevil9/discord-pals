@@ -6,6 +6,7 @@ Essential bot management commands: reload, switch, clear, recall, status, autono
 import discord
 from discord import app_commands
 from typing import Optional, Set
+import re
 
 from discord_utils import clear_history, remove_assistant_from_history
 from character import character_manager
@@ -36,6 +37,51 @@ async def is_owner(interaction: discord.Interaction) -> bool:
 def setup_core_commands(bot_instance) -> None:
     """Register core bot management commands."""
     tree = bot_instance.tree
+
+    def _normalize_name(value: str) -> str:
+        if not isinstance(value, str):
+            return ""
+        return re.sub(r'\s+', ' ', value.strip().lstrip('@')).lower()
+
+    def _canonical_name(value: str) -> str:
+        return re.sub(r'[^a-z0-9]+', '', _normalize_name(value))
+
+    def _resolve_character_name(raw_name: str) -> str:
+        """Map user input to a canonical character name when possible."""
+        cleaned = re.sub(r'\s+', ' ', (raw_name or "").strip())
+        if not cleaned:
+            return ""
+
+        known_names = set(character_manager.list_available())
+        if bot_instance.character and bot_instance.character.name:
+            known_names.add(bot_instance.character.name)
+        if not known_names:
+            return cleaned
+
+        cleaned_norm = _normalize_name(cleaned)
+        cleaned_can = _canonical_name(cleaned)
+
+        # Exact (case-insensitive) first.
+        for name in known_names:
+            if _normalize_name(name) == cleaned_norm:
+                return name
+
+        # Canonical exact fallback.
+        canonical_matches = [name for name in known_names if _canonical_name(name) == cleaned_can]
+        if len(canonical_matches) == 1:
+            return canonical_matches[0]
+
+        # Unique prefix fallback.
+        prefix_matches = []
+        for name in known_names:
+            norm = _normalize_name(name)
+            can = _canonical_name(name)
+            if norm.startswith(cleaned_norm) or (cleaned_can and can.startswith(cleaned_can)):
+                prefix_matches.append(name)
+        if len(prefix_matches) == 1:
+            return prefix_matches[0]
+
+        return cleaned
     
     @tree.command(name="reload", description="Reload character from file")
     async def cmd_reload(interaction: discord.Interaction) -> None:
@@ -216,28 +262,44 @@ def setup_core_commands(bot_instance) -> None:
     @app_commands.describe(bot_name="Name of the bot/character to ignore")
     async def cmd_ignore(interaction: discord.Interaction, bot_name: str) -> None:
         user_id = str(interaction.user.id)
-
-        if user_ignores.add_ignore(user_id, bot_name):
+        target_name = _resolve_character_name(bot_name)
+        if not target_name:
             await interaction.response.send_message(
-                f"✅ **{bot_name}** will no longer respond to your messages.", ephemeral=True
+                "❌ Please provide a bot/character name to ignore.", ephemeral=True
+            )
+            return
+
+        if user_ignores.add_ignore(user_id, target_name):
+            await interaction.response.send_message(
+                f"✅ **{target_name}** will no longer respond to your messages.", ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                f"ℹ️ You're already ignoring **{bot_name}**.", ephemeral=True
+                f"ℹ️ You're already ignoring **{target_name}**.", ephemeral=True
             )
 
     @tree.command(name="unignore", description="Allow a bot to respond to you again")
     @app_commands.describe(bot_name="Name of the bot/character to unignore")
     async def cmd_unignore(interaction: discord.Interaction, bot_name: str) -> None:
         user_id = str(interaction.user.id)
-
-        if user_ignores.remove_ignore(user_id, bot_name):
+        requested_name = _resolve_character_name(bot_name)
+        if not requested_name:
             await interaction.response.send_message(
-                f"✅ **{bot_name}** can now respond to your messages again.", ephemeral=True
+                "❌ Please provide a bot/character name to unignore.", ephemeral=True
+            )
+            return
+
+        matched_name, suggestions = user_ignores.find_best_ignore_match(user_id, requested_name)
+        if matched_name and user_ignores.remove_ignore(user_id, matched_name):
+            await interaction.response.send_message(
+                f"✅ **{matched_name}** can now respond to your messages again.", ephemeral=True
             )
         else:
+            suggestion_text = ""
+            if suggestions:
+                suggestion_text = "\nDid you mean: " + ", ".join([f"**{s}**" for s in suggestions])
             await interaction.response.send_message(
-                f"ℹ️ You weren't ignoring **{bot_name}**.", ephemeral=True
+                f"ℹ️ You weren't ignoring **{requested_name}**.{suggestion_text}", ephemeral=True
             )
 
     @tree.command(name="ignorelist", description="Show which bots you're ignoring")
