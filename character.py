@@ -17,6 +17,106 @@ RE_PERSONA = re.compile(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGN
 RE_DIALOGUE = re.compile(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_SPECIAL_USERS = re.compile(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_EMPTY_LINES = re.compile(r'\n{3,}')
+RE_SPECIAL_USERS_HEADER_LINE = re.compile(r'^\s*(?:#{1,6}\s*)?special users?\s*:?\s*$', re.IGNORECASE)
+RE_SPECIAL_USER_HEADING = re.compile(r'^\s*#{2,6}\s+(.+?)\s*$', re.IGNORECASE)
+RE_BARE_SPECIAL_USER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-' ]{1,63}$")
+
+
+def _extract_special_users_block(content: str) -> str:
+    """Extract Special Users block from markdown, including legacy non-heading forms."""
+    special_match = RE_SPECIAL_USERS.search(content)
+    if special_match:
+        return special_match.group(1).strip()
+
+    lines = content.splitlines()
+    start_index = None
+    for idx, line in enumerate(lines):
+        if RE_SPECIAL_USERS_HEADER_LINE.match(line):
+            start_index = idx + 1
+            break
+
+    if start_index is None:
+        return ""
+
+    block_lines = []
+    for line in lines[start_index:]:
+        if re.match(r'^\s*##\s+\S', line):
+            break
+        block_lines.append(line.rstrip())
+    return "\n".join(block_lines).strip()
+
+
+def _looks_like_special_user_name(value: str) -> bool:
+    """Heuristic for legacy special-user labels (e.g., `seelewee`)."""
+    token = value.strip().strip(':')
+    if not token:
+        return False
+    if RE_SPECIAL_USERS_HEADER_LINE.match(token):
+        return False
+    if token.count(' ') > 3:
+        return False
+    if re.search(r"[,.!?;]", token):
+        return False
+    return bool(RE_BARE_SPECIAL_USER.match(token))
+
+
+def _parse_special_users_block(block_text: str) -> Dict[str, str]:
+    """Parse strict heading-based and legacy plaintext special-user formats."""
+    if not block_text:
+        return {}
+
+    special_users: Dict[str, str] = {}
+    current_user = None
+    current_context: List[str] = []
+
+    def _flush_current():
+        nonlocal current_user, current_context
+        if not current_user:
+            return
+        context = "\n".join(current_context).strip()
+        if context:
+            special_users[current_user.strip()] = context
+        current_user = None
+        current_context = []
+
+    lines = block_text.splitlines()
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if current_user and current_context and current_context[-1] != "":
+                current_context.append("")
+            continue
+
+        heading_match = RE_SPECIAL_USER_HEADING.match(line)
+        if heading_match:
+            heading = heading_match.group(1).strip()
+            if not heading or RE_SPECIAL_USERS_HEADER_LINE.match(heading):
+                continue
+            _flush_current()
+            current_user = heading.rstrip(':')
+            current_context = []
+            continue
+
+        if current_user is None and _looks_like_special_user_name(line):
+            current_user = line.rstrip(':')
+            current_context = []
+            continue
+
+        if (
+            current_user is not None
+            and _looks_like_special_user_name(line)
+            and any(chunk.strip() for chunk in current_context)
+        ):
+            _flush_current()
+            current_user = line.rstrip(':')
+            current_context = []
+            continue
+
+        if current_user is not None:
+            current_context.append(line)
+
+    _flush_current()
+    return special_users
 
 
 class PromptManager:
@@ -214,24 +314,10 @@ class CharacterManager:
         if dialogue_match:
             example_dialogue = dialogue_match.group(1).strip()
 
-        # Extract Special Users section
-        special_match = RE_SPECIAL_USERS.search(content)
-        if special_match:
-            lines = special_match.group(1).strip().split('\n')
-            current_user = None
-            current_context = []
-
-            for line in lines:
-                if line.startswith('### '):
-                    if current_user:
-                        special_users[current_user] = '\n'.join(current_context).strip()
-                    current_user = line[4:].strip()
-                    current_context = []
-                elif current_user:
-                    current_context.append(line)
-
-            if current_user:
-                special_users[current_user] = '\n'.join(current_context).strip()
+        # Extract Special Users section (supports strict and legacy formats).
+        special_block = _extract_special_users_block(content)
+        if special_block:
+            special_users = _parse_special_users_block(special_block)
 
         character = Character(char_name, persona, special_users, example_dialogue)
         self.characters[name] = character

@@ -2013,6 +2013,7 @@ class BotInstance:
             "your", "here", "there", "now", "pls", "pleasee",
             "for", "this", "that", "its", "with", "from", "not", "but", "just", "like",
         }
+        creator_relation_terms = {"creator", "owner", "maker", "developer", "dev", "author"}
 
         def _canonical_token(value: str) -> str:
             if not isinstance(value, str):
@@ -2112,7 +2113,7 @@ class BotInstance:
         def _detect_relation_terms(source: str) -> set[str]:
             groups = [
                 {"sis", "sister", "bro", "brother", "sibling"},
-                {"creator", "owner", "maker", "developer", "dev", "author"}
+                creator_relation_terms
             ]
             lowered = source.lower()
             selected = set()
@@ -2318,18 +2319,120 @@ class BotInstance:
                 return next(iter(prefix.values()))
             return None
 
+        async def _resolve_special_user_relation_ids(relation_terms: set[str]) -> list[int]:
+            """Resolve relation requests via character special-users first (human-only)."""
+            if not self.character or not relation_terms.intersection(creator_relation_terms):
+                return []
+
+            special_users = self.character.special_users or {}
+            if not special_users:
+                return []
+
+            targeted_terms = relation_terms.intersection(creator_relation_terms)
+            preferred_names = []
+            for special_name, special_context in special_users.items():
+                combined = f"{special_name}\n{special_context or ''}".lower()
+                if any(
+                    re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', combined)
+                    for term in targeted_terms
+                ):
+                    preferred_names.append(str(special_name).strip())
+
+            if not preferred_names:
+                preferred_names = [str(name).strip() for name in special_users.keys() if str(name).strip()]
+
+            if not preferred_names:
+                return []
+
+            deduped_names = []
+            seen_names = set()
+            for name in preferred_names:
+                lowered = name.lower()
+                if lowered in seen_names:
+                    continue
+                seen_names.add(lowered)
+                deduped_names.append(name)
+
+            resolved_ids = []
+            seen_ids_local = set()
+            self_id = self.client.user.id if self.client and self.client.user else None
+            base_members = [m for m in guild.members if not m.bot and (not self_id or m.id != self_id)] if guild else []
+
+            fetched_members = None
+            for name in deduped_names[:12]:
+                selected_id = _pick_unique_candidate_id(name, candidates, include_bots=False)
+                if selected_id and selected_id not in seen_ids_local:
+                    seen_ids_local.add(selected_id)
+                    resolved_ids.append(selected_id)
+                    continue
+
+                if not guild:
+                    continue
+
+                member = _pick_unique_member(name, base_members, include_bots=False)
+                if member is None:
+                    query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", name).strip()
+                    queried = []
+                    if query_term:
+                        try:
+                            queried = await guild.query_members(query=query_term[:100], limit=100, cache=True)
+                        except Exception:
+                            queried = []
+                    if not queried and " " in query_term:
+                        first_token = query_term.split()[0].strip()
+                        if len(first_token) >= 3:
+                            try:
+                                queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                            except Exception:
+                                queried = []
+                    merged = {m.id: m for m in base_members}
+                    for m in queried:
+                        if not getattr(m, "bot", False):
+                            merged[m.id] = m
+                    member = _pick_unique_member(name, list(merged.values()), include_bots=False)
+
+                if member is None and hasattr(guild, "fetch_members"):
+                    if fetched_members is None:
+                        fetched_members = []
+                        try:
+                            async for m in guild.fetch_members(limit=1200):
+                                if not getattr(m, "bot", False) and (not self_id or m.id != self_id):
+                                    fetched_members.append(m)
+                        except Exception:
+                            fetched_members = []
+                    if fetched_members:
+                        merged = {m.id: m for m in base_members}
+                        for m in fetched_members:
+                            merged[m.id] = m
+                        member = _pick_unique_member(name, list(merged.values()), include_bots=False)
+
+                if member and member.id not in seen_ids_local:
+                    seen_ids_local.add(member.id)
+                    resolved_ids.append(member.id)
+
+            return resolved_ids
+
         terms = _extract_terms(request_content)
+        relation_terms = _detect_relation_terms(request_content)
+        creator_relation_intent = bool(relation_terms.intersection(creator_relation_terms))
         requested_ids = []
         seen_ids = set()
         for term in terms:
-            selected_id = _pick_unique_candidate_id(term, candidates, include_bots=True)
+            include_bots_for_term = not (creator_relation_intent and term in creator_relation_terms)
+            selected_id = _pick_unique_candidate_id(term, candidates, include_bots=include_bots_for_term)
             if selected_id and selected_id not in seen_ids:
                 seen_ids.add(selected_id)
                 requested_ids.append(selected_id)
 
         # Relation fallback: resolve vague requests like "tag your sister/creator"
         # by matching known candidate names near relationship terms in character text.
-        relation_terms = _detect_relation_terms(request_content)
+        if relation_terms and not requested_ids:
+            special_relation_ids = await _resolve_special_user_relation_ids(relation_terms)
+            for special_id in special_relation_ids:
+                if special_id not in seen_ids:
+                    seen_ids.add(special_id)
+                    requested_ids.append(special_id)
+
         if relation_terms and not requested_ids:
             relation_corpus = _build_character_relation_corpus()
             relation_ids = []
@@ -2338,6 +2441,9 @@ class BotInstance:
                 try:
                     user_id = int(candidate.get("user_id"))
                 except (TypeError, ValueError):
+                    continue
+
+                if creator_relation_intent and _candidate_is_bot(candidate):
                     continue
 
                 aliases = candidate.get("aliases") or []
@@ -2377,6 +2483,7 @@ class BotInstance:
                 return out
 
             for term in terms:
+                allow_bot_fallback = not (creator_relation_intent and term in creator_relation_terms)
                 member = _pick_unique_member(term, base_members, include_bots=False)
                 if member is None:
                     query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
@@ -2412,7 +2519,7 @@ class BotInstance:
                                 include_bots=False
                             )
 
-                if member is None:
+                if member is None and allow_bot_fallback:
                     member = _pick_unique_member(term, base_bots, include_bots=True)
                     if member is None:
                         query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
@@ -2459,13 +2566,24 @@ class BotInstance:
                     requested_ids.append(cached_user_id)
                     continue
 
-                cached_bot_id = _pick_unique_cached_id(term, cached_rows, include_bots=True)
-                if cached_bot_id and cached_bot_id not in seen_ids:
-                    seen_ids.add(cached_bot_id)
-                    requested_ids.append(cached_bot_id)
+                if allow_bot_fallback:
+                    cached_bot_id = _pick_unique_cached_id(term, cached_rows, include_bots=True)
+                    if cached_bot_id and cached_bot_id not in seen_ids:
+                        seen_ids.add(cached_bot_id)
+                        requested_ids.append(cached_bot_id)
 
         if not requested_ids:
             return response
+
+        if creator_relation_intent and requested_ids:
+            allowed = set(requested_ids)
+
+            def _keep_allowed_mention(match: re.Match) -> str:
+                mention_id = int(match.group(1))
+                return match.group(0) if mention_id in allowed else ""
+
+            response = re.sub(r'<@!?(\d{15,22})>', _keep_allowed_mention, response)
+            response = re.sub(r'\s{2,}', ' ', response).strip()
 
         existing_ids = {int(mid) for mid in re.findall(r'<@!?(\d{15,22})>', response)}
         prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]

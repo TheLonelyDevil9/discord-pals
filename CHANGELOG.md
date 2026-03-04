@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.14] - 2026-03-05
+
+### Fixed
+
+- Parse legacy `Special Users` blocks without strict markdown headings so character files like `cecile.md` correctly load creator mappings (`seelewee`, `geechan`)
+- Improve creator-relation tag fallback to prefer special-user human matches and avoid selecting bot candidates like Dottore for requests such as "tag your creator"
+- Enforce creator-intent mention filtering so conflicting bot mentions are removed when a creator target is resolved
+
+### Added
+
+- Regression tests for legacy special-user parsing and real Cecile creator mapping detection
+- Regression tests for creator-relation mention fallback to ensure `seelewee` is tagged instead of Dottore
+
 ## [v1.6.13] - 2026-03-05
 
 ### Fixed
