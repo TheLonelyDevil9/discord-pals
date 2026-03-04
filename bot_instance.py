@@ -486,6 +486,13 @@ class BotInstance:
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
+
+            # Last possible guardrail before sending: never leak malformed
+            # mention fragments like "<@" to Discord output.
+            line = self._cleanup_malformed_mentions_final(line)
+            if not line.strip():
+                continue
+
             try:
                 if i == 0:
                     if is_synthetic:

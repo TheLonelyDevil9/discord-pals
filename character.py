@@ -324,10 +324,13 @@ class CharacterManager:
 
         # Add mentionable users context (for @mention feature)
         # Show @Username format (not raw <@id>) - AI learns to use @Name, we convert on output
-        mentionable_users_context = ""
+        mentionable_users_context = (
+            "Mention formatting rule: Use plain @Name only. "
+            "Never output raw Discord mention syntax like <@123>, <@!123>, or <@ Name>."
+        )
         if mentionable_users:
             user_list = [f"- @{u['name']}" for u in mentionable_users[:10]]
-            mentionable_users_context = "Users you can @mention to get their attention:\n" + "\n".join(user_list)
+            mentionable_users_context += "\n\nUsers you can @mention to get their attention:\n" + "\n".join(user_list)
 
         # Add mentionable bots context (for bot-to-bot @mention feature)
         mentionable_bots_context = ""
