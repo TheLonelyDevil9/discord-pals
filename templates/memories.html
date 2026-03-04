@@ -67,9 +67,12 @@
     </div>
     <div class="danger-row">
         <div class="danger-copy">
-            <strong>Danger Zone:</strong> Clears every memory store, including global user profiles.
+            <strong>Danger Zone:</strong> Clear every memory store, with an option to keep lore.
         </div>
-        <button type="button" class="btn btn-danger" onclick="clearAllMemoryStores()">Clear All Memories + Profiles</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-ghost" onclick="clearAllMemoryStores({ preserveLore: true })">Clear All Except Lore</button>
+            <button type="button" class="btn btn-danger" onclick="clearAllMemoryStores()">Clear All Memories + Profiles</button>
+        </div>
     </div>
 
     {% if memories %}
@@ -814,11 +817,17 @@ function clearAllMemories(fileName) {
     );
 }
 
-// Clear all memory stores (including global user profiles)
-function clearAllMemoryStores() {
+// Clear all memory stores (optionally preserve lore)
+function clearAllMemoryStores(options = {}) {
+    const preserveLore = !!options.preserveLore;
+    const title = preserveLore ? 'Clear All Memories (Keep Lore)' : 'Clear All Memories';
+    const confirmMessage = preserveLore
+        ? 'This will permanently delete server memories, DM memories, user memories, and global user profiles, but KEEP lore. This cannot be undone. Continue?'
+        : 'This will permanently delete ALL server memories, lore, DM memories, user memories, and global user profiles. This cannot be undone. Continue?';
+
     showConfirm(
-        'Clear All Memories',
-        'This will permanently delete ALL server memories, lore, DM memories, user memories, and global user profiles. This cannot be undone. Continue?',
+        title,
+        confirmMessage,
         async function() {
             try {
                 const response = await fetch('/api/memories/clear-all-stores', {
@@ -828,13 +837,17 @@ function clearAllMemoryStores() {
                         'X-CSRF-Token': '{{ csrf_token() }}'
                     },
                     body: JSON.stringify({
-                        include_user_profiles: true
+                        include_user_profiles: true,
+                        preserve_lore: preserveLore
                     })
                 });
 
                 const data = await response.json();
                 if (data.status === 'ok') {
-                    showToast('All memories and profiles cleared', 'success');
+                    const successMessage = preserveLore
+                        ? 'All memories and profiles cleared (lore preserved)'
+                        : 'All memories and profiles cleared';
+                    showToast(successMessage, 'success');
                     setTimeout(() => location.reload(), 1000);
                 } else {
                     showToast(data.message || 'Failed to clear memories', 'error');

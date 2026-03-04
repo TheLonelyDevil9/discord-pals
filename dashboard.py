@@ -1482,17 +1482,25 @@ def api_clear_all_memory_stores():
 
     data = request.json or {}
     include_profiles = bool(data.get('include_user_profiles', True))
+    preserve_lore = bool(data.get('preserve_lore', False))
 
     try:
-        summary = memory_manager.clear_all_memories(include_global_profiles=include_profiles)
+        summary = memory_manager.clear_all_memories(
+            include_global_profiles=include_profiles,
+            preserve_lore=preserve_lore
+        )
         log.warn(
             "Cleared all memory stores via dashboard "
-            f"(include_profiles={include_profiles}, summary={summary})"
+            f"(include_profiles={include_profiles}, preserve_lore={preserve_lore}, summary={summary})"
         )
+        result_message = 'All memories cleared'
+        if preserve_lore:
+            result_message = 'All memories cleared (lore preserved)'
         return jsonify({
             'status': 'ok',
-            'message': 'All memories cleared',
+            'message': result_message,
             'include_user_profiles': include_profiles,
+            'preserve_lore': preserve_lore,
             'summary': summary
         })
     except Exception as e:

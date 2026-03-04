@@ -500,22 +500,27 @@ class MemoryManager:
         self._dirty_files.clear()
         self._last_save = time.time()
 
-    def clear_all_memories(self, include_global_profiles: bool = True) -> dict:
+    def clear_all_memories(self, include_global_profiles: bool = True,
+                           preserve_lore: bool = False) -> dict:
         """Clear all memory stores across shared and per-character files.
 
         Returns a summary dict with rough counts of cleared stores/files.
         """
+        lore_count = len(self.lore)
         summary = {
             "server_keys": len(self.server_memories),
-            "lore_keys": len(self.lore),
+            "lore_keys": lore_count if not preserve_lore else 0,
+            "lore_keys_preserved": lore_count if preserve_lore else 0,
             "global_profile_keys": len(self.global_user_profiles) if include_global_profiles else 0,
             "dm_files": 0,
-            "user_files": 0
+            "user_files": 0,
+            "preserve_lore": bool(preserve_lore)
         }
 
         # Reset in-memory shared stores.
         self.server_memories = {}
-        self.lore = {}
+        if not preserve_lore:
+            self.lore = {}
         if include_global_profiles:
             self.global_user_profiles = {}
 
@@ -532,7 +537,10 @@ class MemoryManager:
 
         # Persist shared stores immediately.
         safe_json_save(MEMORIES_FILE, {})
-        safe_json_save(LORE_FILE, {})
+        if preserve_lore:
+            safe_json_save(LORE_FILE, self.lore)
+        else:
+            safe_json_save(LORE_FILE, {})
         if include_global_profiles:
             safe_json_save(GLOBAL_USER_PROFILES_FILE, {})
 
