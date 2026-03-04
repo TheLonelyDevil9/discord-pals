@@ -24,7 +24,8 @@ from discord_utils import (
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared, strip_unresolved_plain_mentions,
-    get_cached_mention_alias_entries
+    get_cached_mention_alias_entries,
+    _build_mention_aliases
 )
 from context_protocol import (
     attach_protocol_handles,
@@ -32,7 +33,7 @@ from context_protocol import (
     render_context_block,
     extract_and_resolve_mentions
 )
-from mention_resolver import resolve_mentions_unified
+from mention_resolver import resolve_mentions_unified, TAG_VERBS_RE, STOPWORDS
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -801,6 +802,17 @@ class BotInstance:
             if runtime_config.get("allow_bot_to_bot_mentions", False):
                 bot_user_id = self.client.user.id if self.client.user else None
                 mentionable_bots = get_other_bots_mentionable(bot_user_id, guild)
+
+        # Pre-resolve explicitly requested tag targets so the model sees them.
+        if mentionable_users is not None and guild:
+            existing_ids = {u['user_id'] for u in mentionable_users}
+            pre_resolved = await self._pre_resolve_tag_targets(
+                content, guild, existing_ids
+            )
+            if pre_resolved:
+                mentionable_users = pre_resolved + mentionable_users
+                log.debug(f"[MENTIONS] Pre-injected {len(pre_resolved)} tag targets: "
+                          f"{[u['name'] for u in pre_resolved]}")
 
         context_protocol_enabled = runtime_config.get("context_protocol_enabled", True)
         mention_handle_mode = runtime_config.get("mention_handle_mode", "id_handles_v1")
@@ -1782,6 +1794,196 @@ class BotInstance:
             flags=re.IGNORECASE
         )
         return response
+
+    async def _pre_resolve_tag_targets(
+        self,
+        content: str,
+        guild: discord.Guild,
+        existing_user_ids: set[int],
+    ) -> list[dict]:
+        """Pre-resolve explicitly requested tag targets so they appear in mentionable_users.
+
+        Detects tag intent (e.g. "tag febs"), extracts target terms, and searches
+        the guild for matching members.  Returns user dicts in the same format as
+        ``get_mentionable_users`` so they can be prepended to the list the model sees.
+        """
+        if not content or not guild:
+            return []
+
+        # --- tag-intent gate (reuses mention_resolver constants) ---
+        if not re.search(rf'\b{TAG_VERBS_RE}\b', content, re.IGNORECASE):
+            return []
+
+        # --- helpers (mirrored from _inject_requested_mentions_failsafe) ---
+        def _canonical_token(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+        def _alias_variants(value: str) -> set[str]:
+            variants: set[str] = set()
+            if not isinstance(value, str):
+                return variants
+            normalized = re.sub(r"\s+", " ", value.strip().lstrip("@")).lower()
+            if not normalized:
+                return variants
+            variants.add(normalized)
+            canonical = _canonical_token(normalized)
+            if len(canonical) >= 3:
+                variants.add(canonical)
+            for part in re.split(r"[\s._-]+", normalized):
+                if len(part) >= 3 and part not in STOPWORDS:
+                    variants.add(part)
+                    part_canonical = _canonical_token(part)
+                    if len(part_canonical) >= 3:
+                        variants.add(part_canonical)
+            return variants
+
+        def _member_aliases(member: discord.Member) -> set[str]:
+            values = {
+                get_user_display_name(member),
+                member.name,
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+            }
+            aliases: set[str] = set()
+            for value in values:
+                if value:
+                    aliases.update(_alias_variants(value))
+            return aliases
+
+        def _pick_unique_member(
+            term: str,
+            members: list[discord.Member],
+        ) -> discord.Member | None:
+            exact: dict[int, discord.Member] = {}
+            prefix: dict[int, discord.Member] = {}
+            term_variants = _alias_variants(term)
+            if not term_variants:
+                return None
+            self_id = self.client.user.id if self.client and self.client.user else None
+            for member in members:
+                if self_id and member.id == self_id:
+                    continue
+                aliases = _member_aliases(member)
+                if aliases.intersection(term_variants):
+                    exact[member.id] = member
+                    continue
+                for alias in aliases:
+                    if any(len(v) >= 3 and alias.startswith(v) for v in term_variants):
+                        prefix[member.id] = member
+                        break
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(prefix) == 1:
+                return next(iter(prefix.values()))
+            return None
+
+        def _member_to_dict(member: discord.Member) -> dict:
+            display_name = get_user_display_name(member)
+            aliases = _build_mention_aliases(
+                display_name,
+                member.name,
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+            )
+            return {
+                "name": display_name,
+                "username": member.name,
+                "aliases": aliases,
+                "user_id": member.id,
+                "mention_syntax": f"<@{member.id}>",
+            }
+
+        # --- extract target terms after tag verb ---
+        segments = re.findall(
+            rf'\b{TAG_VERBS_RE}\b([^.!?\n\r]*)',
+            content,
+            flags=re.IGNORECASE,
+        )
+        if not segments:
+            return []
+
+        terms: list[str] = []
+        seen_terms: set[str] = set()
+        for segment in segments:
+            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.\-']{1,31}", segment):
+                t = token.strip().lower()
+                if not t or t in STOPWORDS or len(t) < 3 or t in seen_terms:
+                    continue
+                seen_terms.add(t)
+                terms.append(t)
+        if not terms:
+            return []
+
+        # --- skip terms that already match an existing mentionable user ---
+        existing_aliases: set[str] = set()
+        # Build alias set from existing_user_ids by checking guild cache
+        for member in guild.members:
+            if member.id in existing_user_ids:
+                existing_aliases.update(_member_aliases(member))
+
+        terms = [t for t in terms if not _alias_variants(t).intersection(existing_aliases)]
+        if not terms:
+            return []
+
+        # --- resolve each term against guild ---
+        self_id = self.client.user.id if self.client and self.client.user else None
+        base_members = [m for m in guild.members if m.id != self_id]
+        resolved: list[dict] = []
+        resolved_ids: set[int] = set()
+
+        for term in terms:
+            # Tier 1: local guild cache
+            member = _pick_unique_member(term, base_members)
+
+            # Tier 2: guild.query_members API
+            if member is None:
+                query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
+                if query_term:
+                    try:
+                        queried = await guild.query_members(
+                            query=query_term[:100], limit=100, cache=True
+                        )
+                    except Exception:
+                        queried = []
+                    if not queried and " " in query_term:
+                        first_token = query_term.split()[0].strip()
+                        if len(first_token) >= 3:
+                            try:
+                                queried = await guild.query_members(
+                                    query=first_token[:100], limit=100, cache=True
+                                )
+                            except Exception:
+                                queried = []
+                    merged = {m.id: m for m in base_members}
+                    for m in queried:
+                        merged[m.id] = m
+                    member = _pick_unique_member(term, list(merged.values()))
+
+            # Tier 3: full fetch (expensive, only if needed)
+            if member is None:
+                if hasattr(guild, "fetch_members"):
+                    try:
+                        fetched: list[discord.Member] = []
+                        async for m in guild.fetch_members(limit=1200):
+                            if m.id != self_id:
+                                fetched.append(m)
+                        member = _pick_unique_member(term, fetched)
+                    except Exception:
+                        pass
+
+            if (
+                member is not None
+                and member.id not in existing_user_ids
+                and member.id not in resolved_ids
+            ):
+                resolved_ids.add(member.id)
+                resolved.append(_member_to_dict(member))
+
+        return resolved
 
     async def _inject_requested_mentions_failsafe(self, response: str, context: dict,
                                                   guild: discord.Guild = None) -> str:

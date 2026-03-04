@@ -2,5 +2,5 @@
 Discord Pals - Version Information
 """
 
-__version__ = "1.6.11"
+__version__ = "1.6.12"
 VERSION = __version__

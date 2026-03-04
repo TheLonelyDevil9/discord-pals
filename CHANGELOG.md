@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.12] - 2026-03-04
+
+### Added
+
+- Pre-resolve explicitly requested tag targets into `mentionable_users` before model context building — when a user says "tag febs", the target is now resolved from guild members and injected at the top of the mention list so the model uses the correct handle instead of guessing from recent posters
+- New `_pre_resolve_tag_targets()` method on BotInstance with three-tier guild search (local cache → `query_members` → `fetch_members`) matching the same alias-variant logic used by the post-generation failsafe
 ## [v1.6.11] - 2026-03-04
 
 ### Fixed
