@@ -170,6 +170,42 @@ class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<@300300300300300300>", result.text)
         self.assertNotIn("<@400400400400400400>", result.text)
 
+    async def test_explicit_tag_intent_keeps_only_requested_target_mentions(self):
+        febs = FakeMember(710710710710710710, "febs", "Febs", bot=False)
+        wraith = FakeMember(720720720720720720, "wraith", "Wraith", bot=False)
+        guild = FakeGuild(members=[febs, wraith], query_pool=[febs, wraith])
+
+        result = await resolve_mentions_unified(
+            response="@wraith, Kris wants you before bed.",
+            request_content="max, tag febs for me?",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertIn("<@710710710710710710>", result.text)
+        self.assertNotIn("<@720720720720720720>", result.text)
+        self.assertNotIn("@wraith", result.text.lower())
+
+    async def test_explicit_tag_intent_drops_non_target_mentions_when_target_unresolved(self):
+        wraith = FakeMember(730730730730730730, "wraith", "Wraith", bot=False)
+        guild = FakeGuild(members=[wraith], query_pool=[wraith])
+
+        result = await resolve_mentions_unified(
+            response="@wraith, okay.",
+            request_content="starlord, tag febs?",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertNotIn("<@730730730730730730>", result.text)
+        self.assertNotIn("@wraith", result.text.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

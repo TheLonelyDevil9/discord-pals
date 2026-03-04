@@ -163,8 +163,8 @@ RE_TIMESTAMP = re.compile(r'<t:(\d+)(?::[tTdDfFR])?>')
 RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
 RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*(?::\d*)?$')
 RE_INCOMPLETE_TAG = re.compile(r'<[a-zA-Z][a-zA-Z0-9_]*:\d{17,21}(?!>)')
-RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
-RE_MALFORMED_EMOJI_PREFIX = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+(?!>)')
+RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d@#&/])\d{17,21}>(?!\S)')
+RE_MALFORMED_EMOJI_PREFIX = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+(?![\d>])')
 RE_EMPTY_ANGLE = re.compile(r'<>')
 RE_MALFORMED_EMOJI = re.compile(
     r'<(?!'
@@ -753,39 +753,33 @@ def get_guild_emojis(guild: discord.Guild, max_count: int = MAX_EMOJIS_IN_PROMPT
 
 def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     """Convert :emoji_name: to proper Discord format (including animated)."""
-    if not guild or guild.id not in _emoji_cache:
+    if not text:
         return text
 
-    cache = _emoji_cache[guild.id]
+    result = text
+    if guild and guild.id in _emoji_cache:
+        cache = _emoji_cache[guild.id]
 
-    # Pre-pass: normalise malformed custom emoji (missing closing ">") to :name:
-    # so the shortcode resolver below can match them against the guild cache.
-    text = RE_MALFORMED_EMOJI_PREFIX.sub(r':\1:', text)
+        def replace_emoji(match):
+            name = match.group(1)
+            if name in cache:
+                emoji = cache[name]
+                if emoji.animated:
+                    return f"<a:{emoji.name}:{emoji.id}>"
+                else:
+                    return f"<:{emoji.name}:{emoji.id}>"
+            return match.group(0)
 
-    def replace_emoji(match):
-        name = match.group(1)
-        if name in cache:
-            emoji = cache[name]
-            if emoji.animated:
-                return f"<a:{emoji.name}:{emoji.id}>"
-            else:
-                return f"<:{emoji.name}:{emoji.id}>"
-        return match.group(0)
+        result = RE_EMOJI_SHORTCODE.sub(replace_emoji, result)
 
-    result = RE_EMOJI_SHORTCODE.sub(replace_emoji, text)
-
-    # AFTER conversion, clean up malformed emoji-like tags that LLMs sometimes generate
-    # Remove incomplete emoji/mention-like tags (e.g., "<huh:1445393773831311146")
+    # Drop malformed custom emoji fragments regardless of cache state.
+    result = RE_MALFORMED_EMOJI_PREFIX.sub('', result)
     result = RE_INCOMPLETE_TAG.sub('', result)
-
-    # Remove incomplete emoji tags at end of string (e.g., "<:emoji" or "<a:")
     result = RE_BROKEN_EMOJI_END.sub('', result)
-
-    # Remove orphaned emoji IDs without proper format (e.g., "12345678901234567890>")
     result = RE_ORPHAN_SNOWFLAKE.sub('', result)
-
-    # Remove empty angle bracket pairs
     result = RE_EMPTY_ANGLE.sub('', result)
+    result = re.sub(r'\s{2,}', ' ', result)
+    result = re.sub(r'\s+([,!?;:.])', r'\1', result)
 
     # Disabled: RE_MALFORMED_EMOJI is too aggressive — it can match legitimate
     # text between < and > (up to 50 chars) and truncate messages mid-sentence.
@@ -1559,6 +1553,7 @@ def strip_unresolved_plain_mentions(content: str) -> str:
 
     cleaned = re.sub(r"<@!?(\d{15,22})>", _protect_valid_mention, content)
     cleaned = re.sub(r"(?<!<)@{2,}(?=[A-Za-z0-9_])", "@", cleaned)
+    cleaned = re.sub(r"@[\u200b\u2060\ufeff\s]+(?=[A-Za-z0-9])", "@", cleaned)
 
     def _demote_plain_mention(match: re.Match) -> str:
         candidate = re.sub(r"\s+", " ", match.group(1)).strip().rstrip(" >.,!?;:")
@@ -1573,6 +1568,7 @@ def strip_unresolved_plain_mentions(content: str) -> str:
         cleaned
     )
 
+    cleaned = re.sub(r"(^|[\s(\[{])@+(?=[\s)\]}.,!?;:]|$)", r"\1", cleaned)
     cleaned = re.sub(r"(^|[\s(\[{])@(?=[\s)\]}.,!?;:]|$)", r"\1", cleaned)
     cleaned = re.sub(r"@\s*>", "", cleaned)
 

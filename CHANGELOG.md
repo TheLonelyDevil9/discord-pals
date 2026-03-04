@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.13] - 2026-03-05
+
+### Fixed
+
+- Enforce explicit tag-intent targeting so requests like "tag febs" no longer resolve and keep conflicting mentions like `@Wraith`
+- Harden unresolved mention cleanup to remove dangling `@` artifacts and malformed plaintext mention remnants
+- Drop malformed custom emoji fragments (for example `<:name:id` without closing `>`) even when no guild emoji cache is present
+- Prevent emoji cleanup from stripping valid numeric user mentions like `<@123...>`
+
+### Added
+
+- Mention resolver regressions for explicit tag-intent target filtering and non-target mention suppression
+- Emoji sanitizer regressions for malformed custom emoji dropping and valid user-mention preservation
 ## [v1.6.12] - 2026-03-04
 
 ### Added

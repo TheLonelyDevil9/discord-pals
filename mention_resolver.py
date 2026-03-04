@@ -578,6 +578,23 @@ def _strip_unresolved_plain_mentions(text: str, unresolved_candidates: List[str]
     return resolved
 
 
+def _retain_requested_numeric_mentions_only(text: str, requested_ids: List[int]) -> str:
+    """When explicit tag intent exists, keep only numeric mentions for requested IDs."""
+    if not text:
+        return text
+
+    allowed_ids = {int(uid) for uid in requested_ids if isinstance(uid, int)}
+
+    def _replace(match: re.Match) -> str:
+        mention_id = int(match.group(1))
+        return match.group(0) if mention_id in allowed_ids else ""
+
+    cleaned = re.sub(r"<@!?(\d{15,22})>", _replace, text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,!?;:.])", r"\1", cleaned)
+    return cleaned.strip()
+
+
 def cleanup_malformed_mentions(text: str) -> str:
     if not text:
         return text
@@ -606,6 +623,7 @@ def cleanup_malformed_mentions(text: str) -> str:
     cleaned = re.sub(r"<@!?", "", cleaned)
     cleaned = re.sub(r"@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>", r"@\1", cleaned)
     cleaned = re.sub(r"(?<!<)@{2,}", "@", cleaned)
+    cleaned = re.sub(r"(^|[\s(\[{])@+(?=[\s)\]}.,!?;:]|$)", r"\1", cleaned)
     cleaned = re.sub(r"(^|[\s(\[{])@(?=[\s)\]}.,!?;:]|$)", r"\1", cleaned)
     cleaned = re.sub(r"@\s*>", "", cleaned)
 
@@ -635,6 +653,7 @@ async def resolve_mentions_unified(
     response_mentions = _extract_plaintext_mentions(response)
     relation_terms = _detect_relation_terms(request_content or "")
     recent_author_ids = _extract_recent_author_ids(envelope)
+    explicit_tag_intent = bool(re.search(rf"\b{TAG_VERBS_RE}\b", request_content or "", flags=re.IGNORECASE))
 
     query_terms = []
     seen_query = set()
@@ -705,7 +724,14 @@ async def resolve_mentions_unified(
             "score": round(score, 3),
             "reasons": reasons,
         })
-        if selected_id:
+        blocked_by_request_intent = explicit_tag_intent and (
+            (requested_ids and selected_id not in seen_ids) or
+            (not requested_ids)
+        )
+        if selected_id and blocked_by_request_intent:
+            decisions[-1]["blocked_by_request_intent"] = True
+            unresolved_candidates.append(candidate)
+        elif selected_id:
             candidate_to_id[candidate] = selected_id
             resolved_ids.add(selected_id)
         else:
@@ -713,6 +739,8 @@ async def resolve_mentions_unified(
 
     rewritten = _replace_plain_mentions(response, candidate_to_id)
     rewritten = _strip_unresolved_plain_mentions(rewritten, unresolved_candidates)
+    if explicit_tag_intent:
+        rewritten = _retain_requested_numeric_mentions_only(rewritten, requested_ids)
     existing_ids = {int(mid) for mid in re.findall(r"<@!?(\d{15,22})>", rewritten)}
     prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]
     if prefixes:
