@@ -1621,11 +1621,40 @@ class BotInstance:
         candidates = envelope.get("mention_candidates") or []
 
         text = request_content.lower()
+        compact_text = re.sub(r"[^a-z0-9]+", "", text)
         stopwords = {
             "please", "me", "you", "them", "him", "her", "someone", "anyone",
             "tag", "mention", "ping", "summon", "notify", "can", "could", "would",
             "and", "or", "to", "the", "a", "an", "my", "your"
         }
+
+        def _canonical_token(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+        def _alias_variants(value: str) -> set[str]:
+            variants = set()
+            if not isinstance(value, str):
+                return variants
+
+            normalized = re.sub(r"\s+", " ", value.strip().lstrip("@")).lower()
+            if not normalized:
+                return variants
+
+            variants.add(normalized)
+            canonical = _canonical_token(normalized)
+            if len(canonical) >= 3:
+                variants.add(canonical)
+
+            for part in re.split(r"[\s._-]+", normalized):
+                if len(part) >= 3 and part not in stopwords:
+                    variants.add(part)
+                    part_canonical = _canonical_token(part)
+                    if len(part_canonical) >= 3:
+                        variants.add(part_canonical)
+
+            return variants
 
         def _extract_terms(source: str) -> list[str]:
             terms = []
@@ -1648,7 +1677,24 @@ class BotInstance:
                     if t not in seen:
                         seen.add(t)
                         terms.append(t)
-            return terms[:8]
+
+                    canonical = _canonical_token(t)
+                    if canonical and canonical not in seen and len(canonical) >= 3 and canonical not in stopwords:
+                        seen.add(canonical)
+                        terms.append(canonical)
+
+            # Also capture explicit @targets from user request.
+            for mention_token in re.findall(r"@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", source):
+                t = mention_token.strip().lower()
+                if t and t not in stopwords and len(t) >= 3 and t not in seen:
+                    seen.add(t)
+                    terms.append(t)
+                canonical = _canonical_token(t)
+                if canonical and canonical not in stopwords and len(canonical) >= 3 and canonical not in seen:
+                    seen.add(canonical)
+                    terms.append(canonical)
+
+            return terms[:16]
 
         def _member_aliases(member: discord.Member) -> set[str]:
             values = {
@@ -1661,26 +1707,35 @@ class BotInstance:
             for value in values:
                 if not value:
                     continue
-                normalized = re.sub(r"\s+", " ", value.strip()).lower()
-                if normalized:
-                    aliases.add(normalized)
-                    for part in re.split(r"[\s._-]+", normalized):
-                        if len(part) >= 3 and part not in stopwords:
-                            aliases.add(part)
+                aliases.update(_alias_variants(value))
             return aliases
 
-        def _pick_unique_member(term: str, members: list[discord.Member]) -> discord.Member | None:
+        def _pick_unique_member(
+            term: str,
+            members: list[discord.Member],
+            *,
+            include_bots: bool = False
+        ) -> discord.Member | None:
             exact = {}
             prefix = {}
+            term_variants = _alias_variants(term)
+            if not term_variants:
+                return None
+
+            self_id = self.client.user.id if self.client and self.client.user else None
             for member in members:
-                if member.bot:
+                if include_bots and not member.bot:
+                    continue
+                if not include_bots and member.bot:
+                    continue
+                if self_id and member.id == self_id:
                     continue
                 aliases = _member_aliases(member)
-                if term in aliases:
+                if aliases.intersection(term_variants):
                     exact[member.id] = member
                     continue
                 for alias in aliases:
-                    if alias.startswith(term):
+                    if any(len(variant) >= 3 and alias.startswith(variant) for variant in term_variants):
                         prefix[member.id] = member
                         break
 
@@ -1692,6 +1747,8 @@ class BotInstance:
                 return next(iter(prefix.values()))
             return None
 
+        terms = _extract_terms(request_content)
+        term_set = set(terms)
         requested_ids = []
         seen_ids = set()
         for candidate in candidates:
@@ -1713,7 +1770,17 @@ class BotInstance:
                 if len(normalized) < 3 or normalized in stopwords:
                     continue
 
+                alias_variants = _alias_variants(normalized)
+                if alias_variants.intersection(term_set):
+                    matched = True
+                    break
+
                 if re.search(rf'(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])', text):
+                    matched = True
+                    break
+
+                alias_canonical = _canonical_token(normalized)
+                if len(alias_canonical) >= 3 and alias_canonical in compact_text:
                     matched = True
                     break
 
@@ -1722,29 +1789,44 @@ class BotInstance:
                 requested_ids.append(user_id)
 
         # Guild lookup fallback for terms not covered by mention candidates.
-        if guild:
+        if guild and terms:
+            self_id = self.client.user.id if self.client and self.client.user else None
             base_members = [m for m in guild.members if not m.bot]
-            terms = _extract_terms(request_content)
+            base_bots = [m for m in guild.members if m.bot and m.id != self_id]
 
             for term in terms:
-                # Skip if a candidate alias already matched this term.
-                if any(
-                    isinstance(alias, str) and alias.strip().lstrip("@").lower() == term
-                    for c in candidates for alias in (c.get("aliases") or [])
-                ):
-                    continue
-
-                member = _pick_unique_member(term, base_members)
+                member = _pick_unique_member(term, base_members, include_bots=False)
                 if member is None:
-                    try:
-                        queried = await guild.query_members(query=term[:100], limit=25, cache=True)
-                    except Exception:
+                    query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
+                    if query_term:
+                        try:
+                            queried = await guild.query_members(query=query_term[:100], limit=25, cache=True)
+                        except Exception:
+                            queried = []
+                    else:
                         queried = []
                     merged = {m.id: m for m in base_members}
                     for m in queried:
                         if not m.bot:
                             merged[m.id] = m
-                    member = _pick_unique_member(term, list(merged.values()))
+                    member = _pick_unique_member(term, list(merged.values()), include_bots=False)
+
+                if member is None:
+                    member = _pick_unique_member(term, base_bots, include_bots=True)
+                    if member is None:
+                        query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
+                        if query_term:
+                            try:
+                                queried = await guild.query_members(query=query_term[:100], limit=25, cache=True)
+                            except Exception:
+                                queried = []
+                        else:
+                            queried = []
+                        merged = {m.id: m for m in base_bots}
+                        for m in queried:
+                            if m.bot and (not self_id or m.id != self_id):
+                                merged[m.id] = m
+                        member = _pick_unique_member(term, list(merged.values()), include_bots=True)
 
                 if member and member.id not in seen_ids:
                     seen_ids.add(member.id)
