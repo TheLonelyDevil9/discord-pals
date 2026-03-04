@@ -881,6 +881,15 @@ class BotInstance:
             guild=guild if allow_mentions else None
         )
 
+        # Last-mile fallback for unresolved "@Name" user mentions and malformed
+        # "<@ Name" fragments, including users not currently in cache.
+        if allow_mentions and guild:
+            response = await self._resolve_unresolved_user_mentions(response, guild)
+
+        # Final safety pass: drop any transcript-style "User: ..." lines that
+        # would make the bot speak as someone else after mention processing.
+        response = self._strip_user_attribution_lines(response, context)
+
         # Prepend mention for split replies
         if split_target:
             response = f"<@{split_target.id}> {response}"
@@ -1154,40 +1163,65 @@ class BotInstance:
         if not response:
             return response
 
+        def _normalize_name(value: str) -> str:
+            """Normalize display/user names for robust matching."""
+            if not isinstance(value, str):
+                return ""
+            value = value.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+            value = re.sub(r'\s+', ' ', value.strip().lstrip('@'))
+            return value
+
         known_user_names = set()
 
         # Current message author
-        user_name = (context.get("user_name") or "").strip()
+        user_name = _normalize_name(context.get("user_name") or "")
         if user_name:
             known_user_names.add(user_name)
 
         # Split-reply target (if present)
         split_target = context.get("split_reply_target")
         if split_target:
-            target_name = get_user_display_name(split_target).strip()
+            target_name = _normalize_name(get_user_display_name(split_target))
             if target_name:
                 known_user_names.add(target_name)
 
         # Active users seen in recent history
         for active in context.get("active_users") or []:
-            if isinstance(active, str) and active.strip():
-                known_user_names.add(active.strip())
+            normalized = _normalize_name(active)
+            if normalized:
+                known_user_names.add(normalized)
 
         # Mentionable users aliases from context builder
         for user in context.get("mentionable_users") or []:
             aliases = user.get("aliases") or [user.get("name"), user.get("username")]
             for alias in aliases:
-                if isinstance(alias, str) and alias.strip():
-                    known_user_names.add(alias.strip())
+                normalized = _normalize_name(alias)
+                if normalized:
+                    known_user_names.add(normalized)
+
+        # Also pull recent history authors to handle queue/concurrency cases where
+        # this request may have been triggered by another bot message.
+        channel_id = context.get("channel_id")
+        if channel_id:
+            for msg in get_history(channel_id)[-60:]:
+                if msg.get("role") != "user":
+                    continue
+                normalized = _normalize_name(msg.get("author"))
+                if normalized:
+                    known_user_names.add(normalized)
 
         # Never strip the bot's own character name
+        own_name = ""
         if self.character and self.character.name:
-            known_user_names.discard(self.character.name)
+            own_name = _normalize_name(self.character.name)
+            if own_name:
+                known_user_names.discard(own_name)
 
         # Filter tiny/invalid names
         known_user_names = {n for n in known_user_names if len(n) >= 2}
         if not known_user_names:
             return response
+        known_user_names_lower = {n.lower() for n in known_user_names}
 
         cleaned_lines = []
         removed_count = 0
@@ -1198,6 +1232,20 @@ class BotInstance:
                 cleaned_lines.append(line)
                 continue
 
+            # Normalize weird invisible chars + malformed "@Name>" speaker stubs.
+            normalized_line = line.replace('\u200b', '').replace('\ufeff', '').replace('\u2060', '')
+            normalized_line = re.sub(
+                r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>\s*:',
+                r'@\1:',
+                normalized_line
+            )
+
+            # If a line starts with a raw mention speaker label ("<@123>: ..."),
+            # treat it as transcript leakage and drop it.
+            if re.match(r'^\s*<@!?\d+>\s*:\s+\S+', normalized_line):
+                removed_count += 1
+                continue
+
             is_user_attribution = False
             for name in known_user_names:
                 escaped = re.escape(name)
@@ -1205,10 +1253,26 @@ class BotInstance:
                 # - "Name: ..."
                 # - "@Name: ..."
                 # - "[Name]: ..."
-                if (re.match(rf'^\s*["“]?(?:@)?{escaped}["”]?\s*:\s+', line, re.IGNORECASE) or
-                        re.match(rf'^\s*\[{escaped}\]\s*:\s+', line, re.IGNORECASE)):
+                if (
+                    re.match(rf'^\s*["“]?`?(?:@)?{escaped}>?["”]?`?\s*:\s+\S+', normalized_line, re.IGNORECASE)
+                    or re.match(rf'^\s*\[{escaped}\]\s*:\s+\S+', normalized_line, re.IGNORECASE)
+                ):
                     is_user_attribution = True
                     break
+
+            # Generic speaker-line fallback for known participants with wrappers.
+            # Catches variants like "*User Name*: text" that bypass simple patterns.
+            if not is_user_attribution:
+                speaker_match = re.match(
+                    r'^\s*["“”\'`\[\]\(\)\*_]*\s*(?:@)?([A-Za-z0-9][A-Za-z0-9 _.\'-]{0,63})'
+                    r'\s*["“”\'`\[\]\(\)\*_]*\s*:\s+\S+',
+                    normalized_line
+                )
+                if speaker_match:
+                    speaker = _normalize_name(speaker_match.group(1))
+                    if speaker and (not own_name or speaker.lower() != own_name.lower()):
+                        if speaker.lower() in known_user_names_lower:
+                            is_user_attribution = True
 
             if is_user_attribution:
                 removed_count += 1
@@ -1220,7 +1284,85 @@ class BotInstance:
             log.warn(f"Stripped {removed_count} user-attribution line(s) from response", self.name)
 
         cleaned = '\n'.join(cleaned_lines).strip()
+        # If we intentionally removed attribution lines and nothing remains, keep
+        # it empty so caller can use normal empty-response fallback.
+        if removed_count > 0:
+            return cleaned
         return cleaned or response.strip()
+
+    async def _resolve_unresolved_user_mentions(self, response: str, guild: discord.Guild) -> str:
+        """Resolve remaining plaintext @mentions to Discord IDs via guild lookup/query."""
+        if not response or not guild:
+            return response
+
+        # Normalize malformed mention stubs to plaintext @Name first.
+        response = re.sub(
+            r'<@!?\s*([A-Za-z][^>\n\r,!?;:.]{0,32}?)(?=[,!?;:.>|]|$)',
+            r'@\1',
+            response
+        )
+        response = re.sub(r'<@!?(?=\s|$)', '', response)
+
+        at_pattern = re.compile(r'(?<!<)@([A-Za-z0-9][A-Za-z0-9 _.\'-]{1,63})')
+        candidates = []
+
+        for match in at_pattern.finditer(response):
+            candidate = re.sub(r'\s+', ' ', match.group(1)).strip()
+            candidate = candidate.rstrip(' >.,!?;:')
+            if len(candidate) >= 2:
+                candidates.append(candidate)
+
+        if not candidates:
+            return response.strip()
+
+        for candidate in sorted(set(candidates), key=len, reverse=True):
+            lower = candidate.lower()
+            member = None
+
+            # Fast path: cached lookup by exact display or username.
+            for m in guild.members:
+                if m.bot:
+                    continue
+                aliases = {
+                    (get_user_display_name(m) or '').lower(),
+                    (m.name or '').lower(),
+                    (getattr(m, 'global_name', None) or '').lower(),
+                    (getattr(m, 'nick', None) or '').lower(),
+                }
+                if lower in aliases:
+                    member = m
+                    break
+
+            # Slow path: query members from API to catch offline/not-cached users.
+            if member is None:
+                try:
+                    queried = await guild.query_members(query=candidate[:100], limit=8, cache=True)
+                except Exception:
+                    queried = []
+
+                for m in queried:
+                    if m.bot:
+                        continue
+                    aliases = {
+                        (get_user_display_name(m) or '').lower(),
+                        (m.name or '').lower(),
+                        (getattr(m, 'global_name', None) or '').lower(),
+                        (getattr(m, 'nick', None) or '').lower(),
+                    }
+                    if lower in aliases:
+                        member = m
+                        break
+
+            if member is None:
+                continue
+
+            mention = f"<@{member.id}>"
+            name_pattern = re.compile(r'(?<!<)@' + re.escape(candidate) + r'(?=[\W]|$)', re.IGNORECASE)
+            response = name_pattern.sub(mention, response)
+
+        # Remove any remaining malformed fragments.
+        response = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', response)
+        return response.strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
