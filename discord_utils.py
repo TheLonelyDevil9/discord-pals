@@ -494,9 +494,13 @@ _cleared_channels: set = set()
 
 def clear_history(channel_id: int):
     """Clear conversation history for a channel."""
-    if channel_id in conversation_history:
-        del conversation_history[channel_id]
+    conversation_history.pop(channel_id, None)
+    _recent_message_hashes.pop(channel_id, None)
+    _channel_last_activity.pop(channel_id, None)
+    channel_names.pop(channel_id, None)
+    multipart_responses.pop(channel_id, None)
     _cleared_channels.add(channel_id)
+    save_history(force=True)
 
 
 def was_recently_cleared(channel_id: int) -> bool:
@@ -982,6 +986,24 @@ def unregister_bot(bot_user_id: int):
         del _bot_registry[bot_user_id]
 
 
+def _build_mention_aliases(*names: Optional[str]) -> List[str]:
+    """Build a de-duplicated alias list for @mention matching."""
+    aliases = []
+    seen = set()
+    for name in names:
+        if not name or not isinstance(name, str):
+            continue
+        cleaned = re.sub(r'\s+', ' ', name.strip().lstrip('@'))
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(cleaned)
+    return aliases
+
+
 def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
     """Get list of other bots that can be mentioned.
 
@@ -990,7 +1012,7 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
         guild: Discord guild object to check membership
 
     Returns:
-        List of dicts with 'character_name', 'user_id', 'mention_syntax'
+        List of dicts with 'character_name', 'name', 'aliases', 'user_id', 'mention_syntax'
     """
     bots = []
     for bot_id, info in _bot_registry.items():
@@ -999,10 +1021,16 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
 
         # Check if bot is in this guild
         if guild and guild.get_member(bot_id):
+            aliases = _build_mention_aliases(
+                info.get("character_name"),
+                info.get("name")
+            )
             bots.append({
                 "character_name": info["character_name"],
+                "name": info.get("name"),
                 "user_id": bot_id,
-                "mention_syntax": f"<@{bot_id}>"
+                "mention_syntax": f"<@{bot_id}>",
+                "aliases": aliases
             })
 
     return bots
@@ -1017,7 +1045,7 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
         guild: Optional guild object for fallback member lookup
 
     Returns:
-        List of dicts with 'name', 'user_id', 'mention_syntax'
+        List of dicts with 'name', 'username', 'aliases', 'user_id', 'mention_syntax'
     """
     users = []
     seen_ids = set()
@@ -1030,8 +1058,28 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
 
         if user_id and user_id not in seen_ids and author:
             seen_ids.add(user_id)
+
+            display_name = author
+            username = None
+            aliases = _build_mention_aliases(author)
+
+            if guild:
+                member = guild.get_member(user_id)
+                if member:
+                    display_name = get_user_display_name(member)
+                    username = member.name
+                    aliases = _build_mention_aliases(
+                        display_name,
+                        member.name,
+                        getattr(member, 'global_name', None),
+                        getattr(member, 'nick', None),
+                        author
+                    )
+
             users.append({
-                "name": author,
+                "name": display_name,
+                "username": username,
+                "aliases": aliases,
                 "user_id": user_id,
                 "mention_syntax": f"<@{user_id}>"
             })
@@ -1047,8 +1095,16 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
                 continue  # Skip bots
             if member.id not in seen_ids:
                 seen_ids.add(member.id)
+                display_name = get_user_display_name(member)
                 users.append({
-                    "name": get_user_display_name(member),
+                    "name": display_name,
+                    "username": member.name,
+                    "aliases": _build_mention_aliases(
+                        display_name,
+                        member.name,
+                        getattr(member, 'global_name', None),
+                        getattr(member, 'nick', None)
+                    ),
                     "user_id": member.id,
                     "mention_syntax": f"<@{member.id}>"
                 })
@@ -1059,7 +1115,7 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
 
 
 def process_outgoing_mentions(content: str, mentionable_users: list = None,
-                               mentionable_bots: list = None) -> str:
+                               mentionable_bots: list = None, guild=None) -> str:
     """Process AI response to convert name-based mentions to Discord format.
 
     The AI might generate "@Username" or "@username" - this converts them
@@ -1069,6 +1125,7 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
         content: AI-generated response text
         mentionable_users: List of user dicts from get_mentionable_users()
         mentionable_bots: List of bot dicts from get_other_bots_mentionable()
+        guild: Optional guild object to validate existing numeric mentions
 
     Returns:
         Content with @Name converted to <@user_id> where applicable
@@ -1076,37 +1133,68 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not content:
         return content
 
-    # Build lookup of name -> mention syntax (case-insensitive)
+    # Build lookup of alias -> mention syntax (case-insensitive)
     mention_lookup = {}
+    known_mention_ids = set()
+
+    def register_alias(alias: str, mention_syntax: str):
+        if not alias or not mention_syntax:
+            return
+        normalized = re.sub(r'\s+', ' ', alias.strip().lstrip('@')).lower()
+        if not normalized:
+            return
+        # Keep first mapping for stability.
+        if normalized not in mention_lookup:
+            mention_lookup[normalized] = mention_syntax
 
     if mentionable_users:
         for user in mentionable_users:
-            name_lower = user['name'].lower()
-            mention_lookup[name_lower] = user['mention_syntax']
-        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users: {list(mention_lookup.keys())}")
+            mention_syntax = user.get('mention_syntax')
+            if not mention_syntax:
+                continue
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
+
+            aliases = user.get('aliases') or [user.get('name'), user.get('username')]
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
+        log.debug(f"[MENTIONS] Built lookup for {len(mention_lookup)} user aliases")
     else:
         log.debug(f"[MENTIONS] mentionable_users is empty or None")
 
     if mentionable_bots:
         for bot in mentionable_bots:
-            if bot.get('character_name'):
-                name_lower = bot['character_name'].lower()
-                mention_lookup[name_lower] = bot['mention_syntax']
+            mention_syntax = bot.get('mention_syntax')
+            if not mention_syntax:
+                continue
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
 
-    if not mention_lookup:
+            aliases = bot.get('aliases') or [bot.get('character_name'), bot.get('name')]
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
+    if not mention_lookup and not re.search(r'<@!?\d+>', content):
         log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
         return content
 
     log.debug(f"[MENTIONS] Processing content: {content[:100]}...")
 
     # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
-    content = re.sub(r'<@!?([^>\d][^>]*)>', r'@\1', content)
+    content = re.sub(r'<@!?([A-Za-z][^>]*)>', r'@\1', content)
 
-    # Track which mention IDs we intentionally insert (so the safety net doesn't strip them)
+    # Clean malformed dangling mentions like "<@" or "<@!".
+    content = re.sub(r'<@!?(?=\s|$)', '', content)
+    content = re.sub(r'<@!?([A-Za-z][^>\n\r]{0,32})(?=\s|$)', r'@\1', content)
+
+    # Track which mention IDs we intentionally insert (for safety-net preservation)
     inserted_mention_ids = set()
 
-    # Replace @Name patterns with Discord mention syntax
-    # Sort by longest name first to avoid partial matches (e.g. "@The Devil" before "@The")
+    # Replace @Alias patterns with Discord mention syntax.
+    # Sort by longest alias first to avoid partial replacements.
     sorted_names = sorted(mention_lookup.keys(), key=len, reverse=True)
 
     for name in sorted_names:
@@ -1126,18 +1214,24 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
 
     log.debug(f"[MENTIONS] Final content: {content[:100]}...")
 
-    # Safety net: Strip any raw Discord syntax the AI hallucinated,
-    # but preserve mentions we just intentionally inserted
-    def strip_if_not_inserted(match):
-        # Extract the numeric ID from the match
-        id_match = re.search(r'\d+', match.group(0))
-        if id_match and id_match.group(0) in inserted_mention_ids:
-            return match.group(0)  # Keep - we inserted this
-        return ''  # Strip - AI hallucinated this
+    # Safety net: strip unknown/hallucinated raw Discord syntax,
+    # but preserve IDs we inserted, known candidates, or valid guild members.
+    def strip_if_untrusted(match):
+        mention_id = match.group(1)
+        if mention_id in inserted_mention_ids or mention_id in known_mention_ids:
+            return match.group(0)
+        if guild:
+            try:
+                if guild.get_member(int(mention_id)):
+                    return match.group(0)
+            except Exception:
+                pass
+        return ''
 
-    content = re.sub(r'<@!?\d+>', strip_if_not_inserted, content)
+    content = re.sub(r'<@!?(\d+)>', strip_if_untrusted, content)
     content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions (always strip)
     content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions (always strip)
+    # Clean incomplete mention fragments like "<@" or "<@name" (without touching valid "<@123>").
+    content = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', content)
 
-    return content
-
+    return content.strip()

@@ -340,6 +340,18 @@
             <p class="form-hint">Maximum concurrent AI requests across all bots</p>
         </div>
 
+        <div class="form-group">
+            <label for="request_timeout_seconds">Bot Request Timeout</label>
+            <div class="slider-row">
+                <input type="range" id="request_timeout_seconds" min="10" max="300" step="5"
+                    value="{{ config.request_timeout_seconds or 60 }}"
+                    oninput="document.getElementById('request_timeout_val').textContent = this.value + 's'"
+                    title="Max seconds for one bot request">
+                <span class="slider-val" id="request_timeout_val">{{ config.request_timeout_seconds or 60 }}s</span>
+            </div>
+            <p class="form-hint">Max time allowed for generate+send before request is canceled</p>
+        </div>
+
         <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
     </div>
 </div>
@@ -1260,7 +1272,8 @@ async function saveSplitReplySettings() {
 // Save concurrency settings
 async function saveConcurrencySettings() {
     const data = {
-        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value)
+        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value),
+        request_timeout_seconds: parseInt(document.getElementById('request_timeout_seconds').value)
     };
 
     const response = await fetch('/api/config', {

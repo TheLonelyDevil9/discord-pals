@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Callable, Any
 from collections import defaultdict
 import discord
+import logger as log
 
 
 class RequestQueue:
@@ -101,7 +102,13 @@ class RequestQueue:
                 
                 # Process the request
                 if self.process_callback:
-                    await self.process_callback(request)
+                    try:
+                        await self.process_callback(request)
+                    except Exception as e:
+                        # Keep queue moving even if one request fails.
+                        req_id = request.get('id')
+                        channel = request.get('message').channel.id if request.get('message') else channel_id
+                        log.error(f"Request queue callback failed (channel={channel}, request={req_id}): {e}")
                 
                 # Small delay between requests
                 await asyncio.sleep(0.5)

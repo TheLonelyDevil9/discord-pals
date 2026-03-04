@@ -615,26 +615,13 @@ class BotInstance:
             except Exception as e:
                 log.warn(f"Failed to recall channel history: {e}", self.name)
 
-        # Clear the "recently cleared" flag now that we're processing a new message
-        acknowledge_cleared(channel_id)
-
-        # Duplicate detection: check if THIS specific message was already processed
-        # Use message ID for precision — content+author matching can falsely collide
-        # across different users or repeated messages
+        # Duplicate detection: check if THIS specific message was already processed.
+        # Use message ID only for precision; content-based matching can collide.
         message_id = message.id
         already_responded = False
         for i, m in enumerate(history):
             # Match by message_id if available (most precise)
             if m.get('message_id') == message_id:
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
-            # Fallback: match by content + author (for history entries without message_id)
-            elif (m.get('message_id') is None and
-                  m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user'):
                 for j in range(i + 1, len(history)):
                     if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
                         already_responded = True
@@ -761,6 +748,18 @@ class BotInstance:
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
+
+        # Extra guard to reduce cross-bot identity bleed during concurrent replies.
+        if other_bot_names:
+            capped_other_bots = other_bot_names[:10]
+            identity_guard = (
+                f"\n\nIDENTITY GUARD:\n"
+                f"- You are {self.character.name}.\n"
+                f"- Never write as or prefix your reply as: {', '.join(capped_other_bots)}.\n"
+                f"- If you mention other bots, only refer to them in third person."
+            )
+            system_prompt += identity_guard
+
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
             emojis=emojis,
@@ -885,7 +884,7 @@ class BotInstance:
             from discord_utils import process_outgoing_mentions
             mentionable_users = context.get("mentionable_users")
             mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
-            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
+            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots, guild=guild)
 
         # Prepend mention for split replies
         if split_target:
@@ -935,6 +934,9 @@ class BotInstance:
         add_to_history(channel_id, "assistant", response, author_name=self.character.name, guild=guild)
         sent_messages = await self._send_organic_response(message, response)
 
+        # We now have a successful post-clear exchange, so history recall can resume.
+        acknowledge_cleared(channel_id)
+
         # Update activity
         runtime_config.update_last_activity(self.name)
         metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
@@ -977,7 +979,14 @@ class BotInstance:
             # Acquire global coordinator slot (limits concurrent AI requests across all bots)
             await coordinator.acquire_slot(self.name, message_id)
 
+            # Global per-request timeout (covers generation + stagger + send path)
             try:
+                timeout_seconds = int(runtime_config.get("request_timeout_seconds", 60))
+            except (TypeError, ValueError):
+                timeout_seconds = 60
+            timeout_seconds = max(10, min(timeout_seconds, 300))
+
+            async def _run_request_pipeline():
                 # Generate AI response (handles provider call, sanitization)
                 response = await self._generate_ai_response(context, message)
                 if response is None:
@@ -992,6 +1001,12 @@ class BotInstance:
 
                 # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
                 await self._send_and_finalize_response(response, context, message, request)
+
+            try:
+                await asyncio.wait_for(_run_request_pipeline(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                log.warn(f"Request timed out after {timeout_seconds}s", self.name)
+                await self._send_user_error(message.channel, "timeout")
             finally:
                 # Always release the slot, even on error
                 coordinator.release_slot(self.name, message_id)
@@ -1086,12 +1101,15 @@ class BotInstance:
             return response
 
         for name in other_bot_names:
-            # Check for "Name:" or "Name :" at start
-            patterns = [f"{name}:", f"{name} :"]
-            for pattern in patterns:
-                if response.lower().startswith(pattern.lower()):
-                    response = response[len(pattern):].strip()
-                    log.warn(f"Stripped impersonation prefix '{pattern}' from response", self.name)
+            # Prefix impersonation at response start: "Name:", "Name -", "Name says:"
+            start_patterns = [
+                rf'^\s*["“]?{re.escape(name)}["”]?\s*[:\-–]\s*',
+                rf'^\s*["“]?\*?{re.escape(name)}\*?["”]?\s+(?:says?|asks?|replies?|responds?)\s*[:\-–]?\s*'
+            ]
+            for pattern in start_patterns:
+                if re.match(pattern, response, re.IGNORECASE):
+                    response = re.sub(pattern, '', response, count=1, flags=re.IGNORECASE).strip()
+                    log.warn(f"Stripped impersonation prefix for '{name}'", self.name)
                     break
 
         # Build combined pattern for all other bot names
@@ -1104,13 +1122,12 @@ class BotInstance:
         for line in lines:
             skip = False
             for name in other_bot_names:
-                # "OtherBot:" or "OtherBot :" at line start
-                if re.match(rf'^{re.escape(name)}\s*:', line, re.IGNORECASE):
-                    log.warn(f"Stripped mid-response impersonation line for '{name}'", self.name)
-                    skip = True
-                    break
-                # "*OtherBot:" or "*OtherBot :" (roleplay asterisk prefix)
-                if re.match(rf'^\*{re.escape(name)}\s*:', line, re.IGNORECASE):
+                # Mid-response impersonation line with name prefix or speech attribution
+                if re.match(
+                    rf'^\s*["“]?\*?{re.escape(name)}\*?["”]?\s*(?:[:\-–]|(?:says?|asks?|replies?|responds?)\b)',
+                    line,
+                    re.IGNORECASE
+                ):
                     log.warn(f"Stripped roleplay impersonation line for '{name}'", self.name)
                     skip = True
                     break
@@ -1292,7 +1309,14 @@ class BotInstance:
         char_name = self.character.name if self.character else "the character"
         # Send more context to LLM (last 10 messages instead of 5)
         await memory_manager.generate_memory(
-            provider_manager, history[-10:], is_dm, id_key, char_name, user_id=user_id, user_name=user_name
+            provider_manager,
+            history[-10:],
+            is_dm,
+            id_key,
+            char_name,
+            user_id=user_id,
+            user_name=user_name,
+            cooldown_scope_id=channel_id
         )
 
     def _setup_commands(self) -> None:
