@@ -879,12 +879,22 @@ class BotInstance:
         content = context["content"]
         split_target = context.get("split_reply_target")
 
-        # Process outgoing mentions (@Name -> <@user_id>)
-        if runtime_config.get("allow_bot_mentions", True):
-            from discord_utils import process_outgoing_mentions
-            mentionable_users = context.get("mentionable_users")
-            mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
-            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots, guild=guild)
+        # Process/sanitize outgoing mention syntax.
+        # Run this even when mentions are disabled so malformed fragments like "<@" are cleaned.
+        from discord_utils import process_outgoing_mentions
+        allow_mentions = runtime_config.get("allow_bot_mentions", True)
+        mentionable_users = context.get("mentionable_users") if allow_mentions else None
+        mentionable_bots = (
+            context.get("mentionable_bots")
+            if allow_mentions and runtime_config.get("allow_bot_to_bot_mentions", False)
+            else None
+        )
+        response = process_outgoing_mentions(
+            response,
+            mentionable_users,
+            mentionable_bots,
+            guild=guild if allow_mentions else None
+        )
 
         # Prepend mention for split replies
         if split_target:

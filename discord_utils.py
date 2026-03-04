@@ -1004,17 +1004,19 @@ def _build_mention_aliases(*names: Optional[str]) -> List[str]:
     return aliases
 
 
-def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
+def get_other_bots_mentionable(current_bot_id: int, guild, limit: int = 15) -> List[dict]:
     """Get list of other bots that can be mentioned.
 
     Args:
         current_bot_id: Discord user ID of the current bot (to exclude)
         guild: Discord guild object to check membership
+        limit: Maximum bots to return
 
     Returns:
         List of dicts with 'character_name', 'name', 'aliases', 'user_id', 'mention_syntax'
     """
     bots = []
+    seen_ids = set()
     for bot_id, info in _bot_registry.items():
         if bot_id == current_bot_id:
             continue
@@ -1025,6 +1027,7 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
                 info.get("character_name"),
                 info.get("name")
             )
+            seen_ids.add(bot_id)
             bots.append({
                 "character_name": info["character_name"],
                 "name": info.get("name"),
@@ -1032,6 +1035,34 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
                 "mention_syntax": f"<@{bot_id}>",
                 "aliases": aliases
             })
+            if len(bots) >= limit:
+                return bots
+
+    # Fallback: include other bot accounts visible in the guild even if they
+    # are not in the local registry (e.g., bots from another process/host).
+    if guild:
+        for member in guild.members:
+            if not member.bot:
+                continue
+            if member.id == current_bot_id or member.id in seen_ids:
+                continue
+
+            display_name = get_user_display_name(member)
+            aliases = _build_mention_aliases(
+                display_name,
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None)
+            )
+            bots.append({
+                "character_name": display_name,
+                "name": member.name,
+                "user_id": member.id,
+                "mention_syntax": f"<@{member.id}>",
+                "aliases": aliases
+            })
+            if len(bots) >= limit:
+                break
 
     return bots
 
