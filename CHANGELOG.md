@@ -4,6 +4,11 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.6] - 2026-03-04
+
+### Changes
+
+- Add clear-all option that preserves lore
 ## [v1.6.5] - 2026-03-04
 
 ### Changes
