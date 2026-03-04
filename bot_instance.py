@@ -964,7 +964,7 @@ class BotInstance:
                 context.get("context_envelope"),
                 guild
             )
-            response = self._resolve_protocol_handles_failsafe(response, context)
+            response = self._resolve_protocol_handles_failsafe(response, context, guild)
 
         # Final safety pass: drop any transcript-style "User: ..." lines that
         # would make the bot speak as someone else after mention processing.
@@ -1542,10 +1542,11 @@ class BotInstance:
 
         return cleaned.strip()
 
-    def _resolve_protocol_handles_failsafe(self, response: str, context: dict) -> str:
+    def _resolve_protocol_handles_failsafe(self, response: str, context: dict, guild: discord.Guild = None) -> str:
         """Hard fallback: convert protocol @u_<id>/@b_<id> handles to <@id>.
 
-        Uses trusted IDs from context envelope to avoid converting arbitrary IDs.
+        Prefers trusted IDs from context envelope, with guild-membership fallback
+        so valid handles still convert even when envelope candidates are sparse.
         """
         if not response:
             return response
@@ -1575,6 +1576,12 @@ class BotInstance:
                 return match.group(0)
             if user_id in trusted_ids:
                 return f"<@{user_id}>"
+            if guild:
+                try:
+                    if guild.get_member(user_id):
+                        return f"<@{user_id}>"
+                except Exception:
+                    pass
             return match.group(0)
 
         # Handle malformed bracketed form: <@u_123...>
