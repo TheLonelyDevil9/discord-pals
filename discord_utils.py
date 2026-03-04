@@ -1172,6 +1172,8 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             r'@\1',
             text
         )
+        # Clean stray trailing ">" after plaintext mentions (e.g. "@Name>")
+        text = re.sub(r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>', r'@\1', text)
         # Remove dangling "<@" / "<@!" markers
         text = re.sub(r'<@!?(?=\s|$)', '', text)
         # Clean remaining incomplete fragments (but keep valid numeric mentions like <@123>)
@@ -1222,10 +1224,30 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             for alias in aliases:
                 register_alias(alias, mention_syntax)
 
+    # Fallback: include real guild members in alias lookup so @DisplayName can
+    # still resolve even when mentionable_users context is sparse/stale.
+    if guild:
+        for member in guild.members:
+            if member.bot:
+                continue
+            mention_syntax = f"<@{member.id}>"
+            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
+            if id_match:
+                known_mention_ids.add(id_match.group(1))
+
+            aliases = _build_mention_aliases(
+                get_user_display_name(member),
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None)
+            )
+            for alias in aliases:
+                register_alias(alias, mention_syntax)
+
     # Normalize malformed tags before deciding whether to return early.
     content = normalize_malformed_mentions(content)
 
-    if not mention_lookup and not re.search(r'<@!?\d+>', content):
+    if not mention_lookup and not re.search(r'<@!?\d+>', content) and not guild:
         log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
         return content.strip()
 
