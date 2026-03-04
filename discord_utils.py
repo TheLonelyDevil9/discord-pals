@@ -1133,6 +1133,20 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not content:
         return content
 
+    def normalize_malformed_mentions(text: str) -> str:
+        """Normalize malformed mention stubs like '<@ Name' into '@Name' or remove them."""
+        # Convert "<@ Name" / "<@! Name" (without closing bracket) into "@Name"
+        text = re.sub(
+            r'<@!?\s*([A-Za-z][^>\n\r,!?;:.]{0,32}?)(?=[,!?;:.>|]|$)',
+            r'@\1',
+            text
+        )
+        # Remove dangling "<@" / "<@!" markers
+        text = re.sub(r'<@!?(?=\s|$)', '', text)
+        # Clean remaining incomplete fragments (but keep valid numeric mentions like <@123>)
+        text = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', text)
+        return text
+
     # Build lookup of alias -> mention syntax (case-insensitive)
     mention_lookup = {}
     known_mention_ids = set()
@@ -1177,18 +1191,18 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             for alias in aliases:
                 register_alias(alias, mention_syntax)
 
+    # Normalize malformed tags before deciding whether to return early.
+    content = normalize_malformed_mentions(content)
+
     if not mention_lookup and not re.search(r'<@!?\d+>', content):
         log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
-        return content
+        return content.strip()
 
     log.debug(f"[MENTIONS] Processing content: {content[:100]}...")
 
     # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
     content = re.sub(r'<@!?([A-Za-z][^>]*)>', r'@\1', content)
-
-    # Clean malformed dangling mentions like "<@" or "<@!".
-    content = re.sub(r'<@!?(?=\s|$)', '', content)
-    content = re.sub(r'<@!?([A-Za-z][^>\n\r]{0,32})(?=\s|$)', r'@\1', content)
+    content = normalize_malformed_mentions(content)
 
     # Track which mention IDs we intentionally insert (for safety-net preservation)
     inserted_mention_ids = set()
@@ -1231,7 +1245,6 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     content = re.sub(r'<@!?(\d+)>', strip_if_untrusted, content)
     content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions (always strip)
     content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions (always strip)
-    # Clean incomplete mention fragments like "<@" or "<@name" (without touching valid "<@123>").
-    content = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', content)
+    content = normalize_malformed_mentions(content)
 
     return content.strip()
