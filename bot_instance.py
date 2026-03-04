@@ -985,6 +985,10 @@ class BotInstance:
         # Parse reactions
         response, reactions = parse_reactions(response)
 
+        # Normalize raw custom emoji syntax from model output to :name: first.
+        # This avoids leaking invalid cross-server emoji IDs as plaintext.
+        response = re.sub(r'<a?:([A-Za-z0-9_]+):\d{15,22}>', r':\1:', response)
+
         # Convert emojis
         if guild:
             response = convert_emojis_in_text(response, guild)
@@ -1696,6 +1700,60 @@ class BotInstance:
 
             return terms[:16]
 
+        def _detect_relation_terms(source: str) -> set[str]:
+            groups = [
+                {"sis", "sister", "bro", "brother", "sibling"},
+                {"creator", "owner", "maker", "developer", "dev", "author"}
+            ]
+            lowered = source.lower()
+            selected = set()
+            for group in groups:
+                if any(re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', lowered) for term in group):
+                    selected.update(group)
+            return selected
+
+        def _build_character_relation_corpus() -> str:
+            if not self.character:
+                return ""
+
+            pieces = []
+            if self.character.persona:
+                pieces.append(self.character.persona)
+            if self.character.example_dialogue:
+                pieces.append(self.character.example_dialogue)
+
+            for special_name, special_context in (self.character.special_users or {}).items():
+                if special_name:
+                    pieces.append(special_name)
+                if special_context:
+                    pieces.append(special_context)
+
+            return "\n".join(pieces).lower()
+
+        def _candidate_matches_relation_terms(candidate_aliases: list, relation_terms: set[str], corpus: str) -> bool:
+            if not corpus or not relation_terms:
+                return False
+
+            for alias in candidate_aliases:
+                if not isinstance(alias, str):
+                    continue
+                for alias_variant in _alias_variants(alias):
+                    if len(alias_variant) < 3:
+                        continue
+                    if re.fullmatch(r'[ub]_\d{3,22}', alias_variant):
+                        continue
+
+                    for match in re.finditer(re.escape(alias_variant), corpus):
+                        start = max(0, match.start() - 96)
+                        end = min(len(corpus), match.end() + 96)
+                        window = corpus[start:end]
+                        if any(
+                            re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', window)
+                            for term in relation_terms
+                        ):
+                            return True
+            return False
+
         def _member_aliases(member: discord.Member) -> set[str]:
             values = {
                 get_user_display_name(member),
@@ -1787,6 +1845,30 @@ class BotInstance:
             if matched and user_id not in seen_ids:
                 seen_ids.add(user_id)
                 requested_ids.append(user_id)
+
+        # Relation fallback: resolve vague requests like "tag your sister/creator"
+        # by matching known candidate names near relationship terms in character text.
+        relation_terms = _detect_relation_terms(request_content)
+        if relation_terms and not requested_ids:
+            relation_corpus = _build_character_relation_corpus()
+            relation_ids = []
+            relation_seen = set()
+            for candidate in candidates:
+                try:
+                    user_id = int(candidate.get("user_id"))
+                except (TypeError, ValueError):
+                    continue
+
+                aliases = candidate.get("aliases") or []
+                if _candidate_matches_relation_terms(aliases, relation_terms, relation_corpus):
+                    if user_id not in relation_seen:
+                        relation_seen.add(user_id)
+                        relation_ids.append(user_id)
+
+            # Use only an unambiguous single relation match.
+            if len(relation_ids) == 1 and relation_ids[0] not in seen_ids:
+                seen_ids.add(relation_ids[0])
+                requested_ids.append(relation_ids[0])
 
         # Guild lookup fallback for terms not covered by mention candidates.
         if guild and terms:
