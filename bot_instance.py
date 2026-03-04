@@ -977,6 +977,11 @@ class BotInstance:
         if split_target:
             response = f"<@{split_target.id}> {response}"
 
+        # Intent fallback: if the user explicitly requested a tag/mention/ping,
+        # inject resolved mentions directly so model wording cannot drop them.
+        if allow_mentions:
+            response = self._inject_requested_mentions_failsafe(response, context)
+
         # Parse reactions
         response, reactions = parse_reactions(response)
 
@@ -1594,6 +1599,69 @@ class BotInstance:
             flags=re.IGNORECASE
         )
         return response
+
+    def _inject_requested_mentions_failsafe(self, response: str, context: dict) -> str:
+        """Inject mentions when user explicitly asks to tag/mention/ping someone."""
+        if not response:
+            return response
+
+        request_content = (context.get("content") or "").strip()
+        if not request_content:
+            return response
+
+        if not re.search(r'\b(tag|mention|ping|summon|notify)\b', request_content, re.IGNORECASE):
+            return response
+
+        envelope = context.get("context_envelope") or {}
+        candidates = envelope.get("mention_candidates") or []
+        if not candidates:
+            return response
+
+        text = request_content.lower()
+        stopwords = {
+            "please", "me", "you", "them", "him", "her", "someone", "anyone",
+            "tag", "mention", "ping", "summon", "notify", "can", "could", "would",
+            "and", "or", "to", "the", "a", "an", "my", "your"
+        }
+
+        requested_ids = []
+        seen_ids = set()
+        for candidate in candidates:
+            try:
+                user_id = int(candidate.get("user_id"))
+            except (TypeError, ValueError):
+                continue
+
+            aliases = candidate.get("aliases") or []
+            matched = False
+            for alias in aliases:
+                if not isinstance(alias, str):
+                    continue
+                normalized = alias.strip().lstrip("@").lower()
+                if not normalized:
+                    continue
+                if re.fullmatch(r'[ub]_\d{3,22}', normalized):
+                    continue
+                if len(normalized) < 3 or normalized in stopwords:
+                    continue
+
+                if re.search(rf'(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])', text):
+                    matched = True
+                    break
+
+            if matched and user_id not in seen_ids:
+                seen_ids.add(user_id)
+                requested_ids.append(user_id)
+
+        if not requested_ids:
+            return response
+
+        existing_ids = {int(mid) for mid in re.findall(r'<@!?(\d{15,22})>', response)}
+        prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]
+        if not prefixes:
+            return response
+
+        return f"{' '.join(prefixes)} {response}".strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
