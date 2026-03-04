@@ -320,11 +320,7 @@ class CharacterManager:
         # Add other bots awareness to prevent impersonation
         other_bots_context = ""
         if other_bot_names:
-            other_bots_context = (
-                "Other bot characters in this channel: "
-                f"{', '.join(other_bot_names)}. "
-                "You are only your own character. Never output dialogue as those bots or prefix your reply with their names."
-            )
+            other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
 
         # Add mentionable users context (for @mention feature)
         # Show @Username format (not raw <@id>) - AI learns to use @Name, we convert on output

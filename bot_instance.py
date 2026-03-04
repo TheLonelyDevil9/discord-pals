@@ -743,18 +743,6 @@ class BotInstance:
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
-
-        # Extra guard to reduce cross-bot identity bleed during concurrent replies.
-        if other_bot_names:
-            capped_other_bots = other_bot_names[:10]
-            identity_guard = (
-                f"\n\nIDENTITY GUARD:\n"
-                f"- You are {self.character.name}.\n"
-                f"- Never write as or prefix your reply as: {', '.join(capped_other_bots)}.\n"
-                f"- If you mention other bots, only refer to them in third person."
-            )
-            system_prompt += identity_guard
-
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
             emojis=emojis,
@@ -795,7 +783,8 @@ class BotInstance:
             "content": content,
             "split_reply_target": split_target,
             "mentionable_users": mentionable_users,
-            "mentionable_bots": mentionable_bots
+            "mentionable_bots": mentionable_bots,
+            "active_users": active_users
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -856,6 +845,7 @@ class BotInstance:
         response = clean_bot_name_prefix(response, self.character.name)
         response = clean_em_dashes(response)
         response = self._strip_other_bot_prefixes(response, other_bot_names)
+        response = self._strip_user_attribution_lines(response, context)
 
         return response
 
@@ -1158,6 +1148,79 @@ class BotInstance:
         response = re.sub(r'\n{3,}', '\n\n', response)
 
         return response.strip()
+
+    def _strip_user_attribution_lines(self, response: str, context: dict) -> str:
+        """Remove lines where the bot incorrectly speaks as a user (e.g., 'UserName: ...')."""
+        if not response:
+            return response
+
+        known_user_names = set()
+
+        # Current message author
+        user_name = (context.get("user_name") or "").strip()
+        if user_name:
+            known_user_names.add(user_name)
+
+        # Split-reply target (if present)
+        split_target = context.get("split_reply_target")
+        if split_target:
+            target_name = get_user_display_name(split_target).strip()
+            if target_name:
+                known_user_names.add(target_name)
+
+        # Active users seen in recent history
+        for active in context.get("active_users") or []:
+            if isinstance(active, str) and active.strip():
+                known_user_names.add(active.strip())
+
+        # Mentionable users aliases from context builder
+        for user in context.get("mentionable_users") or []:
+            aliases = user.get("aliases") or [user.get("name"), user.get("username")]
+            for alias in aliases:
+                if isinstance(alias, str) and alias.strip():
+                    known_user_names.add(alias.strip())
+
+        # Never strip the bot's own character name
+        if self.character and self.character.name:
+            known_user_names.discard(self.character.name)
+
+        # Filter tiny/invalid names
+        known_user_names = {n for n in known_user_names if len(n) >= 2}
+        if not known_user_names:
+            return response
+
+        cleaned_lines = []
+        removed_count = 0
+
+        for line in response.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                cleaned_lines.append(line)
+                continue
+
+            is_user_attribution = False
+            for name in known_user_names:
+                escaped = re.escape(name)
+                # Matches:
+                # - "Name: ..."
+                # - "@Name: ..."
+                # - "[Name]: ..."
+                if (re.match(rf'^\s*["“]?(?:@)?{escaped}["”]?\s*:\s+', line, re.IGNORECASE) or
+                        re.match(rf'^\s*\[{escaped}\]\s*:\s+', line, re.IGNORECASE)):
+                    is_user_attribution = True
+                    break
+
+            if is_user_attribution:
+                removed_count += 1
+                continue
+
+            cleaned_lines.append(line)
+
+        if removed_count > 0:
+            log.warn(f"Stripped {removed_count} user-attribution line(s) from response", self.name)
+
+        cleaned = '\n'.join(cleaned_lines).strip()
+        return cleaned or response.strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
