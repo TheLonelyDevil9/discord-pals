@@ -889,6 +889,9 @@ class BotInstance:
         # Final safety pass: drop any transcript-style "User: ..." lines that
         # would make the bot speak as someone else after mention processing.
         response = self._strip_user_attribution_lines(response, context)
+        # Hard fail-safe: remove/normalize malformed mention markers so raw "<@"
+        # fragments never leak to Discord output.
+        response = self._cleanup_malformed_mentions_final(response)
 
         # Prepend mention for split replies
         if split_target:
@@ -1363,6 +1366,55 @@ class BotInstance:
         # Remove any remaining malformed fragments.
         response = re.sub(r'<@!?(?!\d+>)[^>\s]*(?=\s|$)', '', response)
         return response.strip()
+
+    def _cleanup_malformed_mentions_final(self, response: str) -> str:
+        """Final output cleanup for malformed mention fragments.
+
+        Preserves valid numeric user mentions (<@123...> / <@!123...>) and
+        normalizes/removes invalid AI-generated variants like "<@ Name".
+        """
+        if not response:
+            return response
+
+        placeholders = {}
+
+        def _protect_valid_user_mention(match: re.Match) -> str:
+            token = f"__VALID_USER_MENTION_{len(placeholders)}__"
+            placeholders[token] = match.group(0)
+            return token
+
+        # Protect valid user mentions first so broad cleanup can't touch them.
+        cleaned = re.sub(r'<@!?(\d{17,21})>', _protect_valid_user_mention, response)
+
+        # Strip raw role/channel mentions that should never be generated directly.
+        cleaned = re.sub(r'<@&\d{17,21}>', '', cleaned)
+        cleaned = re.sub(r'<#\d{17,21}>', '', cleaned)
+
+        # Convert malformed closed tags (e.g. "<@ Febs>") to plaintext "@Febs".
+        cleaned = re.sub(
+            r'<@!?\s*([^>\n\r]{1,80})>',
+            lambda m: '@' + re.sub(r'\s+', ' ', m.group(1)).strip(),
+            cleaned
+        )
+
+        # Convert malformed open stubs (e.g. "<@ Febs, hello") to "@Febs, hello".
+        cleaned = re.sub(
+            r'<@!?\s*([A-Za-z][A-Za-z0-9 _.\'-]{1,63})(?=[,!?;:.]|\s|$)',
+            lambda m: '@' + m.group(1).strip(),
+            cleaned
+        )
+
+        # Remove any remaining invalid "<@" markers.
+        cleaned = re.sub(r'<@!?', '', cleaned)
+
+        # Cleanup stray trailing ">" from malformed mention attempts.
+        cleaned = re.sub(r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>', r'@\1', cleaned)
+
+        # Restore protected valid mentions.
+        for token, original in placeholders.items():
+            cleaned = cleaned.replace(token, original)
+
+        return cleaned.strip()
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
