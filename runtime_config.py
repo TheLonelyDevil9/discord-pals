@@ -17,6 +17,7 @@ DEFAULTS = {
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
+    "thread_response_policy": "mention_or_reply",  # normal | mention_or_reply | disabled
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
     # Bot-on-bot conversation fall-off settings
@@ -39,6 +40,13 @@ DEFAULTS = {
     "mention_resolver_include_bots": True,  # Resolve bot mentions as well as user mentions
     "mention_resolver_ambiguity_policy": "best_match",  # best_match | no_tag | clarify
     "mention_resolver_min_score": 5.0,  # Minimum confidence to auto-resolve a mention
+    # Auto-memory generation
+    "auto_memory_enabled": True,  # Enable automatic memory extraction after responses
+    "auto_memory_min_message_chars": 2,  # Skip only tiny/noise messages
+    "auto_memory_min_history_messages": 3,  # Minimum chat lines before attempting memory generation
+    "auto_memory_context_window": 24,  # Number of recent messages passed to memory extractor
+    "auto_memory_channel_cooldown_seconds": 10,  # Shared per-channel cooldown (seconds)
+    "auto_memory_fallback_on_nothing": True,  # Retry with a broader pass when first extraction returns NOTHING
     # Context protocol + payload formatting
     "context_protocol_enabled": True,  # Inject deterministic context envelope for mentions/speaker identity
     "mention_handle_mode": "id_handles_v1",  # Mention protocol handle scheme

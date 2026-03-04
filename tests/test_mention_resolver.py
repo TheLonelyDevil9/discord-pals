@@ -15,10 +15,11 @@ class FakeMember:
 
 
 class FakeGuild:
-    def __init__(self, guild_id=1, members=None, query_pool=None):
+    def __init__(self, guild_id=1, members=None, query_pool=None, fetch_pool=None):
         self.id = guild_id
         self.members = list(members or [])
         self._query_pool = list(query_pool or [])
+        self._fetch_pool = list(fetch_pool or [])
 
     async def query_members(self, query: str, limit: int = 100, cache: bool = True):
         lowered = query.lower().strip()
@@ -36,6 +37,11 @@ class FakeGuild:
             if any(lowered in alias for alias in aliases) or (canonical and canonical in alias_canon):
                 out.append(member)
         return out[:limit]
+
+    async def fetch_members(self, limit=None):
+        max_items = len(self._fetch_pool) if limit is None else min(len(self._fetch_pool), int(limit))
+        for member in self._fetch_pool[:max_items]:
+            yield member
 
 
 class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
@@ -103,6 +109,35 @@ class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<@", result.text)
         self.assertNotIn("@@", result.text)
         self.assertNotIn("@ >", result.text)
+
+    async def test_fetch_members_fallback_resolves_offline_user(self):
+        offline_target = FakeMember(888888888888888888, "seele", "Seele", bot=False)
+        guild = FakeGuild(members=[], query_pool=[], fetch_pool=[offline_target])
+
+        result = await resolve_mentions_unified(
+            response="Sure @seele, done.",
+            request_content="tag seele",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertIn("<@888888888888888888>", result.text)
+        self.assertNotIn("@seele", result.text.lower())
+
+    async def test_unresolved_plain_mentions_are_demoted(self):
+        result = await resolve_mentions_unified(
+            response="@hopefully that works for you!",
+            request_content="tag evoc",
+            context_envelope={},
+            guild=None,
+            include_bots=True,
+        )
+
+        self.assertIn("hopefully that works for you!", result.text.lower())
+        self.assertNotIn("@hopefully", result.text.lower())
 
 
 if __name__ == "__main__":

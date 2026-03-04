@@ -370,6 +370,53 @@ async def _query_members_for_terms(guild, terms: List[str], include_bots: bool) 
                 continue
             seen_ids.add(rec.user_id)
             out.append(member)
+
+    # Fallback for stale cache / offline users: do a bounded fetch pass only
+    # when query_members found nothing.
+    if out:
+        return out
+
+    if not hasattr(guild, "fetch_members"):
+        return out
+
+    normalized_terms = [_normalize_alias(t) for t in terms if _normalize_alias(t)]
+    canonical_terms = [_canonical_token(t) for t in normalized_terms if _canonical_token(t)]
+    if not normalized_terms:
+        return out
+
+    try:
+        fetched_count = 0
+        async for member in guild.fetch_members(limit=1200):
+            fetched_count += 1
+            rec = _make_record_from_member(member)
+            if not rec:
+                continue
+            if not include_bots and rec.is_bot:
+                continue
+            if rec.user_id in seen_ids:
+                continue
+
+            aliases = rec.aliases
+            matched = False
+            for term in normalized_terms:
+                if len(term) < 3:
+                    continue
+                if any(alias == term or alias.startswith(term) or term in alias for alias in aliases):
+                    matched = True
+                    break
+            if not matched:
+                for term in canonical_terms:
+                    if len(term) < 3:
+                        continue
+                    if any(alias == term or alias.startswith(term) or term in alias for alias in aliases):
+                        matched = True
+                        break
+
+            if matched:
+                seen_ids.add(rec.user_id)
+                out.append(member)
+    except Exception:
+        pass
     return out
 
 
@@ -509,6 +556,17 @@ def _replace_plain_mentions(text: str, candidate_to_id: Dict[str, int]) -> str:
     return resolved
 
 
+def _strip_unresolved_plain_mentions(text: str, unresolved_candidates: List[str]) -> str:
+    """Remove leading @ from unresolved plaintext mentions to avoid fake pings."""
+    if not text or not unresolved_candidates:
+        return text
+    resolved = text
+    for candidate in sorted(set(unresolved_candidates), key=len, reverse=True):
+        pattern = re.compile(r"(?<!<)@" + re.escape(candidate) + r"(?=[\W]|$)", re.IGNORECASE)
+        resolved = pattern.sub(candidate, resolved)
+    return resolved
+
+
 def cleanup_malformed_mentions(text: str) -> str:
     if not text:
         return text
@@ -609,6 +667,7 @@ async def resolve_mentions_unified(
             requested_ids.append(selected_id)
 
     candidate_to_id = {}
+    unresolved_candidates = []
     resolved_ids = set(requested_ids)
     for candidate in response_mentions:
         selected_id, score, reasons = _select_best_record(
@@ -632,8 +691,11 @@ async def resolve_mentions_unified(
         if selected_id:
             candidate_to_id[candidate] = selected_id
             resolved_ids.add(selected_id)
+        else:
+            unresolved_candidates.append(candidate)
 
     rewritten = _replace_plain_mentions(response, candidate_to_id)
+    rewritten = _strip_unresolved_plain_mentions(rewritten, unresolved_candidates)
     existing_ids = {int(mid) for mid in re.findall(r"<@!?(\d{15,22})>", rewritten)}
     prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]
     if prefixes:

@@ -22,6 +22,7 @@ from constants import (
     TEXTUAL_SIMILARITY_THRESHOLD, KEY_TERM_OVERLAP_THRESHOLD
 )
 import logger as log
+import runtime_config
 
 
 def ensure_data_dir():
@@ -976,9 +977,14 @@ class MemoryManager:
             return None
 
         now = time.time()
+        try:
+            cooldown_seconds = int(runtime_config.get("auto_memory_channel_cooldown_seconds", self._MEMORY_COOLDOWN_SECONDS))
+        except (TypeError, ValueError):
+            cooldown_seconds = self._MEMORY_COOLDOWN_SECONDS
+        cooldown_seconds = max(0, min(cooldown_seconds, 300))
         last_gen = self._channel_memory_cooldown.get(channel_key, 0)
-        if now - last_gen < self._MEMORY_COOLDOWN_SECONDS:
-            log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {self._MEMORY_COOLDOWN_SECONDS}s)")
+        if cooldown_seconds > 0 and now - last_gen < cooldown_seconds:
+            log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {cooldown_seconds}s)")
             return None
 
         self._channel_memory_inflight.add(channel_key)
@@ -1034,6 +1040,28 @@ Memory about {target_user} (or NOTHING):"""
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt="You are a memory analyzer. Create brief, factual summaries."
             )
+
+            if result and "NOTHING" in result.upper() and runtime_config.get("auto_memory_fallback_on_nothing", True):
+                # Broader second pass: still favor user-authored facts, but recover from
+                # over-strict first-pass misses so auto-memories keep flowing.
+                fallback_prompt = f"""Extract ONE concise memory about {target_user} from this conversation.
+
+Prefer facts {target_user} said about themselves in their own messages.
+If none are clear, you may capture one stable preference or recurring trait from context.
+Do not include roleplay dialogue as literal fact.
+
+If there is truly nothing worth keeping, respond with ONLY "NOTHING".
+Otherwise return one short sentence starting with "{target_user}".
+
+Conversation:
+{context}
+
+Memory about {target_user} (or NOTHING):"""
+
+                result = await provider_manager.generate(
+                    messages=[{"role": "user", "content": fallback_prompt}],
+                    system_prompt="You extract concise memory facts from chat logs."
+                )
 
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):
                 # Sanitize before storing - remove any reasoning tags

@@ -165,10 +165,26 @@ class BotInstance:
         Returns dict with keys: mentioned, is_reply_to_bot, is_autonomous, name_triggered, should_respond
         """
         channel_id = message.channel.id
+        is_thread = isinstance(message.channel, discord.Thread)
+        thread_policy = str(runtime_config.get("thread_response_policy", "mention_or_reply") or "mention_or_reply").lower()
+        thread_policy_disabled = is_thread and thread_policy in {"disabled", "off", "none"}
+        thread_policy_strict = is_thread and thread_policy in {
+            "mention_or_reply", "mentionreply", "mention_only", "mentiononly", "strict"
+        }
 
         # Check if user has ignored this bot
         char_name = self.character.name if self.character else ""
         if char_name and user_ignores.is_ignored(str(message.author.id), char_name):
+            return {
+                "mentioned": False,
+                "is_reply_to_bot": False,
+                "is_autonomous": False,
+                "name_triggered": False,
+                "should_respond": False
+            }
+
+        # Optional thread kill switch.
+        if thread_policy_disabled:
             return {
                 "mentioned": False,
                 "is_reply_to_bot": False,
@@ -200,12 +216,15 @@ class BotInstance:
 
         # Autonomous mode check
         is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
+        if thread_policy_strict:
+            # In threads, only direct @mention or reply should trigger.
+            is_autonomous = False
 
         # Name/nickname trigger
         name_triggered = False
         name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
 
-        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm):
+        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm and not thread_policy_strict):
 
             # Check if bot triggers are allowed for this channel when message is from a bot
             if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
@@ -1643,15 +1662,19 @@ class BotInstance:
                 user_id = int(match.group(1))
             except (TypeError, ValueError):
                 return match.group(0)
+            # Always convert numeric protocol handles to Discord mention syntax.
+            # If the ID is invalid for this guild, Discord will render it harmlessly
+            # as plain unresolved mention text, but this avoids leaking raw @u_... tokens.
+            mention = f"<@{user_id}>"
             if user_id in trusted_ids:
-                return f"<@{user_id}>"
+                return mention
             if guild:
                 try:
                     if guild.get_member(user_id):
-                        return f"<@{user_id}>"
+                        return mention
                 except Exception:
                     pass
-            return match.group(0)
+            return mention
 
         # Handle malformed bracketed form: <@u_123...>
         response = re.sub(r'<@[ub]_(\d{15,22})>', _replace, response, flags=re.IGNORECASE)
@@ -2164,12 +2187,26 @@ class BotInstance:
     async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
         try:
+            if not runtime_config.get("auto_memory_enabled", True):
+                return
+
+            try:
+                min_chars = int(runtime_config.get("auto_memory_min_message_chars", 2))
+            except (TypeError, ValueError):
+                min_chars = 2
+            min_chars = max(1, min(min_chars, 80))
+
             # Quick pre-filter: skip only extremely short pings/noise.
-            if len(last_message or "") < 4:
+            if len(last_message or "") < min_chars:
                 return
 
             history = get_history(channel_id)
-            if len(history) < 4:
+            try:
+                min_history = int(runtime_config.get("auto_memory_min_history_messages", 3))
+            except (TypeError, ValueError):
+                min_history = 3
+            min_history = max(2, min(min_history, 20))
+            if len(history) < min_history:
                 return
 
             # Analyze once per assistant response; generation-level cooldowns handle spam.
@@ -2181,10 +2218,16 @@ class BotInstance:
             last_memory_check[channel_id] = msg_count
             self._last_memory_check = last_memory_check
 
+            try:
+                context_window = int(runtime_config.get("auto_memory_context_window", 24))
+            except (TypeError, ValueError):
+                context_window = 24
+            context_window = max(8, min(context_window, 60))
+
             char_name = self.character.name if self.character else "the character"
             generated_memory = await memory_manager.generate_memory(
                 provider_manager,
-                history[-20:],
+                history[-context_window:],
                 is_dm,
                 id_key,
                 char_name,
