@@ -1480,10 +1480,18 @@ class BotInstance:
 
             # Slow path: query members from API to catch offline/not-cached users.
             if member is None:
+                query_text = candidate[:100].strip()
                 try:
-                    queried = await guild.query_members(query=candidate[:100], limit=25, cache=True)
+                    queried = await guild.query_members(query=query_text, limit=100, cache=True) if query_text else []
                 except Exception:
                     queried = []
+                if not queried and ' ' in query_text:
+                    first_token = query_text.split()[0].strip()
+                    if len(first_token) >= 3:
+                        try:
+                            queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                        except Exception:
+                            queried = []
 
                 merged = {m.id: m for m in pool}
                 for m in queried:
@@ -1544,6 +1552,11 @@ class BotInstance:
 
         # Cleanup stray trailing ">" from malformed mention attempts.
         cleaned = re.sub(r'@([A-Za-z][A-Za-z0-9 _.\'-]{0,63})>', r'@\1', cleaned)
+        # Collapse doubled plaintext markers like "@@name" -> "@name".
+        cleaned = re.sub(r'(?<!<)@{2,}(?=[A-Za-z0-9_])', '@', cleaned)
+        # Remove standalone/dangling "@" artifacts.
+        cleaned = re.sub(r'(^|[\s(\[{])@(?=[\s)\]}.,!?;:]|$)', r'\1', cleaned)
+        cleaned = re.sub(r'@\s*>', '', cleaned)
 
         # Restore protected valid mentions.
         for token, original in placeholders.items():
@@ -1618,7 +1631,8 @@ class BotInstance:
         if not request_content:
             return response
 
-        if not re.search(r'\b(tag|mention|ping|summon|notify)\b', request_content, re.IGNORECASE):
+        mention_verbs = r'tag|mention|ping|summon|notify|call|bring|get'
+        if not re.search(rf'\b(?:{mention_verbs})\b', request_content, re.IGNORECASE):
             return response
 
         envelope = context.get("context_envelope") or {}
@@ -1628,8 +1642,9 @@ class BotInstance:
         compact_text = re.sub(r"[^a-z0-9]+", "", text)
         stopwords = {
             "please", "me", "you", "them", "him", "her", "someone", "anyone",
-            "tag", "mention", "ping", "summon", "notify", "can", "could", "would",
-            "and", "or", "to", "the", "a", "an", "my", "your"
+            "tag", "mention", "ping", "summon", "notify", "call", "bring", "get",
+            "can", "could", "would", "and", "or", "to", "the", "a", "an", "my",
+            "your", "here", "there", "now", "pls", "pleasee"
         }
 
         def _canonical_token(value: str) -> str:
@@ -1666,7 +1681,7 @@ class BotInstance:
 
             # Prefer words after explicit action keywords.
             segments = re.findall(
-                r'\b(?:tag|mention|ping|summon|notify)\b([^.!?\n\r]*)',
+                rf'\b(?:{mention_verbs})\b([^.!?\n\r]*)',
                 source,
                 flags=re.IGNORECASE
             )
@@ -1674,6 +1689,7 @@ class BotInstance:
                 segments = [source]
 
             for segment in segments:
+                segment_tokens = []
                 for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.\-']{1,31}", segment):
                     t = token.strip().lower()
                     if not t or t in stopwords or len(t) < 3:
@@ -1681,11 +1697,32 @@ class BotInstance:
                     if t not in seen:
                         seen.add(t)
                         terms.append(t)
+                        segment_tokens.append(t)
 
                     canonical = _canonical_token(t)
                     if canonical and canonical not in seen and len(canonical) >= 3 and canonical not in stopwords:
                         seen.add(canonical)
                         terms.append(canonical)
+
+                # Keep short multi-word phrases for exact display-name matching.
+                for i in range(len(segment_tokens)):
+                    for n in (2, 3):
+                        if i + n > len(segment_tokens):
+                            continue
+                        phrase = " ".join(segment_tokens[i:i + n]).strip()
+                        if len(phrase) < 3 or phrase in seen:
+                            continue
+                        seen.add(phrase)
+                        terms.append(phrase)
+                        phrase_canonical = _canonical_token(phrase)
+                        if (
+                            phrase_canonical
+                            and len(phrase_canonical) >= 3
+                            and phrase_canonical not in seen
+                            and phrase_canonical not in stopwords
+                        ):
+                            seen.add(phrase_canonical)
+                            terms.append(phrase_canonical)
 
             # Also capture explicit @targets from user request.
             for mention_token in re.findall(r"@([A-Za-z0-9][A-Za-z0-9_.\-']{1,63})", source):
@@ -1882,11 +1919,18 @@ class BotInstance:
                     query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
                     if query_term:
                         try:
-                            queried = await guild.query_members(query=query_term[:100], limit=25, cache=True)
+                            queried = await guild.query_members(query=query_term[:100], limit=100, cache=True)
                         except Exception:
                             queried = []
                     else:
                         queried = []
+                    if not queried and " " in query_term:
+                        first_token = query_term.split()[0].strip()
+                        if len(first_token) >= 3:
+                            try:
+                                queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                            except Exception:
+                                queried = []
                     merged = {m.id: m for m in base_members}
                     for m in queried:
                         if not m.bot:
@@ -1899,11 +1943,18 @@ class BotInstance:
                         query_term = re.sub(r"[^A-Za-z0-9 ._-]+", "", term).strip()
                         if query_term:
                             try:
-                                queried = await guild.query_members(query=query_term[:100], limit=25, cache=True)
+                                queried = await guild.query_members(query=query_term[:100], limit=100, cache=True)
                             except Exception:
                                 queried = []
                         else:
                             queried = []
+                        if not queried and " " in query_term:
+                            first_token = query_term.split()[0].strip()
+                            if len(first_token) >= 3:
+                                try:
+                                    queried = await guild.query_members(query=first_token[:100], limit=100, cache=True)
+                                except Exception:
+                                    queried = []
                         merged = {m.id: m for m in base_bots}
                         for m in queried:
                             if m.bot and (not self_id or m.id != self_id):
