@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.9] - 2026-03-04
+
+### Changes
+
+- Fix incomplete Discord mention and emoji tag parsing
+- Fix tag target extraction with leading reply mentions (v1.6.8)
+- Fix mention tagging consistency and bump version to 1.6.7
 ## [v1.6.8] - 2026-03-04
 
 ### Changes
