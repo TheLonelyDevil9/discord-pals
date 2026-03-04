@@ -1566,7 +1566,7 @@ class BotInstance:
             except (TypeError, ValueError):
                 pass
 
-        if not trusted_ids:
+        if not trusted_ids and not guild:
             return response
 
         def _replace(match: re.Match) -> str:
