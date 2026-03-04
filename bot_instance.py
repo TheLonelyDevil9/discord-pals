@@ -980,7 +980,7 @@ class BotInstance:
         # Intent fallback: if the user explicitly requested a tag/mention/ping,
         # inject resolved mentions directly so model wording cannot drop them.
         if allow_mentions:
-            response = self._inject_requested_mentions_failsafe(response, context)
+            response = await self._inject_requested_mentions_failsafe(response, context, guild)
 
         # Parse reactions
         response, reactions = parse_reactions(response)
@@ -1600,8 +1600,13 @@ class BotInstance:
         )
         return response
 
-    def _inject_requested_mentions_failsafe(self, response: str, context: dict) -> str:
-        """Inject mentions when user explicitly asks to tag/mention/ping someone."""
+    async def _inject_requested_mentions_failsafe(self, response: str, context: dict,
+                                                  guild: discord.Guild = None) -> str:
+        """Inject mentions when user explicitly asks to tag/mention/ping someone.
+
+        Resolves from context candidates first, then queries guild members for
+        unresolved names so non-recent/offline members can still be tagged.
+        """
         if not response:
             return response
 
@@ -1614,8 +1619,6 @@ class BotInstance:
 
         envelope = context.get("context_envelope") or {}
         candidates = envelope.get("mention_candidates") or []
-        if not candidates:
-            return response
 
         text = request_content.lower()
         stopwords = {
@@ -1623,6 +1626,71 @@ class BotInstance:
             "tag", "mention", "ping", "summon", "notify", "can", "could", "would",
             "and", "or", "to", "the", "a", "an", "my", "your"
         }
+
+        def _extract_terms(source: str) -> list[str]:
+            terms = []
+            seen = set()
+
+            # Prefer words after explicit action keywords.
+            segments = re.findall(
+                r'\b(?:tag|mention|ping|summon|notify)\b([^.!?\n\r]*)',
+                source,
+                flags=re.IGNORECASE
+            )
+            if not segments:
+                segments = [source]
+
+            for segment in segments:
+                for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.\-']{1,31}", segment):
+                    t = token.strip().lower()
+                    if not t or t in stopwords or len(t) < 3:
+                        continue
+                    if t not in seen:
+                        seen.add(t)
+                        terms.append(t)
+            return terms[:8]
+
+        def _member_aliases(member: discord.Member) -> set[str]:
+            values = {
+                get_user_display_name(member),
+                member.name,
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+            }
+            aliases = set()
+            for value in values:
+                if not value:
+                    continue
+                normalized = re.sub(r"\s+", " ", value.strip()).lower()
+                if normalized:
+                    aliases.add(normalized)
+                    for part in re.split(r"[\s._-]+", normalized):
+                        if len(part) >= 3 and part not in stopwords:
+                            aliases.add(part)
+            return aliases
+
+        def _pick_unique_member(term: str, members: list[discord.Member]) -> discord.Member | None:
+            exact = {}
+            prefix = {}
+            for member in members:
+                if member.bot:
+                    continue
+                aliases = _member_aliases(member)
+                if term in aliases:
+                    exact[member.id] = member
+                    continue
+                for alias in aliases:
+                    if alias.startswith(term):
+                        prefix[member.id] = member
+                        break
+
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(prefix) == 1:
+                return next(iter(prefix.values()))
+            return None
 
         requested_ids = []
         seen_ids = set()
@@ -1652,6 +1720,35 @@ class BotInstance:
             if matched and user_id not in seen_ids:
                 seen_ids.add(user_id)
                 requested_ids.append(user_id)
+
+        # Guild lookup fallback for terms not covered by mention candidates.
+        if guild:
+            base_members = [m for m in guild.members if not m.bot]
+            terms = _extract_terms(request_content)
+
+            for term in terms:
+                # Skip if a candidate alias already matched this term.
+                if any(
+                    isinstance(alias, str) and alias.strip().lstrip("@").lower() == term
+                    for c in candidates for alias in (c.get("aliases") or [])
+                ):
+                    continue
+
+                member = _pick_unique_member(term, base_members)
+                if member is None:
+                    try:
+                        queried = await guild.query_members(query=term[:100], limit=25, cache=True)
+                    except Exception:
+                        queried = []
+                    merged = {m.id: m for m in base_members}
+                    for m in queried:
+                        if not m.bot:
+                            merged[m.id] = m
+                    member = _pick_unique_member(term, list(merged.values()))
+
+                if member and member.id not in seen_ids:
+                    seen_ids.add(member.id)
+                    requested_ids.append(member.id)
 
         if not requested_ids:
             return response

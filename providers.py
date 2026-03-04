@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 from config import PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 import asyncio
+import re
 import logger as log
 
 try:
@@ -91,6 +92,43 @@ def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
             target.pop(parsed, None)
     except Exception as e:
         log.debug(f"Failed to parse exclude_body YAML: {e}")
+
+
+def coerce_numeric_strings(target: dict) -> None:
+    """Coerce known numeric request params when provided as strings.
+
+    Helps with YAML/body configs where users quote numeric values:
+    - min_p: "0.05"
+    - top_k: "40"
+    """
+    if not isinstance(target, dict):
+        return
+
+    float_keys = {
+        "temperature", "top_p", "min_p", "presence_penalty", "frequency_penalty",
+        "repetition_penalty", "typical_p", "tfs", "eta_cutoff", "epsilon_cutoff"
+    }
+    int_keys = {"max_tokens", "top_k", "n", "num_predict", "seed"}
+    number_re = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+
+    for key, value in list(target.items()):
+        if isinstance(value, dict):
+            coerce_numeric_strings(value)
+            continue
+        if not isinstance(value, str):
+            continue
+
+        stripped = value.strip()
+        if key in int_keys and re.fullmatch(r"^[+-]?\d+$", stripped):
+            try:
+                target[key] = int(stripped)
+            except ValueError:
+                pass
+        elif key in float_keys and number_re.fullmatch(stripped):
+            try:
+                target[key] = float(stripped)
+            except ValueError:
+                pass
 
 
 def is_multimodal_content(content) -> bool:
@@ -291,6 +329,7 @@ class AIProviderManager:
                 # Apply SillyTavern-style YAML parameters (preferred)
                 if include_body:
                     merge_yaml_to_dict(request_kwargs, include_body)
+                    coerce_numeric_strings(request_kwargs)
                     log.debug(f"[{tier}] Applied include_body YAML")
 
                 # Remove keys specified in exclude_body
@@ -313,6 +352,11 @@ class AIProviderManager:
                     else:
                         extra_body = passthrough_params
                     log.debug(f"[{tier}] Moved to extra_body: {list(passthrough_params.keys())}")
+
+                # Coerce any quoted numeric values in provider-specific payloads.
+                coerce_numeric_strings(request_kwargs)
+                if extra_body:
+                    coerce_numeric_strings(extra_body)
 
                 # Pass extra_body as SDK parameter (bypasses validation)
                 if extra_body:
