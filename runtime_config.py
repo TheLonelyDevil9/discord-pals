@@ -34,6 +34,11 @@ DEFAULTS = {
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
     "mention_context_limit": 10,  # Max users to show in mention context for AI
+    # Unified mention resolver
+    "mention_resolver_enabled": True,  # Use deterministic resolver for request/response mentions
+    "mention_resolver_include_bots": True,  # Resolve bot mentions as well as user mentions
+    "mention_resolver_ambiguity_policy": "best_match",  # best_match | no_tag | clarify
+    "mention_resolver_min_score": 5.0,  # Minimum confidence to auto-resolve a mention
     # Context protocol + payload formatting
     "context_protocol_enabled": True,  # Inject deterministic context envelope for mentions/speaker identity
     "mention_handle_mode": "id_handles_v1",  # Mention protocol handle scheme

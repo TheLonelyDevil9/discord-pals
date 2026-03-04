@@ -31,6 +31,7 @@ from context_protocol import (
     render_context_block,
     extract_and_resolve_mentions
 )
+from mention_resolver import resolve_mentions_unified
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -932,6 +933,17 @@ class BotInstance:
         # Run this even when mentions are disabled so malformed fragments like "<@" are cleaned.
         from discord_utils import process_outgoing_mentions
         allow_mentions = runtime_config.get("allow_bot_mentions", True)
+        mention_resolver_enabled = runtime_config.get("mention_resolver_enabled", True)
+        mention_resolver_include_bots = runtime_config.get("mention_resolver_include_bots", True)
+        mention_resolver_ambiguity_policy = (
+            runtime_config.get("mention_resolver_ambiguity_policy", "best_match") or "best_match"
+        )
+        try:
+            mention_resolver_min_score = float(runtime_config.get("mention_resolver_min_score", 5.0))
+        except (TypeError, ValueError):
+            mention_resolver_min_score = 5.0
+        mention_resolver_min_score = max(0.1, min(mention_resolver_min_score, 20.0))
+
         mentionable_users = context.get("mentionable_users") if allow_mentions else None
         mentionable_bots = (
             context.get("mentionable_bots")
@@ -951,10 +963,26 @@ class BotInstance:
             guild=guild if allow_mentions else None
         )
 
-        # Last-mile fallback for unresolved "@Name" user mentions and malformed
-        # "<@ Name" fragments, including users not currently in cache.
-        if allow_mentions and guild:
-            response = await self._resolve_unresolved_user_mentions(response, guild)
+        if allow_mentions and mention_resolver_enabled:
+            resolver_result = await resolve_mentions_unified(
+                response=response,
+                request_content=content,
+                context_envelope=context.get("context_envelope"),
+                guild=guild,
+                include_bots=bool(mention_resolver_include_bots),
+                ambiguity_policy=str(mention_resolver_ambiguity_policy).lower(),
+                min_score=mention_resolver_min_score,
+                relation_corpus=self._build_relation_corpus_for_mentions(),
+            )
+            response = resolver_result.text
+            if resolver_result.resolved_ids:
+                log.debug(
+                    f"[MENTION-RESOLVER] Resolved ids: {resolver_result.resolved_ids}"
+                )
+        else:
+            # Legacy fallback path for unresolved "@Name" user mentions.
+            if allow_mentions and guild:
+                response = await self._resolve_unresolved_user_mentions(response, guild)
 
         # Last protocol-handle pass: if @u_<id> or @b_<id> survived earlier
         # mention processing, resolve them from the context envelope now.
@@ -979,7 +1007,7 @@ class BotInstance:
 
         # Intent fallback: if the user explicitly requested a tag/mention/ping,
         # inject resolved mentions directly so model wording cannot drop them.
-        if allow_mentions:
+        if allow_mentions and not mention_resolver_enabled:
             response = await self._inject_requested_mentions_failsafe(response, context, guild)
 
         # Parse reactions
@@ -1381,6 +1409,25 @@ class BotInstance:
         if removed_count > 0:
             return cleaned
         return cleaned or response.strip()
+
+    def _build_relation_corpus_for_mentions(self) -> str:
+        """Build character text corpus used for relation-term mention disambiguation."""
+        if not self.character:
+            return ""
+
+        parts = []
+        if self.character.persona:
+            parts.append(self.character.persona)
+        if self.character.example_dialogue:
+            parts.append(self.character.example_dialogue)
+
+        for special_name, special_context in (self.character.special_users or {}).items():
+            if special_name:
+                parts.append(str(special_name))
+            if special_context:
+                parts.append(str(special_context))
+
+        return "\n".join(parts)
 
     async def _resolve_unresolved_user_mentions(self, response: str, guild: discord.Guild) -> str:
         """Resolve remaining plaintext @mentions to Discord IDs via guild lookup/query."""
