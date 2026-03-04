@@ -2116,38 +2116,41 @@ class BotInstance:
     
     async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
-        # Quick pre-filter: skip very short messages (reduced from 20 to 10)
-        if len(last_message) < 10:
-            return
-        
-        # Cooldown: don't check for memories too frequently
-        history = get_history(channel_id)
-        if len(history) < 2:  # Reduced from 3 to 2
-            return
-        
-        # Check if we recently analyzed for memories (every 2 messages instead of 3)
-        last_memory_check = getattr(self, '_last_memory_check', {})
-        msg_count = len(history)
-        last_checked = last_memory_check.get(channel_id, 0)
-        if msg_count - last_checked < 2:  # Reduced from 3 to 2
-            return
-        last_memory_check[channel_id] = msg_count
-        self._last_memory_check = last_memory_check
-        
-        char_name = self.character.name if self.character else "the character"
-        # Send more context to LLM (last 10 messages instead of 5)
-        generated_memory = await memory_manager.generate_memory(
-            provider_manager,
-            history[-10:],
-            is_dm,
-            id_key,
-            char_name,
-            user_id=user_id,
-            user_name=user_name,
-            cooldown_scope_id=channel_id
-        )
-        if generated_memory:
-            log.info(f"Auto-memory saved: {generated_memory[:120]}", self.name)
+        try:
+            # Quick pre-filter: skip only extremely short pings/noise.
+            if len(last_message or "") < 4:
+                return
+
+            history = get_history(channel_id)
+            if len(history) < 4:
+                return
+
+            # Analyze once per assistant response; generation-level cooldowns handle spam.
+            last_memory_check = getattr(self, '_last_memory_check', {})
+            msg_count = len(history)
+            last_checked = last_memory_check.get(channel_id, 0)
+            if msg_count - last_checked < 1:
+                return
+            last_memory_check[channel_id] = msg_count
+            self._last_memory_check = last_memory_check
+
+            char_name = self.character.name if self.character else "the character"
+            generated_memory = await memory_manager.generate_memory(
+                provider_manager,
+                history[-20:],
+                is_dm,
+                id_key,
+                char_name,
+                user_id=user_id,
+                user_name=user_name,
+                cooldown_scope_id=channel_id
+            )
+            if generated_memory:
+                log.info(f"Auto-memory saved: {generated_memory[:120]}", self.name)
+            else:
+                log.debug("Auto-memory check completed without new memory", self.name)
+        except Exception as e:
+            log.warn(f"Auto-memory pipeline failed: {e}", self.name)
 
     def _setup_commands(self) -> None:
         """Register slash commands from commands module."""

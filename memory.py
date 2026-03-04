@@ -352,6 +352,7 @@ class MemoryManager:
         # Global channel-level memory generation cooldown (prevents multi-bot duplication)
         self._channel_memory_cooldown: Dict[int, float] = {}
         self._MEMORY_COOLDOWN_SECONDS = 30  # Min seconds between memory generation per channel
+        self._channel_memory_inflight: set[int] = set()
 
         # Recently generated facts (short-lived idempotency guard for async overlaps)
         self._recent_generated_facts: Dict[str, float] = {}
@@ -526,6 +527,7 @@ class MemoryManager:
         self._dirty_files.clear()
         self._recent_generated_facts.clear()
         self._channel_memory_cooldown.clear()
+        self._channel_memory_inflight.clear()
 
         # Persist shared stores immediately.
         safe_json_save(MEMORIES_FILE, {})
@@ -962,18 +964,24 @@ class MemoryManager:
         cooldown_scope_id: int = None
     ) -> Optional[str]:
         """Generate a memory summary from conversation using AI."""
-        if len(messages) < 5:
+        if len(messages) < 4:
+            log.debug("Memory generation skipped - not enough context messages")
             return None
 
         # Global channel-level cooldown: prevent multiple bots from generating
         # memories for the same channel within the cooldown window
         channel_key = cooldown_scope_id if cooldown_scope_id is not None else id_key
+        if channel_key in self._channel_memory_inflight:
+            log.debug("Memory generation skipped - already in progress for this channel")
+            return None
+
         now = time.time()
         last_gen = self._channel_memory_cooldown.get(channel_key, 0)
         if now - last_gen < self._MEMORY_COOLDOWN_SECONDS:
             log.debug(f"Memory generation skipped - channel cooldown ({now - last_gen:.0f}s < {self._MEMORY_COOLDOWN_SECONDS}s)")
             return None
-        self._channel_memory_cooldown[channel_key] = now
+
+        self._channel_memory_inflight.add(channel_key)
 
         # Build context with explicit user attribution (using author from history)
         context_lines = []
@@ -1075,9 +1083,22 @@ Memory about {target_user} (or NOTHING):"""
                                                      user_name=user_name, character_name=character_name,
                                                      embedding=embedding)
 
+                # Apply cooldown only on successful write so failed/NOTHING runs
+                # don't suppress future attempts.
+                self._channel_memory_cooldown[channel_key] = time.time()
+                # Persist immediately so dashboard/file checks reflect new memories.
+                self.flush()
                 return result.strip()
+            if result and "NOTHING" in result.upper():
+                log.debug("Memory generation returned NOTHING")
+            elif result and result.startswith("❌"):
+                log.debug("Memory generation returned provider error marker")
+            else:
+                log.debug("Memory generation returned empty result")
         except Exception as e:
             log.warn(f"Memory generation failed: {e}")
+        finally:
+            self._channel_memory_inflight.discard(channel_key)
 
         return None
 
