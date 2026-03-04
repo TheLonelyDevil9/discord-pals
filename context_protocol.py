@@ -248,18 +248,33 @@ def extract_and_resolve_mentions(text: str, envelope: Optional[dict], guild=None
         return text
 
     lookup = {}
+    alias_lookup: Dict[str, int] = {}
     for candidate in envelope.get("mention_candidates", []):
         handle = (candidate.get("handle") or "").strip()
         user_id = _to_int(candidate.get("user_id"))
         if handle and user_id:
             lookup[handle.lower()] = user_id
+        if user_id:
+            for alias in candidate.get("aliases") or []:
+                alias_norm = _normalize_alias(alias).lower()
+                if alias_norm:
+                    alias_lookup.setdefault(alias_norm, user_id)
     for participant in envelope.get("participants", []):
         handle = (participant.get("mention_handle") or "").strip()
         user_id = _to_int(participant.get("user_id"))
         if handle and user_id and handle.lower() not in lookup:
             lookup[handle.lower()] = user_id
+        if user_id:
+            for alias_value in (
+                participant.get("display_name"),
+                participant.get("username"),
+                participant.get("mention_handle"),
+            ):
+                alias_norm = _normalize_alias(str(alias_value or "")).lower()
+                if alias_norm:
+                    alias_lookup.setdefault(alias_norm, user_id)
 
-    if not lookup:
+    if not lookup and not alias_lookup:
         return text
 
     resolved = text
@@ -282,6 +297,36 @@ def extract_and_resolve_mentions(text: str, envelope: Optional[dict], guild=None
     resolved = re.sub(
         r"@[\u200b\u2060\ufeff\s]*([ub])_(\d{3,22})(?=[^A-Za-z0-9_]|$)",
         replace_plain,
+        resolved,
+        flags=re.IGNORECASE
+    )
+
+    # Recover malformed non-numeric protocol handles such as "@u_seelewee".
+    def replace_plain_alias(match: re.Match) -> str:
+        raw_alias = (match.group(2) or "").strip()
+        if not raw_alias:
+            return ""
+
+        candidate_aliases = [
+            raw_alias,
+            raw_alias.replace("_", " "),
+            raw_alias.replace("-", " "),
+            raw_alias.replace(".", " "),
+        ]
+        for alias in candidate_aliases:
+            alias_norm = _normalize_alias(alias).lower()
+            if not alias_norm:
+                continue
+            user_id = alias_lookup.get(alias_norm)
+            if user_id:
+                return f"<@{user_id}>"
+
+        # Do not leak fake ping-like protocol text.
+        return raw_alias
+
+    resolved = re.sub(
+        r"(?<![A-Za-z0-9_])@?[\u200b\u2060\ufeff\s]*([ub])_([A-Za-z][A-Za-z0-9_.\-']{1,63})(?=[^A-Za-z0-9_]|$)",
+        replace_plain_alias,
         resolved,
         flags=re.IGNORECASE
     )

@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.15] - 2026-03-05
+
+### Fixed
+
+- Expand relation-intent mention fallback beyond creator terms: "tag your roommate" now maps Kaveh to Alhaitham (and vice versa), and "tag both travelers" maps Alhaitham to both Aether and Lumine
+- Prevent incorrect carry-over mentions during unresolved relation requests by stripping conflicting numeric mentions when strict relation intent is active but no safe target is resolved
+- Recover malformed non-numeric protocol handles like `@u_seelewee` via context alias lookup, and demote unresolved protocol-like tokens to plain text without fake `@` pings
+
+### Added
+
+- Regression tests for relation-intent fallback covering creator unresolved cleanup, roommate targeting, and dual-traveler targeting
+- Regression tests for non-numeric context protocol handle recovery and unresolved-token demotion
+
 ## [v1.6.14] - 2026-03-05
 
 ### Fixed

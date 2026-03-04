@@ -79,7 +79,8 @@ class FakeGuild:
 
 
 class _DummyCharacter:
-    def __init__(self):
+    def __init__(self, name="Cecile"):
+        self.name = name
         self.persona = "Cecile is Dottore's experiment. Seele is Cecile's creator."
         self.example_dialogue = ""
         self.special_users = {
@@ -96,8 +97,8 @@ class _DummyClient:
 
 
 class _DummyBot:
-    def __init__(self):
-        self.character = _DummyCharacter()
+    def __init__(self, *, character_name="Cecile"):
+        self.character = _DummyCharacter(name=character_name)
         self.client = _DummyClient()
 
 
@@ -179,6 +180,93 @@ class BotInstanceRelationMentionTests(unittest.IsolatedAsyncioTestCase):
             bot_instance_module.get_cached_mention_alias_entries = original_cache_lookup
 
         self.assertIn("<@222222222222222222>", result)
+
+    async def test_creator_relation_drops_wrong_numeric_mention_when_unresolved(self):
+        dottore_id = 222222222222222222
+        dottore = FakeMember(dottore_id, "dottore", "Dottore", bot=True)
+        guild = FakeGuild(members=[dottore])
+
+        context = {
+            "content": "cecile, can you tag your creator?",
+            "context_envelope": {
+                "mention_candidates": [
+                    {
+                        "user_id": dottore_id,
+                        "aliases": ["dottore", "Dottore"],
+                        "handle": "@b_222222222222222222",
+                        "priority": "bot",
+                    },
+                ]
+            },
+        }
+
+        dummy = _DummyBot()
+        original_cache_lookup = bot_instance_module.get_cached_mention_alias_entries
+        bot_instance_module.get_cached_mention_alias_entries = lambda *_args, **_kwargs: []
+        try:
+            result = await BotInstance._inject_requested_mentions_failsafe(
+                dummy,
+                "<@222222222222222222> Fine.",
+                context,
+                guild,
+            )
+        finally:
+            bot_instance_module.get_cached_mention_alias_entries = original_cache_lookup
+
+        self.assertNotIn("<@222222222222222222>", result)
+
+    async def test_roommate_relation_for_kaveh_mentions_alhaitham(self):
+        alhaitham_id = 333333333333333333
+        alhaitham = FakeMember(alhaitham_id, "alhaitham", "Alhaitham", bot=True)
+        guild = FakeGuild(members=[alhaitham])
+
+        context = {
+            "content": "kaveh, can you tag your roommate?",
+            "context_envelope": {"mention_candidates": []},
+        }
+
+        dummy = _DummyBot(character_name="Kaveh")
+        original_cache_lookup = bot_instance_module.get_cached_mention_alias_entries
+        bot_instance_module.get_cached_mention_alias_entries = lambda *_args, **_kwargs: []
+        try:
+            result = await BotInstance._inject_requested_mentions_failsafe(
+                dummy,
+                "You mean Alhaitham?",
+                context,
+                guild,
+            )
+        finally:
+            bot_instance_module.get_cached_mention_alias_entries = original_cache_lookup
+
+        self.assertIn("<@333333333333333333>", result)
+
+    async def test_travelers_relation_for_alhaitham_mentions_both_travelers(self):
+        aether_id = 444444444444444444
+        lumine_id = 555555555555555555
+        aether = FakeMember(aether_id, "aether", "Aether", bot=True)
+        lumine = FakeMember(lumine_id, "lumine", "Lumine", bot=True)
+        guild = FakeGuild(members=[aether, lumine])
+
+        context = {
+            "content": "alhaitham, can you tag both travelers?",
+            "context_envelope": {"mention_candidates": []},
+        }
+
+        dummy = _DummyBot(character_name="Alhaitham")
+        original_cache_lookup = bot_instance_module.get_cached_mention_alias_entries
+        bot_instance_module.get_cached_mention_alias_entries = lambda *_args, **_kwargs: []
+        try:
+            result = await BotInstance._inject_requested_mentions_failsafe(
+                dummy,
+                "Kris wants you.",
+                context,
+                guild,
+            )
+        finally:
+            bot_instance_module.get_cached_mention_alias_entries = original_cache_lookup
+
+        self.assertIn("<@444444444444444444>", result)
+        self.assertIn("<@555555555555555555>", result)
 
 
 if __name__ == "__main__":

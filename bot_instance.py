@@ -2012,8 +2012,11 @@ class BotInstance:
             "can", "could", "would", "and", "or", "to", "the", "a", "an", "my",
             "your", "here", "there", "now", "pls", "pleasee",
             "for", "this", "that", "its", "with", "from", "not", "but", "just", "like",
+            "both", "all",
         }
         creator_relation_terms = {"creator", "owner", "maker", "developer", "dev", "author"}
+        roommate_relation_terms = {"roommate", "room mate", "housemate", "house mate", "flatmate", "flat mate"}
+        traveler_relation_terms = {"traveler", "travelers", "traveller", "travellers", "twin", "twins"}
 
         def _canonical_token(value: str) -> str:
             if not isinstance(value, str):
@@ -2113,7 +2116,9 @@ class BotInstance:
         def _detect_relation_terms(source: str) -> set[str]:
             groups = [
                 {"sis", "sister", "bro", "brother", "sibling"},
-                creator_relation_terms
+                creator_relation_terms,
+                roommate_relation_terms,
+                traveler_relation_terms,
             ]
             lowered = source.lower()
             selected = set()
@@ -2121,6 +2126,45 @@ class BotInstance:
                 if any(re.search(rf'(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])', lowered) for term in group):
                     selected.update(group)
             return selected
+
+        def _relation_plural_requested(source: str, relation_terms: set[str]) -> bool:
+            if not relation_terms.intersection(traveler_relation_terms):
+                return False
+            lowered = source.lower()
+            if relation_terms.intersection({"travelers", "travellers", "twins"}):
+                return True
+            return bool(re.search(r"\b(both|all|two|twins?)\b", lowered))
+
+        def _relation_role_target_terms(source: str, relation_terms: set[str]) -> list[str]:
+            out = []
+            character_name = ""
+            if self.character and getattr(self.character, "name", None):
+                character_name = re.sub(r"\s+", " ", str(self.character.name).strip()).lower()
+
+            roommate_targets = {
+                "kaveh": "alhaitham",
+                "alhaitham": "kaveh",
+            }
+            if relation_terms.intersection(roommate_relation_terms):
+                roommate = roommate_targets.get(character_name)
+                if roommate:
+                    out.append(roommate)
+
+            if relation_terms.intersection(traveler_relation_terms):
+                if _relation_plural_requested(source, relation_terms):
+                    out.extend(["aether", "lumine"])
+                else:
+                    out.append("aether")
+
+            deduped = []
+            seen = set()
+            for item in out:
+                key = re.sub(r"\s+", " ", str(item or "").strip()).lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(item)
+            return deduped
 
         def _build_character_relation_corpus() -> str:
             if not self.character:
@@ -2414,7 +2458,20 @@ class BotInstance:
 
         terms = _extract_terms(request_content)
         relation_terms = _detect_relation_terms(request_content)
+        relation_role_target_terms = _relation_role_target_terms(request_content, relation_terms)
+        if relation_role_target_terms:
+            merged_terms = []
+            seen_term_keys = set()
+            for term in relation_role_target_terms + terms:
+                key = re.sub(r"\s+", " ", str(term or "").strip()).lower()
+                if not key or key in seen_term_keys:
+                    continue
+                seen_term_keys.add(key)
+                merged_terms.append(term)
+            terms = merged_terms[:20]
+
         creator_relation_intent = bool(relation_terms.intersection(creator_relation_terms))
+        strict_relation_intent = creator_relation_intent or bool(relation_role_target_terms)
         requested_ids = []
         seen_ids = set()
         for term in terms:
@@ -2572,10 +2629,13 @@ class BotInstance:
                         seen_ids.add(cached_bot_id)
                         requested_ids.append(cached_bot_id)
 
-        if not requested_ids:
-            return response
+        if strict_relation_intent and not requested_ids:
+            # If relation intent exists but we couldn't resolve any safe target,
+            # strip existing numeric mentions rather than keeping a wrong ping.
+            response = re.sub(r'<@!?(\d{15,22})>', '', response)
+            response = re.sub(r'\s{2,}', ' ', response).strip()
 
-        if creator_relation_intent and requested_ids:
+        if strict_relation_intent and requested_ids:
             allowed = set(requested_ids)
 
             def _keep_allowed_mention(match: re.Match) -> str:
@@ -2584,6 +2644,17 @@ class BotInstance:
 
             response = re.sub(r'<@!?(\d{15,22})>', _keep_allowed_mention, response)
             response = re.sub(r'\s{2,}', ' ', response).strip()
+
+        # Non-numeric protocol-like leftovers should not leak as fake mentions.
+        response = re.sub(
+            r"(?<![A-Za-z0-9_])@?([ub])_([A-Za-z][A-Za-z0-9_.\-']{1,63})(?=[^A-Za-z0-9_]|$)",
+            lambda m: m.group(2),
+            response,
+            flags=re.IGNORECASE
+        )
+
+        if not requested_ids:
+            return response
 
         existing_ids = {int(mid) for mid in re.findall(r'<@!?(\d{15,22})>', response)}
         prefixes = [f"<@{uid}>" for uid in requested_ids if uid not in existing_ids]
