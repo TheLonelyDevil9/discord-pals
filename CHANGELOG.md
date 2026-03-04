@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.10] - 2026-03-04
+
+### Fixed
+
+- Custom emojis with missing closing `>` (e.g. `<:cute:id`) now normalize correctly instead of leaking as plaintext
+- `@word` mention patterns no longer leak to Discord when `allow_mentions` is disabled — `strip_unresolved_plain_mentions()` now runs unconditionally
+
+### Added
+
+- `RE_MALFORMED_EMOJI_PREFIX` safety-net pattern in `discord_utils.py` to catch malformed emoji in `convert_emojis_in_text()` pre-pass
 ## [v1.6.9] - 2026-03-04
 
 ### Changes

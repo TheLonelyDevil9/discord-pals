@@ -1082,15 +1082,16 @@ class BotInstance:
             response = f"<@{split_target.id}> {response}"
         # Strict final pass: unresolved plaintext mentions should never leak as
         # fake pings like "@yo" or dangling "@". Keep valid numeric mentions.
-        if allow_mentions:
-            response = strip_unresolved_plain_mentions(response)
+        # Always run — _cleanup_malformed_mentions_final() can produce @word
+        # patterns that must be stripped even when mentions are disabled.
+        response = strip_unresolved_plain_mentions(response)
 
         # Parse reactions
         response, reactions = parse_reactions(response)
 
         # Normalize raw custom emoji syntax from model output to :name: first.
         # This avoids leaking invalid cross-server emoji IDs as plaintext.
-        response = re.sub(r'<a?:([A-Za-z0-9_]+):\d{15,22}>', r':\1:', response)
+        response = re.sub(r'<a?:([A-Za-z0-9_]+):\d+>?', r':\1:', response)
 
         # Convert emojis
         if guild:

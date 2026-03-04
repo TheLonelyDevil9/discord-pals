@@ -164,6 +164,7 @@ RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
 RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*(?::\d*)?$')
 RE_INCOMPLETE_TAG = re.compile(r'<[a-zA-Z][a-zA-Z0-9_]*:\d{17,21}(?!>)')
 RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
+RE_MALFORMED_EMOJI_PREFIX = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+(?!>)')
 RE_EMPTY_ANGLE = re.compile(r'<>')
 RE_MALFORMED_EMOJI = re.compile(
     r'<(?!'
@@ -756,6 +757,10 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
         return text
 
     cache = _emoji_cache[guild.id]
+
+    # Pre-pass: normalise malformed custom emoji (missing closing ">") to :name:
+    # so the shortcode resolver below can match them against the guild cache.
+    text = RE_MALFORMED_EMOJI_PREFIX.sub(r':\1:', text)
 
     def replace_emoji(match):
         name = match.group(1)
