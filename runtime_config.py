@@ -30,6 +30,7 @@ DEFAULTS = {
     "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
     "split_replies_max_targets": 5,  # Max users to split replies for (prevents spam)
     "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots
+    "autonomous_pause_while_channel_busy": True,  # Suppress autonomous bot-on-bot triggers while any bot is generating in channel
     "request_timeout_seconds": 60,  # Global timeout for a bot request (generation + send)
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses

@@ -368,6 +368,15 @@
             <p class="form-hint">Max time allowed for generate+send before request is canceled</p>
         </div>
 
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="autonomous_pause_while_channel_busy"
+                    {% if config.autonomous_pause_while_channel_busy is not defined or config.autonomous_pause_while_channel_busy %}checked{% endif %}>
+                <span>Pause Autonomous While Busy</span>
+            </label>
+            <p class="form-hint">Prevents autonomous bot-on-bot triggers while another bot is still generating in that channel</p>
+        </div>
+
         <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
     </div>
 </div>
@@ -1390,7 +1399,8 @@ async function saveSplitReplySettings() {
 async function saveConcurrencySettings() {
     const data = {
         concurrency_limit: parseInt(document.getElementById('concurrency_limit').value),
-        request_timeout_seconds: parseInt(document.getElementById('request_timeout_seconds').value)
+        request_timeout_seconds: parseInt(document.getElementById('request_timeout_seconds').value),
+        autonomous_pause_while_channel_busy: document.getElementById('autonomous_pause_while_channel_busy').checked
     };
 
     const response = await fetch('/api/config', {

@@ -143,6 +143,7 @@ channel_names: Dict[int, str] = {}
 _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
 _STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
 _channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
+_channel_history_seq: Dict[int, int] = {}  # Monotonic sequence per channel (stable snapshots)
 
 # Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
@@ -226,11 +227,13 @@ def flush_pending_history():
 
 def load_history():
     """Load conversation history from disk on startup."""
-    global conversation_history, channel_names
+    global conversation_history, channel_names, _channel_history_seq
 
     data = safe_json_load(HISTORY_CACHE_FILE, default={})
+    conversation_history = {}
+    channel_names = {}
+    _channel_history_seq = {}
     if not data:
-        conversation_history = {}
         return
 
     # Handle both old format (list) and new format (dict with name/messages)
@@ -238,12 +241,25 @@ def load_history():
         channel_id = int(k)
         if isinstance(v, dict) and "messages" in v:
             # New format with name
-            conversation_history[channel_id] = v["messages"]
+            messages = v["messages"] if isinstance(v["messages"], list) else []
+            conversation_history[channel_id] = messages
             if "name" in v:
                 channel_names[channel_id] = v["name"]
         else:
             # Old format - just list of messages
-            conversation_history[channel_id] = v
+            messages = v if isinstance(v, list) else []
+            conversation_history[channel_id] = messages
+
+        # Restore per-channel history sequence counter (or infer fallback).
+        max_seq = 0
+        for msg in conversation_history[channel_id]:
+            seq = msg.get("history_seq")
+            if isinstance(seq, int) and seq > max_seq:
+                max_seq = seq
+        if max_seq <= 0 and conversation_history[channel_id]:
+            max_seq = len(conversation_history[channel_id])
+        if max_seq > 0:
+            _channel_history_seq[channel_id] = max_seq
 
     log.info(f"Loaded history for {len(conversation_history)} channels")
 
@@ -409,6 +425,12 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
     if msg_hash in _recent_message_hashes[channel_id]:
         return  # Already added
 
+    # Stamp stable ordering metadata only for newly-added messages.
+    next_seq = _channel_history_seq.get(channel_id, 0) + 1
+    _channel_history_seq[channel_id] = next_seq
+    msg["history_seq"] = next_seq
+    msg["history_ts"] = time.time()
+
     # Add hash and maintain limit (OrderedDict preserves insertion order)
     _recent_message_hashes[channel_id][msg_hash] = True
     while len(_recent_message_hashes[channel_id]) > _RECENT_HASH_LIMIT:
@@ -456,6 +478,7 @@ def cleanup_stale_conversation_history():
         conversation_history.pop(ch, None)
         _recent_message_hashes.pop(ch, None)
         _channel_last_activity.pop(ch, None)
+        _channel_history_seq.pop(ch, None)
         channel_names.pop(ch, None)
 
     if channels_to_remove:
@@ -502,6 +525,7 @@ def clear_history(channel_id: int):
     conversation_history.pop(channel_id, None)
     _recent_message_hashes.pop(channel_id, None)
     _channel_last_activity.pop(channel_id, None)
+    _channel_history_seq.pop(channel_id, None)
     channel_names.pop(channel_id, None)
     multipart_responses.pop(channel_id, None)
     _cleared_channels.add(channel_id)
@@ -536,75 +560,61 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
-def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5, 
-                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
-    """
-    Split history into two parts for the new context structure:
-    - history: older messages (background context)
-    - immediate: recent messages (placed after chatroom context for focused response)
-    
-    If current_bot_name is provided, other bots' messages will be tagged with their name
-    (like user messages) to prevent personality bleed.
-    
-    Returns: (history_messages, immediate_messages)
-    """
-    all_history = get_history(channel_id)[-total_limit:]  # Apply total limit
-    
-    # Format all messages
+def format_history_split_from_messages(messages: List[dict], immediate_count: int = 5,
+                                       current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+    """Format and split a provided history snapshot (legacy transcript mode)."""
     formatted = []
-    for msg in all_history:
+    for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
 
         if role == "user" and author:
-            # User messages get Author: prefix (no brackets)
             content = f"{author}: {content}"
         elif role == "assistant":
-            # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
             if author and current_bot_name and author.lower() != current_bot_name.lower():
-                # Different bot - treat as "user" role with name prefix to prevent personality bleed
                 role = "user"
                 content = f"{author}: {content}"
-            # If same bot or no author field, keep as assistant (no prefix)
 
         formatted.append({"role": role, "content": content})
-    
-    # Split into history and immediate
+
     if len(formatted) <= immediate_count:
-        # Not enough messages - everything goes to immediate
         return [], formatted
-    
-    history = formatted[:-immediate_count]
-    immediate = formatted[-immediate_count:]
-    
-    return history, immediate
+    return formatted[:-immediate_count], formatted[-immediate_count:]
 
 
-def format_history_split_structured(channel_id: int, total_limit: int = 200,
-                                    immediate_count: int = 5,
-                                    current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
-    """
-    Split history for structured payload mode.
+def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5,
+                         current_bot_name: str = None,
+                         history_override: Optional[List[dict]] = None) -> Tuple[List[dict], List[dict]]:
+    """Split history into background + immediate sections (legacy transcript mode)."""
+    source = history_override if history_override is not None else get_history(channel_id)
+    all_history = source[-total_limit:]
+    return format_history_split_from_messages(all_history, immediate_count=immediate_count, current_bot_name=current_bot_name)
 
-    Unlike format_history_split(), this keeps message content raw and carries
-    speaker metadata in side fields. This avoids training the model to mimic
-    "Name: ..." transcript formatting while preserving identity context.
 
-    Returns: (history_messages, immediate_messages)
-    """
-    all_history = get_history(channel_id)[-total_limit:]
+def format_history_split_structured_from_messages(messages: List[dict], immediate_count: int = 5,
+                                                  current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+    """Format and split a provided history snapshot (structured mode)."""
     formatted = []
 
-    for msg in all_history:
+    for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
         author_id = msg.get("user_id")
 
-        # Treat other bots as user role to avoid assistant-role personality bleed.
+        speaker_kind = "assistant"
         if role == "assistant" and author and current_bot_name and author.lower() != current_bot_name.lower():
             role = "user"
+            speaker_kind = "bot"
+        elif role == "user":
+            speaker_kind = "user"
+
+        # Add deterministic speaker marker in structured mode so identity survives
+        # provider-side metadata stripping.
+        if role == "user" and author:
+            marker = f"[speaker={author}|kind={speaker_kind}]"
+            content = f"{marker} {content}".strip()
 
         entry = {"role": role, "content": content}
         if author:
@@ -620,15 +630,23 @@ def format_history_split_structured(channel_id: int, total_limit: int = 200,
 
     if len(formatted) <= immediate_count:
         return [], formatted
-
-    history = formatted[:-immediate_count]
-    immediate = formatted[-immediate_count:]
-    return history, immediate
+    return formatted[:-immediate_count], formatted[-immediate_count:]
 
 
-def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
+def format_history_split_structured(channel_id: int, total_limit: int = 200,
+                                    immediate_count: int = 5,
+                                    current_bot_name: str = None,
+                                    history_override: Optional[List[dict]] = None) -> Tuple[List[dict], List[dict]]:
+    """Split history for structured payload mode."""
+    source = history_override if history_override is not None else get_history(channel_id)
+    all_history = source[-total_limit:]
+    return format_history_split_structured_from_messages(all_history, immediate_count=immediate_count, current_bot_name=current_bot_name)
+
+
+def get_active_users(channel_id: int, limit: int = 20, history_override: Optional[List[dict]] = None) -> List[str]:
     """Get list of unique users who have participated recently."""
-    history = get_history(channel_id)[-limit:]
+    source = history_override if history_override is not None else get_history(channel_id)
+    history = source[-limit:]
     users = set()
 
     for msg in history:
@@ -639,12 +657,13 @@ def get_active_users(channel_id: int, limit: int = 20) -> List[str]:
     return list(users)
 
 
-def get_other_bot_names(channel_id: int, current_bot_name: str) -> List[str]:
+def get_other_bot_names(channel_id: int, current_bot_name: str,
+                        history_override: Optional[List[dict]] = None) -> List[str]:
     """Get names of other bot characters from history and the bot registry."""
     other_bots = set()
 
     # From history (bots that have spoken in this channel)
-    history = get_history(channel_id)
+    history = history_override if history_override is not None else get_history(channel_id)
     for msg in history:
         if msg.get("role") == "assistant":
             author = msg.get("author")
@@ -1117,7 +1136,8 @@ def get_other_bots_mentionable(current_bot_id: int, guild, limit: int = 15) -> L
     return bots
 
 
-def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[dict]:
+def get_mentionable_users(channel_id: int, limit: int = 10, guild=None,
+                          history_override: Optional[List[dict]] = None) -> List[dict]:
     """Get list of users who can be mentioned based on conversation history.
 
     Args:
@@ -1132,7 +1152,7 @@ def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[
     seen_ids = set()
 
     # Primary: Get from recent message authors in history
-    history = get_history(channel_id)
+    history = history_override if history_override is not None else get_history(channel_id)
     for msg in reversed(history[-50:]):
         user_id = msg.get("user_id")
         author = msg.get("author")

@@ -36,7 +36,9 @@ class RequestQueue:
         user_id: int,
         sticker_info: str = None,
         from_interact_command: bool = False,
-        split_reply_target: discord.Member = None
+        split_reply_target: discord.Member = None,
+        history_cutoff_message_id: int = None,
+        history_cutoff_ts: float = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -75,7 +77,17 @@ class RequestQueue:
                 'user_id': user_id,
                 'sticker_info': sticker_info,
                 'from_interact_command': from_interact_command,
-                'split_reply_target': split_reply_target
+                'split_reply_target': split_reply_target,
+                'history_cutoff_message_id': (
+                    history_cutoff_message_id
+                    if history_cutoff_message_id is not None
+                    else getattr(message, 'id', None)
+                ),
+                'history_cutoff_ts': (
+                    float(history_cutoff_ts)
+                    if history_cutoff_ts is not None
+                    else current_time
+                )
             }
 
             self.queues[channel_id].append(request)

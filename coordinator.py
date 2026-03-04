@@ -39,6 +39,8 @@ class GlobalCoordinator:
         # Track which bots are processing which messages
         # message_id -> set of bot_names currently processing
         self._active_requests: Dict[int, Set[str]] = defaultdict(set)
+        # channel_id -> set of bot_names currently processing
+        self._active_channels: Dict[int, Set[str]] = defaultdict(set)
 
         # Lock created lazily to avoid event loop issues
         self._request_lock: Optional[asyncio.Lock] = None
@@ -70,12 +72,13 @@ class GlobalCoordinator:
 
         return self._semaphore
 
-    async def acquire_slot(self, bot_name: str, message_id: int) -> bool:
+    async def acquire_slot(self, bot_name: str, message_id: int, channel_id: int) -> bool:
         """Acquire a slot for AI request. Blocks if at concurrency limit.
 
         Args:
             bot_name: Name of the bot requesting a slot
             message_id: Discord message ID being processed
+            channel_id: Discord channel ID being processed
 
         Returns:
             True when slot is acquired
@@ -87,6 +90,7 @@ class GlobalCoordinator:
             async with lock:
                 # Register this bot as processing this message
                 self._active_requests[message_id].add(bot_name)
+                self._active_channels[channel_id].add(bot_name)
 
                 # Queue for staggered response
                 self._response_queue[message_id].append((bot_name, time.time()))
@@ -99,12 +103,13 @@ class GlobalCoordinator:
             log.error(f"[{bot_name}] Failed to acquire slot: {e}")
             return True  # Continue anyway to not block the bot
 
-    def release_slot(self, bot_name: str, message_id: int):
+    def release_slot(self, bot_name: str, message_id: int, channel_id: int):
         """Release the AI request slot.
 
         Args:
             bot_name: Name of the bot releasing the slot
             message_id: Discord message ID that was processed
+            channel_id: Discord channel ID that was processed
         """
         try:
             semaphore = self._get_semaphore()
@@ -115,6 +120,10 @@ class GlobalCoordinator:
                 self._active_requests[message_id].discard(bot_name)
                 if not self._active_requests[message_id]:
                     del self._active_requests[message_id]
+            if channel_id in self._active_channels:
+                self._active_channels[channel_id].discard(bot_name)
+                if not self._active_channels[channel_id]:
+                    del self._active_channels[channel_id]
 
             log.debug(f"[{bot_name}] Released AI slot for message {message_id}")
 
@@ -163,6 +172,10 @@ class GlobalCoordinator:
         """
         return self._active_requests.get(message_id, set()).copy()
 
+    def is_channel_busy(self, channel_id: int) -> bool:
+        """Return True if at least one bot is currently generating in channel."""
+        return bool(self._active_channels.get(channel_id))
+
     def _maybe_cleanup(self):
         """Clean up stale tracking data."""
         now = time.time()
@@ -180,6 +193,11 @@ class GlobalCoordinator:
         for msg_id in stale_messages:
             del self._response_queue[msg_id]
             self._active_requests.pop(msg_id, None)
+
+        # Sweep empty channel active sets defensively.
+        for channel_id in list(self._active_channels.keys()):
+            if not self._active_channels[channel_id]:
+                del self._active_channels[channel_id]
 
         if stale_messages:
             log.debug(f"Coordinator cleanup: removed {len(stale_messages)} stale entries")

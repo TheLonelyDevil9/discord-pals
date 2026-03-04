@@ -216,6 +216,15 @@ class BotInstance:
 
         # Autonomous mode check
         is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
+        if is_autonomous and is_other_bot and runtime_config.get("autonomous_pause_while_channel_busy", True):
+            try:
+                from coordinator import coordinator
+                if coordinator.is_channel_busy(channel_id):
+                    log.debug("Suppressing autonomous bot trigger while channel has in-flight generation", self.name)
+                    is_autonomous = False
+            except Exception:
+                # Fail open if coordinator isn't available.
+                pass
         if thread_policy_strict:
             # In threads, only direct @mention or reply should trigger.
             is_autonomous = False
@@ -440,7 +449,8 @@ class BotInstance:
                             is_dm=is_dm,
                             user_id=message.author.id,
                             sticker_info=sticker_info,
-                            split_reply_target=target
+                            split_reply_target=target,
+                            history_cutoff_message_id=message.id
                         )
                 else:
                     # Normal single request
@@ -453,7 +463,8 @@ class BotInstance:
                         user_name=user_name,
                         is_dm=is_dm,
                         user_id=message.author.id,
-                        sticker_info=sticker_info
+                        sticker_info=sticker_info,
+                        history_cutoff_message_id=message.id
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -623,6 +634,8 @@ class BotInstance:
         is_dm = request['is_dm']
         user_id = request['user_id']
         split_target = request.get('split_reply_target')
+        history_cutoff_message_id = request.get('history_cutoff_message_id') or getattr(message, 'id', None)
+        history_cutoff_ts = request.get('history_cutoff_ts')
 
         # For split replies, use target user for context instead of sender
         if split_target:
@@ -666,6 +679,30 @@ class BotInstance:
         recent = history[-5:]
         if not any(m.get('message_id') == message_id or (m.get('content') == content and m.get('author') == user_name) for m in recent):
             add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild, message_id=message_id)
+
+        # Build a stable history snapshot for this queued request so later
+        # channel activity cannot change the context mid-queue.
+        history = get_history(channel_id)
+        request_history = history
+        cutoff_idx = None
+        if history_cutoff_message_id is not None:
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].get('message_id') == history_cutoff_message_id:
+                    cutoff_idx = i
+                    break
+        if cutoff_idx is not None:
+            request_history = history[:cutoff_idx + 1]
+        elif history_cutoff_ts is not None:
+            try:
+                cutoff_ts = float(history_cutoff_ts)
+                request_history = [
+                    msg for msg in history
+                    if float(msg.get('history_ts', 0) or 0) <= cutoff_ts
+                ]
+            except (TypeError, ValueError):
+                request_history = history
+        if not request_history and history:
+            request_history = history[-min(len(history), 20):]
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -742,7 +779,7 @@ class BotInstance:
             memories = remove_thinking_tags(memories)
 
         # Get active users (mentioned_context already gathered above in parallel)
-        active_users = get_active_users(channel_id) if not is_dm else []
+        active_users = get_active_users(channel_id, history_override=request_history) if not is_dm else []
 
         # Get mentionable users and bots for @mention feature
         mentionable_users = []
@@ -750,7 +787,12 @@ class BotInstance:
         if runtime_config.get("allow_bot_mentions", True) and not is_dm:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
             mention_limit = runtime_config.get("mention_context_limit", 10)
-            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit, guild=guild)
+            mentionable_users = get_mentionable_users(
+                channel_id,
+                limit=mention_limit,
+                guild=guild,
+                history_override=request_history
+            )
             log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mentionable users for channel {channel_id}")
             if mentionable_users:
                 log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")
@@ -776,24 +818,30 @@ class BotInstance:
         # Split history into older context and immediate messages
         total_limit = runtime_config.get('history_limit', 200)
         immediate_count = runtime_config.get('immediate_message_count', 5)
-        history_snapshot = get_history(channel_id)[-total_limit:]
+        history_snapshot = request_history[-total_limit:]
         if context_protocol_enabled:
             history_msgs, immediate = format_history_split_structured(
                 channel_id,
                 total_limit=total_limit,
                 immediate_count=immediate_count,
-                current_bot_name=self.character.name
+                current_bot_name=self.character.name,
+                history_override=history_snapshot
             )
         else:
             history_msgs, immediate = format_history_split(
                 channel_id,
                 total_limit=total_limit,
                 immediate_count=immediate_count,
-                current_bot_name=self.character.name
+                current_bot_name=self.character.name,
+                history_override=history_snapshot
             )
 
         # Build chatroom context (use target user for split replies)
-        other_bot_names = get_other_bot_names(channel_id, self.character.name)
+        other_bot_names = get_other_bot_names(
+            channel_id,
+            self.character.name,
+            history_override=history_snapshot
+        )
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
             emojis=emojis,
@@ -1127,7 +1175,7 @@ class BotInstance:
                 return  # Duplicate or should skip
 
             # Acquire global coordinator slot (limits concurrent AI requests across all bots)
-            await coordinator.acquire_slot(self.name, message_id)
+            await coordinator.acquire_slot(self.name, message_id, message.channel.id)
 
             # Global per-request timeout (covers generation + stagger + send path)
             try:
@@ -1159,7 +1207,7 @@ class BotInstance:
                 await self._send_user_error(message.channel, "timeout")
             finally:
                 # Always release the slot, even on error
-                coordinator.release_slot(self.name, message_id)
+                coordinator.release_slot(self.name, message_id, message.channel.id)
 
         except asyncio.TimeoutError:
             log.warn("Request timed out", self.name)
@@ -1361,6 +1409,11 @@ class BotInstance:
         if not known_user_names:
             return response
         known_user_names_lower = {n.lower() for n in known_user_names}
+        known_other_bot_names = set()
+        for bot_name in context.get("other_bot_names") or []:
+            normalized = _normalize_name(bot_name)
+            if normalized and (not own_name or normalized.lower() != own_name.lower()):
+                known_other_bot_names.add(normalized)
 
         cleaned_lines = []
         removed_count = 0
@@ -1419,13 +1472,47 @@ class BotInstance:
 
             cleaned_lines.append(line)
 
-        if removed_count > 0:
-            log.warn(f"Stripped {removed_count} user-attribution line(s) from response", self.name)
-
         cleaned = '\n'.join(cleaned_lines).strip()
+
+        # Stage 2: strip inline speaker labels that can appear mid-paragraph
+        # during concurrent generations (e.g., "... Kris: ...", "<@123>: ...").
+        inline_removed = 0
+
+        def _strip_inline_speaker_stubs(text: str, names: set[str]) -> str:
+            nonlocal inline_removed
+            out = text
+            # Strip raw mention speaker stubs.
+            out, count = re.subn(
+                r'(^|[\n\r]|[.!?]\s+|[)\]>"“”]\s+)\s*<@!?\d+>\s*:\s*',
+                lambda m: m.group(1),
+                out
+            )
+            inline_removed += count
+
+            for speaker_name in sorted(names, key=len, reverse=True):
+                escaped = re.escape(speaker_name)
+                pattern = (
+                    rf'(^|[\n\r]|[.!?]\s+|[)\]>"“”]\s+)'
+                    rf'["“”\'`\[\]\(\)\*_]*\s*(?:@)?{escaped}>?\s*["“”\'`\[\]\(\)\*_]*\s*:\s*'
+                )
+                out, count = re.subn(pattern, lambda m: m.group(1), out, flags=re.IGNORECASE)
+                inline_removed += count
+            return out
+
+        cleaned = _strip_inline_speaker_stubs(cleaned, known_user_names)
+        if known_other_bot_names:
+            cleaned = _strip_inline_speaker_stubs(cleaned, known_other_bot_names)
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+
+        if removed_count > 0 or inline_removed > 0:
+            log.warn(
+                f"Stripped {removed_count} line-attribution and {inline_removed} inline-speaker fragment(s) from response",
+                self.name
+            )
+
         # If we intentionally removed attribution lines and nothing remains, keep
         # it empty so caller can use normal empty-response fallback.
-        if removed_count > 0:
+        if removed_count > 0 or inline_removed > 0:
             return cleaned
         return cleaned or response.strip()
 
