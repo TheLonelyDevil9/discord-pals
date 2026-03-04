@@ -964,6 +964,7 @@ class BotInstance:
                 context.get("context_envelope"),
                 guild
             )
+            response = self._resolve_protocol_handles_failsafe(response, context)
 
         # Final safety pass: drop any transcript-style "User: ..." lines that
         # would make the bot speak as someone else after mention processing.
@@ -1540,6 +1541,52 @@ class BotInstance:
             cleaned = cleaned.replace(token, original)
 
         return cleaned.strip()
+
+    def _resolve_protocol_handles_failsafe(self, response: str, context: dict) -> str:
+        """Hard fallback: convert protocol @u_<id>/@b_<id> handles to <@id>.
+
+        Uses trusted IDs from context envelope to avoid converting arbitrary IDs.
+        """
+        if not response:
+            return response
+
+        trusted_ids = set()
+        envelope = context.get("context_envelope") or {}
+
+        for candidate in envelope.get("mention_candidates", []):
+            try:
+                trusted_ids.add(int(candidate.get("user_id")))
+            except (TypeError, ValueError):
+                pass
+
+        for participant in envelope.get("participants", []):
+            try:
+                trusted_ids.add(int(participant.get("user_id")))
+            except (TypeError, ValueError):
+                pass
+
+        if not trusted_ids:
+            return response
+
+        def _replace(match: re.Match) -> str:
+            try:
+                user_id = int(match.group(1))
+            except (TypeError, ValueError):
+                return match.group(0)
+            if user_id in trusted_ids:
+                return f"<@{user_id}>"
+            return match.group(0)
+
+        # Handle malformed bracketed form: <@u_123...>
+        response = re.sub(r'<@[ub]_(\d{15,22})>', _replace, response, flags=re.IGNORECASE)
+        # Handle plain form (including occasional invisible chars after "@")
+        response = re.sub(
+            r'@[\u200b\u2060\ufeff\s]*[ub]_(\d{15,22})(?=[^A-Za-z0-9_]|$)',
+            _replace,
+            response,
+            flags=re.IGNORECASE
+        )
+        return response
 
     def _check_rate_limit(self, channel_id: int) -> bool:
         """Check if we're responding too frequently (anti-loop measure).
