@@ -151,13 +151,20 @@ def build_context_envelope(
 
     target_id = _to_int(reply_target_user_id)
     if target_id and target_id not in participants:
+        handle = _build_user_handle(target_id)
         participants[target_id] = {
             "user_id": target_id,
             "display_name": reply_target_name or str(target_id),
             "username": "",
             "is_bot": False,
-            "mention_handle": _build_user_handle(target_id)
+            "mention_handle": handle
         }
+        mention_candidates.append({
+            "handle": handle,
+            "user_id": target_id,
+            "aliases": _dedupe_aliases([reply_target_name or "", handle]),
+            "priority": "reply_target"
+        })
 
     recent = []
     for raw in (history_messages or [])[-max_recent_messages:]:
@@ -246,6 +253,11 @@ def extract_and_resolve_mentions(text: str, envelope: Optional[dict], guild=None
         user_id = _to_int(candidate.get("user_id"))
         if handle and user_id:
             lookup[handle.lower()] = user_id
+    for participant in envelope.get("participants", []):
+        handle = (participant.get("mention_handle") or "").strip()
+        user_id = _to_int(participant.get("user_id"))
+        if handle and user_id and handle.lower() not in lookup:
+            lookup[handle.lower()] = user_id
 
     if not lookup:
         return text
@@ -260,7 +272,21 @@ def extract_and_resolve_mentions(text: str, envelope: Optional[dict], guild=None
 
     resolved = re.sub(r"<@([ub])_(\d{3,22})>", replace_bracketed, resolved, flags=re.IGNORECASE)
 
-    # Convert plain protocol handles.
+    # Convert plain or slightly malformed protocol handles, including
+    # optional invisible characters after '@' that some models emit.
+    def replace_plain(match: re.Match) -> str:
+        handle = f"@{match.group(1)}_{match.group(2)}".lower()
+        user_id = lookup.get(handle)
+        return f"<@{user_id}>" if user_id else match.group(0)
+
+    resolved = re.sub(
+        r"@[\u200b\u2060\ufeff\s]*([ub])_(\d{3,22})(?=[^A-Za-z0-9_]|$)",
+        replace_plain,
+        resolved,
+        flags=re.IGNORECASE
+    )
+
+    # Convert exact plain protocol handles.
     for handle, user_id in sorted(lookup.items(), key=lambda item: len(item[0]), reverse=True):
         pattern = re.compile(
             r"(?<![A-Za-z0-9_])" + re.escape(handle) + r"(?=[^A-Za-z0-9_]|$)",
@@ -269,4 +295,3 @@ def extract_and_resolve_mentions(text: str, envelope: Optional[dict], guild=None
         resolved = pattern.sub(f"<@{user_id}>", resolved)
 
     return resolved
-

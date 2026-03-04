@@ -956,6 +956,15 @@ class BotInstance:
         if allow_mentions and guild:
             response = await self._resolve_unresolved_user_mentions(response, guild)
 
+        # Last protocol-handle pass: if @u_<id> or @b_<id> survived earlier
+        # mention processing, resolve them from the context envelope now.
+        if allow_mentions:
+            response = extract_and_resolve_mentions(
+                response,
+                context.get("context_envelope"),
+                guild
+            )
+
         # Final safety pass: drop any transcript-style "User: ..." lines that
         # would make the bot speak as someone else after mention processing.
         response = self._strip_user_attribution_lines(response, context)
