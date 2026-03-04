@@ -161,7 +161,8 @@ RE_TIMESTAMP = re.compile(r'<t:(\d+)(?::[tTdDfFR])?>')
 
 # Pre-compiled patterns for convert_emojis_in_text
 RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
-RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*$')
+RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*(?::\d*)?$')
+RE_INCOMPLETE_TAG = re.compile(r'<[a-zA-Z][a-zA-Z0-9_]*:\d{17,21}(?!>)')
 RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
 RE_EMPTY_ANGLE = re.compile(r'<>')
 RE_MALFORMED_EMOJI = re.compile(
@@ -769,6 +770,9 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     result = RE_EMOJI_SHORTCODE.sub(replace_emoji, text)
 
     # AFTER conversion, clean up malformed emoji-like tags that LLMs sometimes generate
+    # Remove incomplete emoji/mention-like tags (e.g., "<huh:1445393773831311146")
+    result = RE_INCOMPLETE_TAG.sub('', result)
+
     # Remove incomplete emoji tags at end of string (e.g., "<:emoji" or "<a:")
     result = RE_BROKEN_EMOJI_END.sub('', result)
 
