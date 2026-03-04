@@ -1249,6 +1249,25 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             for alias in aliases:
                 register_alias(alias, mention_syntax)
 
+    # Short-name fallback: if an alias is multi-part (e.g. "Febs WaWa"), allow
+    # "@Febs" only when that short alias maps to exactly one mention target.
+    short_alias_to_targets = {}
+    for alias, mention_syntax in mention_lookup.items():
+        if len(alias) < 3:
+            continue
+        if not re.search(r'[\s._-]', alias):
+            continue
+        short = re.split(r'[\s._-]+', alias, maxsplit=1)[0].strip()
+        if len(short) < 3:
+            continue
+        short_alias_to_targets.setdefault(short, set()).add(mention_syntax)
+
+    for short, targets in short_alias_to_targets.items():
+        if short in mention_lookup:
+            continue
+        if len(targets) == 1:
+            mention_lookup[short] = next(iter(targets))
+
     # Normalize malformed tags before deciding whether to return early.
     content = normalize_malformed_mentions(content)
 

@@ -1305,6 +1305,70 @@ class BotInstance:
         if not response or not guild:
             return response
 
+        def _normalize_alias(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r'\s+', ' ', value.strip().lstrip('@')).lower()
+
+        def _member_aliases(member: discord.Member) -> set[str]:
+            aliases = {
+                get_user_display_name(member),
+                member.name,
+                getattr(member, 'global_name', None),
+                getattr(member, 'nick', None),
+            }
+            return {a for a in (_normalize_alias(v) for v in aliases) if a}
+
+        def _select_unique_member(candidates: list[discord.Member], target: str) -> discord.Member | None:
+            """Resolve target name conservatively: exact first, then unique short-prefix."""
+            target_norm = _normalize_alias(target)
+            if len(target_norm) < 2:
+                return None
+
+            exact = {}
+            short = {}
+            token = {}
+
+            for m in candidates:
+                if m.bot:
+                    continue
+                aliases = _member_aliases(m)
+
+                if target_norm in aliases:
+                    exact[m.id] = m
+                    continue
+
+                if len(target_norm) < 3:
+                    continue
+
+                for alias in aliases:
+                    if (alias.startswith(target_norm + ' ')
+                            or alias.startswith(target_norm + '_')
+                            or alias.startswith(target_norm + '-')
+                            or alias.startswith(target_norm + '.')):
+                        short[m.id] = m
+                        break
+
+                if m.id in short:
+                    continue
+
+                for part in re.split(r'[\s._-]+', ' '.join(aliases)):
+                    if part == target_norm:
+                        token[m.id] = m
+                        break
+
+            if len(exact) == 1:
+                return next(iter(exact.values()))
+            if len(exact) > 1:
+                return None
+            if len(short) == 1:
+                return next(iter(short.values()))
+            if len(short) > 1:
+                return None
+            if len(token) == 1:
+                return next(iter(token.values()))
+            return None
+
         # Normalize malformed mention stubs to plaintext @Name first.
         response = re.sub(
             r'<@!?\s*([A-Za-z][^>\n\r,!?;:.]{0,32}?)(?=[,!?;:.>|]|$)',
@@ -1329,39 +1393,21 @@ class BotInstance:
             lower = candidate.lower()
             member = None
 
-            # Fast path: cached lookup by exact display or username.
-            for m in guild.members:
-                if m.bot:
-                    continue
-                aliases = {
-                    (get_user_display_name(m) or '').lower(),
-                    (m.name or '').lower(),
-                    (getattr(m, 'global_name', None) or '').lower(),
-                    (getattr(m, 'nick', None) or '').lower(),
-                }
-                if lower in aliases:
-                    member = m
-                    break
+            pool = [m for m in guild.members if not m.bot]
+            member = _select_unique_member(pool, lower)
 
             # Slow path: query members from API to catch offline/not-cached users.
             if member is None:
                 try:
-                    queried = await guild.query_members(query=candidate[:100], limit=8, cache=True)
+                    queried = await guild.query_members(query=candidate[:100], limit=25, cache=True)
                 except Exception:
                     queried = []
 
+                merged = {m.id: m for m in pool}
                 for m in queried:
-                    if m.bot:
-                        continue
-                    aliases = {
-                        (get_user_display_name(m) or '').lower(),
-                        (m.name or '').lower(),
-                        (getattr(m, 'global_name', None) or '').lower(),
-                        (getattr(m, 'nick', None) or '').lower(),
-                    }
-                    if lower in aliases:
-                        member = m
-                        break
+                    if not m.bot:
+                        merged[m.id] = m
+                member = _select_unique_member(list(merged.values()), lower)
 
             if member is None:
                 continue
