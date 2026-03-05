@@ -4,6 +4,15 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.7.0] - 2026-03-05
+
+### Added
+
+- **OpenRouter first-class support** — auto-detects OpenRouter URLs and injects `HTTP-Referer` and `X-OpenRouter-Title` headers for leaderboard attribution
+- **Per-provider `openrouter` config** — optional dict field merged into API request body, supporting provider routing (`order`, `ignore`, `allow_fallbacks`, `sort`, `data_collection`), model fallbacks (`models` array), and context compression (`transforms: ["middle-out"]`)
+- **OpenRouter settings in dashboard** — JSON textarea in Edit/Add Provider modals, auto-shown when endpoint URL contains `openrouter.ai`
+- **OpenRouter documentation** — new README section with config examples and common options
+
 ## [v1.6.19] - 2026-03-05
 
 ### Added

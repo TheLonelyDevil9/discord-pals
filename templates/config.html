@@ -432,6 +432,12 @@
                     <label for="new-provider-timeout">Timeout (seconds, optional)</label>
                     <input type="number" id="new-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
                 </div>
+                <div class="form-group" id="new-openrouter-group" style="display:none;">
+                    <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
+                    <textarea id="new-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
+                        placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
+                    <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
+                </div>
             </div>
             <button type="submit" class="btn btn-primary">Add Provider</button>
         </form>
@@ -489,6 +495,12 @@
                 <div class="form-group">
                     <label for="edit-provider-timeout">Timeout (seconds, optional)</label>
                     <input type="number" id="edit-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
+                </div>
+                <div class="form-group" id="edit-openrouter-group" style="display:none;">
+                    <label for="edit-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
+                    <textarea id="edit-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
+                        placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
+                    <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
                 </div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 16px;">
@@ -1457,12 +1469,29 @@ function editProvider(index) {
     document.getElementById('edit-provider-max-tokens').value = provider.max_tokens || '';
     document.getElementById('edit-provider-timeout').value = provider.timeout || '';
 
+    // OpenRouter settings - show/hide based on URL
+    const editUrl = provider.url || '';
+    const orGroup = document.getElementById('edit-openrouter-group');
+    if (editUrl.includes('openrouter.ai')) {
+        orGroup.style.display = '';
+        document.getElementById('edit-provider-openrouter').value = provider.openrouter ? JSON.stringify(provider.openrouter, null, 2) : '';
+    } else {
+        orGroup.style.display = 'none';
+        document.getElementById('edit-provider-openrouter').value = '';
+    }
+
     document.getElementById('edit-provider-modal').classList.add('active');
 }
 
 function closeEditModal() {
     document.getElementById('edit-provider-modal').classList.remove('active');
 }
+
+// Show/hide OpenRouter settings when endpoint URL changes in edit modal
+document.getElementById('edit-provider-endpoint')?.addEventListener('input', (e) => {
+    const orGroup = document.getElementById('edit-openrouter-group');
+    orGroup.style.display = e.target.value.includes('openrouter.ai') ? '' : 'none';
+});
 
 document.getElementById('edit-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1493,6 +1522,19 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
         provider.timeout = parseInt(timeout);
     } else {
         delete provider.timeout;
+    }
+
+    // OpenRouter settings
+    const orText = document.getElementById('edit-provider-openrouter').value.trim();
+    if (orText) {
+        try {
+            provider.openrouter = JSON.parse(orText);
+        } catch (err) {
+            showToast('Invalid OpenRouter JSON: ' + err.message, 'error');
+            return;
+        }
+    } else {
+        delete provider.openrouter;
     }
 
     // Clean up undefined values
@@ -1560,6 +1602,8 @@ function updateProviderDefaults() {
         document.getElementById('new-provider-endpoint').value = providerDefaults[type].url;
         document.getElementById('new-provider-model').value = providerDefaults[type].model;
     }
+    // Show/hide OpenRouter settings
+    document.getElementById('new-openrouter-group').style.display = type === 'openrouter' ? '' : 'none';
 }
 
 // Add provider form
@@ -1582,6 +1626,17 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     if (api_key) newProvider.api_key = api_key;
     const newTimeout = document.getElementById('new-provider-timeout').value.trim();
     if (newTimeout) newProvider.timeout = parseInt(newTimeout);
+
+    // OpenRouter settings
+    const newOrText = document.getElementById('new-provider-openrouter').value.trim();
+    if (newOrText) {
+        try {
+            newProvider.openrouter = JSON.parse(newOrText);
+        } catch (err) {
+            showToast('Invalid OpenRouter JSON: ' + err.message, 'error');
+            return;
+        }
+    }
 
     providersData.push(newProvider);
     await saveProvidersToServer();

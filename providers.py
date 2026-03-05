@@ -257,10 +257,17 @@ class AIProviderManager:
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
             if key:
+                # Auto-detect OpenRouter and inject recommended headers
+                default_headers = {}
+                if "openrouter.ai" in cfg.get("url", ""):
+                    default_headers["HTTP-Referer"] = "https://github.com/TheLonelyDevil9/discord-pals"
+                    default_headers["X-OpenRouter-Title"] = cfg.get("name", "Discord Pals")
+
                 self.providers[tier] = AsyncOpenAI(
                     base_url=cfg["url"],
                     api_key=cfg["key"],
-                    timeout=cfg.get("timeout") or API_TIMEOUT
+                    timeout=cfg.get("timeout") or API_TIMEOUT,
+                    default_headers=default_headers or None
                 )
     
     async def _try_generate(
@@ -472,6 +479,11 @@ class AIProviderManager:
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
                 include_headers = PROVIDERS[tier].get("include_headers", "")
+
+                # Merge OpenRouter-specific config into extra_body
+                openrouter_cfg = PROVIDERS[tier].get("openrouter", {})
+                if openrouter_cfg and "openrouter.ai" in PROVIDERS[tier].get("url", ""):
+                    extra_body = {**extra_body, **openrouter_cfg} if extra_body else dict(openrouter_cfg)
 
                 # Check if provider supports vision (default True, set false for text-only models)
                 supports_vision = PROVIDERS[tier].get("supports_vision", True)

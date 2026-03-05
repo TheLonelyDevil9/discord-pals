@@ -123,6 +123,7 @@ def load_providers() -> tuple[dict, int, dict]:
                 "exclude_body": _validate_provider_value(p.get("exclude_body"), str, "", name="exclude_body"),
                 "include_headers": _validate_provider_value(p.get("include_headers"), str, "", name="include_headers"),
                 "timeout": _validate_provider_value(p.get("timeout"), int, None, min_val=5, max_val=3600, name="timeout"),
+                "openrouter": _validate_provider_value(p.get("openrouter"), dict, {}, name="openrouter"),
             }
 
         timeout = _validate_provider_value(data.get("timeout"), int, 60, min_val=5, max_val=3600, name="timeout")

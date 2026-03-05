@@ -403,6 +403,49 @@ This is useful for:
 - Adding sampler parameters for local LLMs
 - Removing unsupported parameters for specific providers
 
+### OpenRouter
+
+OpenRouter is auto-detected when your provider URL contains `openrouter.ai`. Discord Pals will automatically:
+
+- Inject `HTTP-Referer` and `X-OpenRouter-Title` headers (for OpenRouter leaderboard attribution)
+- Merge any `openrouter` config into the API request body
+
+Add an `openrouter` object to your provider for OpenRouter-specific features:
+
+```json
+{
+  "providers": [
+    {
+      "name": "Claude via OpenRouter",
+      "url": "https://openrouter.ai/api/v1",
+      "key_env": "OPENROUTER_API_KEY",
+      "model": "anthropic/claude-sonnet-4",
+      "openrouter": {
+        "provider": {
+          "order": ["anthropic"],
+          "allow_fallbacks": true
+        },
+        "models": ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
+        "transforms": ["middle-out"]
+      }
+    }
+  ],
+  "timeout": 60
+}
+```
+
+Common `openrouter` options:
+
+- **`provider.order`** — preferred backend providers (e.g., `["anthropic", "google"]`)
+- **`provider.allow_fallbacks`** — allow OpenRouter to try other backends if preferred ones fail (default: `true`)
+- **`provider.ignore`** — block specific backends (e.g., `["together"]`)
+- **`provider.data_collection`** — set to `"deny"` to avoid providers that store data
+- **`provider.sort`** — sort by `"price"`, `"throughput"`, or `"latency"`
+- **`models`** — array of fallback models OpenRouter tries in order if the primary model fails
+- **`transforms`** — `["middle-out"]` auto-compresses long conversations to fit context limits
+
+These settings are also configurable through the web dashboard when editing an OpenRouter provider.
+
 ### Diagnosing Provider Issues
 
 Run the built-in diagnostics script:
