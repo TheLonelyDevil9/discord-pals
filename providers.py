@@ -260,7 +260,7 @@ class AIProviderManager:
                 self.providers[tier] = AsyncOpenAI(
                     base_url=cfg["url"],
                     api_key=cfg["key"],
-                    timeout=API_TIMEOUT
+                    timeout=cfg.get("timeout") or API_TIMEOUT
                 )
     
     async def _try_generate(
@@ -271,6 +271,7 @@ class AIProviderManager:
         temperature: float,
         max_tokens: int,
         tier: str,
+        timeout: int = None,
         extra_body: Optional[dict] = None,
         include_body: str = "",
         exclude_body: str = "",
@@ -344,7 +345,7 @@ class AIProviderManager:
                 
                 response = await asyncio.wait_for(
                     client.chat.completions.create(**request_kwargs),
-                    timeout=API_TIMEOUT
+                    timeout=timeout or API_TIMEOUT
                 )
                 
                 # Check for valid response
@@ -475,6 +476,9 @@ class AIProviderManager:
                 # Check if provider supports vision (default True, set false for text-only models)
                 supports_vision = PROVIDERS[tier].get("supports_vision", True)
 
+                # Per-provider timeout (falls back to global API_TIMEOUT)
+                effective_timeout = PROVIDERS[tier].get("timeout") or API_TIMEOUT
+
                 # Use text-only messages for non-vision providers
                 messages_to_send = full_messages
                 if has_images and not supports_vision:
@@ -502,6 +506,7 @@ class AIProviderManager:
                     client = self.providers[tier]
                     result = await self._try_generate(
                         client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
+                        timeout=effective_timeout,
                         extra_body=extra_body if extra_body else None,
                         include_body=include_body,
                         exclude_body=exclude_body,
@@ -517,7 +522,7 @@ class AIProviderManager:
                     
                 except asyncio.TimeoutError:
                     self.status[tier] = "timeout"
-                    log.error(f"[{tier}] Timeout after {API_TIMEOUT}s")
+                    log.error(f"[{tier}] Timeout after {effective_timeout}s")
                     continue
                 except RateLimitError:
                     self.status[tier] = "rate limited"

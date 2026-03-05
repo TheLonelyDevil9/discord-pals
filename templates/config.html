@@ -428,6 +428,10 @@
                     <label for="new-provider-temp">Temperature</label>
                     <input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7">
                 </div>
+                <div class="form-group">
+                    <label for="new-provider-timeout">Timeout (seconds, optional)</label>
+                    <input type="number" id="new-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
+                </div>
             </div>
             <button type="submit" class="btn btn-primary">Add Provider</button>
         </form>
@@ -481,6 +485,10 @@
                 <div class="form-group">
                     <label for="edit-provider-max-tokens">Max Tokens (optional)</label>
                     <input type="number" id="edit-provider-max-tokens" min="1" placeholder="Leave blank for default">
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-timeout">Timeout (seconds, optional)</label>
+                    <input type="number" id="edit-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
                 </div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 16px;">
@@ -1447,6 +1455,7 @@ function editProvider(index) {
     document.getElementById('edit-provider-model').value = provider.model || '';
     document.getElementById('edit-provider-temp').value = provider.temperature ?? 0.7;
     document.getElementById('edit-provider-max-tokens').value = provider.max_tokens || '';
+    document.getElementById('edit-provider-timeout').value = provider.timeout || '';
 
     document.getElementById('edit-provider-modal').classList.add('active');
 }
@@ -1479,6 +1488,13 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
         delete provider.max_tokens;
     }
 
+    const timeout = document.getElementById('edit-provider-timeout').value.trim();
+    if (timeout) {
+        provider.timeout = parseInt(timeout);
+    } else {
+        delete provider.timeout;
+    }
+
     // Clean up undefined values
     if (!provider.url) delete provider.url;
 
@@ -1496,11 +1512,21 @@ document.getElementById('edit-provider-modal')?.addEventListener('click', (e) =>
 });
 
 async function saveProvidersToServer() {
-    const data = { providers: providersData };
+    // Preserve global fields (timeout, character_providers) from existing config
+    let globalFields = {};
+    const jsonEditor = document.getElementById('providers-json-editor');
+    if (jsonEditor) {
+        try {
+            const existing = JSON.parse(jsonEditor.value);
+            if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
+            if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
+        } catch (e) { /* ignore parse errors */ }
+    }
+
+    const data = { providers: providersData, ...globalFields };
     const jsonStr = JSON.stringify(data, null, 2);
 
     // Update the JSON editor too
-    const jsonEditor = document.getElementById('providers-json-editor');
     if (jsonEditor) {
         jsonEditor.value = jsonStr;
     }
@@ -1554,6 +1580,8 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     const newProvider = { name, model, temperature };
     if (url) newProvider.url = url;
     if (api_key) newProvider.api_key = api_key;
+    const newTimeout = document.getElementById('new-provider-timeout').value.trim();
+    if (newTimeout) newProvider.timeout = parseInt(newTimeout);
 
     providersData.push(newProvider);
     await saveProvidersToServer();

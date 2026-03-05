@@ -275,10 +275,11 @@ No API key needed! Just point to your local server:
     {
       "name": "Local LLM",
       "url": "http://localhost:8080/v1",
-      "model": "local-model"
+      "model": "local-model",
+      "timeout": 600
     }
   ],
-  "timeout": 600
+  "timeout": 60
 }
 ```
 
@@ -1154,7 +1155,7 @@ discord-pals/
 
 ### Provider timeout
 
-→ Increase timeout in `providers.json` (try 120+ for local LLMs)
+→ Increase timeout in `providers.json` (try 120+ for local LLMs). You can set `"timeout"` per-provider for individual overrides, or globally at the top level as the default for all providers.
 
 ### Character changes not taking effect
 

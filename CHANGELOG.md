@@ -4,6 +4,18 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.19] - 2026-03-05
+
+### Added
+
+- **Per-provider timeout** - Each provider can now have its own `"timeout"` field (5-3600s) that overrides the global timeout. Prevents slow providers (e.g., local LLMs) from being cut off mid-generation while keeping fast cloud APIs on shorter timeouts.
+- **Timeout field in dashboard** - Edit Provider modal and Add Provider form now include a timeout input field.
+- **Dashboard-first development principle** added to CLAUDE.md.
+
+### Fixed
+
+- **Dashboard dropping global config fields** - `saveProvidersToServer()` was reconstructing JSON as `{ providers: [...] }` only, discarding the global `timeout` and `character_providers` fields. Now preserves all top-level fields when saving via the UI.
+
 ## [v1.6.18] - 2026-03-05
 
 ### Reverted

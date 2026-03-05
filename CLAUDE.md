@@ -1,5 +1,9 @@
 # Claude Instructions for discord-pals
 
+## Development Principles
+
+**Dashboard-first:** All features must be built with the web dashboard in mind. New configuration options, runtime settings, or data structures should be viewable and editable through the dashboard UI. Don't add backend-only config that requires manual JSON editing.
+
 ## Version Bump Checklist
 
 **When bumping a version, ALL of these must be updated together:**
