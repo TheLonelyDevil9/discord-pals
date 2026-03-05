@@ -185,6 +185,13 @@ def _sanitize_memory_entries(entries: list) -> list:
             value = entry.get(key)
             if isinstance(value, str) and value:
                 cleaned[key] = value
+        subject_user_id = entry.get("subject_user_id")
+        try:
+            subject_user_id = int(subject_user_id)
+        except (TypeError, ValueError):
+            subject_user_id = None
+        if subject_user_id and subject_user_id > 0:
+            cleaned["subject_user_id"] = subject_user_id
         if isinstance(entry.get("embedding"), list):
             cleaned["embedding"] = entry["embedding"]
 
@@ -203,7 +210,7 @@ def _is_duplicate_memory(
     """Check if new memory is semantically similar to existing ones.
 
     Uses three-stage check:
-    1. Key term overlap (fast) - if <30% terms match, skip expensive checks
+    1. Key term overlap (fast gate for textual comparison only)
     2. Sequence similarity (accurate) - confirms with difflib
     3. Semantic similarity (embeddings) - catches paraphrases
 
@@ -230,18 +237,18 @@ def _is_duplicate_memory(
 
         existing_normalized = _normalize_memory(existing_content)
 
-        # Stage 1: Quick key term check
+        # Stage 1: Quick key term check (textual stage gate only)
         existing_terms = _extract_key_terms(existing_content)
+        overlap = None
         if new_terms and existing_terms:
             overlap = len(new_terms & existing_terms) / max(len(new_terms), len(existing_terms))
-            if overlap < KEY_TERM_OVERLAP_THRESHOLD:
-                continue
 
         # Stage 2: Textual sequence similarity
-        similarity = difflib.SequenceMatcher(None, new_normalized, existing_normalized).ratio()
-        if similarity >= textual_threshold:
-            log.debug(f"Textual duplicate detected (sim={similarity:.3f}): '{new_content[:40]}' ~ '{existing_content[:40]}'")
-            return True
+        if overlap is None or overlap >= KEY_TERM_OVERLAP_THRESHOLD:
+            similarity = difflib.SequenceMatcher(None, new_normalized, existing_normalized).ratio()
+            if similarity >= textual_threshold:
+                log.debug(f"Textual duplicate detected (sim={similarity:.3f}): '{new_content[:40]}' ~ '{existing_content[:40]}'")
+                return True
 
         # Stage 3: Semantic similarity via embeddings
         if new_embedding and mem.get('embedding'):
@@ -393,6 +400,96 @@ class MemoryManager:
             if isinstance(entry, dict) and entry.get('fingerprint') == fingerprint:
                 return True
         return False
+
+    @staticmethod
+    def _normalize_user_id(value) -> Optional[int]:
+        """Normalize user id-like values into a positive int."""
+        try:
+            user_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return user_id if user_id > 0 else None
+
+    def _collect_cross_store_user_candidates(
+        self,
+        user_id: int,
+        guild_id: int = None,
+        character_name: str = None,
+        include_server: bool = True,
+    ) -> list:
+        """Collect user-scoped memory entries across stores for dedup checks."""
+        normalized_user_id = self._normalize_user_id(user_id)
+        if not normalized_user_id:
+            return []
+
+        user_key = str(normalized_user_id)
+        candidates = []
+
+        # Global profile facts (shared)
+        profiles = self.global_user_profiles.get(user_key)
+        if profiles is not None:
+            self.global_user_profiles[user_key] = _sanitize_memory_entries(profiles)
+            candidates.extend(self.global_user_profiles[user_key])
+
+        # Character-specific user facts
+        if character_name:
+            dm_memories = self._get_dm_memories_for_character(character_name)
+            if user_key in dm_memories:
+                dm_memories[user_key] = _sanitize_memory_entries(dm_memories[user_key])
+                candidates.extend(dm_memories[user_key])
+
+            user_memories = self._get_user_memories_for_character(character_name)
+            if guild_id is not None:
+                guild_keys = [str(guild_id)]
+            else:
+                guild_keys = list(user_memories.keys())
+
+            for guild_key in guild_keys:
+                if guild_key in user_memories and user_key in user_memories[guild_key]:
+                    user_memories[guild_key][user_key] = _sanitize_memory_entries(user_memories[guild_key][user_key])
+                    candidates.extend(user_memories[guild_key][user_key])
+
+        if include_server:
+            if guild_id is not None:
+                guild_keys = [str(guild_id)]
+            else:
+                guild_keys = list(self.server_memories.keys())
+
+            for guild_key in guild_keys:
+                memories = self.server_memories.get(str(guild_key))
+                if memories is None:
+                    continue
+                self.server_memories[str(guild_key)] = _sanitize_memory_entries(memories)
+                for entry in self.server_memories[str(guild_key)]:
+                    if self._normalize_user_id(entry.get("subject_user_id")) == normalized_user_id:
+                        candidates.append(entry)
+
+        return candidates
+
+    def _is_cross_store_user_duplicate(
+        self,
+        content: str,
+        embedding: list,
+        user_id: int,
+        guild_id: int = None,
+        character_name: str = None,
+        include_server: bool = True,
+    ) -> bool:
+        """Check if content duplicates user-scoped memories across stores."""
+        content = _sanitize_memory_content(content)
+        normalized_user_id = self._normalize_user_id(user_id)
+        if not content or not normalized_user_id:
+            return False
+
+        candidates = self._collect_cross_store_user_candidates(
+            normalized_user_id,
+            guild_id=guild_id,
+            character_name=character_name,
+            include_server=include_server,
+        )
+        if not candidates:
+            return False
+        return _is_duplicate_memory(content, candidates, new_embedding=embedding)
 
     def _ensure_legacy_loaded(self):
         """Lazy-load legacy memory files only when needed."""
@@ -569,7 +666,8 @@ class MemoryManager:
     # --- Server Memories (shared) ---
 
     def add_server_memory(self, guild_id: int, content: str, auto: bool = False,
-                          embedding: list = None) -> bool:
+                          embedding: list = None, subject_user_id: int = None,
+                          skip_cross_store_check: bool = False) -> bool:
         """Add a memory for a server.
 
         Returns True if memory was added, False if duplicate detected.
@@ -589,6 +687,18 @@ class MemoryManager:
             log.debug(f"Skipping duplicate server memory by fingerprint: {content[:50]}...")
             return False
 
+        normalized_subject_user_id = self._normalize_user_id(subject_user_id)
+        if normalized_subject_user_id and not skip_cross_store_check:
+            if self._is_cross_store_user_duplicate(
+                content,
+                embedding,
+                user_id=normalized_subject_user_id,
+                guild_id=guild_id,
+                include_server=True
+            ):
+                log.debug(f"Skipping cross-store duplicate server memory: {content[:50]}...")
+                return False
+
         # Check for duplicates before adding (with semantic check if embedding provided)
         if _is_duplicate_memory(content, self.server_memories[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate server memory: {content[:50]}...")
@@ -600,6 +710,8 @@ class MemoryManager:
             "auto": auto,
             "fingerprint": fingerprint
         }
+        if normalized_subject_user_id:
+            memory["subject_user_id"] = normalized_subject_user_id
         if embedding:
             memory["embedding"] = embedding
         self.server_memories[key].append(memory)
@@ -630,7 +742,7 @@ class MemoryManager:
 
     def add_dm_memory(self, user_id: int, content: str, auto: bool = False,
                       character_name: str = None, user_name: str = None,
-                      embedding: list = None) -> bool:
+                      embedding: list = None, skip_cross_store_check: bool = False) -> bool:
         """Add a memory for a DM conversation.
 
         Returns True if memory was added, False if duplicate detected.
@@ -660,6 +772,17 @@ class MemoryManager:
         if _is_duplicate_memory(content, dm_memories[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate DM memory: {content[:50]}...")
             return False
+
+        if not skip_cross_store_check:
+            if self._is_cross_store_user_duplicate(
+                content,
+                embedding,
+                user_id=user_id,
+                character_name=character_name,
+                include_server=False
+            ):
+                log.debug(f"Skipping cross-store duplicate DM memory: {content[:50]}...")
+                return False
 
         memory = {
             "content": content,
@@ -742,7 +865,7 @@ class MemoryManager:
 
     def add_user_memory(self, guild_id: int, user_id: int, content: str,
                         auto: bool = False, user_name: str = None, character_name: str = None,
-                        embedding: list = None) -> bool:
+                        embedding: list = None, skip_cross_store_check: bool = False) -> bool:
         """Add a memory about a specific user in a server.
 
         Returns True if memory was added, False if duplicate detected.
@@ -775,6 +898,18 @@ class MemoryManager:
         if _is_duplicate_memory(content, user_memories[guild_key][user_key], new_embedding=embedding):
             log.debug(f"Skipping duplicate user memory: {content[:50]}...")
             return False
+
+        if not skip_cross_store_check:
+            if self._is_cross_store_user_duplicate(
+                content,
+                embedding,
+                user_id=user_id,
+                guild_id=guild_id,
+                character_name=character_name,
+                include_server=True
+            ):
+                log.debug(f"Skipping cross-store duplicate user memory: {content[:50]}...")
+                return False
 
         memory = {
             "content": content,
@@ -871,7 +1006,7 @@ class MemoryManager:
 
     def add_global_user_profile(self, user_id: int, content: str, auto: bool = False,
                                  user_name: str = None, character_name: str = None,
-                                 embedding: list = None) -> bool:
+                                 embedding: list = None, skip_cross_store_check: bool = False) -> bool:
         """Add a cross-server fact about a user (follows them everywhere).
 
         Returns True if memory was added, False if duplicate detected.
@@ -895,6 +1030,17 @@ class MemoryManager:
         if _is_duplicate_memory(content, self.global_user_profiles[key], new_embedding=embedding):
             log.debug(f"Skipping duplicate global profile: {content[:50]}...")
             return False
+
+        if not skip_cross_store_check:
+            if self._is_cross_store_user_duplicate(
+                content,
+                embedding,
+                user_id=user_id,
+                character_name=character_name,
+                include_server=True
+            ):
+                log.debug(f"Skipping cross-store duplicate global profile: {content[:50]}...")
+                return False
 
         memory = {
             "content": content,
@@ -1096,28 +1242,50 @@ Memory about {target_user} (or NOTHING):"""
 
                 # Generate embedding ONCE for semantic deduplication across all stores
                 embedding = await provider_manager.get_embedding(result.strip())
+                subject_user_id = id_key if is_dm else user_id
+                if subject_user_id and self._is_cross_store_user_duplicate(
+                    result.strip(),
+                    embedding,
+                    user_id=subject_user_id,
+                    guild_id=None if is_dm else id_key,
+                    character_name=character_name,
+                    include_server=not is_dm
+                ):
+                    log.debug("Memory generation skipped - cross-store semantic duplicate")
+                    return None
 
                 if is_dm:
                     self.add_dm_memory(id_key, result.strip(), auto=True,
                                        character_name=character_name, user_name=user_name,
-                                       embedding=embedding)
+                                       embedding=embedding,
+                                       skip_cross_store_check=True)
                     # Also add to global profile (DM facts are always important)
                     self.add_global_user_profile(id_key, result.strip(), auto=True,
                                                  user_name=user_name, character_name=character_name,
-                                                 embedding=embedding)
+                                                 embedding=embedding,
+                                                 skip_cross_store_check=True)
                 else:
                     # Add to server-wide memory (shared)
-                    self.add_server_memory(id_key, result.strip(), auto=True, embedding=embedding)
+                    self.add_server_memory(
+                        id_key,
+                        result.strip(),
+                        auto=True,
+                        embedding=embedding,
+                        subject_user_id=user_id,
+                        skip_cross_store_check=True
+                    )
 
                     # Also add per-user memory (character-specific)
                     if user_id:
                         self.add_user_memory(id_key, user_id, result.strip(), auto=True,
                                              user_name=user_name, character_name=character_name,
-                                             embedding=embedding)
+                                             embedding=embedding,
+                                             skip_cross_store_check=True)
                         # Also add to global profile (cross-server)
                         self.add_global_user_profile(user_id, result.strip(), auto=True,
                                                      user_name=user_name, character_name=character_name,
-                                                     embedding=embedding)
+                                                     embedding=embedding,
+                                                     skip_cross_store_check=True)
 
                 # Apply cooldown only on successful write so failed/NOTHING runs
                 # don't suppress future attempts.

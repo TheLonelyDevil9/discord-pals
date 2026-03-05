@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.17] - 2026-03-05
+
+### Changes
+
+- Harden mention resolution and bump version to 1.6.16
+- Fix relation mention fallback and protocol alias recovery (v1.6.15)
 ## [v1.6.16] - 2026-03-05
 
 ### Changes
