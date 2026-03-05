@@ -9,6 +9,7 @@ import os
 import re
 import time
 import difflib
+import hashlib
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
@@ -65,6 +66,102 @@ def _cosine_similarity(vec1: list, vec2: list) -> float:
     return dot / (norm1 * norm2)
 
 
+def _sanitize_memory_content(content: str) -> str:
+    """Normalize/sanitize memory text before storing."""
+    if not isinstance(content, str):
+        return ""
+    cleaned = remove_thinking_tags(content).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
+
+def _memory_fingerprint(content: str) -> str:
+    """Build a stable idempotency key for memory text using SHA256 hash."""
+    normalized = _normalize_memory(content)
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    return digest[:24]  # Use first 24 chars for compact storage
+
+
+def _memory_entry_is_valid(entry: dict) -> bool:
+    """Check if a memory entry has minimally valid structure."""
+    if not isinstance(entry, dict):
+        return False
+    content = entry.get('content')
+    timestamp = entry.get('timestamp')
+    if not isinstance(content, str) or not content.strip():
+        return False
+    if timestamp is not None and not isinstance(timestamp, str):
+        return False
+    embedding = entry.get('embedding')
+    if embedding is not None and not isinstance(embedding, list):
+        return False
+    return True
+
+
+def _sanitize_memory_entries(entries: list) -> list:
+    """Drop malformed entries and normalize content/fingerprint fields."""
+    if not isinstance(entries, list):
+        return []
+
+    cleaned_entries = []
+    seen_fingerprints = set()
+    for entry in entries:
+        if not _memory_entry_is_valid(entry):
+            continue
+
+        content = _sanitize_memory_content(entry.get('content', ''))
+        if not content:
+            continue
+
+        fingerprint = entry.get('fingerprint')
+        if not isinstance(fingerprint, str) or not fingerprint:
+            fingerprint = _memory_fingerprint(content)
+
+        # Skip duplicates within this list
+        if fingerprint and fingerprint in seen_fingerprints:
+            continue
+        if fingerprint:
+            seen_fingerprints.add(fingerprint)
+
+        cleaned = {
+            "content": content,
+            "timestamp": entry.get("timestamp") or datetime.now().isoformat(),
+            "auto": bool(entry.get("auto", False)),
+            "fingerprint": fingerprint
+        }
+
+        # Preserve optional metadata when valid
+        for key in ("character", "user_name", "learned_from"):
+            value = entry.get(key)
+            if isinstance(value, str) and value:
+                cleaned[key] = value
+        subject_user_id = entry.get("subject_user_id")
+        try:
+            subject_user_id = int(subject_user_id)
+        except (TypeError, ValueError):
+            subject_user_id = None
+        if subject_user_id and subject_user_id > 0:
+            cleaned["subject_user_id"] = subject_user_id
+        if isinstance(entry.get("embedding"), list):
+            cleaned["embedding"] = entry["embedding"]
+
+        cleaned_entries.append(cleaned)
+
+    return cleaned_entries
+
+
+def _contains_fingerprint(memories: list, fingerprint: str) -> bool:
+    """Check if a memory list already contains the same fingerprint."""
+    if not fingerprint:
+        return False
+    for entry in memories:
+        if isinstance(entry, dict) and entry.get('fingerprint') == fingerprint:
+            return True
+    return False
+
+
 def _is_duplicate_memory(
     new_content: str,
     existing_memories: list,
@@ -74,7 +171,8 @@ def _is_duplicate_memory(
 ) -> bool:
     """Check if new memory is semantically similar to existing ones.
 
-    Uses three-stage check:
+    Uses four-stage check:
+    0. Fingerprint check (instant) - exact match detection via SHA256
     1. Key term overlap (fast) - if <30% terms match, skip expensive checks
     2. Sequence similarity (accurate) - confirms with difflib
     3. Semantic similarity (embeddings) - catches paraphrases
@@ -91,6 +189,12 @@ def _is_duplicate_memory(
     """
     if not existing_memories or not new_content:
         return False
+
+    # Stage 0: Fingerprint check (fastest - exact duplicates)
+    new_fingerprint = _memory_fingerprint(new_content)
+    if new_fingerprint and _contains_fingerprint(existing_memories, new_fingerprint):
+        log.debug(f"Fingerprint duplicate detected: '{new_content[:40]}'")
+        return True
 
     new_normalized = _normalize_memory(new_content)
     new_terms = _extract_key_terms(new_content)
@@ -313,6 +417,9 @@ class MemoryManager:
         """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         key = str(guild_id)
         if key not in self.server_memories:
@@ -326,7 +433,8 @@ class MemoryManager:
         memory = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto
+            "auto": auto,
+            "fingerprint": _memory_fingerprint(content)
         }
         if embedding:
             memory["embedding"] = embedding
@@ -367,6 +475,10 @@ class MemoryManager:
             # Fallback to legacy shared file
             return self._add_legacy_dm_memory(user_id, content, auto)
 
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
+
         dm_memories = self._get_dm_memories_for_character(character_name)
         key = str(user_id)
 
@@ -382,7 +494,8 @@ class MemoryManager:
             "content": content,
             "timestamp": datetime.now().isoformat(),
             "auto": auto,
-            "character": character_name
+            "character": character_name,
+            "fingerprint": _memory_fingerprint(content)
         }
         if user_name:
             memory["user_name"] = user_name
@@ -461,6 +574,9 @@ class MemoryManager:
         """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         if not character_name:
             # Fallback to legacy shared file
@@ -484,7 +600,8 @@ class MemoryManager:
             "content": content,
             "timestamp": datetime.now().isoformat(),
             "auto": auto,
-            "character": character_name
+            "character": character_name,
+            "fingerprint": _memory_fingerprint(content)
         }
         if user_name:
             memory["user_name"] = user_name
@@ -577,6 +694,9 @@ class MemoryManager:
         """
         # Strip any reasoning tags before storing
         content = remove_thinking_tags(content)
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
         key = str(user_id)
         if key not in self.global_user_profiles:
@@ -590,7 +710,8 @@ class MemoryManager:
         memory = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto
+            "auto": auto,
+            "fingerprint": _memory_fingerprint(content)
         }
         if user_name:
             memory["user_name"] = user_name

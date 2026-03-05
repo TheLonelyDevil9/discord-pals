@@ -4,6 +4,51 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.6.18] - 2026-03-05
+
+### Reverted
+
+- **Hard reset to v1.6.4 baseline** due to stability issues in v1.6.5-v1.6.17
+- Removed complex mention/tagging system (`context_protocol.py`, `mention_resolver.py`)
+- Removed protocol handle abstraction (@u_123, @b_456 system)
+- Removed alias cache persistence (`user_alias_cache.json`)
+- Removed history sequence numbers
+- Removed cross-store memory deduplication (O(n²) performance issue)
+- Removed auto-memory user mention validation and auto-prefixing
+- Removed relation-based tag fallback system
+- Removed tag intent detection via regex + stopwords
+- Removed 11 test files for reverted features
+
+### Added (cherry-picked from v1.6.17)
+
+- **Memory fingerprint-based deduplication** - SHA256 hash-based exact duplicate detection (per-store only)
+  - `_memory_fingerprint()` - Generate 24-char hash for each memory
+  - `_sanitize_memory_content()` - Normalize content before storage
+  - `_sanitize_memory_entries()` - Validate and deduplicate memory lists
+  - `_contains_fingerprint()` - Fast fingerprint checking
+  - All `add_*_memory()` methods now generate and store fingerprints
+  - Fingerprint check added as Stage 0 in `_is_duplicate_memory()` (instant exact match detection)
+- **Improved emoji sanitization patterns** for malformed custom emojis:
+  - `RE_INCOMPLETE_TAG` - Catches `<:name:id` without closing `>`
+  - `RE_MALFORMED_EMOJI_PREFIX` - Catches malformed emoji prefixes
+  - Updated `RE_BROKEN_EMOJI_END` - Better incomplete emoji detection (now handles `<a:name:id` patterns)
+  - Updated `RE_ORPHAN_SNOWFLAKE` - Avoids false positives on mentions (excludes `@#&/` prefixes)
+  - Enhanced `convert_emojis_in_text()` with targeted cleanup and whitespace normalization
+
+### Changed
+
+- Memory deduplication simplified to per-store only (no cross-store checking for performance)
+- Emoji cleanup now uses multiple targeted patterns instead of one aggressive regex
+- `convert_emojis_in_text()` now handles `None` text input gracefully
+
+### Notes
+
+- This release prioritizes **stability and reliability** over feature richness
+- Mention system reverted to v1.6.4 baseline (basic @user pings work, no advanced tagging)
+- Context system rework planned for future release with focus on simplicity
+- Total lines removed: ~6,000 (from 28 files)
+- Total lines added: ~200 (dedup + emoji improvements)
+
 ## [v1.6.4] - 2026-02-28
 
 ### Fixed

@@ -153,8 +153,10 @@ RE_TIMESTAMP = re.compile(r'<t:(\d+)(?::[tTdDfFR])?>')
 
 # Pre-compiled patterns for convert_emojis_in_text
 RE_EMOJI_SHORTCODE = re.compile(r':([a-zA-Z0-9_]+):')
-RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*$')
-RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d])\d{17,21}>(?!\S)')
+RE_BROKEN_EMOJI_END = re.compile(r'<a?:[a-zA-Z0-9_]*(?::\d*)?$')
+RE_INCOMPLETE_TAG = re.compile(r'<[a-zA-Z][a-zA-Z0-9_]*:\d{17,21}(?!>)')
+RE_ORPHAN_SNOWFLAKE = re.compile(r'(?<![:\d@#&/])\d{17,21}>(?!\S)')
+RE_MALFORMED_EMOJI_PREFIX = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+(?![\d>])')
 RE_EMPTY_ANGLE = re.compile(r'<>')
 RE_MALFORMED_EMOJI = re.compile(
     r'<(?!'
@@ -660,24 +662,32 @@ def get_guild_emojis(guild: discord.Guild, max_count: int = MAX_EMOJIS_IN_PROMPT
 
 def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     """Convert :emoji_name: to proper Discord format (including animated)."""
-    if not guild or guild.id not in _emoji_cache:
+    if not text:
         return text
 
-    cache = _emoji_cache[guild.id]
+    result = text
+    if guild and guild.id in _emoji_cache:
+        cache = _emoji_cache[guild.id]
 
-    def replace_emoji(match):
-        name = match.group(1)
-        if name in cache:
-            emoji = cache[name]
-            if emoji.animated:
-                return f"<a:{emoji.name}:{emoji.id}>"
-            else:
-                return f"<:{emoji.name}:{emoji.id}>"
-        return match.group(0)
+        def replace_emoji(match):
+            name = match.group(1)
+            if name in cache:
+                emoji = cache[name]
+                if emoji.animated:
+                    return f"<a:{emoji.name}:{emoji.id}>"
+                else:
+                    return f"<:{emoji.name}:{emoji.id}>"
+            return match.group(0)
 
-    result = RE_EMOJI_SHORTCODE.sub(replace_emoji, text)
+        result = RE_EMOJI_SHORTCODE.sub(replace_emoji, result)
 
     # AFTER conversion, clean up malformed emoji-like tags that LLMs sometimes generate
+    # Remove malformed emoji prefixes (e.g., "<:test:123" without closing ">")
+    result = RE_MALFORMED_EMOJI_PREFIX.sub('', result)
+
+    # Remove incomplete tags (e.g., "<:name:123456789012345678" without ">")
+    result = RE_INCOMPLETE_TAG.sub('', result)
+
     # Remove incomplete emoji tags at end of string (e.g., "<:emoji" or "<a:")
     result = RE_BROKEN_EMOJI_END.sub('', result)
 
@@ -687,10 +697,14 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     # Remove empty angle bracket pairs
     result = RE_EMPTY_ANGLE.sub('', result)
 
+    # Clean up extra whitespace
+    result = re.sub(r'\s{2,}', ' ', result)
+    result = re.sub(r'\s+([,!?;:.])', r'\1', result)
+
     # Disabled: RE_MALFORMED_EMOJI is too aggressive — it can match legitimate
     # text between < and > (up to 50 chars) and truncate messages mid-sentence.
-    # RE_BROKEN_EMOJI_END (applied elsewhere) handles the common case of
-    # incomplete emoji at string end, which is sufficient.
+    # The targeted patterns above handle specific malformed cases without
+    # the risk of truncating legitimate content.
     # result = RE_MALFORMED_EMOJI.sub('', result)
 
     return result.strip()
