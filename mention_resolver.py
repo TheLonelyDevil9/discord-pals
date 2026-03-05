@@ -641,6 +641,7 @@ async def resolve_mentions_unified(
     ambiguity_policy: str = "best_match",
     min_score: float = 5.0,
     relation_corpus: str = "",
+    current_bot_user_id: Optional[int] = None,
 ) -> MentionResolutionResult:
     if not response:
         return MentionResolutionResult(text=response or "")
@@ -654,10 +655,18 @@ async def resolve_mentions_unified(
     relation_terms = _detect_relation_terms(request_content or "")
     recent_author_ids = _extract_recent_author_ids(envelope)
     explicit_tag_intent = bool(re.search(rf"\b{TAG_VERBS_RE}\b", request_content or "", flags=re.IGNORECASE))
+    try:
+        normalized_current_bot_user_id = int(current_bot_user_id) if current_bot_user_id else None
+    except (TypeError, ValueError):
+        normalized_current_bot_user_id = None
 
     query_terms = []
     seen_query = set()
-    for item in request_terms + response_mentions:
+    query_seed = list(request_terms)
+    if explicit_tag_intent:
+        query_seed.extend(response_mentions)
+
+    for item in query_seed:
         norm = _normalize_alias(item)
         if not norm or norm in seen_query:
             continue
@@ -706,6 +715,17 @@ async def resolve_mentions_unified(
     unresolved_candidates = []
     resolved_ids = set(requested_ids)
     for candidate in response_mentions:
+        if not explicit_tag_intent:
+            decisions.append({
+                "stage": "response_plain_mention",
+                "term": candidate,
+                "selected_id": None,
+                "score": 0.0,
+                "reasons": ["no_explicit_tag_intent"],
+            })
+            unresolved_candidates.append(candidate)
+            continue
+
         selected_id, score, reasons = _select_best_record(
             term=candidate,
             records=records,
@@ -724,6 +744,11 @@ async def resolve_mentions_unified(
             "score": round(score, 3),
             "reasons": reasons,
         })
+        if normalized_current_bot_user_id and selected_id == normalized_current_bot_user_id:
+            decisions[-1]["blocked_self_mention"] = True
+            unresolved_candidates.append(candidate)
+            continue
+
         blocked_by_request_intent = explicit_tag_intent and (
             (requested_ids and selected_id not in seen_ids) or
             (not requested_ids)

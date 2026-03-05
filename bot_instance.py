@@ -1013,8 +1013,10 @@ class BotInstance:
         # Run this even when mentions are disabled so malformed fragments like "<@" are cleaned.
         from discord_utils import process_outgoing_mentions
         allow_mentions = runtime_config.get("allow_bot_mentions", True)
+        allow_bot_to_bot_mentions = runtime_config.get("allow_bot_to_bot_mentions", False)
         mention_resolver_enabled = runtime_config.get("mention_resolver_enabled", True)
         mention_resolver_include_bots = runtime_config.get("mention_resolver_include_bots", True)
+        resolver_include_bots = bool(mention_resolver_include_bots and allow_bot_to_bot_mentions)
         mention_resolver_ambiguity_policy = (
             runtime_config.get("mention_resolver_ambiguity_policy", "no_tag") or "no_tag"
         )
@@ -1030,7 +1032,7 @@ class BotInstance:
         mentionable_users = context.get("mentionable_users") if allow_mentions else None
         mentionable_bots = (
             context.get("mentionable_bots")
-            if allow_mentions and runtime_config.get("allow_bot_to_bot_mentions", False)
+            if allow_mentions and allow_bot_to_bot_mentions
             else None
         )
         if allow_mentions:
@@ -1052,10 +1054,11 @@ class BotInstance:
                 request_content=content,
                 context_envelope=context.get("context_envelope"),
                 guild=guild,
-                include_bots=bool(mention_resolver_include_bots),
+                include_bots=resolver_include_bots,
                 ambiguity_policy=mention_resolver_ambiguity_policy,
                 min_score=mention_resolver_min_score,
                 relation_corpus=self._build_relation_corpus_for_mentions(),
+                current_bot_user_id=self.client.user.id if self.client and self.client.user else None,
             )
             response = resolver_result.text
             if resolver_result.resolved_ids:

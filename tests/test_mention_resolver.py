@@ -79,6 +79,60 @@ class MentionResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<@200200200200200200>", result.text)
         self.assertNotIn("@starlord", result.text.lower())
 
+    async def test_plaintext_mentions_require_explicit_tag_intent(self):
+        target = FakeMember(210210210210210210, "seele", "Seele", bot=False)
+        guild = FakeGuild(members=[target], query_pool=[target])
+
+        result = await resolve_mentions_unified(
+            response="@seele, can help.",
+            request_content="hello there",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertNotIn("<@210210210210210210>", result.text)
+        self.assertNotIn("@seele", result.text.lower())
+
+    async def test_blocks_self_plaintext_mention_when_current_bot_id_provided(self):
+        fly = FakeMember(220220220220220220, "fly", "Fly", bot=True)
+        febs = FakeMember(221221221221221221, "febs", "Febs", bot=False)
+        guild = FakeGuild(members=[fly, febs], query_pool=[fly, febs])
+
+        result = await resolve_mentions_unified(
+            response="@fly, ready.",
+            request_content="tag febs",
+            context_envelope={},
+            guild=guild,
+            include_bots=True,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+            current_bot_user_id=fly.id,
+        )
+
+        self.assertIn("<@221221221221221221>", result.text)
+        self.assertNotIn("<@220220220220220220>", result.text)
+        self.assertNotIn("@fly", result.text.lower())
+
+    async def test_does_not_resolve_bot_when_include_bots_false(self):
+        bot_member = FakeMember(230230230230230230, "starlord", "Star-Lord", bot=True)
+        guild = FakeGuild(members=[bot_member], query_pool=[bot_member])
+
+        result = await resolve_mentions_unified(
+            response="@starlord, should handle it.",
+            request_content="tag starlord",
+            context_envelope={},
+            guild=guild,
+            include_bots=False,
+            ambiguity_policy="best_match",
+            min_score=4.0,
+        )
+
+        self.assertNotIn("<@230230230230230230>", result.text)
+        self.assertNotIn("@starlord", result.text.lower())
+
     async def test_best_match_policy_is_deterministic(self):
         alex_a = FakeMember(500500500500500500, "alex", "Alex", bot=False)
         alex_b = FakeMember(700700700700700700, "alex2", "Alex", bot=False)
