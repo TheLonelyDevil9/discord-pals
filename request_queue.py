@@ -55,7 +55,7 @@ class RequestQueue:
 
             # Limit pending requests per user
             user_pending = sum(1 for req in self.queues[channel_id] if req['user_id'] == user_id)
-            if user_pending >= 2:
+            if user_pending >= 3:
                 return False
 
             # Add request to queue

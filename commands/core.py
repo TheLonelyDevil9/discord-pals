@@ -256,3 +256,35 @@ def setup_core_commands(bot_instance) -> None:
                 "You're not ignoring any bots. Use `/ignore <name>` to block a bot from responding to you.",
                 ephemeral=True
             )
+
+    @tree.command(name="nickname-trigger", description="Enable/disable nickname-based triggers for this channel")
+    @app_commands.describe(
+        enabled="Enable or disable nickname triggers in this channel"
+    )
+    async def cmd_nickname_trigger(
+        interaction: discord.Interaction,
+        enabled: bool
+    ) -> None:
+        if not await is_owner(interaction):
+            await interaction.response.send_message(
+                "Only the bot owner can use this command", ephemeral=True
+            )
+            return
+
+        if isinstance(interaction.channel, discord.DMChannel):
+            await interaction.response.send_message("Nickname triggers are server-only", ephemeral=True)
+            return
+
+        from discord_utils import autonomous_manager
+        autonomous_manager.set_nickname_trigger(interaction.channel_id, enabled)
+
+        if enabled:
+            await interaction.response.send_message(
+                f"Nickname triggers ON for this channel — the bot will respond when its name is mentioned.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"Nickname triggers OFF for this channel — the bot will only respond to @mentions and replies.",
+                ephemeral=True
+            )

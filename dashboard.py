@@ -11,7 +11,7 @@ import io
 import time
 import zipfile
 from pathlib import Path
-from datetime import timedelta
+from datetime import timedelta, datetime
 import logger as log
 from security import (
     safe_path, safe_filename, validate_zip_entry,
@@ -1189,6 +1189,7 @@ def channels_page():
                         'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
                         'auto_cooldown': cooldown_mins,
                         'allow_bot_triggers': allow_bot_triggers,
+                        'nickname_trigger': autonomous_manager.is_nickname_trigger_enabled(channel.id),
                         'history_count': history_count
                     }
     
@@ -1234,6 +1235,7 @@ def api_channels():
                     'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
                     'auto_cooldown': cooldown_mins,
                     'allow_bot_triggers': allow_bot_triggers,
+                    'nickname_trigger': autonomous_manager.is_nickname_trigger_enabled(channel.id),
                     'history_count': history_count
                 })
     
@@ -1300,6 +1302,24 @@ def api_channel_autonomous(channel_id):
         'cooldown': cooldown_mins,
         'allow_bot_triggers': allow_bot_triggers
     })
+
+
+@app.route('/api/channels/<int:channel_id>/nickname-trigger', methods=['GET', 'POST'])
+@requires_csrf
+def api_channel_nickname_trigger(channel_id):
+    """Get or set nickname trigger mode for a channel."""
+    from discord_utils import autonomous_manager
+
+    if request.method == 'POST':
+        data = request.json or {}
+        enabled = data.get('enabled', False)
+        autonomous_manager.set_nickname_trigger(channel_id, enabled)
+        log.info(f"Nickname triggers {'ENABLED' if enabled else 'DISABLED'} for channel {channel_id} via dashboard")
+        return jsonify({'status': 'ok', 'channel_id': channel_id, 'enabled': enabled})
+
+    # GET request
+    enabled = autonomous_manager.is_nickname_trigger_enabled(channel_id)
+    return jsonify({'channel_id': channel_id, 'enabled': enabled})
 
 
 # --- Memory Management API ---
@@ -1754,6 +1774,191 @@ def api_memory_stats():
             pass
 
     return jsonify(stats)
+
+
+# --- Unified Memory API (v2) ---
+
+@app.route('/api/v2/memories/auto')
+def api_v2_auto_memories():
+    """List auto memories with optional filters."""
+    from memory import memory_manager
+    search = request.args.get('search', '').lower()
+    server_filter = request.args.get('server_id', '')
+    user_filter = request.args.get('user_id', '')
+
+    results = []
+    for key, entries in memory_manager.auto_memories.items():
+        # Apply filters
+        if server_filter and f"server:{server_filter}" not in key and server_filter != '0':
+            if not (server_filter == 'dm' and key.startswith('dm:')):
+                continue
+        if user_filter and f"user:{user_filter}" not in key:
+            continue
+
+        for idx, entry in enumerate(entries):
+            if search and search not in entry.get('content', '').lower():
+                continue
+            results.append({
+                'key': key,
+                'index': idx,
+                'content': entry.get('content', ''),
+                'timestamp': entry.get('timestamp', ''),
+                'user_name': entry.get('user_name', ''),
+                'server_name': entry.get('server_name', ''),
+                'character': entry.get('character', ''),
+                'user_id': entry.get('user_id'),
+                'server_id': entry.get('server_id'),
+            })
+
+    # Sort by timestamp descending
+    results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return jsonify({'memories': results, 'total': len(results)})
+
+
+@app.route('/api/v2/memories/auto/delete-batch', methods=['POST'])
+@requires_csrf
+def api_v2_auto_delete_batch():
+    """Delete multiple auto memories by key+index pairs."""
+    from memory import memory_manager
+    data = request.json or {}
+    items = data.get('items', [])  # [{"key": "...", "index": N}, ...]
+
+    # Group by key for efficient deletion
+    by_key = {}
+    for item in items:
+        k = item.get('key')
+        idx = item.get('index')
+        if k is not None and idx is not None:
+            by_key.setdefault(k, []).append(idx)
+
+    deleted = 0
+    for key, indices in by_key.items():
+        before = len(memory_manager.auto_memories.get(key, []))
+        memory_manager.delete_auto_memories(key, indices)
+        after = len(memory_manager.auto_memories.get(key, []))
+        deleted += before - after
+
+    return jsonify({'status': 'ok', 'deleted': deleted})
+
+
+@app.route('/api/v2/memories/auto/clear', methods=['POST'])
+@requires_csrf
+def api_v2_auto_clear():
+    """Clear all auto memories for a key."""
+    from memory import memory_manager
+    data = request.json or {}
+    key = data.get('key')
+    if key:
+        memory_manager.clear_auto_memories(key)
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/v2/memories/lore')
+def api_v2_lore():
+    """List all lore entries."""
+    from memory import memory_manager
+    type_filter = request.args.get('type', '')  # 'user', 'bot', 'server'
+
+    results = []
+    for key, entries in memory_manager.manual_lore.items():
+        # Determine type from key
+        if key.startswith('user:'):
+            lore_type = 'user'
+            target = key[5:]
+        elif key.startswith('bot:'):
+            lore_type = 'bot'
+            target = key[4:]
+        elif key.startswith('server:'):
+            lore_type = 'server'
+            target = key[7:]
+        else:
+            continue
+
+        if type_filter and lore_type != type_filter:
+            continue
+
+        for idx, entry in enumerate(entries):
+            results.append({
+                'key': key,
+                'index': idx,
+                'type': lore_type,
+                'target': target,
+                'content': entry.get('content', ''),
+                'timestamp': entry.get('timestamp', ''),
+                'added_by': entry.get('added_by', ''),
+            })
+
+    results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return jsonify({'lore': results, 'total': len(results)})
+
+
+@app.route('/api/v2/memories/lore/add', methods=['POST'])
+@requires_csrf
+def api_v2_lore_add():
+    """Add a lore entry."""
+    from memory import memory_manager
+    data = request.json or {}
+    target_type = data.get('type')  # 'user', 'bot', 'server'
+    target_id = data.get('target_id')
+    content = data.get('content', '').strip()
+    added_by = data.get('added_by', 'dashboard')
+
+    if not target_type or not target_id or not content:
+        return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+    added = memory_manager.add_lore(target_type, target_id, content, added_by=added_by)
+    if added:
+        return jsonify({'status': 'ok'})
+    return jsonify({'status': 'error', 'message': 'Duplicate lore entry'}), 409
+
+
+@app.route('/api/v2/memories/lore/edit', methods=['PUT'])
+@requires_csrf
+def api_v2_lore_edit():
+    """Edit a lore entry."""
+    from memory import memory_manager
+    data = request.json or {}
+    key = data.get('key')
+    index = data.get('index')
+    content = data.get('content', '').strip()
+
+    if key is None or index is None or not content:
+        return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+    entries = memory_manager.manual_lore.get(key, [])
+    if 0 <= index < len(entries):
+        entries[index]['content'] = content
+        entries[index]['timestamp'] = datetime.now().isoformat()
+        entries[index]['fingerprint'] = None  # Will be regenerated
+        memory_manager._mark_dirty('lore')
+        return jsonify({'status': 'ok'})
+
+    return jsonify({'status': 'error', 'message': 'Entry not found'}), 404
+
+
+@app.route('/api/v2/memories/lore/delete-batch', methods=['POST'])
+@requires_csrf
+def api_v2_lore_delete_batch():
+    """Delete multiple lore entries."""
+    from memory import memory_manager
+    data = request.json or {}
+    items = data.get('items', [])
+
+    by_key = {}
+    for item in items:
+        k = item.get('key')
+        idx = item.get('index')
+        if k is not None and idx is not None:
+            by_key.setdefault(k, []).append(idx)
+
+    deleted = 0
+    for key, indices in by_key.items():
+        before = len(memory_manager.manual_lore.get(key, []))
+        memory_manager.delete_lore(key, indices)
+        after = len(memory_manager.manual_lore.get(key, []))
+        deleted += before - after
+
+    return jsonify({'status': 'ok', 'deleted': deleted})
 
 
 # --- Version API ---

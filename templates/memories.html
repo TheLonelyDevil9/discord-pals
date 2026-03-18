@@ -9,9 +9,9 @@
 
 <!-- Tab Navigation -->
 <div class="tabs">
-    <button type="button" class="tab active" onclick="switchTab('files')">Memory Files</button>
+    <button type="button" class="tab active" onclick="switchTab('files')">Auto Memories</button>
     <button type="button" class="tab" onclick="switchTab('add')">Add Memory</button>
-    <button type="button" class="tab" onclick="switchTab('lore')">Server Lore</button>
+    <button type="button" class="tab" onclick="switchTab('lore')">Manual Lore</button>
 </div>
 
 <!-- Memory Files Tab -->
@@ -144,37 +144,53 @@
 <div id="tab-lore" class="tab-content">
     <div class="card">
         <div class="card-header">
-            <span class="card-title">Server Lore Management</span>
+            <span class="card-title">Manual Lore Management</span>
         </div>
         <div class="card-body">
-            <p class="tab-description">Lore is world-building information that helps the bot understand the context of your server.</p>
+            <p class="tab-description">Lore is manually added context about users, bots, or servers that the AI uses for richer responses.</p>
 
-            {% if guilds %}
-            <div class="form-group">
-                <label for="lore-guild">Select Server</label>
-                <select id="lore-guild" onchange="loadLore()" title="Select a server">
-                    <option value="">Select a server...</option>
-                    {% for guild in guilds %}
-                    <option value="{{ guild.id }}" data-lore="{{ guild.lore | e }}">{{ guild.name }}</option>
-                    {% endfor %}
-                </select>
+            <!-- Add Lore Form -->
+            <div class="form-group" style="margin-bottom: 16px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px;">
+                <h4 style="margin: 0 0 12px 0;">Add Lore</h4>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: end;">
+                    <div class="form-group" style="flex: 0 0 120px;">
+                        <label for="lore-type">Type</label>
+                        <select id="lore-type" title="Lore target type">
+                            <option value="server">Server</option>
+                            <option value="user">User</option>
+                            <option value="bot">Bot</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label for="lore-target">Target ID / Name</label>
+                        <input type="text" id="lore-target" placeholder="Server ID, User ID, or Bot name" title="Target identifier">
+                    </div>
+                    <div class="form-group" style="flex: 2; min-width: 200px;">
+                        <label for="lore-new-content">Content</label>
+                        <input type="text" id="lore-new-content" placeholder="Enter lore content..." title="Lore content">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="addLoreV2()">Add</button>
+                </div>
             </div>
 
-            <div id="lore-editor" class="hidden">
-                <div class="form-group">
-                    <label for="lore-content">Current Lore</label>
-                    <textarea id="lore-content" placeholder="No lore set for this server..." title="Server lore content"></textarea>
+            <!-- Lore List with Mass Delete -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                        <input type="checkbox" id="lore-select-all" onchange="toggleAllLore(this.checked)"> Select All
+                    </label>
+                    <button type="button" class="btn btn-danger btn-sm" id="lore-delete-btn" onclick="deleteSelectedLore()" style="display: none;">Delete Selected</button>
                 </div>
-
-                <div class="lore-actions">
-                    <button type="button" class="btn btn-primary" onclick="saveLore(false)">Append Lore</button>
-                    <button type="button" class="btn btn-ghost" onclick="saveLore(true)">Replace Lore</button>
-                    <button type="button" class="btn btn-danger" onclick="clearLore()">Clear Lore</button>
+                <div style="display: flex; gap: 8px;">
+                    <select id="lore-type-filter" onchange="loadLoreV2()" title="Filter by type">
+                        <option value="">All Types</option>
+                        <option value="server">Server</option>
+                        <option value="user">User</option>
+                        <option value="bot">Bot</option>
+                    </select>
                 </div>
             </div>
-            {% else %}
-            <div class="empty">No servers available. Make sure your bots are online.</div>
-            {% endif %}
+            <div id="lore-list" class="memory-list"></div>
         </div>
     </div>
 </div>
@@ -1066,5 +1082,145 @@ document.addEventListener('click', function(event) {
         closeModal();
     }
 });
+
+// ===== Manual Lore (v2 API) =====
+
+let loreData = [];
+
+async function loadLoreV2() {
+    const typeFilter = document.getElementById('lore-type-filter')?.value || '';
+    const params = new URLSearchParams();
+    if (typeFilter) params.set('type', typeFilter);
+
+    try {
+        const response = await fetch(`/api/v2/memories/lore?${params}`);
+        const data = await response.json();
+        loreData = data.lore || [];
+        renderLoreList();
+    } catch (e) {
+        showToast('Failed to load lore', 'error');
+    }
+}
+
+function renderLoreList() {
+    const container = document.getElementById('lore-list');
+    if (!loreData.length) {
+        container.innerHTML = '<div class="empty">No lore entries found. Add lore above to get started.</div>';
+        return;
+    }
+
+    let html = '';
+    for (const item of loreData) {
+        const typeLabel = item.type.charAt(0).toUpperCase() + item.type.slice(1);
+        const date = item.timestamp ? new Date(item.timestamp).toLocaleDateString() : '';
+        html += `
+            <div class="memory-entry" style="display: flex; align-items: start; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border-color);">
+                <input type="checkbox" class="lore-checkbox" data-key="${item.key}" data-index="${item.index}" onchange="updateLoreDeleteBtn()">
+                <div style="flex: 1;">
+                    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px;">
+                        <span class="badge badge-sm ${item.type === 'server' ? 'badge-info' : item.type === 'user' ? 'badge-success' : 'badge-muted'}">${typeLabel}</span>
+                        <span style="font-size: 0.85em; opacity: 0.7;">${item.target}</span>
+                        <span style="font-size: 0.8em; opacity: 0.5; margin-left: auto;">${date}</span>
+                    </div>
+                    <div>${item.content}</div>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="deleteSingleLore('${item.key}', ${item.index})" title="Delete">&#x2715;</button>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
+}
+
+function toggleAllLore(checked) {
+    document.querySelectorAll('.lore-checkbox').forEach(cb => cb.checked = checked);
+    updateLoreDeleteBtn();
+}
+
+function updateLoreDeleteBtn() {
+    const checked = document.querySelectorAll('.lore-checkbox:checked').length;
+    const btn = document.getElementById('lore-delete-btn');
+    btn.style.display = checked > 0 ? '' : 'none';
+    btn.textContent = `Delete Selected (${checked})`;
+}
+
+async function deleteSelectedLore() {
+    const checkboxes = document.querySelectorAll('.lore-checkbox:checked');
+    const items = Array.from(checkboxes).map(cb => ({
+        key: cb.dataset.key,
+        index: parseInt(cb.dataset.index)
+    }));
+
+    if (!items.length) return;
+    if (!confirm(`Delete ${items.length} lore entries?`)) return;
+
+    try {
+        const response = await fetch('/api/v2/memories/lore/delete-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token() }}' },
+            body: JSON.stringify({ items })
+        });
+        const data = await response.json();
+        if (data.status === 'ok') {
+            showToast(`Deleted ${data.deleted} lore entries`, 'success');
+            loadLoreV2();
+        }
+    } catch (e) {
+        showToast('Failed to delete lore', 'error');
+    }
+}
+
+async function deleteSingleLore(key, index) {
+    if (!confirm('Delete this lore entry?')) return;
+    try {
+        const response = await fetch('/api/v2/memories/lore/delete-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token() }}' },
+            body: JSON.stringify({ items: [{ key, index }] })
+        });
+        const data = await response.json();
+        if (data.status === 'ok') {
+            showToast('Lore deleted', 'success');
+            loadLoreV2();
+        }
+    } catch (e) {
+        showToast('Failed to delete lore', 'error');
+    }
+}
+
+async function addLoreV2() {
+    const type = document.getElementById('lore-type').value;
+    const target = document.getElementById('lore-target').value.trim();
+    const content = document.getElementById('lore-new-content').value.trim();
+
+    if (!target || !content) {
+        showToast('Please fill in all fields', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/v2/memories/lore/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token() }}' },
+            body: JSON.stringify({ type, target_id: target, content, added_by: 'dashboard' })
+        });
+        const data = await response.json();
+        if (data.status === 'ok') {
+            showToast('Lore added', 'success');
+            document.getElementById('lore-new-content').value = '';
+            loadLoreV2();
+        } else {
+            showToast(data.message || 'Failed to add lore', 'error');
+        }
+    } catch (e) {
+        showToast('Failed to add lore', 'error');
+    }
+}
+
+// Load lore when switching to lore tab
+const origSwitchTab = switchTab;
+switchTab = function(tabName) {
+    origSwitchTab(tabName);
+    if (tabName === 'lore') loadLoreV2();
+};
 </script>
 {% endblock %}

@@ -80,6 +80,9 @@ class BotInstance:
         # Bot-on-bot conversation fall-off tracker
         self._bot_conversation_tracker: Dict[int, dict] = {}  # channel_id -> {consecutive_bot_messages, last_message_time, last_human_message_time}
 
+        # DM follow-up state
+        self._dm_followup_state: Dict[int, dict] = {}  # user_id -> {last_user_msg, followups_sent, last_followup, channel_id}
+
         # Set up events and commands
         self._setup_events()
         self._setup_commands()
@@ -97,7 +100,7 @@ class BotInstance:
         bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
         if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
             log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
-            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id, guild=message.guild, message_id=message.id)
+            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
             return True
         return False
 
@@ -111,7 +114,7 @@ class BotInstance:
 
         # Global stop-bot interactions
         if runtime_config.get("bot_interactions_paused", False):
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
             return True
 
         # Initialize or update conversation tracker
@@ -139,13 +142,13 @@ class BotInstance:
                 f"probability: {response_probability:.2%})",
                 self.name
             )
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
             return True
 
         # Keep existing 60-second cooldown as additional safeguard
         last_bot_response = self._last_bot_response.get(channel_id, 0)
         if time.time() - last_bot_response < 60:
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id)
+            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
             return True
 
         return False
@@ -193,11 +196,12 @@ class BotInstance:
         # Autonomous mode check
         is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
 
-        # Name/nickname trigger
+        # Name/nickname trigger — only in channels where explicitly enabled
         name_triggered = False
         name_trigger_chance = runtime_config.get('name_trigger_chance', 1.0)
 
-        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm):
+        if (name_trigger_chance > 0 and not mentioned and not is_reply_to_bot and not is_dm
+                and autonomous_manager.is_nickname_trigger_enabled(channel_id)):
 
             # Check if bot triggers are allowed for this channel when message is from a bot
             if is_other_bot and not autonomous_manager.can_bot_trigger(channel_id):
@@ -334,6 +338,9 @@ class BotInstance:
             # Start periodic state cleanup task (every 5 minutes)
             asyncio.create_task(self._periodic_state_cleanup())
 
+            # Start DM follow-up loop
+            asyncio.create_task(self._dm_followup_loop())
+
             # Initialize Prometheus metrics for this bot
             metrics_manager.update_bot_status(
                 bot_name=self.name,
@@ -361,6 +368,15 @@ class BotInstance:
             is_other_bot = message.author.bot
             channel_id = message.channel.id
             guild = message.guild
+
+            # Track DM activity for follow-up system
+            if is_dm and not is_other_bot:
+                self._dm_followup_state[message.author.id] = {
+                    "last_user_msg": time.time(),
+                    "followups_sent": 0,
+                    "last_followup": self._dm_followup_state.get(message.author.id, {}).get("last_followup", 0),
+                    "channel_id": channel_id
+                }
 
             # User rate limiting - prevent spam
             if not is_other_bot:
@@ -434,7 +450,7 @@ class BotInstance:
                     add_to_history(
                         channel_id, "user", message.content,
                         author_name=user_name, user_id=message.author.id, guild=message.guild,
-                        message_id=message.id
+                        message_id=message.id, is_bot=is_other_bot
                     )
 
         @self.client.event
@@ -632,7 +648,10 @@ class BotInstance:
                         break
                 if already_responded:
                     break
-            # Fallback: match by content + author (for history entries without message_id)
+            # Fallback: match by content + author ONLY for legacy entries without message_id
+            # Skip this fallback when we have a message_id (prevents false matches on repeated phrases)
+            elif (message_id and m.get('message_id') is not None):
+                continue  # Both have message_ids but didn't match — not the same message
             elif (m.get('message_id') is None and
                   m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user'):
                 for j in range(i + 1, len(history)):
@@ -647,8 +666,12 @@ class BotInstance:
             return None
 
         # Only add to history if not already present
-        recent = history[-5:]
-        if not any(m.get('message_id') == message_id or (m.get('content') == content and m.get('author') == user_name) for m in recent):
+        # Use message_id exclusively when available to prevent false matches on repeated content
+        if message_id:
+            already_in = any(m.get('message_id') == message_id for m in history[-20:])
+        else:
+            already_in = any(m.get('content') == content and m.get('author') == user_name for m in history[-5:])
+        if not already_in:
             add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild, message_id=message_id)
 
         # Store channel name for readable history display
@@ -679,48 +702,18 @@ class BotInstance:
 
         # Get emojis and lore
         emojis = get_guild_emojis(guild) if guild else ""
-        lore = memory_manager.get_lore(guild_id) if guild_id else ""
+        lore = memory_manager.get_server_lore(guild_id) if guild_id else ""
 
-        # Get memories (use target user for split replies)
-        global_profile = memory_manager.get_global_user_profile(target_user_id)
+        # Get bot-specific lore
+        bot_lore = memory_manager.get_bot_lore(self.character.name) if self.character else ""
+        if bot_lore and lore:
+            lore = f"{lore}\n{bot_lore}"
+        elif bot_lore:
+            lore = bot_lore
 
-        if is_dm:
-            memories = memory_manager.get_dm_memories(target_user_id, character_name=char_name)
-            if global_profile and memories:
-                # Deduplicate across stores
-                all_lines = global_profile.split('\n') + memories.split('\n')
-                deduped = deduplicate_memory_strings(all_lines)
-                memories = f"What you know about this user:\n" + "\n".join(deduped)
-            elif global_profile:
-                memories = f"What you know about this user:\n{global_profile}"
-        elif guild_id:
-            server_memories = memory_manager.get_server_memories(guild_id)
-            user_memories = memory_manager.get_user_memories(guild_id, target_user_id, character_name=char_name)
-
-            # Collect all memory lines across stores for cross-store dedup
-            all_lines = []
-            if global_profile:
-                all_lines.extend(global_profile.split('\n'))
-            if user_memories:
-                all_lines.extend(user_memories.split('\n'))
-            if server_memories:
-                all_lines.extend(server_memories.split('\n'))
-
-            if all_lines:
-                deduped = deduplicate_memory_strings(all_lines)
-                # Rebuild with sections — assign each deduped line to its original section
-                # For simplicity, present as a single unified block
-                memory_parts = []
-                if global_profile:
-                    memory_parts.append(f"What you know about {target_user_name} (cross-server):")
-                if user_memories:
-                    memory_parts.append(f"About {target_user_name} (this server):")
-                memory_parts.append("\n".join(deduped))
-                memories = "\n".join(memory_parts)
-            else:
-                memories = ""
-        else:
-            memories = ""
+        # Get memories from unified store
+        server_id = guild_id if guild_id else 0
+        memories = memory_manager.get_all_memories_for_context(server_id, target_user_id, target_user_name)
 
         if memories:
             memories = remove_thinking_tags(memories)
@@ -750,14 +743,24 @@ class BotInstance:
         )
 
         # Split history into older context and immediate messages
-        total_limit = runtime_config.get('history_limit', 200)
-        immediate_count = runtime_config.get('immediate_message_count', 5)
-        history_msgs, immediate = format_history_split(
-            channel_id,
-            total_limit=total_limit,
-            immediate_count=immediate_count,
-            current_bot_name=self.character.name
-        )
+        user_only_context = runtime_config.get('user_only_context', True)
+        if user_only_context:
+            context_count = runtime_config.get('context_message_count', 10)
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                user_only=True,
+                context_count=context_count,
+                current_bot_name=self.character.name
+            )
+        else:
+            total_limit = runtime_config.get('history_limit', 200)
+            immediate_count = runtime_config.get('immediate_message_count', 5)
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
+            )
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
@@ -1226,6 +1229,94 @@ class BotInstance:
             except Exception as e:
                 log.error(f"Error during periodic state cleanup: {e}", self.name)
 
+    async def _dm_followup_loop(self):
+        """Background task that sends follow-up messages in DMs after silence."""
+        while True:
+            try:
+                await asyncio.sleep(60)  # Check every 60 seconds
+
+                if not runtime_config.get("dm_followup_enabled", False):
+                    continue
+                if runtime_config.get("global_paused", False):
+                    continue
+
+                timeout_mins = runtime_config.get("dm_followup_timeout_minutes", 120)
+                max_followups = runtime_config.get("dm_followup_max_count", 1)
+                cooldown_hours = runtime_config.get("dm_followup_cooldown_hours", 24)
+                now = time.time()
+
+                for user_id, state in list(self._dm_followup_state.items()):
+                    try:
+                        last_msg = state.get("last_user_msg", 0)
+                        followups_sent = state.get("followups_sent", 0)
+                        last_followup = state.get("last_followup", 0)
+                        channel_id = state.get("channel_id")
+
+                        if not channel_id or not last_msg:
+                            continue
+
+                        # Check timeout
+                        if now - last_msg < timeout_mins * 60:
+                            continue
+
+                        # Check max follow-ups
+                        if followups_sent >= max_followups:
+                            continue
+
+                        # Check cooldown
+                        if last_followup and now - last_followup < cooldown_hours * 3600:
+                            continue
+
+                        # Get channel and generate follow-up
+                        channel = self.client.get_channel(channel_id)
+                        if not channel:
+                            continue
+
+                        # Get recent context for the LLM
+                        history = get_history(channel_id)
+                        user_msgs = [m for m in history if m.get("role") == "user"][-5:]
+                        context_lines = [f"{m.get('author', 'User')}: {m.get('content', '')[:100]}" for m in user_msgs]
+                        context = "\n".join(context_lines) if context_lines else "No recent messages."
+
+                        char_name = self.character.name if self.character else "the bot"
+                        prompt = f"""You are {char_name}. The user hasn't replied in a while. Generate a brief, organic follow-up message to re-engage them naturally. Be warm and casual, not pushy. Reference the conversation topic if relevant.
+
+Recent conversation:
+{context}
+
+Your follow-up message (1-2 sentences, in character):"""
+
+                        response = await provider_manager.generate(
+                            messages=[{"role": "user", "content": prompt}],
+                            system_prompt=f"You are {char_name}. Write a natural follow-up message."
+                        )
+
+                        if response and not response.startswith("❌"):
+                            from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix
+                            response = remove_thinking_tags(response, self.character.name if self.character else None)
+                            response = clean_bot_name_prefix(response, self.character.name if self.character else None)
+
+                            # Simulate organic typing
+                            async with channel.typing():
+                                await asyncio.sleep(min(len(response) * 0.03, 3))
+                            await channel.send(response)
+
+                            # Add to history
+                            add_to_history(channel_id, "assistant", response, author_name=char_name)
+
+                            # Update state
+                            state["followups_sent"] = followups_sent + 1
+                            state["last_followup"] = now
+                            log.info(f"Sent DM follow-up to user {user_id} ({followups_sent + 1}/{max_followups})", self.name)
+
+                    except Exception as e:
+                        log.warn(f"DM follow-up error for user {user_id}: {e}", self.name)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Error in DM follow-up loop: {e}", self.name)
+
     def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
         """Check if response is too similar to recent responses (anti-loop measure).
 
@@ -1316,9 +1407,10 @@ class BotInstance:
         
         for msg in messages:
             is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
+            is_any_bot = msg.author.bot  # Track all bots for context filtering
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
-            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id, guild=guild, message_id=msg.id)
+            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id, guild=guild, message_id=msg.id, is_bot=is_any_bot)
             count += 1
         
         return count

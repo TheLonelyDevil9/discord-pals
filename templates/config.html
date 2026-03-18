@@ -37,7 +37,29 @@
                             title="Immediate message count">
                         <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
                     </div>
-                    <p class="form-hint">Priority messages placed after chatroom context</p>
+                    <p class="form-hint">Priority messages placed after chatroom context (legacy mode)</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="user_only_context">User-Only Context</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="user_only_context" name="user_only_context"
+                            {% if config.user_only_context is not defined or config.user_only_context %}checked{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <p class="form-hint">Only send human user messages to the AI. Discards all bot/assistant responses from context to prevent impersonation.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="context_message_count">Context Messages (User-Only Mode)</label>
+                    <div class="slider-row">
+                        <input type="range" id="context_message_count" name="context_message_count" min="5" max="20"
+                            step="1" value="{{ config.context_message_count or 10 }}"
+                            oninput="document.getElementById('context_count_val').textContent = this.value"
+                            title="Number of recent user messages to include">
+                        <span class="slider-val" id="context_count_val">{{ config.context_message_count or 10 }}</span>
+                    </div>
+                    <p class="form-hint">Last N human user messages sent when user-only context is enabled</p>
                 </div>
 
                 {% if providers %}
@@ -54,6 +76,65 @@
             </div>
 
             <button type="submit" class="btn btn-primary">Save Settings</button>
+        </form>
+    </div>
+</div>
+
+<!-- DM Follow-ups -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">DM Follow-ups</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 12px;">When enabled, bots will send a follow-up message in DMs after a period of silence from the user.</p>
+        <form id="dm-followup-form">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="dm_followup_enabled">Enable DM Follow-ups</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="dm_followup_enabled" name="dm_followup_enabled"
+                            {% if config.dm_followup_enabled %}checked{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label for="dm_followup_timeout_minutes">Timeout (minutes)</label>
+                    <div class="slider-row">
+                        <input type="range" id="dm_followup_timeout_minutes" name="dm_followup_timeout_minutes" min="15" max="1440"
+                            step="15" value="{{ config.dm_followup_timeout_minutes or 120 }}"
+                            oninput="document.getElementById('dm_timeout_val').textContent = this.value"
+                            title="Minutes of silence before sending follow-up">
+                        <span class="slider-val" id="dm_timeout_val">{{ config.dm_followup_timeout_minutes or 120 }}</span>
+                    </div>
+                    <p class="form-hint">Minutes of silence before bot sends a follow-up</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="dm_followup_max_count">Max Follow-ups</label>
+                    <div class="slider-row">
+                        <input type="range" id="dm_followup_max_count" name="dm_followup_max_count" min="1" max="5"
+                            step="1" value="{{ config.dm_followup_max_count or 1 }}"
+                            oninput="document.getElementById('dm_max_val').textContent = this.value"
+                            title="Maximum follow-up messages">
+                        <span class="slider-val" id="dm_max_val">{{ config.dm_followup_max_count or 1 }}</span>
+                    </div>
+                    <p class="form-hint">Max follow-ups before stopping (resets when user replies)</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="dm_followup_cooldown_hours">Cooldown (hours)</label>
+                    <div class="slider-row">
+                        <input type="range" id="dm_followup_cooldown_hours" name="dm_followup_cooldown_hours" min="1" max="48"
+                            step="1" value="{{ config.dm_followup_cooldown_hours or 24 }}"
+                            oninput="document.getElementById('dm_cooldown_val').textContent = this.value"
+                            title="Hours between follow-up attempts">
+                        <span class="slider-val" id="dm_cooldown_val">{{ config.dm_followup_cooldown_hours or 24 }}</span>
+                    </div>
+                    <p class="form-hint">Minimum hours between follow-up attempts for same user</p>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Save DM Settings</button>
         </form>
     </div>
 </div>
@@ -1107,7 +1188,9 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     const data = {
         history_limit: parseInt(document.getElementById('history_limit').value),
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-        active_provider: document.getElementById('active_provider')?.value || null
+        active_provider: document.getElementById('active_provider')?.value || null,
+        user_only_context: document.getElementById('user_only_context').checked,
+        context_message_count: parseInt(document.getElementById('context_message_count').value)
     };
 
     const response = await fetch('/api/config', {
@@ -1121,6 +1204,32 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 
     if (response.ok) {
         showToast('Settings saved', 'success');
+    } else {
+        showToast('Failed to save settings', 'error');
+    }
+});
+
+// Save DM follow-up settings
+document.getElementById('dm-followup-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = {
+        dm_followup_enabled: document.getElementById('dm_followup_enabled').checked,
+        dm_followup_timeout_minutes: parseInt(document.getElementById('dm_followup_timeout_minutes').value),
+        dm_followup_max_count: parseInt(document.getElementById('dm_followup_max_count').value),
+        dm_followup_cooldown_hours: parseInt(document.getElementById('dm_followup_cooldown_hours').value)
+    };
+
+    const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        showToast('DM follow-up settings saved', 'success');
     } else {
         showToast('Failed to save settings', 'error');
     }

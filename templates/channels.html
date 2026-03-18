@@ -56,6 +56,7 @@
                     <th class="sortable" data-sort="server" onclick="sortTable('server')">Server <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="history" onclick="sortTable('history')">History <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="autonomous" onclick="sortTable('autonomous')">Autonomous <span class="sort-icon"></span></th>
+                    <th>Nickname Trigger</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -90,6 +91,15 @@
                             </button>
                             {% else %}
                             <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', true)" title="Click to enable">OFF</button>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="nickname-trigger-status" id="nickname-status-{{ channel.id }}">
+                            {% if channel.nickname_trigger %}
+                            <button type="button" class="badge badge-success" onclick="toggleNicknameTrigger('{{ channel.id }}', false)" title="Nickname triggers enabled - click to disable">ON</button>
+                            {% else %}
+                            <button type="button" class="badge badge-muted" onclick="toggleNicknameTrigger('{{ channel.id }}', true)" title="Nickname triggers disabled - click to enable">OFF</button>
                             {% endif %}
                         </div>
                     </td>
@@ -1019,6 +1029,36 @@ async function quickToggleBotTriggers(channelId, enable) {
         }
     } catch (e) {
         showToast('Error toggling bot triggers', 'error');
+    }
+}
+
+// Toggle nickname trigger for a channel
+async function toggleNicknameTrigger(channelId, enable) {
+    try {
+        const response = await fetch(`/api/channels/${channelId}/nickname-trigger`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({ enabled: enable })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+            const statusDiv = document.getElementById(`nickname-status-${channelId}`);
+            if (enable) {
+                statusDiv.innerHTML = `<button type="button" class="badge badge-success" onclick="toggleNicknameTrigger('${channelId}', false)" title="Nickname triggers enabled - click to disable">ON</button>`;
+            } else {
+                statusDiv.innerHTML = `<button type="button" class="badge badge-muted" onclick="toggleNicknameTrigger('${channelId}', true)" title="Nickname triggers disabled - click to enable">OFF</button>`;
+            }
+            showToast(enable ? 'Nickname triggers enabled' : 'Nickname triggers disabled', 'success');
+        } else {
+            showToast('Failed to toggle nickname triggers', 'error');
+        }
+    } catch (e) {
+        showToast('Error toggling nickname triggers', 'error');
     }
 }
 </script>

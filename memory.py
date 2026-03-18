@@ -1,20 +1,21 @@
 """
 Discord Pals - Memory System
-Stores and retrieves memories for the bot.
-Per-character memory isolation: each character has its own DM and user memory files.
-With debounced saving to reduce disk I/O.
+Unified 2-store memory system: auto memories + manual lore.
+With debounced saving, LLM deduplication, and legacy migration.
 """
 
 import os
 import re
 import time
+import glob
 import difflib
 import hashlib
 from typing import Dict, List, Optional
 from datetime import datetime
 from config import (
     DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE,
-    LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE
+    LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE,
+    AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
 )
 from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
 from constants import (
@@ -280,50 +281,46 @@ def get_character_user_file(character_name: str) -> str:
 
 
 class MemoryManager:
-    """Manages server and DM memories with auto-generation and manual saving.
+    """Unified 2-store memory system.
 
-    Memory layers:
-    - Server memories: Shared across all characters (per-server events)
-    - Lore: Shared across all characters (world-building)
-    - Global user profiles: Cross-server facts about users (follows users everywhere)
-    - DM memories: Per-character (each character remembers their own DM conversations)
-    - User memories: Per-character, per-server (each character has their own memories about users)
+    Store 1: Auto Memories (auto_memories.json)
+      - Keyed by "server:{guild_id}:user:{user_id}" or "dm:0:user:{user_id}"
+      - Auto-generated from conversations, with LLM deduplication every N memories
 
-    Uses debounced saving to reduce disk I/O.
+    Store 2: Manual Lore (manual_lore.json)
+      - Keyed by "user:{user_id}", "bot:{bot_name}", or "server:{guild_id}"
+      - Manually inserted via dashboard or commands
+
+    Includes migration from the legacy 5-store system.
     """
+
+    # LLM dedup trigger threshold
+    _LLM_DEDUP_EVERY = 5
 
     def __init__(self):
         ensure_data_dir()
-        # Shared across all characters
-        self.server_memories: Dict[str, List[dict]] = safe_json_load(MEMORIES_FILE)
-        self.lore: Dict[str, str] = safe_json_load(LORE_FILE)
 
-        # Global user profiles (cross-server, follows users everywhere)
-        self.global_user_profiles: Dict[str, List[dict]] = safe_json_load(GLOBAL_USER_PROFILES_FILE)
+        # Migrate legacy stores if needed (before loading new stores)
+        self._migrate_if_needed()
 
-        # Per-character memory caches (loaded on demand)
-        self._dm_memory_cache: Dict[str, Dict[str, List[dict]]] = {}
-        self._user_memory_cache: Dict[str, Dict[str, Dict[str, List[dict]]]] = {}
+        # New unified stores
+        self.auto_memories: Dict[str, List[dict]] = safe_json_load(AUTO_MEMORIES_FILE)
+        self.manual_lore: Dict[str, List[dict]] = safe_json_load(MANUAL_LORE_FILE)
 
-        # Legacy shared memories (lazy-loaded for backwards compatibility)
-        self._legacy_dm_memories: Optional[Dict[str, List[dict]]] = None
-        self._legacy_user_memories: Optional[Dict[str, Dict[str, List[dict]]]] = None
-        self._legacy_loaded = False
+        # LLM dedup counter per key
+        self._memory_creation_counter: Dict[str, int] = {}
 
         # Debounce tracking
-        self._dirty_files: set = set()  # Track which files need saving
+        self._dirty_files: set = set()
         self._last_save = time.time()
 
         # Global channel-level memory generation cooldown (prevents multi-bot duplication)
         self._channel_memory_cooldown: Dict[int, float] = {}
-        self._MEMORY_COOLDOWN_SECONDS = 30  # Min seconds between memory generation per channel
+        self._MEMORY_COOLDOWN_SECONDS = 30
 
-    def _ensure_legacy_loaded(self):
-        """Lazy-load legacy memory files only when needed."""
-        if not self._legacy_loaded:
-            self._legacy_dm_memories = safe_json_load(DM_MEMORIES_FILE)
-            self._legacy_user_memories = safe_json_load(USER_MEMORIES_FILE)
-            self._legacy_loaded = True
+    # ==========================================================================
+    # PERSISTENCE
+    # ==========================================================================
 
     def _mark_dirty(self, file_type: str):
         """Mark a file type as needing to be saved."""
@@ -337,440 +334,325 @@ class MemoryManager:
 
     def _save_dirty_files(self):
         """Save all files marked as dirty."""
-        if 'server' in self._dirty_files:
-            safe_json_save(MEMORIES_FILE, self.server_memories)
+        if 'auto' in self._dirty_files:
+            safe_json_save(AUTO_MEMORIES_FILE, self.auto_memories)
         if 'lore' in self._dirty_files:
-            safe_json_save(LORE_FILE, self.lore)
-        if 'global_profiles' in self._dirty_files:
-            safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
-        if 'legacy_dm' in self._dirty_files and self._legacy_loaded:
-            safe_json_save(DM_MEMORIES_FILE, self._legacy_dm_memories)
-        if 'legacy_user' in self._dirty_files and self._legacy_loaded:
-            safe_json_save(USER_MEMORIES_FILE, self._legacy_user_memories)
-
-        # Save character-specific files
-        for file_type in list(self._dirty_files):
-            if file_type.startswith('dm:'):
-                char_name = file_type[3:]
-                self._save_character_dm_memories(char_name)
-            elif file_type.startswith('user:'):
-                char_name = file_type[5:]
-                self._save_character_user_memories(char_name)
-
+            safe_json_save(MANUAL_LORE_FILE, self.manual_lore)
         self._dirty_files.clear()
         self._last_save = time.time()
 
     def flush(self):
-        """Force save all dirty files - call on shutdown."""
+        """Force save all dirty files — call on shutdown."""
         if self._dirty_files:
             self._save_dirty_files()
 
-    def _get_dm_memories_for_character(self, character_name: str) -> Dict[str, List[dict]]:
-        """Load DM memories for a character (with caching)."""
-        if character_name not in self._dm_memory_cache:
-            filepath = get_character_dm_file(character_name)
-            self._dm_memory_cache[character_name] = safe_json_load(filepath)
-        return self._dm_memory_cache[character_name]
-
-    def _get_user_memories_for_character(self, character_name: str) -> Dict[str, Dict[str, List[dict]]]:
-        """Load user memories for a character (with caching)."""
-        if character_name not in self._user_memory_cache:
-            filepath = get_character_user_file(character_name)
-            self._user_memory_cache[character_name] = safe_json_load(filepath)
-        return self._user_memory_cache[character_name]
-
-    def _save_character_dm_memories(self, character_name: str):
-        """Save DM memories for a specific character."""
-        if character_name in self._dm_memory_cache:
-            filepath = get_character_dm_file(character_name)
-            safe_json_save(filepath, self._dm_memory_cache[character_name])
-
-    def _save_character_user_memories(self, character_name: str):
-        """Save user memories for a specific character."""
-        if character_name in self._user_memory_cache:
-            filepath = get_character_user_file(character_name)
-            safe_json_save(filepath, self._user_memory_cache[character_name])
-
     def save_all(self):
-        """Save all memories to disk."""
-        safe_json_save(MEMORIES_FILE, self.server_memories)
-        safe_json_save(LORE_FILE, self.lore)
-        safe_json_save(GLOBAL_USER_PROFILES_FILE, self.global_user_profiles)
-
-        # Save all cached character memories
-        for character_name in self._dm_memory_cache:
-            self._save_character_dm_memories(character_name)
-        for character_name in self._user_memory_cache:
-            self._save_character_user_memories(character_name)
-
-        # Clear dirty tracking since we saved everything
+        """Save all stores to disk."""
+        safe_json_save(AUTO_MEMORIES_FILE, self.auto_memories)
+        safe_json_save(MANUAL_LORE_FILE, self.manual_lore)
         self._dirty_files.clear()
         self._last_save = time.time()
 
-    # --- Server Memories (shared) ---
+    # ==========================================================================
+    # KEY HELPERS
+    # ==========================================================================
 
-    def add_server_memory(self, guild_id: int, content: str, auto: bool = False,
-                          embedding: list = None) -> bool:
-        """Add a memory for a server.
+    @staticmethod
+    def _auto_key(server_id: int, user_id: int) -> str:
+        """Build a key for auto memories. server_id=0 means DM."""
+        if server_id and server_id != 0:
+            return f"server:{server_id}:user:{user_id}"
+        return f"dm:0:user:{user_id}"
+
+    @staticmethod
+    def _server_lore_key(guild_id: int) -> str:
+        return f"server:{guild_id}"
+
+    @staticmethod
+    def _user_lore_key(user_id: int) -> str:
+        return f"user:{user_id}"
+
+    @staticmethod
+    def _bot_lore_key(bot_name: str) -> str:
+        return f"bot:{bot_name}"
+
+    # ==========================================================================
+    # AUTO MEMORIES
+    # ==========================================================================
+
+    def add_auto_memory(self, server_id: int, user_id: int, content: str,
+                        character_name: str = None, user_name: str = None,
+                        server_name: str = None, embedding: list = None) -> bool:
+        """Add an auto-generated memory.
 
         Returns True if memory was added, False if duplicate detected.
         """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
         content = _sanitize_memory_content(content)
         if not content:
             return False
 
-        key = str(guild_id)
-        if key not in self.server_memories:
-            self.server_memories[key] = []
+        key = self._auto_key(server_id, user_id)
+        if key not in self.auto_memories:
+            self.auto_memories[key] = []
 
-        # Check for duplicates before adding (with semantic check if embedding provided)
-        if _is_duplicate_memory(content, self.server_memories[key], new_embedding=embedding):
-            log.debug(f"Skipping duplicate server memory: {content[:50]}...")
+        # Check for duplicates
+        if _is_duplicate_memory(content, self.auto_memories[key], new_embedding=embedding):
+            log.debug(f"Skipping duplicate auto memory: {content[:50]}...")
             return False
 
         memory = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto,
-            "fingerprint": _memory_fingerprint(content)
-        }
-        if embedding:
-            memory["embedding"] = embedding
-        self.server_memories[key].append(memory)
-
-        # Keep max 50 memories per server
-        if len(self.server_memories[key]) > 50:
-            self.server_memories[key] = self.server_memories[key][-50:]
-
-        self._mark_dirty('server')
-        return True
-
-    def get_server_memories(self, guild_id: int, limit: int = 10) -> str:
-        """Get formatted memories for a server."""
-        key = str(guild_id)
-        memories = self.server_memories.get(key, [])[-limit:]
-        if not memories:
-            return ""
-        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
-
-    def clear_server_memories(self, guild_id: int):
-        """Clear all memories for a server."""
-        key = str(guild_id)
-        if key in self.server_memories:
-            del self.server_memories[key]
-            self._mark_dirty('server')
-
-    # --- DM Memories (per-character) ---
-
-    def add_dm_memory(self, user_id: int, content: str, auto: bool = False,
-                      character_name: str = None, user_name: str = None,
-                      embedding: list = None) -> bool:
-        """Add a memory for a DM conversation.
-
-        Returns True if memory was added, False if duplicate detected.
-        """
-        if not character_name:
-            # Fallback to legacy shared file
-            return self._add_legacy_dm_memory(user_id, content, auto)
-
-        content = _sanitize_memory_content(content)
-        if not content:
-            return False
-
-        dm_memories = self._get_dm_memories_for_character(character_name)
-        key = str(user_id)
-
-        if key not in dm_memories:
-            dm_memories[key] = []
-
-        # Check for duplicates before adding (with semantic check if embedding provided)
-        if _is_duplicate_memory(content, dm_memories[key], new_embedding=embedding):
-            log.debug(f"Skipping duplicate DM memory: {content[:50]}...")
-            return False
-
-        memory = {
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "auto": auto,
-            "character": character_name,
-            "fingerprint": _memory_fingerprint(content)
+            "fingerprint": _memory_fingerprint(content),
+            "user_id": user_id,
+            "server_id": server_id,
         }
         if user_name:
             memory["user_name"] = user_name
+        if server_name:
+            memory["server_name"] = server_name
+        if character_name:
+            memory["character"] = character_name
         if embedding:
             memory["embedding"] = embedding
 
-        dm_memories[key].append(memory)
+        self.auto_memories[key].append(memory)
 
-        # Keep max 30 memories per user
-        if len(dm_memories[key]) > 30:
-            dm_memories[key] = dm_memories[key][-30:]
+        # Cap at 50 memories per key
+        if len(self.auto_memories[key]) > 50:
+            self.auto_memories[key] = self.auto_memories[key][-50:]
 
-        self._mark_dirty(f'dm:{character_name}')
+        self._mark_dirty('auto')
+
+        # Track creation count for LLM dedup
+        self._memory_creation_counter[key] = self._memory_creation_counter.get(key, 0) + 1
         return True
 
-    def _add_legacy_dm_memory(self, user_id: int, content: str, auto: bool = False):
-        """Add to legacy shared DM memories (backwards compatibility)."""
-        self._ensure_legacy_loaded()
-        key = str(user_id)
-        if key not in self._legacy_dm_memories:
-            self._legacy_dm_memories[key] = []
-
-        self._legacy_dm_memories[key].append({
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "auto": auto
-        })
-
-        if len(self._legacy_dm_memories[key]) > 30:
-            self._legacy_dm_memories[key] = self._legacy_dm_memories[key][-30:]
-
-        self._mark_dirty('legacy_dm')
-
-    def get_dm_memories(self, user_id: int, limit: int = 10, character_name: str = None) -> str:
-        """Get formatted memories for a DM."""
-        key = str(user_id)
-        memories = []
-
-        if character_name:
-            # Get character-specific memories
-            dm_memories = self._get_dm_memories_for_character(character_name)
-            memories = dm_memories.get(key, [])[-limit:]
-
-        # Fallback to legacy if no character-specific memories found
-        if not memories:
-            self._ensure_legacy_loaded()
-            memories = self._legacy_dm_memories.get(key, [])[-limit:]
-
+    def get_auto_memories(self, server_id: int, user_id: int, limit: int = 10) -> str:
+        """Get formatted auto memories for a user in a server/DM."""
+        key = self._auto_key(server_id, user_id)
+        memories = self.auto_memories.get(key, [])[-limit:]
         if not memories:
             return ""
         return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
 
-    def clear_dm_memories(self, user_id: int, character_name: str = None):
-        """Clear all memories for a user's DMs."""
-        key = str(user_id)
+    def get_all_memories_for_context(self, server_id: int, user_id: int, user_name: str = "") -> str:
+        """Get all relevant memories for LLM context — combines auto memories and lore."""
+        parts = []
 
-        if character_name:
-            dm_memories = self._get_dm_memories_for_character(character_name)
-            if key in dm_memories:
-                del dm_memories[key]
-                self._mark_dirty(f'dm:{character_name}')
+        # Auto memories for this user+server
+        auto = self.get_auto_memories(server_id, user_id)
+        if auto:
+            parts.append(f"What you know about {user_name or 'this user'}:\n{auto}")
+
+        # User lore
+        user_lore = self.get_user_lore(user_id)
+        if user_lore:
+            parts.append(f"Lore about {user_name or 'this user'}:\n{user_lore}")
+
+        # Deduplicate across combined lines
+        if len(parts) > 1:
+            all_lines = "\n".join(parts).split("\n")
+            content_lines = [l for l in all_lines if l.startswith("- ")]
+            header_lines = [l for l in all_lines if not l.startswith("- ")]
+            deduped = deduplicate_memory_strings(content_lines)
+            return "\n".join(header_lines[:1]) + "\n" + "\n".join(deduped) if deduped else ""
+
+        return "\n".join(parts) if parts else ""
+
+    def delete_auto_memories(self, key: str, indices: List[int]):
+        """Delete specific auto memories by index (descending order safe)."""
+        if key not in self.auto_memories:
+            return
+        for idx in sorted(indices, reverse=True):
+            if 0 <= idx < len(self.auto_memories[key]):
+                self.auto_memories[key].pop(idx)
+        if not self.auto_memories[key]:
+            del self.auto_memories[key]
+        self._mark_dirty('auto')
+
+    def clear_auto_memories(self, key: str):
+        """Clear all auto memories for a key."""
+        if key in self.auto_memories:
+            del self.auto_memories[key]
+            self._mark_dirty('auto')
+
+    # ==========================================================================
+    # MANUAL LORE
+    # ==========================================================================
+
+    def add_lore(self, target_type: str, target_id, content: str, added_by: str = None) -> bool:
+        """Add manual lore. target_type: 'user', 'bot', or 'server'."""
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
+
+        if target_type == "user":
+            key = self._user_lore_key(int(target_id))
+        elif target_type == "bot":
+            key = self._bot_lore_key(str(target_id))
+        elif target_type == "server":
+            key = self._server_lore_key(int(target_id))
         else:
-            self._ensure_legacy_loaded()
-            if key in self._legacy_dm_memories:
-                del self._legacy_dm_memories[key]
-                self._mark_dirty('legacy_dm')
-
-    # --- Per-User Server Memories (per-character) ---
-
-    def add_user_memory(self, guild_id: int, user_id: int, content: str,
-                        auto: bool = False, user_name: str = None, character_name: str = None,
-                        embedding: list = None) -> bool:
-        """Add a memory about a specific user in a server.
-
-        Returns True if memory was added, False if duplicate detected.
-        """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
-        content = _sanitize_memory_content(content)
-        if not content:
             return False
 
-        if not character_name:
-            # Fallback to legacy shared file
-            return self._add_legacy_user_memory(guild_id, user_id, content, auto, user_name)
+        if key not in self.manual_lore:
+            self.manual_lore[key] = []
 
-        user_memories = self._get_user_memories_for_character(character_name)
-        guild_key = str(guild_id)
-        user_key = str(user_id)
-
-        if guild_key not in user_memories:
-            user_memories[guild_key] = {}
-        if user_key not in user_memories[guild_key]:
-            user_memories[guild_key][user_key] = []
-
-        # Check for duplicates before adding (with semantic check if embedding provided)
-        if _is_duplicate_memory(content, user_memories[guild_key][user_key], new_embedding=embedding):
-            log.debug(f"Skipping duplicate user memory: {content[:50]}...")
+        # Check for duplicates
+        if _is_duplicate_memory(content, self.manual_lore[key]):
+            log.debug(f"Skipping duplicate lore: {content[:50]}...")
             return False
 
-        memory = {
+        entry = {
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            "auto": auto,
-            "character": character_name,
-            "fingerprint": _memory_fingerprint(content)
+            "fingerprint": _memory_fingerprint(content),
         }
-        if user_name:
-            memory["user_name"] = user_name
-        if embedding:
-            memory["embedding"] = embedding
+        if added_by:
+            entry["added_by"] = added_by
 
-        user_memories[guild_key][user_key].append(memory)
-
-        # Keep max 20 memories per user per server
-        if len(user_memories[guild_key][user_key]) > 20:
-            user_memories[guild_key][user_key] = user_memories[guild_key][user_key][-20:]
-
-        self._mark_dirty(f'user:{character_name}')
+        self.manual_lore[key].append(entry)
+        self._mark_dirty('lore')
         return True
 
-    def _add_legacy_user_memory(self, guild_id: int, user_id: int, content: str,
-                                 auto: bool = False, user_name: str = None):
-        """Add to legacy shared user memories (backwards compatibility)."""
-        self._ensure_legacy_loaded()
-        guild_key = str(guild_id)
-        user_key = str(user_id)
-
-        if guild_key not in self._legacy_user_memories:
-            self._legacy_user_memories[guild_key] = {}
-        if user_key not in self._legacy_user_memories[guild_key]:
-            self._legacy_user_memories[guild_key][user_key] = []
-
-        memory = {
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "auto": auto
-        }
-        if user_name:
-            memory["user_name"] = user_name
-
-        self._legacy_user_memories[guild_key][user_key].append(memory)
-
-        if len(self._legacy_user_memories[guild_key][user_key]) > 20:
-            self._legacy_user_memories[guild_key][user_key] = self._legacy_user_memories[guild_key][user_key][-20:]
-
-        self._mark_dirty('legacy_user')
-
-    def get_user_memories(self, guild_id: int, user_id: int, limit: int = 5,
-                          character_name: str = None) -> str:
-        """Get formatted memories about a specific user in a server."""
-        guild_key = str(guild_id)
-        user_key = str(user_id)
-        memories = []
-
-        if character_name:
-            # Get character-specific memories
-            user_memories = self._get_user_memories_for_character(character_name)
-            if guild_key in user_memories:
-                memories = user_memories[guild_key].get(user_key, [])[-limit:]
-
-        # Fallback to legacy if no character-specific memories found
-        if not memories:
-            self._ensure_legacy_loaded()
-            if guild_key in self._legacy_user_memories:
-                memories = self._legacy_user_memories[guild_key].get(user_key, [])[-limit:]
-
-        if not memories:
+    def get_server_lore(self, guild_id: int) -> str:
+        """Get server lore."""
+        key = self._server_lore_key(guild_id)
+        entries = self.manual_lore.get(key, [])
+        if not entries:
             return ""
-        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
+        return "\n".join([f"- {e['content']}" for e in entries])
 
-    def clear_user_memories(self, guild_id: int, user_id: int, character_name: str = None):
-        """Clear memories about a specific user."""
-        guild_key = str(guild_id)
-        user_key = str(user_id)
-
-        if character_name:
-            user_memories = self._get_user_memories_for_character(character_name)
-            if guild_key in user_memories and user_key in user_memories[guild_key]:
-                del user_memories[guild_key][user_key]
-                self._mark_dirty(f'user:{character_name}')
-        else:
-            self._ensure_legacy_loaded()
-            if guild_key in self._legacy_user_memories and user_key in self._legacy_user_memories[guild_key]:
-                del self._legacy_user_memories[guild_key][user_key]
-                self._mark_dirty('legacy_user')
-
-    # --- Global User Profiles (cross-server) ---
-
-    def add_global_user_profile(self, user_id: int, content: str, auto: bool = False,
-                                 user_name: str = None, character_name: str = None,
-                                 embedding: list = None) -> bool:
-        """Add a cross-server fact about a user (follows them everywhere).
-
-        Returns True if memory was added, False if duplicate detected.
-        """
-        # Strip any reasoning tags before storing
-        content = remove_thinking_tags(content)
-        content = _sanitize_memory_content(content)
-        if not content:
-            return False
-
-        key = str(user_id)
-        if key not in self.global_user_profiles:
-            self.global_user_profiles[key] = []
-
-        # Check for duplicates before adding (with semantic check if embedding provided)
-        if _is_duplicate_memory(content, self.global_user_profiles[key], new_embedding=embedding):
-            log.debug(f"Skipping duplicate global profile: {content[:50]}...")
-            return False
-
-        memory = {
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "auto": auto,
-            "fingerprint": _memory_fingerprint(content)
-        }
-        if user_name:
-            memory["user_name"] = user_name
-        if character_name:
-            memory["learned_from"] = character_name
-        if embedding:
-            memory["embedding"] = embedding
-
-        self.global_user_profiles[key].append(memory)
-
-        # Keep max 20 global facts per user
-        if len(self.global_user_profiles[key]) > 20:
-            self.global_user_profiles[key] = self.global_user_profiles[key][-20:]
-
-        self._mark_dirty('global_profiles')
-        return True
-
-    def get_global_user_profile(self, user_id: int, limit: int = 5) -> str:
-        """Get cross-server facts about a user."""
-        key = str(user_id)
-        memories = self.global_user_profiles.get(key, [])[-limit:]
-        if not memories:
+    def get_user_lore(self, user_id: int) -> str:
+        """Get user lore."""
+        key = self._user_lore_key(user_id)
+        entries = self.manual_lore.get(key, [])
+        if not entries:
             return ""
-        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
+        return "\n".join([f"- {e['content']}" for e in entries])
 
-    def clear_global_user_profile(self, user_id: int):
-        """Clear all global facts about a user."""
-        key = str(user_id)
-        if key in self.global_user_profiles:
-            del self.global_user_profiles[key]
-            self._mark_dirty('global_profiles')
+    def get_bot_lore(self, bot_name: str) -> str:
+        """Get bot lore."""
+        key = self._bot_lore_key(bot_name)
+        entries = self.manual_lore.get(key, [])
+        if not entries:
+            return ""
+        return "\n".join([f"- {e['content']}" for e in entries])
 
-    # --- Lore (shared) ---
-
-    def add_lore(self, guild_id: int, lore_text: str):
-        """Add or append lore for a server."""
-        # Strip any reasoning tags before storing
-        lore_text = remove_thinking_tags(lore_text)
-
-        key = str(guild_id)
-        existing = self.lore.get(key, "")
-        if existing:
-            self.lore[key] = existing + "\n" + lore_text
-        else:
-            self.lore[key] = lore_text
+    def delete_lore(self, key: str, indices: List[int]):
+        """Delete specific lore entries by index."""
+        if key not in self.manual_lore:
+            return
+        for idx in sorted(indices, reverse=True):
+            if 0 <= idx < len(self.manual_lore[key]):
+                self.manual_lore[key].pop(idx)
+        if not self.manual_lore[key]:
+            del self.manual_lore[key]
         self._mark_dirty('lore')
 
-    def get_lore(self, guild_id: int) -> str:
-        """Get lore for a server."""
-        return self.lore.get(str(guild_id), "")
-
-    def clear_lore(self, guild_id: int):
-        """Clear lore for a server."""
-        key = str(guild_id)
-        if key in self.lore:
-            del self.lore[key]
+    def clear_lore(self, key: str):
+        """Clear all lore for a key."""
+        if key in self.manual_lore:
+            del self.manual_lore[key]
             self._mark_dirty('lore')
 
-    # --- Memory Generation ---
+    # Legacy compatibility aliases
+    def add_server_memory(self, guild_id: int, content: str, auto: bool = False, embedding: list = None) -> bool:
+        """Legacy compat: add server memory → auto memory with server_id, user_id=0."""
+        return self.add_auto_memory(guild_id, 0, content, embedding=embedding)
+
+    def get_server_memories(self, guild_id: int, limit: int = 10) -> str:
+        """Legacy compat: get server memories → auto memories with user_id=0."""
+        return self.get_auto_memories(guild_id, 0, limit=limit)
+
+    def get_lore(self, guild_id: int) -> str:
+        """Legacy compat: get_lore → get_server_lore."""
+        return self.get_server_lore(guild_id)
+
+    def get_dm_memories(self, user_id: int, limit: int = 10, character_name: str = None) -> str:
+        """Legacy compat: DM memories → auto memories with server_id=0."""
+        return self.get_auto_memories(0, user_id, limit=limit)
+
+    def get_user_memories(self, guild_id: int, user_id: int, limit: int = 5, character_name: str = None) -> str:
+        """Legacy compat: user memories → auto memories."""
+        return self.get_auto_memories(guild_id, user_id, limit=limit)
+
+    def get_global_user_profile(self, user_id: int, limit: int = 5) -> str:
+        """Legacy compat: global profile → user lore + auto memories across servers."""
+        return self.get_user_lore(user_id)
+
+    # ==========================================================================
+    # LLM DEDUPLICATION
+    # ==========================================================================
+
+    def should_llm_deduplicate(self, key: str) -> bool:
+        """Check if a key has accumulated enough new memories to trigger LLM dedup."""
+        count = self._memory_creation_counter.get(key, 0)
+        return count >= self._LLM_DEDUP_EVERY
+
+    async def llm_deduplicate(self, key: str, provider_manager):
+        """Use LLM to consolidate and deduplicate memories for a key."""
+        memories = self.auto_memories.get(key, [])
+        if len(memories) < 3:
+            return
+
+        # Build context
+        memory_lines = [f"{i+1}. {m['content']}" for i, m in enumerate(memories)]
+        memory_text = "\n".join(memory_lines)
+
+        user_name = memories[0].get('user_name', 'the user') if memories else 'the user'
+
+        prompt = f"""Here are {len(memories)} stored memories about {user_name}. Some may be duplicates or redundant.
+
+Consolidate them into a clean, deduplicated list. Merge similar facts. Remove exact duplicates.
+Keep all unique information. Return one memory per line, no numbering.
+
+Memories:
+{memory_text}
+
+Deduplicated memories (one per line):"""
+
+        try:
+            result = await provider_manager.generate(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt="You are a memory consolidation assistant. Return only the deduplicated list, one per line."
+            )
+
+            if result and not result.startswith("❌"):
+                result = remove_thinking_tags(result)
+                new_lines = [line.strip() for line in result.strip().split("\n") if line.strip()]
+                # Rebuild memory entries
+                new_memories = []
+                for line in new_lines:
+                    # Remove leading "- " or numbering
+                    line = re.sub(r'^[\-\d\.\)]+\s*', '', line).strip()
+                    if not line:
+                        continue
+                    new_memories.append({
+                        "content": line,
+                        "timestamp": datetime.now().isoformat(),
+                        "fingerprint": _memory_fingerprint(line),
+                        "user_id": memories[0].get("user_id"),
+                        "server_id": memories[0].get("server_id"),
+                        "user_name": memories[0].get("user_name"),
+                        "server_name": memories[0].get("server_name"),
+                        "character": "consolidated",
+                    })
+
+                if new_memories:
+                    before_count = len(memories)
+                    self.auto_memories[key] = new_memories
+                    self._mark_dirty('auto')
+                    self._memory_creation_counter[key] = 0
+                    log.info(f"LLM dedup for {key}: {before_count} -> {len(new_memories)} memories")
+
+        except Exception as e:
+            log.warn(f"LLM deduplication failed for {key}: {e}")
+
+    # ==========================================================================
+    # MEMORY GENERATION
+    # ==========================================================================
 
     async def generate_memory(
         self,
@@ -786,9 +668,8 @@ class MemoryManager:
         if len(messages) < 5:
             return None
 
-        # Global channel-level cooldown: prevent multiple bots from generating
-        # memories for the same channel within the cooldown window
-        channel_key = id_key  # guild_id for servers, user_id for DMs
+        # Global channel-level cooldown
+        channel_key = id_key
         now = time.time()
         last_gen = self._channel_memory_cooldown.get(channel_key, 0)
         if now - last_gen < self._MEMORY_COOLDOWN_SECONDS:
@@ -796,7 +677,7 @@ class MemoryManager:
             return None
         self._channel_memory_cooldown[channel_key] = now
 
-        # Build context with explicit user attribution (using author from history)
+        # Build context with explicit user attribution
         context_lines = []
         for m in messages[-20:]:
             author = m.get('author', 'Unknown')
@@ -808,7 +689,6 @@ class MemoryManager:
                 context_lines.append(f"[{author}]: {content}")
         context = "\n".join(context_lines)
 
-        # Use specific user name in prompt to ensure correct attribution
         target_user = user_name if user_name else "the user"
 
         prompt = f"""Analyze this conversation and extract anything worth remembering about {target_user}.
@@ -849,38 +729,38 @@ Memory about {target_user} (or NOTHING):"""
             )
 
             if result and "NOTHING" not in result.upper() and not result.startswith("❌"):
-                # Sanitize before storing - remove any reasoning tags
                 result = remove_thinking_tags(result)
 
-                # Validate memory is about the correct user - must mention their name
+                # Validate memory is about the correct user
                 if user_name and user_name.lower() not in result.lower():
                     log.debug(f"Rejected memory - doesn't mention target user {user_name}: {result[:100]}")
                     return None
 
-                # Generate embedding ONCE for semantic deduplication across all stores
+                # Generate embedding for semantic dedup
                 embedding = await provider_manager.get_embedding(result.strip())
 
-                if is_dm:
-                    self.add_dm_memory(id_key, result.strip(), auto=True,
-                                       character_name=character_name, user_name=user_name,
-                                       embedding=embedding)
-                    # Also add to global profile (DM facts are always important)
-                    self.add_global_user_profile(id_key, result.strip(), auto=True,
-                                                 user_name=user_name, character_name=character_name,
-                                                 embedding=embedding)
-                else:
-                    # Add to server-wide memory (shared)
-                    self.add_server_memory(id_key, result.strip(), auto=True, embedding=embedding)
+                # Determine server_id and server_name
+                server_id = id_key if not is_dm else 0
+                server_name = None  # Will be populated by caller if available
 
-                    # Also add per-user memory (character-specific)
-                    if user_id:
-                        self.add_user_memory(id_key, user_id, result.strip(), auto=True,
-                                             user_name=user_name, character_name=character_name,
-                                             embedding=embedding)
-                        # Also add to global profile (cross-server)
-                        self.add_global_user_profile(user_id, result.strip(), auto=True,
-                                                     user_name=user_name, character_name=character_name,
-                                                     embedding=embedding)
+                # Store in unified auto memories
+                added = self.add_auto_memory(
+                    server_id=server_id,
+                    user_id=user_id or id_key,
+                    content=result.strip(),
+                    character_name=character_name,
+                    user_name=user_name,
+                    server_name=server_name,
+                    embedding=embedding
+                )
+
+                if added:
+                    # Check if LLM dedup should run
+                    auto_key = self._auto_key(server_id, user_id or id_key)
+                    if self.should_llm_deduplicate(auto_key):
+                        # Fire-and-forget (will run async)
+                        import asyncio
+                        asyncio.create_task(self.llm_deduplicate(auto_key, provider_manager))
 
                 return result.strip()
         except Exception as e:
@@ -888,6 +768,163 @@ Memory about {target_user} (or NOTHING):"""
 
         return None
 
+    # ==========================================================================
+    # MIGRATION FROM LEGACY 5-STORE SYSTEM
+    # ==========================================================================
+
+    def _migrate_if_needed(self):
+        """Check for legacy memory files and migrate to the new unified system."""
+        # Skip if new files already exist
+        if os.path.exists(AUTO_MEMORIES_FILE) or os.path.exists(MANUAL_LORE_FILE):
+            return
+
+        # Check if any legacy files exist
+        legacy_files = [MEMORIES_FILE, LORE_FILE, GLOBAL_USER_PROFILES_FILE,
+                        DM_MEMORIES_FILE, USER_MEMORIES_FILE]
+        has_legacy = any(os.path.exists(f) for f in legacy_files)
+        has_legacy_dirs = (os.path.exists(DM_MEMORIES_DIR) and os.listdir(DM_MEMORIES_DIR)) or \
+                          (os.path.exists(USER_MEMORIES_DIR) and os.listdir(USER_MEMORIES_DIR))
+
+        if not has_legacy and not has_legacy_dirs:
+            return
+
+        log.info("Migrating legacy memory files to unified system...")
+        auto_memories = {}
+        manual_lore = {}
+        stats = {"migrated": 0, "skipped_dupes": 0}
+
+        def _add_auto(key, entry):
+            if key not in auto_memories:
+                auto_memories[key] = []
+            content = entry.get("content", "")
+            if not content:
+                return
+            if _is_duplicate_memory(content, auto_memories[key]):
+                stats["skipped_dupes"] += 1
+                return
+            auto_memories[key].append({
+                "content": content,
+                "timestamp": entry.get("timestamp", datetime.now().isoformat()),
+                "fingerprint": entry.get("fingerprint") or _memory_fingerprint(content),
+                "user_name": entry.get("user_name"),
+                "character": entry.get("character") or entry.get("learned_from"),
+            })
+            stats["migrated"] += 1
+
+        # 1. Server memories (memories.json) → auto_memories keyed by server:X:user:0
+        if os.path.exists(MEMORIES_FILE):
+            data = safe_json_load(MEMORIES_FILE)
+            for guild_id, entries in data.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        subj = entry.get("subject_user_id")
+                        uid = int(subj) if subj else 0
+                        key = f"server:{guild_id}:user:{uid}"
+                        _add_auto(key, entry)
+
+        # 2. Lore (lore.json) → manual_lore keyed by server:X
+        if os.path.exists(LORE_FILE):
+            data = safe_json_load(LORE_FILE)
+            for guild_id, lore_text in data.items():
+                if not isinstance(lore_text, str) or not lore_text.strip():
+                    continue
+                key = f"server:{guild_id}"
+                manual_lore[key] = [{
+                    "content": lore_text.strip(),
+                    "timestamp": datetime.now().isoformat(),
+                    "fingerprint": _memory_fingerprint(lore_text),
+                    "added_by": "migrated"
+                }]
+                stats["migrated"] += 1
+
+        # 3. Global user profiles → auto_memories (merged across servers)
+        if os.path.exists(GLOBAL_USER_PROFILES_FILE):
+            data = safe_json_load(GLOBAL_USER_PROFILES_FILE)
+            for user_id, entries in data.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        key = f"dm:0:user:{user_id}"
+                        _add_auto(key, entry)
+
+        # 4. Per-character DM memories
+        if os.path.exists(DM_MEMORIES_DIR):
+            for filepath in glob.glob(os.path.join(DM_MEMORIES_DIR, "*.json")):
+                data = safe_json_load(filepath)
+                for user_id, entries in data.items():
+                    if not isinstance(entries, list):
+                        continue
+                    for entry in entries:
+                        if isinstance(entry, dict):
+                            key = f"dm:0:user:{user_id}"
+                            _add_auto(key, entry)
+
+        # 5. Legacy shared DM memories
+        if os.path.exists(DM_MEMORIES_FILE):
+            data = safe_json_load(DM_MEMORIES_FILE)
+            for user_id, entries in data.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        key = f"dm:0:user:{user_id}"
+                        _add_auto(key, entry)
+
+        # 6. Per-character user memories
+        if os.path.exists(USER_MEMORIES_DIR):
+            for filepath in glob.glob(os.path.join(USER_MEMORIES_DIR, "*.json")):
+                data = safe_json_load(filepath)
+                for guild_id, guild_data in data.items():
+                    if not isinstance(guild_data, dict):
+                        continue
+                    for user_id, entries in guild_data.items():
+                        if not isinstance(entries, list):
+                            continue
+                        for entry in entries:
+                            if isinstance(entry, dict):
+                                key = f"server:{guild_id}:user:{user_id}"
+                                _add_auto(key, entry)
+
+        # 7. Legacy shared user memories
+        if os.path.exists(USER_MEMORIES_FILE):
+            data = safe_json_load(USER_MEMORIES_FILE)
+            for guild_id, guild_data in data.items():
+                if not isinstance(guild_data, dict):
+                    continue
+                for user_id, entries in guild_data.items():
+                    if not isinstance(entries, list):
+                        continue
+                    for entry in entries:
+                        if isinstance(entry, dict):
+                            key = f"server:{guild_id}:user:{user_id}"
+                            _add_auto(key, entry)
+
+        # Save new files
+        safe_json_save(AUTO_MEMORIES_FILE, auto_memories)
+        safe_json_save(MANUAL_LORE_FILE, manual_lore)
+
+        # Rename old files to .bak
+        for f in legacy_files:
+            if os.path.exists(f):
+                try:
+                    os.rename(f, f + ".bak")
+                except Exception as e:
+                    log.warn(f"Could not rename {f} to .bak: {e}")
+
+        # Rename legacy directories
+        for d in [DM_MEMORIES_DIR, USER_MEMORIES_DIR]:
+            if os.path.exists(d):
+                try:
+                    os.rename(d, d + "_bak")
+                except Exception as e:
+                    log.warn(f"Could not rename {d} to _bak: {e}")
+
+        log.ok(f"Migration complete: {stats['migrated']} memories migrated, {stats['skipped_dupes']} duplicates skipped")
+
 
 # Global instance
 memory_manager = MemoryManager()
+

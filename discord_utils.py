@@ -362,7 +362,7 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None, is_bot: bool = False):
     """Add a message to conversation history.
 
     Args:
@@ -373,6 +373,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         user_id: Discord user ID (for mention features)
         guild: Discord guild object for resolving mentions (optional)
         message_id: Discord message ID (for precise duplicate detection)
+        is_bot: Whether the author is a bot (for context filtering)
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
@@ -397,9 +398,15 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["user_id"] = user_id
     if message_id:
         msg["message_id"] = message_id
+    if is_bot:
+        msg["is_bot"] = True
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
-    msg_hash = hash((role, content, author_name or ''))
+    # Include message_id when available so different Discord messages with same content aren't deduped
+    if message_id:
+        msg_hash = hash((role, content, author_name or '', message_id))
+    else:
+        msg_hash = hash((role, content, author_name or ''))
     if channel_id not in _recent_message_hashes:
         _recent_message_hashes[channel_id] = OrderedDict()
 
@@ -529,20 +536,45 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
-def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5, 
-                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5,
+                         current_bot_name: str = None,
+                         user_only: bool = False, context_count: int = 10) -> Tuple[List[dict], List[dict]]:
     """
-    Split history into two parts for the new context structure:
+    Split history into two parts for the context structure:
     - history: older messages (background context)
     - immediate: recent messages (placed after chatroom context for focused response)
-    
-    If current_bot_name is provided, other bots' messages will be tagged with their name
-    (like user messages) to prevent personality bleed.
-    
+
+    When user_only=True (paper-backed mode):
+    - Only human user messages are included (all bot/assistant messages discarded)
+    - Returns ([], last N user messages) — no history split needed
+
+    When user_only=False (legacy mode):
+    - If current_bot_name is provided, other bots' messages will be tagged with their name
+      (like user messages) to prevent personality bleed.
+
     Returns: (history_messages, immediate_messages)
     """
-    all_history = get_history(channel_id)[-total_limit:]  # Apply total limit
-    
+    all_history = get_history(channel_id)
+
+    if user_only:
+        # Paper-backed mode: only include human user messages, discard ALL bot/assistant messages
+        user_messages = [
+            msg for msg in all_history
+            if msg.get("role") == "user" and not msg.get("is_bot", False)
+        ]
+        # Take last N user messages only
+        recent_user = user_messages[-context_count:]
+        formatted = []
+        for msg in recent_user:
+            author = msg.get("author", "Unknown")
+            content = f"{author}: {msg.get('content', '')}"
+            formatted.append({"role": "user", "content": content})
+        # No split needed — everything goes to immediate
+        return [], formatted
+
+    # Legacy mode: include all messages with bot personality bleed prevention
+    all_history = all_history[-total_limit:]
+
     # Format all messages
     formatted = []
     for msg in all_history:
@@ -562,15 +594,15 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
             # If same bot or no author field, keep as assistant (no prefix)
 
         formatted.append({"role": role, "content": content})
-    
+
     # Split into history and immediate
     if len(formatted) <= immediate_count:
         # Not enough messages - everything goes to immediate
         return [], formatted
-    
+
     history = formatted[:-immediate_count]
     immediate = formatted[-immediate_count:]
-    
+
     return history, immediate
 
 
@@ -881,12 +913,13 @@ AUTONOMOUS_FILE = "bot_data/autonomous.json"
 
 
 class AutonomousManager:
-    """Manages autonomous (unprompted) responses with persistent storage."""
-    
+    """Manages autonomous (unprompted) responses and nickname trigger scoping with persistent storage."""
+
     def __init__(self):
         self.enabled_channels: Dict[int, float] = {}
         self.channel_cooldowns: Dict[int, timedelta] = {}
         self.allow_bot_triggers: Dict[int, bool] = {}  # Per-channel bot trigger control
+        self.nickname_trigger_channels: Dict[int, bool] = {}  # Per-channel nickname trigger toggle
         self.last_autonomous: Dict[int, datetime] = {}
         self.default_cooldown = timedelta(minutes=2)
         self._load()
@@ -894,8 +927,17 @@ class AutonomousManager:
     def _load(self):
         """Load settings from disk."""
         data = safe_json_load(AUTONOMOUS_FILE, default={})
+
+        # Load per-channel nickname trigger settings (stored at top level)
+        nickname_data = data.pop('_nickname_triggers', {})
+        for ch_id, enabled in nickname_data.items():
+            self.nickname_trigger_channels[int(ch_id)] = bool(enabled)
+
         for ch_id, settings in data.items():
-            ch_id = int(ch_id)
+            try:
+                ch_id = int(ch_id)
+            except (ValueError, TypeError):
+                continue
             self.enabled_channels[ch_id] = settings.get('chance', 0.05)
             self.channel_cooldowns[ch_id] = timedelta(minutes=settings.get('cooldown', 2))
             self.allow_bot_triggers[ch_id] = settings.get('allow_bot_triggers', False)
@@ -910,6 +952,9 @@ class AutonomousManager:
                 'cooldown': int(cooldown.total_seconds() // 60),
                 'allow_bot_triggers': self.allow_bot_triggers.get(ch_id, False)
             }
+        # Store nickname trigger settings under a reserved key
+        if self.nickname_trigger_channels:
+            data['_nickname_triggers'] = {str(k): v for k, v in self.nickname_trigger_channels.items()}
         os.makedirs(os.path.dirname(AUTONOMOUS_FILE), exist_ok=True)
         safe_json_save(AUTONOMOUS_FILE, data)
     
@@ -936,6 +981,18 @@ class AutonomousManager:
                 del self.allow_bot_triggers[channel_id]
         self._save()
     
+    def is_nickname_trigger_enabled(self, channel_id: int) -> bool:
+        """Check if nickname triggers are enabled for a channel. Default: OFF."""
+        return self.nickname_trigger_channels.get(channel_id, False)
+
+    def set_nickname_trigger(self, channel_id: int, enabled: bool):
+        """Enable or disable nickname triggers for a channel."""
+        if enabled:
+            self.nickname_trigger_channels[channel_id] = True
+        elif channel_id in self.nickname_trigger_channels:
+            del self.nickname_trigger_channels[channel_id]
+        self._save()
+
     def can_bot_trigger(self, channel_id: int) -> bool:
         """Check if bots can trigger name-based responses in this channel."""
         return self.allow_bot_triggers.get(channel_id, False)

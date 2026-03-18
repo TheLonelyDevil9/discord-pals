@@ -4,6 +4,31 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.0] - 2026-03-19
+
+### Added
+
+- **Autonomous DM follow-ups** — bots send organic follow-up messages in DMs after configurable silence periods; timeout, max count, and cooldown all adjustable from dashboard
+- **Scoped nickname triggers** — per-channel toggle (default OFF) for name-based triggers; new `/nickname-trigger` slash command and dashboard toggle in Channels page; bot only responds to @mentions/replies unless explicitly enabled
+- **User-only context mode** — based on "Do LLMs Benefit From Their Own Words?" paper; discards ALL bot/assistant messages from LLM context, sending only the last N human user messages; drastically reduces impersonation and context poisoning
+- **Unified memory system** — consolidated 5 memory stores (server, DM, user, global profiles, lore) into 2 (auto memories + manual lore); automatic migration from legacy stores on startup with .bak backups
+- **LLM-based memory deduplication** — after every 5 auto-memories per user, an LLM consolidates and removes redundant entries
+- **Manual lore system** — lore can be attached to users, bots, or servers; add/edit/delete via dashboard or `/lore` command with type selection
+- **Mass delete for memories and lore** — checkbox selection + "Delete Selected" in dashboard for both auto memories and manual lore
+- **New v2 memory API endpoints** — `/api/v2/memories/auto`, `/api/v2/memories/lore` with filtering, batch delete, and add/edit support
+
+### Changed
+
+- **Context system** — `format_history_split()` now supports `user_only` mode that filters out all bot messages; `is_bot` flag added to history entries for filtering
+- **Memory commands** — `/memory`, `/memories`, `/lore`, and `/clearmemories` simplified to work with unified 2-store system
+- **Dashboard** — Memories page tabs renamed to "Auto Memories" and "Manual Lore"; Config page gets new "User-Only Context" toggle, "Context Message Count" slider, and "DM Follow-ups" section
+
+### Fixed
+
+- **Queue/generation bug** — `add_to_history()` hash dedup now includes `message_id` to prevent different Discord messages with same content from being silently dropped
+- **Duplicate detection hardening** — `_build_request_context()` content-based fallback now skipped when message_id is available; `already_in_history` check uses message_id exclusively
+- **Per-user pending limit** — increased from 2 to 3 in request queue to prevent legitimate requests from being dropped
+
 ## [v1.7.0] - 2026-03-05
 
 ### Added
