@@ -791,6 +791,36 @@ class BotInstance:
             messages_for_api.append({"role": "system", "content": chatroom_context})
         messages_for_api.extend(immediate)
 
+        # Synthetic first-turn fallback for user_only mode
+        # If user_only is enabled and there are no assistant turns, inject one from example_dialogue
+        use_user_only = runtime_config.get("user_only_context", False)
+        if use_user_only and not any(m.get("role") == "assistant" for m in messages_for_api):
+            if self.character.example_dialogue:
+                # Parse first assistant line from example_dialogue
+                # Look for patterns like "{{char}}:" or character name followed by colon
+                example_lines = self.character.example_dialogue.strip().split('\n')
+                synthetic_turn = None
+
+                for line in example_lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Match "{{char}}:" or "CharacterName:" at start of line
+                    if line.startswith("{{char}}:") or line.startswith(f"{self.character.name}:"):
+                        # Extract content after the prefix
+                        synthetic_turn = line.split(':', 1)[1].strip()
+                        break
+
+                if synthetic_turn:
+                    # Insert at the beginning of messages_for_api (after system messages)
+                    # Find the first non-system message position
+                    insert_pos = 0
+                    for i, msg in enumerate(messages_for_api):
+                        if msg.get("role") != "system":
+                            insert_pos = i
+                            break
+                    messages_for_api.insert(insert_pos, {"role": "assistant", "content": synthetic_turn})
+
         return {
             "system_prompt": system_prompt,
             "messages_for_api": messages_for_api,

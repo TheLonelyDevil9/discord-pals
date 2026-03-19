@@ -34,8 +34,8 @@ DEFAULTS = {
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
     "mention_context_limit": 10,  # Max users to show in mention context for AI
     # Context system
-    "user_only_context": True,  # When True, only human user messages are sent to the AI (discards all bot/assistant messages)
-    "context_message_count": 10,  # Last N user messages to include when user_only_context is True
+    "user_only_context": False,  # When True, only human user messages are sent to the AI (discards all bot/assistant messages)
+    "user_only_context_count": 20,  # Last N user messages to include when user_only_context is True
     # DM follow-up settings
     "dm_followup_enabled": False,  # Enable autonomous DM follow-ups after silence
     "dm_followup_timeout_minutes": 120,  # Minutes of silence before sending a follow-up

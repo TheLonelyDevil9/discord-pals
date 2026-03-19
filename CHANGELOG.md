@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.2] - 2026-03-19
+
+### Fixed
+
+- **LLM responding as generic assistant** — `user_only_context` defaulted to `True` in v1.8.0, immediately stripping all assistant turns for all users; LLMs lost roleplay pattern and defaulted to "helpful assistant" mode regardless of system prompt; now defaults to `False` (opt-in via dashboard)
+- **User-only mode now keeps last 3 assistant turns** — instead of only 1 (v1.8.1), now keeps the current bot's last 3 responses interleaved chronologically with user messages; provides stronger conversational anchoring while still discarding other bots and older history
+- **Synthetic first-turn fallback** — when user-only mode is enabled and the bot has never responded in a channel, injects a synthetic assistant turn from the character's `example_dialogue` to maintain roleplay pattern; skips gracefully if no example dialogue exists
+- **Context viewer scroll position preserved** — increased poll interval from 3s to 10s and added content hashing; DOM only updates when context actually changes, preventing mid-scroll jumps
+
+### Changed
+
+- Renamed `context_message_count` to `user_only_context_count` for clarity (default: 20)
+
 ## [v1.8.1] - 2026-03-19
 
 ### Fixed

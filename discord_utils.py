@@ -558,21 +558,22 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
 
     if user_only:
         # Paper-backed mode: primarily human user messages, with the current bot's
-        # most recent response kept as a single assistant turn for conversational flow.
-        # Without at least one assistant turn, LLMs lose the roleplay pattern entirely.
+        # last 3 responses kept as assistant turns for conversational flow.
+        # Without assistant turns, LLMs lose the roleplay pattern entirely.
 
-        # Find the current bot's last response (for conversational anchoring)
-        last_bot_response = None
-        last_bot_idx = -1
+        # Find the current bot's last 3 responses (for conversational anchoring)
+        bot_responses = []
         if current_bot_name:
             for i in range(len(all_history) - 1, -1, -1):
                 msg = all_history[i]
                 if msg.get("role") == "assistant":
                     author = msg.get("author", "")
                     if not author or (current_bot_name and author.lower() == current_bot_name.lower()):
-                        last_bot_response = msg
-                        last_bot_idx = i
-                        break
+                        bot_responses.append((i, msg))
+                        if len(bot_responses) >= 3:
+                            break
+            # Reverse to chronological order (oldest first)
+            bot_responses.reverse()
 
         # Collect human user messages only
         user_messages = [
@@ -582,22 +583,27 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
         # Take last N user messages
         recent_user = user_messages[-context_count:]
 
+        # Merge user messages and bot responses chronologically
         formatted = []
-        bot_inserted = False
+        bot_idx = 0
 
-        for idx, msg in recent_user:
-            # Insert the bot's last response at its chronological position
-            if last_bot_response and not bot_inserted and idx > last_bot_idx:
-                formatted.append({"role": "assistant", "content": last_bot_response.get("content", "")})
-                bot_inserted = True
+        for user_idx, user_msg in recent_user:
+            # Insert any bot responses that come before this user message
+            while bot_idx < len(bot_responses) and bot_responses[bot_idx][0] < user_idx:
+                _, bot_msg = bot_responses[bot_idx]
+                formatted.append({"role": "assistant", "content": bot_msg.get("content", "")})
+                bot_idx += 1
 
-            author = msg.get("author", "Unknown")
-            content = f"{author}: {msg.get('content', '')}"
+            # Add the user message
+            author = user_msg.get("author", "Unknown")
+            content = f"{author}: {user_msg.get('content', '')}"
             formatted.append({"role": "user", "content": content})
 
-        # If bot response was after all selected user messages, append at end
-        if last_bot_response and not bot_inserted:
-            formatted.append({"role": "assistant", "content": last_bot_response.get("content", "")})
+        # Append any remaining bot responses that come after all user messages
+        while bot_idx < len(bot_responses):
+            _, bot_msg = bot_responses[bot_idx]
+            formatted.append({"role": "assistant", "content": bot_msg.get("content", "")})
+            bot_idx += 1
 
         return [], formatted
 

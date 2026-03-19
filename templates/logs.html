@@ -716,6 +716,18 @@ document.addEventListener('visibilitychange', () => {
 // Context polling
 let contextPollInterval = null;
 
+let _lastContextHash = '';
+
+function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash;
+}
+
 async function fetchContexts() {
     try {
         const response = await fetch('/api/contexts');
@@ -767,7 +779,13 @@ function renderContexts(contexts) {
             </div>
         </div>`;
     }
-    container.innerHTML = html;
+
+    // Only update DOM if content changed
+    const hash = simpleHash(html);
+    if (hash !== _lastContextHash) {
+        _lastContextHash = hash;
+        container.innerHTML = html;
+    }
 }
 
 // Override switchTab to manage context polling
@@ -777,7 +795,7 @@ switchTab = function(tabName) {
     if (tabName === 'context') {
         fetchContexts();
         if (!contextPollInterval) {
-            contextPollInterval = setInterval(fetchContexts, 3000);
+            contextPollInterval = setInterval(fetchContexts, 10000);
         }
     } else {
         if (contextPollInterval) {
@@ -790,7 +808,7 @@ switchTab = function(tabName) {
 // Initial context fetch if context tab is active
 if (document.getElementById('tab-context').classList.contains('active')) {
     fetchContexts();
-    contextPollInterval = setInterval(fetchContexts, 3000);
+    contextPollInterval = setInterval(fetchContexts, 10000);
 }
 </script>
 {% endblock %}
