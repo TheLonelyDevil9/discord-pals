@@ -60,15 +60,19 @@ The system instructions were authored by legendary chef @Geechan.
   - Autonomous channel monitoring
 - **Character hot-swap** - Switch characters via dashboard or `/switch` command
 - **Multi-bot support** - Run multiple bots from a single terminal/process
-- **Memory system** - Per-character isolation with cross-server user profiles
+- **Memory system** - Unified 2-store system: auto memories (per-user, per-server) and manual lore (attachable to users, bots, or servers)
 - **Auto-memory** - Automatically remembers important facts from conversations
+- **Memory deduplication** - LLM-based consolidation every 5 auto-memories per user to prevent redundancy
 - **History persistence** - Conversation history survives restarts
+- **User-only context mode** - Send only human messages to the LLM (opt-in), reduces impersonation and context poisoning
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Instant responses** - Bot responds to every message immediately (no batching delay)
-- **Memory deduplication** - Automatically prevents duplicate memories from being stored
+- **Memory deduplication** - LLM-based consolidation every 5 auto-memories per user to prevent redundancy
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
+- **Killswitch** - `/pause` command for emergency stop of all bot activity
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
 - **Impersonation prevention** - Bots won't roleplay as each other in multi-bot setups
+- **User ignore system** - `/ignore`, `/unignore`, `/ignorelist` to block specific bots from responding to you
 - **Context-aware commands** - Slash commands use chat history and memories
 - **Flexible interactions** - `/interact` command for hugs, kisses, bonks, roasts, and any custom action
 - **Smart responses** - Tracks reply chains with full message context
@@ -79,9 +83,10 @@ The system instructions were authored by legendary chef @Geechan.
 - **Split replies** - Send separate messages to multiple mentioned users
 - **Custom nicknames** - Define additional trigger words beyond bot name
 - **Autonomous mode** - Bot randomly joins conversations (configurable per-channel)
-  - Name triggers (responding to nickname mentions) are now a subset of autonomous mode
+  - Name triggers (responding to nickname mentions) scoped per-channel via `/nickname-trigger`
   - Per-channel control over whether bots/apps can trigger responses
   - Configurable response chance and cooldown per channel
+- **Autonomous DM follow-ups** - Bots send organic follow-up messages in DMs after configurable silence periods
 
 ---
 
@@ -526,21 +531,14 @@ Changes are saved immediately. Use `/reload` in Discord or click the reload butt
 
 ### Memories & Lore Page
 
-Manage all memory types:
+Manage the bot's memory system:
 
-- **Server Memories** - Shared events and facts for the server
-- **User Memories** - Per-user facts (with Discord username resolution)
-- **DM Memories** - Private conversation memories per character
-- **Global User Profiles** - Cross-server facts that follow users
-- **Lore** - World-building information shared across characters
-
-Features:
-
-- Add, edit, and delete memories
-- Filter by server, user, or character
-- User ID to username resolution for readability
-- **Collapsible Cards** - Click card headers to collapse/expand (large files collapse by default)
-- **Format JSON** - Button in raw editor to pretty-print and validate JSON
+- **Auto Memories** — View, edit, and delete automatically created memories per user/server
+- **Manual Lore** — Add, edit, and delete lore entries scoped to users, bots, or servers
+- **Mass Delete** — Checkbox selection with "Delete Selected" for bulk cleanup
+- **Filtering** — Filter by server, user, or type
+- **User Resolution** — User IDs displayed as readable Discord names
+- **Collapsible Cards** — Click card headers to collapse/expand (large sections collapse by default)
 
 ### Channels Page
 
@@ -559,10 +557,12 @@ Click the channel name to expand settings, or use the quick toggle to enable/dis
 
 Adjust runtime settings without restarting:
 
-- **History Limit** - Messages included in context (default: 200)
-- **Name Trigger Chance** - Probability of responding to name mentions
-- **Provider Selection** - Switch between configured providers
-- **Single User Mode** - SillyTavern-style message formatting
+- **History & Context** — History limit, immediate message count, user-only context mode
+- **Name Trigger Chance** — Probability of responding to name mentions
+- **Provider Selection** — Switch between configured providers
+- **Single User Mode** — SillyTavern-style message formatting
+- **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
+- **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
 
@@ -572,28 +572,39 @@ Monitor your bot in real-time:
 
 - **Live Log Stream** - Watch bot activity as it happens (with server-side clear)
 - **Message Stats** - Daily message counts, response times, top users
-- **Context Visualization** - See exactly what context is sent to the AI (live polling every 3 seconds)
+- **Context Visualization** - See exactly what context is sent to the AI (live polling every 10 seconds, scroll-safe)
 - **Error Tracking** - View recent errors and provider failures
 
 ---
 
 ## Memory Architecture
 
-The bot uses a layered memory system for intelligent context management:
+The bot uses a unified 2-store memory system:
 
-| Memory Type | Scope | File Location |
-|-------------|-------|---------------|
-| **Global User Profile** | Cross-server (follows users everywhere) | `bot_data/user_profiles.json` |
-| **DM Memories** | Per-character (each character has own DM memories) | `bot_data/dm_memories/{character}.json` |
-| **User Memories** | Per-character, per-server | `bot_data/user_memories/{character}.json` |
-| **Server Memories** | Shared across all characters | `bot_data/memories.json` |
-| **Lore** | Shared across all characters | `bot_data/lore.json` |
+| Store | Scope | File Location |
+| ----- | ----- | ------------- |
+| **Auto Memories** | Per-user, per-server (fingerprinted by user ID + server ID) | `bot_data/auto_memories.json` |
+| **Manual Lore** | Attachable to users, bots, or servers | `bot_data/manual_lore.json` |
 
-When a user talks to the bot, context is loaded in priority order:
+### Auto Memories
 
-1. Global user profile (facts that follow them across servers)
-2. Character-specific memories about that user
-3. Server-wide memories
+The bot automatically detects and stores important facts from conversations (preferences, relationships, events). To prevent bloat, an LLM-based deduplication pass runs every 5 auto-memories per user, consolidating redundant entries.
+
+User IDs are resolved to readable Discord display names in the dashboard for easy management.
+
+### Manual Lore
+
+Lore entries are user-created context that the bot references during conversations. Each entry can be scoped to:
+
+- **Server** — Shared world-building facts for the entire server
+- **User** — Facts about a specific user
+- **Bot** — Facts about a specific bot/character
+
+Add lore via the dashboard Memories & Lore page, or with the `/lore` slash command.
+
+### Legacy Migration
+
+If upgrading from v1.7.x or earlier, the old 5-store memory system (server memories, DM memories, user memories, global profiles, lore) is automatically migrated on first startup. Backup files (`.bak`) are created before migration.
 
 ---
 
@@ -601,37 +612,41 @@ When a user talks to the bot, context is loaded in priority order:
 
 ### Core Commands
 
-| Command                  | Description                               |
-| ------------------------ | ----------------------------------------- |
-| `/status`                | Check bot and provider status             |
-| `/reload`                | Reload character file (hot-reload)        |
-| `/clear`                 | Clear conversation history                |
-| `/recall <count>`        | Load last N messages (1-200)              |
-
-### Character Commands
-
-| Command                  | Description                               |
-| ------------------------ | ----------------------------------------- |
-| `/character list`        | List available characters                 |
-| `/character set <name>`  | Switch to a different character           |
-| `/character reload`      | Hot-reloads current character file        |
-
-### Memory Commands
-
-| Command                  | Description                               |
-| ------------------------ | ----------------------------------------- |
-| `/memory <text>`         | Save a memory                             |
-| `/memories`              | View saved memories                       |
-| `/clearmemories`         | Clear all memories for the current context |
-| `/lore <text>`           | Add server lore                           |
+| Command | Description |
+| ------- | ----------- |
+| `/status` | Check bot and provider status |
+| `/reload` | Reload character file (hot-reload) |
+| `/switch [character]` | Switch to a different character (or list available) |
+| `/clear` | Clear conversation history |
+| `/recall <count>` | Load last N messages (1-200) |
 
 ### Moderation Commands
 
-| Command                  | Description                               |
-| ------------------------ | ----------------------------------------- |
-| `/autonomous <on/off>`   | Toggle random responses (5% default)      |
-| `/stop [enable]`         | Pause/resume bot-to-bot interactions (flag optional) |
-| `/delete_messages <N>`   | Delete bot's last N messages              |
+| Command | Description |
+| ------- | ----------- |
+| `/autonomous <on/off>` | Toggle random responses (5% default) |
+| `/nickname-trigger <on/off>` | Enable/disable nickname-based triggers for this channel |
+| `/stop [enable]` | Pause/resume bot-to-bot interactions (flag optional) |
+| `/pause [enable]` | KILLSWITCH: Pause/resume ALL bot activity (owner only) |
+| `/delete_messages <N>` | Delete bot's last N messages |
+
+### Memory Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `/memory <text>` | Save a memory about yourself or a user |
+| `/memories` | View saved memories |
+| `/clearmemories [scope]` | Clear memories (scope: auto, server lore, user lore, bot lore) |
+| `/lore <text> [type]` | Add lore (type: server, user, or bot) |
+
+### User Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `/ignore <bot_name>` | Block a bot from responding to you |
+| `/unignore <bot_name>` | Allow a bot to respond to you again |
+| `/ignorelist` | Show which bots you're ignoring |
+| `/interact <action>` | Perform an action (e.g., "hugs you", "tells you a joke") |
 
 ---
 
@@ -648,12 +663,14 @@ Autonomous mode allows bots to randomly join conversations without being explici
 
 ### Name Triggers
 
-Name triggers (responding when the bot's name/nickname is mentioned without @) are now a **subset of autonomous mode**:
+Name triggers (responding when the bot's name/nickname is mentioned without @) are scoped per-channel:
 
-- Name triggers only work in channels where autonomous mode is enabled
+- Use `/nickname-trigger on` to enable name-based triggers for the current channel
+- Default is OFF — bots only respond to @mentions and replies unless explicitly enabled
 - The `name_trigger_chance` runtime config controls the probability of responding to name mentions
 - If `allow_bot_triggers` is disabled for a channel, bots cannot trigger name-based responses
 - **Emoji-safe:** Discord emojis like `:nahida_happy:` won't accidentally trigger nicknames (e.g., "nahida")
+- Also toggleable from the dashboard Channels page
 
 ### Dashboard Configuration
 
@@ -686,6 +703,19 @@ When enabled, the bot sends separate replies to each mentioned user instead of o
 - Enable via `split_replies_enabled: true` in runtime config
 - Limit targets with `split_replies_max_targets` (default: 5)
 - Useful for personalized responses in group conversations
+
+### DM Follow-ups
+
+When enabled, bots send organic follow-up messages in DMs after a configurable period of silence. This encourages continued conversation without being intrusive.
+
+| Setting | Default | Description |
+| ------- | ------- | ----------- |
+| `dm_followup_enabled` | false | Enable autonomous DM follow-ups |
+| `dm_followup_timeout_minutes` | 120 | Minutes of silence before sending a follow-up |
+| `dm_followup_max_count` | 1 | Max follow-up messages before stopping |
+| `dm_followup_cooldown_hours` | 24 | Hours between follow-up attempts for same user |
+
+Configure via the dashboard Config page or `bot_data/runtime_config.json`.
 
 ### Interaction Command
 
@@ -972,6 +1002,12 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `allow_bot_mentions` | true | Allow bots to generate @mentions for users |
 | `allow_bot_to_bot_mentions` | false | Allow bots to @mention other bots (can cause loops!) |
 | `mention_context_limit` | 10 | Max users to show in mention context for AI |
+| `user_only_context` | false | Send only human user messages to the AI (discards bot/assistant messages) |
+| `user_only_context_count` | 20 | Last N user messages to include when user_only_context is enabled |
+| `dm_followup_enabled` | false | Enable autonomous DM follow-ups after silence |
+| `dm_followup_timeout_minutes` | 120 | Minutes of silence before sending a follow-up |
+| `dm_followup_max_count` | 1 | Max follow-up messages before stopping |
+| `dm_followup_cooldown_hours` | 24 | Hours between follow-up attempts for same user |
 
 ### When to Adjust Settings
 
@@ -1147,29 +1183,44 @@ Create password file: `sudo htpasswd -c /etc/nginx/.htpasswd admin`
 
 ```text
 discord-pals/
-├── main.py              # Main bot code
-├── bot_instance.py      # Bot instance management
-├── coordinator.py       # Multi-bot request coordination
-├── config.py            # Settings
-├── providers.py         # AI providers
-├── character.py         # Character loader
-├── memory.py            # Memory system
-├── discord_utils.py     # Discord helpers
-├── request_queue.py     # Anti-spam
-├── startup.py           # Startup validation
-├── diagnose.py          # Provider diagnostics
-├── setup.bat / setup.sh # Interactive setup
-├── run.bat / run.sh     # Start the bot
-├── providers.json       # AI provider config
-├── bots.json            # Multi-bot config **(Optional)**
-├── .env                 # Your tokens **(DO NOT COMMIT)**
-├── characters/          # Character definitions
-│   ├── template.md      # Example template
+├── main.py                  # Entry point, multi-bot launcher
+├── bot_instance.py          # Bot instance, message handling, LLM integration
+├── coordinator.py           # Multi-bot request coordination
+├── config.py                # Configuration loading, provider validation
+├── runtime_config.py        # Live-adjustable runtime settings
+├── constants.py             # Global constants
+├── providers.py             # AI provider abstraction, fallback chain
+├── character.py             # Character file parsing from markdown
+├── memory.py                # Unified 2-store memory system
+├── discord_utils.py         # Discord helpers, history, emoji sanitization
+├── response_sanitizer.py    # Output cleaning, impersonation prevention
+├── request_queue.py         # Anti-spam queue system
+├── user_ignores.py          # User blocking/ignore system
+├── security.py              # Dashboard auth, CSRF protection
+├── logger.py                # Logging setup
+├── stats.py                 # Message statistics tracking
+├── prometheus_metrics.py    # Prometheus monitoring integration
+├── startup.py               # Startup validation checks
+├── version.py               # Version constant
+├── diagnose.py              # Provider connectivity diagnostics
+├── bump_version.py          # Version management script
+├── setup.bat / setup.sh     # Interactive setup wizard
+├── run.bat / run.sh         # Start the bot
+├── providers.json           # AI provider config
+├── bots.json                # Multi-bot config (optional)
+├── .env                     # Your tokens (DO NOT COMMIT)
+├── commands/                # Slash commands
+│   ├── core.py              # Core commands (reload, switch, status, etc.)
+│   ├── memory.py            # Memory/lore commands
+│   └── fun.py               # Interaction command
+├── characters/              # Character definitions
+│   ├── template.md          # Example template
 │   └── your-character.md
-├── prompts/             # System prompt templates
+├── prompts/                 # System prompt templates
 │   ├── system.md
 │   └── chatroom_context.md
-└── bot_data/            # Runtime data (memories, lore)
+├── templates/               # Dashboard HTML (10 pages)
+└── bot_data/                # Runtime data (memories, config, history)
 ```
 
 ---
@@ -1251,6 +1302,7 @@ discord-pals/
 - **Test in DMs:** DM the bot directly for quiet testing
 - **Check status:** Use `/status` to verify provider health
 - **Diagnose issues:** Run `python diagnose.py` for detailed checks
+- **Block a bot:** Use `/ignore <bot_name>` if a bot is bothering you
 
 ---
 
@@ -1263,6 +1315,6 @@ discord-pals/
 
 ---
 
-Made with ❤️ by TLD (and Opus 4.5).
+Made with ❤️ by TLD (and Opus 4.6).
 
 Credits to SpicyMarinara again for the inspiration, and Geechan for naming the project as well as the system prompt!

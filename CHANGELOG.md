@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.4] - 2026-03-19
+
+### Changed
+
+- **Documentation overhaul** — Comprehensive README.md update to match v1.8.x codebase:
+  - Rewrote Memory Architecture section from legacy 5-tier to current 2-store system (auto memories + manual lore)
+  - Added 6 missing slash commands to Commands tables (`/switch`, `/pause`, `/nickname-trigger`, `/ignore`, `/unignore`, `/ignorelist`)
+  - Added 6 missing runtime config settings (user-only context, DM follow-ups)
+  - Updated Dashboard section descriptions (Memories, Config, Logs pages)
+  - Expanded File Structure to include all 22 Python modules and commands/ folder
+  - Added DM Follow-ups and Scoped Nickname Triggers subsections to Autonomous Mode
+  - Updated Features list with user-only context, DM follow-ups, user ignore system, killswitch command
+  - Fixed context viewer polling interval reference (3s → 10s)
+- Updated CONTRIBUTING.md with project structure notes for new contributors
+
 ## [v1.8.3] - 2026-03-19
 
 ### Fixed

@@ -77,6 +77,13 @@ Thank you for your interest in contributing to Discord Pals! This document provi
    - Test edge cases
    - Ensure existing functionality still works
 
+### Project Structure Notes
+
+- **Slash commands** live in `commands/` — `core.py` for core/moderation, `memory.py` for memory/lore, `fun.py` for interactions
+- **Memory system** is unified in `memory.py` — two stores: auto memories and manual lore. Don't create new memory files; use the existing API
+- **Dashboard pages** are Jinja2 templates in `templates/` — each page has a corresponding route in `dashboard.py`
+- **Runtime settings** go in `runtime_config.py` DEFAULTS dict — they're automatically exposed in the dashboard Config page
+
 ### Testing Multi-Bot Features
 
 When testing features that involve multiple bots:
