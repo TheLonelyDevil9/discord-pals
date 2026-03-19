@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.3] - 2026-03-19
+
+### Fixed
+
+- **Auto Channels stat counting stale entries** — dashboard stat included channels from `autonomous.json` that bots can no longer access (deleted channels, left servers); now filters against actually accessible channels
+
 ## [v1.8.2] - 2026-03-19
 
 ### Fixed

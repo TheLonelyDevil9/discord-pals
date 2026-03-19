@@ -176,9 +176,15 @@ def dashboard():
     memory_count = len(get_memory_files())
     character_count = len(get_character_files())
     
-    # Get autonomous channels count
+    # Get autonomous channels count (only count channels bots can still access)
     from discord_utils import autonomous_manager
-    autonomous_count = len(autonomous_manager.enabled_channels)
+    accessible_channel_ids = set()
+    for bot in bot_instances:
+        if hasattr(bot, 'client') and bot.client.is_ready():
+            for guild in bot.client.guilds:
+                for channel in guild.text_channels:
+                    accessible_channel_ids.add(channel.id)
+    autonomous_count = sum(1 for ch_id in autonomous_manager.enabled_channels if ch_id in accessible_channel_ids)
     
     # Get global state for control panel
     global_paused = runtime_config.get("global_paused", False)
