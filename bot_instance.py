@@ -83,6 +83,9 @@ class BotInstance:
         # DM follow-up state
         self._dm_followup_state: Dict[int, dict] = {}  # user_id -> {last_user_msg, followups_sent, last_followup, channel_id}
 
+        # Processed message tracking (prevents duplicate responses to queued messages)
+        self._processed_message_ids: set = set()
+
         # Set up events and commands
         self._setup_events()
         self._setup_commands()
@@ -634,39 +637,22 @@ class BotInstance:
         # Clear the "recently cleared" flag now that we're processing a new message
         acknowledge_cleared(channel_id)
 
-        # Duplicate detection: check if THIS specific message was already processed
-        # Use message ID for precision — content+author matching can falsely collide
-        # across different users or repeated messages
+        # Duplicate detection: check if we've already processed this message_id
         message_id = message.id
-        already_responded = False
-        for i, m in enumerate(history):
-            # Match by message_id if available (most precise)
-            if m.get('message_id') == message_id:
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
-            # Fallback: match by content + author ONLY for legacy entries without message_id
-            # Skip this fallback when we have a message_id (prevents false matches on repeated phrases)
-            elif (message_id and m.get('message_id') is not None):
-                continue  # Both have message_ids but didn't match — not the same message
-            elif (m.get('message_id') is None and
-                  m.get('content') == content and m.get('author') == user_name and m.get('role') == 'user'):
-                for j in range(i + 1, len(history)):
-                    if history[j].get('author') == self.character.name and history[j].get('role') == 'assistant':
-                        already_responded = True
-                        break
-                if already_responded:
-                    break
-
-        if already_responded:
-            log.debug(f"Skipping - already responded to this message from {user_name}", self.name)
+        if message_id in self._processed_message_ids:
+            log.debug(f"Skipping - already processed message {message_id} from {user_name}", self.name)
             return None
 
-        # Only add to history if not already present
-        # Use message_id exclusively when available to prevent false matches on repeated content
+        # Mark as processed
+        self._processed_message_ids.add(message_id)
+
+        # Cleanup: keep only last 1000 processed IDs to prevent unbounded growth
+        if len(self._processed_message_ids) > 1000:
+            sorted_ids = sorted(self._processed_message_ids)
+            for old_id in sorted_ids[:200]:
+                self._processed_message_ids.discard(old_id)
+
+        # Add to history if not already present (may have been passively collected)
         if message_id:
             already_in = any(m.get('message_id') == message_id for m in history[-20:])
         else:

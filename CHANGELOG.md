@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.5] - 2026-03-19
+
+### Fixed
+
+- **Multiple tags only producing one reply** — Duplicate detection scanned history for ANY bot response after a user message, falsely concluding the bot already responded to queued messages. When messages A, B, C were queued and A's response appeared after B and C in history, B and C were silently skipped. Replaced fragile history-scanning with a precise set-based tracker of processed message IDs.
+
 ## [v1.8.4] - 2026-03-19
 
 ### Changed
