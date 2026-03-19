@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.1] - 2026-03-19
+
+### Fixed
+
+- **LLM refusing to roleplay** — user-only context mode was stripping ALL assistant messages, leaving the LLM with zero conversational flow; now keeps the current bot's most recent response as a single assistant turn for anchoring while still discarding all other bot/assistant messages
+
 ## [v1.8.0] - 2026-03-19
 
 ### Added

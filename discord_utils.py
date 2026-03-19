@@ -557,19 +557,48 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
     all_history = get_history(channel_id)
 
     if user_only:
-        # Paper-backed mode: only include human user messages, discard ALL bot/assistant messages
+        # Paper-backed mode: primarily human user messages, with the current bot's
+        # most recent response kept as a single assistant turn for conversational flow.
+        # Without at least one assistant turn, LLMs lose the roleplay pattern entirely.
+
+        # Find the current bot's last response (for conversational anchoring)
+        last_bot_response = None
+        last_bot_idx = -1
+        if current_bot_name:
+            for i in range(len(all_history) - 1, -1, -1):
+                msg = all_history[i]
+                if msg.get("role") == "assistant":
+                    author = msg.get("author", "")
+                    if not author or (current_bot_name and author.lower() == current_bot_name.lower()):
+                        last_bot_response = msg
+                        last_bot_idx = i
+                        break
+
+        # Collect human user messages only
         user_messages = [
-            msg for msg in all_history
+            (idx, msg) for idx, msg in enumerate(all_history)
             if msg.get("role") == "user" and not msg.get("is_bot", False)
         ]
-        # Take last N user messages only
+        # Take last N user messages
         recent_user = user_messages[-context_count:]
+
         formatted = []
-        for msg in recent_user:
+        bot_inserted = False
+
+        for idx, msg in recent_user:
+            # Insert the bot's last response at its chronological position
+            if last_bot_response and not bot_inserted and idx > last_bot_idx:
+                formatted.append({"role": "assistant", "content": last_bot_response.get("content", "")})
+                bot_inserted = True
+
             author = msg.get("author", "Unknown")
             content = f"{author}: {msg.get('content', '')}"
             formatted.append({"role": "user", "content": content})
-        # No split needed — everything goes to immediate
+
+        # If bot response was after all selected user messages, append at end
+        if last_bot_response and not bot_inserted:
+            formatted.append({"role": "assistant", "content": last_bot_response.get("content", "")})
+
         return [], formatted
 
     # Legacy mode: include all messages with bot personality bleed prevention
