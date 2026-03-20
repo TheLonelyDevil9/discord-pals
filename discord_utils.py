@@ -558,8 +558,7 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
 
     if user_only:
         # Paper-backed mode: primarily human user messages, with the current bot's
-        # last 3 responses kept as assistant turns for conversational flow.
-        # Without assistant turns, LLMs lose the roleplay pattern entirely.
+        # last 3 responses and other bots' last 5 messages each for conversational context.
 
         # Find the current bot's last 3 responses (for conversational anchoring)
         bot_responses = []
@@ -572,38 +571,48 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
                         bot_responses.append((i, msg))
                         if len(bot_responses) >= 3:
                             break
-            # Reverse to chronological order (oldest first)
             bot_responses.reverse()
+
+        # Collect last 5 messages from each OTHER bot/app for conversational context
+        # Without these, replies to other bots and bot-bot conversations lose all context
+        other_bot_messages = []
+        bot_authors = {}
+        for i in range(len(all_history) - 1, -1, -1):
+            msg = all_history[i]
+            if msg.get("is_bot", False) and msg.get("role") == "user":
+                author = msg.get("author", "")
+                if author and (not current_bot_name or author.lower() != current_bot_name.lower()):
+                    if author not in bot_authors:
+                        bot_authors[author] = []
+                    if len(bot_authors[author]) < 5:
+                        bot_authors[author].append((i, msg))
+        for msgs in bot_authors.values():
+            other_bot_messages.extend(msgs)
+        other_bot_messages.sort(key=lambda x: x[0])
 
         # Collect human user messages only
         user_messages = [
             (idx, msg) for idx, msg in enumerate(all_history)
             if msg.get("role") == "user" and not msg.get("is_bot", False)
         ]
-        # Take last N user messages
         recent_user = user_messages[-context_count:]
 
-        # Merge user messages and bot responses chronologically
-        formatted = []
-        bot_idx = 0
+        # Build unified timeline: human messages + current bot responses + other bots
+        all_entries = []
 
-        for user_idx, user_msg in recent_user:
-            # Insert any bot responses that come before this user message
-            while bot_idx < len(bot_responses) and bot_responses[bot_idx][0] < user_idx:
-                _, bot_msg = bot_responses[bot_idx]
-                formatted.append({"role": "assistant", "content": bot_msg.get("content", "")})
-                bot_idx += 1
+        for idx, msg in recent_user:
+            author = msg.get("author", "Unknown")
+            all_entries.append((idx, {"role": "user", "content": f"{author}: {msg.get('content', '')}"}))
 
-            # Add the user message
-            author = user_msg.get("author", "Unknown")
-            content = f"{author}: {user_msg.get('content', '')}"
-            formatted.append({"role": "user", "content": content})
+        for idx, msg in bot_responses:
+            all_entries.append((idx, {"role": "assistant", "content": msg.get("content", "")}))
 
-        # Append any remaining bot responses that come after all user messages
-        while bot_idx < len(bot_responses):
-            _, bot_msg = bot_responses[bot_idx]
-            formatted.append({"role": "assistant", "content": bot_msg.get("content", "")})
-            bot_idx += 1
+        for idx, msg in other_bot_messages:
+            author = msg.get("author", "Unknown")
+            all_entries.append((idx, {"role": "user", "content": f"{author}: {msg.get('content', '')}"}))
+
+        all_entries.sort(key=lambda x: x[0])
+        formatted = [entry for _, entry in all_entries]
 
         return [], formatted
 

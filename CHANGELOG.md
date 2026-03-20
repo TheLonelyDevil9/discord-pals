@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.6] - 2026-03-20
+
+### Fixed
+
+- **Other bots' messages missing from user-only context** — In user-only mode, ALL bot/app messages from other bots were completely discarded, making replies to other bots and bot-bot conversations nonsensical. Now includes the last 5 messages from each other bot/app in the channel, formatted as user-role entries with author prefix to prevent personality bleed. Current bot's own last 3 assistant turns still kept separately.
+
 ## [v1.8.5] - 2026-03-19
 
 ### Fixed
