@@ -20,7 +20,7 @@ from security import (
     login_user, logout_user, is_auth_enabled
 )
 from constants import ALLOWED_IMPORT_FILES
-from config import PROVIDERS, CHARACTER_PROVIDERS
+from config import PROVIDERS, CHARACTER_PROVIDERS, AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
 from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
@@ -98,15 +98,36 @@ def check_login():
 
 
 def get_memory_files():
-    """Get all memory JSON files."""
-    # Files that are NOT memories and should be excluded
-    excluded = {"autonomous", "runtime_config", "stats", "history_cache"}
-    files = {}
-    if DATA_DIR.exists():
-        for f in DATA_DIR.glob("*.json"):
-            if f.stem not in excluded:
-                files[f.stem] = f
-    return files
+    """Get unified memory JSON files only."""
+    files = {
+        "auto_memories": Path(AUTO_MEMORIES_FILE),
+        "manual_lore": Path(MANUAL_LORE_FILE),
+    }
+    return {name: path for name, path in files.items() if path.exists()}
+
+
+def get_unified_memory_stats() -> dict:
+    """Get totals from the in-memory unified stores."""
+    from memory import memory_manager
+
+    auto_total = sum(
+        len(entries) for entries in memory_manager.auto_memories.values()
+        if isinstance(entries, list)
+    )
+    manual_total = sum(
+        len(entries) for entries in memory_manager.manual_lore.values()
+        if isinstance(entries, list)
+    )
+
+    return {
+        'total': auto_total + manual_total,
+        'auto': auto_total,
+        'manual': manual_total,
+        'by_type': {
+            'auto_memories': {'total': auto_total, 'auto': auto_total, 'manual': 0},
+            'manual_lore': {'total': manual_total, 'auto': 0, 'manual': manual_total},
+        }
+    }
 
 
 def get_character_files():
@@ -207,18 +228,7 @@ def memories():
     """Memories management page."""
     from stats import stats_manager
     from memory import memory_manager
-    
-    files = get_memory_files()
-    memories_data = {}
-    
-    for name, path in files.items():
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                memories_data[name] = data
-        except Exception as e:
-            memories_data[name] = {"error": str(e)}
-    
+
     user_names = stats_manager.get_all_user_names()
     
     # Get guilds for the dropdown
@@ -241,10 +251,11 @@ def memories():
     characters = get_character_files()
     
     return render_template('memories.html',
-        memories=memories_data,
         user_names=user_names,
         guilds=guilds,
-        characters=characters
+        characters=characters,
+        auto_memory_file='auto_memories',
+        manual_lore_file='manual_lore'
     )
 
 
@@ -1360,7 +1371,7 @@ def api_add_memory():
     from memory import memory_manager
     
     data = request.json or {}
-    memory_type = data.get('type', 'server')  # server, lore, user
+    memory_type = data.get('type', 'server')  # server, lore, user, global
     guild_id = data.get('guild_id')
     user_id = data.get('user_id')
     content = data.get('content', '').strip()
@@ -1371,18 +1382,35 @@ def api_add_memory():
     
     try:
         if memory_type == 'server' and guild_id:
-            memory_manager.add_server_memory(int(guild_id), content, auto=False)
-            log.info(f"Server memory added via dashboard for guild {guild_id}")
+            added = memory_manager.add_auto_memory(
+                server_id=int(guild_id),
+                user_id=0,
+                content=content,
+                character_name=character_name
+            )
+            if not added:
+                return jsonify({'status': 'error', 'message': 'Duplicate auto memory'}), 409
+            log.info(f"Server auto memory added via dashboard for guild {guild_id}")
         elif memory_type == 'lore' and guild_id:
-            memory_manager.add_lore(int(guild_id), content)
+            added = memory_manager.add_lore('server', int(guild_id), content, added_by='dashboard')
+            if not added:
+                return jsonify({'status': 'error', 'message': 'Duplicate lore entry'}), 409
             log.info(f"Lore added via dashboard for guild {guild_id}")
         elif memory_type == 'user' and guild_id and user_id:
-            memory_manager.add_user_memory(int(guild_id), int(user_id), content,
-                                           auto=False, character_name=character_name)
+            added = memory_manager.add_auto_memory(
+                server_id=int(guild_id),
+                user_id=int(user_id),
+                content=content,
+                character_name=character_name
+            )
+            if not added:
+                return jsonify({'status': 'error', 'message': 'Duplicate auto memory'}), 409
             log.info(f"User memory added via dashboard for user {user_id} in guild {guild_id}")
         elif memory_type == 'global' and user_id:
-            memory_manager.add_global_user_profile(int(user_id), content, auto=False)
-            log.info(f"Global user profile added via dashboard for user {user_id}")
+            added = memory_manager.add_lore('user', int(user_id), content, added_by='dashboard')
+            if not added:
+                return jsonify({'status': 'error', 'message': 'Duplicate lore entry'}), 409
+            log.info(f"User lore added via dashboard for user {user_id}")
         else:
             return jsonify({'status': 'error', 'message': 'Invalid memory type or missing IDs'}), 400
         
@@ -1466,34 +1494,31 @@ def api_delete_selected_memories(file_name):
 @requires_csrf
 def api_clear_all_memories(file_name):
     """Clear all memories from a specific file."""
-    import json
+    from memory import memory_manager
 
     try:
-        # Map file names to appropriate clear functions
-        if file_name == 'memories':
-            # This would clear ALL server memories - need guild_id
-            return jsonify({'status': 'error', 'message': 'Cannot clear all server memories without guild_id'}), 400
-        elif file_name == 'lore':
-            # This would clear ALL lore - need guild_id
-            return jsonify({'status': 'error', 'message': 'Cannot clear all lore without guild_id'}), 400
-        elif file_name == 'user_profiles':
-            # Clear all global user profiles - dangerous!
-            file_path = DATA_DIR / f"{file_name}.json"
-            if file_path.exists():
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f)
-                log.warn(f"Cleared ALL global user profiles via dashboard")
-                return jsonify({'status': 'ok', 'message': 'All global user profiles cleared'})
-        else:
-            # For other files (dm_memories, user_memories, etc.), clear the entire file
-            file_path = DATA_DIR / f"{file_name}.json"
-            if file_path.exists():
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f)
-                log.warn(f"Cleared all memories from {file_name} via dashboard")
-                return jsonify({'status': 'ok', 'message': f'All memories cleared from {file_name}'})
-            else:
-                return jsonify({'status': 'error', 'message': 'File not found'}), 404
+        if file_name == 'auto_memories':
+            memory_manager.auto_memories.clear()
+            memory_manager.memory_state['pending_auto_since_dedup'] = {}
+            memory_manager._mark_dirty('auto')
+            memory_manager._mark_dirty('state')
+            log.warn("Cleared all auto memories via dashboard")
+            return jsonify({'status': 'ok', 'message': 'All auto memories cleared'})
+
+        if file_name == 'manual_lore':
+            memory_manager.manual_lore.clear()
+            memory_manager._mark_dirty('lore')
+            log.warn("Cleared all manual lore via dashboard")
+            return jsonify({'status': 'ok', 'message': 'All manual lore cleared'})
+
+        file_path = DATA_DIR / f"{file_name}.json"
+        if file_path.exists():
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump({}, f)
+            log.warn(f"Cleared all memories from legacy file {file_name} via dashboard")
+            return jsonify({'status': 'ok', 'message': f'All memories cleared from {file_name}'})
+
+        return jsonify({'status': 'error', 'message': 'File not found'}), 404
 
     except Exception as e:
         log.error(f"Error clearing memories: {e}")
@@ -1526,20 +1551,22 @@ def api_deduplicate_memories():
         return seen, removed
 
     try:
-        # Deduplicate server memories
-        for guild_id in list(memory_manager.server_memories.keys()):
-            deduped, count = dedupe_list(memory_manager.server_memories[guild_id])
+        for key in list(memory_manager.auto_memories.keys()):
+            deduped, count = dedupe_list(memory_manager.auto_memories[key])
             if count > 0:
-                memory_manager.server_memories[guild_id] = deduped
-                memory_manager._mark_dirty('server')
+                memory_manager.auto_memories[key] = deduped
+                memory_manager._mark_dirty('auto')
+                memory_manager._set_pending_auto_count(
+                    key,
+                    min(memory_manager._get_pending_auto_count(key), len(deduped))
+                )
                 removed_count += count
 
-        # Deduplicate global user profiles
-        for user_id in list(memory_manager.global_user_profiles.keys()):
-            deduped, count = dedupe_list(memory_manager.global_user_profiles[user_id])
+        for key in list(memory_manager.manual_lore.keys()):
+            deduped, count = dedupe_list(memory_manager.manual_lore[key])
             if count > 0:
-                memory_manager.global_user_profiles[user_id] = deduped
-                memory_manager._mark_dirty('global_profiles')
+                memory_manager.manual_lore[key] = deduped
+                memory_manager._mark_dirty('lore')
                 removed_count += count
 
         # Force save
@@ -1731,55 +1758,7 @@ def api_memory_entry_item(file_name, key, index):
 @app.route('/api/memories/stats')
 def api_memory_stats():
     """Get memory statistics across all types."""
-    files = get_memory_files()
-
-    stats = {
-        'total': 0,
-        'auto': 0,
-        'manual': 0,
-        'by_type': {}
-    }
-
-    for name, path in files.items():
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            type_stats = {'total': 0, 'auto': 0, 'manual': 0}
-
-            def count_memories(memories):
-                if isinstance(memories, list):
-                    for item in memories:
-                        if isinstance(item, dict):
-                            type_stats['total'] += 1
-                            stats['total'] += 1
-                            if item.get('auto'):
-                                type_stats['auto'] += 1
-                                stats['auto'] += 1
-                            else:
-                                type_stats['manual'] += 1
-                                stats['manual'] += 1
-                elif isinstance(memories, str):
-                    # Lore entries
-                    type_stats['total'] += 1
-                    type_stats['manual'] += 1
-                    stats['total'] += 1
-                    stats['manual'] += 1
-
-            for key, value in data.items():
-                if isinstance(value, list):
-                    count_memories(value)
-                elif isinstance(value, dict):
-                    for sub_value in value.values():
-                        count_memories(sub_value)
-                elif isinstance(value, str):
-                    count_memories(value)
-
-            stats['by_type'][name] = type_stats
-        except Exception:
-            pass
-
-    return jsonify(stats)
+    return jsonify(get_unified_memory_stats())
 
 
 # --- Unified Memory API (v2) ---
@@ -1807,6 +1786,7 @@ def api_v2_auto_memories():
             results.append({
                 'key': key,
                 'index': idx,
+                'auto': True,
                 'content': entry.get('content', ''),
                 'timestamp': entry.get('timestamp', ''),
                 'user_name': entry.get('user_name', ''),
@@ -1814,11 +1794,54 @@ def api_v2_auto_memories():
                 'character': entry.get('character', ''),
                 'user_id': entry.get('user_id'),
                 'server_id': entry.get('server_id'),
+                'scope': 'dm' if entry.get('server_id') in (None, 0) else 'server',
             })
 
     # Sort by timestamp descending
     results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     return jsonify({'memories': results, 'total': len(results)})
+
+
+@app.route('/api/v2/memories/auto/item', methods=['GET', 'PUT', 'DELETE'])
+@requires_csrf
+def api_v2_auto_memory_item():
+    """CRUD operations on a single auto-memory entry."""
+    from memory import memory_manager
+
+    if request.method == 'GET':
+        key = request.args.get('key')
+        index = request.args.get('index', type=int)
+    else:
+        data = request.json or {}
+        key = data.get('key')
+        index = data.get('index')
+
+    if key is None or index is None:
+        return jsonify({'status': 'error', 'message': 'Missing key or index'}), 400
+
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid index'}), 400
+
+    entries = memory_manager.auto_memories.get(key, [])
+    if not (0 <= index < len(entries)):
+        return jsonify({'status': 'error', 'message': 'Entry not found'}), 404
+
+    if request.method == 'GET':
+        return jsonify(entries[index])
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        content = data.get('content', '').strip()
+        character = data.get('character', '')
+        updated = memory_manager.update_auto_memory(key, index, content, character_name=character or None)
+        if updated:
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'message': 'Invalid or duplicate memory content'}), 409
+
+    memory_manager.delete_auto_memories(key, [index])
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/api/v2/memories/auto/delete-batch', methods=['POST'])
@@ -1887,6 +1910,7 @@ def api_v2_lore():
             results.append({
                 'key': key,
                 'index': idx,
+                'auto': False,
                 'type': lore_type,
                 'target': target,
                 'content': entry.get('content', ''),
@@ -1922,7 +1946,7 @@ def api_v2_lore_add():
 @requires_csrf
 def api_v2_lore_edit():
     """Edit a lore entry."""
-    from memory import memory_manager
+    from memory import memory_manager, _memory_fingerprint
     data = request.json or {}
     key = data.get('key')
     index = data.get('index')
@@ -1934,8 +1958,9 @@ def api_v2_lore_edit():
     entries = memory_manager.manual_lore.get(key, [])
     if 0 <= index < len(entries):
         entries[index]['content'] = content
+        entries[index]['auto'] = False
         entries[index]['timestamp'] = datetime.now().isoformat()
-        entries[index]['fingerprint'] = None  # Will be regenerated
+        entries[index]['fingerprint'] = _memory_fingerprint(content)
         memory_manager._mark_dirty('lore')
         return jsonify({'status': 'ok'})
 

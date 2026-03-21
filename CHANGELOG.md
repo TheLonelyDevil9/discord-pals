@@ -64,7 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Scoped nickname triggers** — per-channel toggle (default OFF) for name-based triggers; new `/nickname-trigger` slash command and dashboard toggle in Channels page; bot only responds to @mentions/replies unless explicitly enabled
 - **User-only context mode** — based on "Do LLMs Benefit From Their Own Words?" paper; discards ALL bot/assistant messages from LLM context, sending only the last N human user messages; drastically reduces impersonation and context poisoning
 - **Unified memory system** — consolidated 5 memory stores (server, DM, user, global profiles, lore) into 2 (auto memories + manual lore); automatic migration from legacy stores on startup with .bak backups
-- **LLM-based memory deduplication** — after every 5 auto-memories per user, an LLM consolidates and removes redundant entries
+- **LLM-based memory deduplication** — after 5 new auto memories for the same user key, an LLM consolidates and removes redundant entries
 - **Manual lore system** — lore can be attached to users, bots, or servers; add/edit/delete via dashboard or `/lore` command with type selection
 - **Mass delete for memories and lore** — checkbox selection + "Delete Selected" in dashboard for both auto memories and manual lore
 - **New v2 memory API endpoints** — `/api/v2/memories/auto`, `/api/v2/memories/lore` with filtering, batch delete, and add/edit support

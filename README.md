@@ -62,12 +62,12 @@ The system instructions were authored by legendary chef @Geechan.
 - **Multi-bot support** - Run multiple bots from a single terminal/process
 - **Memory system** - Unified 2-store system: auto memories (per-user, per-server) and manual lore (attachable to users, bots, or servers)
 - **Auto-memory** - Automatically remembers important facts from conversations
-- **Memory deduplication** - LLM-based consolidation every 5 auto-memories per user to prevent redundancy
+- **Memory deduplication** - LLM-based consolidation after 5 new auto memories for the same user key to prevent redundancy
 - **History persistence** - Conversation history survives restarts
 - **User-only context mode** - Send only human messages to the LLM (opt-in), reduces impersonation and context poisoning
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Instant responses** - Bot responds to every message immediately (no batching delay)
-- **Memory deduplication** - LLM-based consolidation every 5 auto-memories per user to prevent redundancy
+- **Memory deduplication** - LLM-based consolidation after 5 new auto memories for the same user key to prevent redundancy
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
 - **Killswitch** - `/pause` command for emergency stop of all bot activity
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
@@ -588,7 +588,7 @@ The bot uses a unified 2-store memory system:
 
 ### Auto Memories
 
-The bot automatically detects and stores important facts from conversations (preferences, relationships, events). To prevent bloat, an LLM-based deduplication pass runs every 5 auto-memories per user, consolidating redundant entries.
+The bot automatically detects and stores important facts from conversations (preferences, relationships, events). To prevent bloat, an LLM-based deduplication pass runs after 5 new auto memories for the same server/user or DM/user key, consolidating redundant entries.
 
 User IDs are resolved to readable Discord display names in the dashboard for easy management.
 

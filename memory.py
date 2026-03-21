@@ -4,18 +4,19 @@ Unified 2-store memory system: auto memories + manual lore.
 With debounced saving, LLM deduplication, and legacy migration.
 """
 
+import asyncio
 import os
 import re
 import time
 import glob
 import difflib
 import hashlib
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from config import (
     DATA_DIR, MEMORIES_FILE, DM_MEMORIES_FILE, USER_MEMORIES_FILE,
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE,
-    AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
+    AUTO_MEMORIES_FILE, MANUAL_LORE_FILE, MEMORY_STATE_FILE
 )
 from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
 from constants import (
@@ -85,6 +86,22 @@ def _memory_fingerprint(content: str) -> str:
     return digest[:24]  # Use first 24 chars for compact storage
 
 
+def _parse_auto_key(key: str) -> Tuple[Optional[int], Optional[int]]:
+    """Parse a unified auto-memory key into server_id and user_id."""
+    if not isinstance(key, str):
+        return None, None
+
+    server_match = re.fullmatch(r'server:(\d+):user:(\d+)', key)
+    if server_match:
+        return int(server_match.group(1)), int(server_match.group(2))
+
+    dm_match = re.fullmatch(r'dm:0:user:(\d+)', key)
+    if dm_match:
+        return 0, int(dm_match.group(1))
+
+    return None, None
+
+
 def _memory_entry_is_valid(entry: dict) -> bool:
     """Check if a memory entry has minimally valid structure."""
     if not isinstance(entry, dict):
@@ -101,19 +118,29 @@ def _memory_entry_is_valid(entry: dict) -> bool:
     return True
 
 
-def _sanitize_memory_entries(entries: list) -> list:
-    """Drop malformed entries and normalize content/fingerprint fields."""
+def _sanitize_memory_entries(
+    entries: list,
+    *,
+    auto_default: bool,
+    memory_key: str = None
+) -> Tuple[list, bool]:
+    """Drop malformed entries and normalize fields while preserving valid metadata."""
     if not isinstance(entries, list):
-        return []
+        return [], bool(entries)
 
+    fallback_server_id, fallback_user_id = _parse_auto_key(memory_key)
     cleaned_entries = []
     seen_fingerprints = set()
+    changed = False
+
     for entry in entries:
         if not _memory_entry_is_valid(entry):
+            changed = True
             continue
 
         content = _sanitize_memory_content(entry.get('content', ''))
         if not content:
+            changed = True
             continue
 
         fingerprint = entry.get('fingerprint')
@@ -122,6 +149,7 @@ def _sanitize_memory_entries(entries: list) -> list:
 
         # Skip duplicates within this list
         if fingerprint and fingerprint in seen_fingerprints:
+            changed = True
             continue
         if fingerprint:
             seen_fingerprints.add(fingerprint)
@@ -129,28 +157,44 @@ def _sanitize_memory_entries(entries: list) -> list:
         cleaned = {
             "content": content,
             "timestamp": entry.get("timestamp") or datetime.now().isoformat(),
-            "auto": bool(entry.get("auto", False)),
+            "auto": auto_default,
             "fingerprint": fingerprint
         }
 
-        # Preserve optional metadata when valid
-        for key in ("character", "user_name", "learned_from"):
+        # Preserve optional string metadata when valid.
+        for key in ("character", "user_name", "server_name", "learned_from", "added_by"):
             value = entry.get(key)
             if isinstance(value, str) and value:
                 cleaned[key] = value
-        subject_user_id = entry.get("subject_user_id")
-        try:
-            subject_user_id = int(subject_user_id)
-        except (TypeError, ValueError):
-            subject_user_id = None
-        if subject_user_id and subject_user_id > 0:
-            cleaned["subject_user_id"] = subject_user_id
+
+        for key in ("user_id", "server_id", "subject_user_id"):
+            value = entry.get(key)
+            if key == "user_id" and value is None and fallback_user_id is not None:
+                value = fallback_user_id
+            if key == "server_id" and value is None and fallback_server_id is not None:
+                value = fallback_server_id
+
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = None
+
+            if value is None:
+                continue
+            if key == "subject_user_id" and value <= 0:
+                continue
+            if key in ("user_id", "server_id") and value < 0:
+                continue
+            cleaned[key] = value
+
         if isinstance(entry.get("embedding"), list):
             cleaned["embedding"] = entry["embedding"]
 
+        if cleaned != entry:
+            changed = True
         cleaned_entries.append(cleaned)
 
-    return cleaned_entries
+    return cleaned_entries, changed
 
 
 def _contains_fingerprint(memories: list, fingerprint: str) -> bool:
@@ -285,7 +329,7 @@ class MemoryManager:
 
     Store 1: Auto Memories (auto_memories.json)
       - Keyed by "server:{guild_id}:user:{user_id}" or "dm:0:user:{user_id}"
-      - Auto-generated from conversations, with LLM deduplication every N memories
+      - Auto-generated from conversations, with LLM deduplication after 5 new memories per key
 
     Store 2: Manual Lore (manual_lore.json)
       - Keyed by "user:{user_id}", "bot:{bot_name}", or "server:{guild_id}"
@@ -306,17 +350,27 @@ class MemoryManager:
         # New unified stores
         self.auto_memories: Dict[str, List[dict]] = safe_json_load(AUTO_MEMORIES_FILE)
         self.manual_lore: Dict[str, List[dict]] = safe_json_load(MANUAL_LORE_FILE)
+        self.memory_state: Dict[str, Dict[str, int]] = safe_json_load(MEMORY_STATE_FILE)
 
-        # LLM dedup counter per key
-        self._memory_creation_counter: Dict[str, int] = {}
+        auto_changed, lore_changed = self._normalize_loaded_stores()
+        state_changed = self._normalize_memory_state()
 
         # Debounce tracking
         self._dirty_files: set = set()
         self._last_save = time.time()
 
+        # Per-key dedup coordination
+        self._dedup_in_flight: set = set()
+
         # Global channel-level memory generation cooldown (prevents multi-bot duplication)
         self._channel_memory_cooldown: Dict[int, float] = {}
         self._MEMORY_COOLDOWN_SECONDS = 30
+
+        # Only warn once per runtime when embeddings are unavailable.
+        self._embedding_unavailable_logged = False
+
+        if auto_changed or lore_changed or state_changed:
+            self.save_all()
 
     # ==========================================================================
     # PERSISTENCE
@@ -338,6 +392,8 @@ class MemoryManager:
             safe_json_save(AUTO_MEMORIES_FILE, self.auto_memories)
         if 'lore' in self._dirty_files:
             safe_json_save(MANUAL_LORE_FILE, self.manual_lore)
+        if 'state' in self._dirty_files:
+            safe_json_save(MEMORY_STATE_FILE, self.memory_state)
         self._dirty_files.clear()
         self._last_save = time.time()
 
@@ -350,8 +406,135 @@ class MemoryManager:
         """Save all stores to disk."""
         safe_json_save(AUTO_MEMORIES_FILE, self.auto_memories)
         safe_json_save(MANUAL_LORE_FILE, self.manual_lore)
+        safe_json_save(MEMORY_STATE_FILE, self.memory_state)
         self._dirty_files.clear()
         self._last_save = time.time()
+
+    def _normalize_loaded_stores(self) -> Tuple[bool, bool]:
+        """Normalize loaded stores and backfill missing metadata once at startup."""
+        auto_changed = not isinstance(self.auto_memories, dict)
+        lore_changed = not isinstance(self.manual_lore, dict)
+
+        normalized_auto = {}
+        if isinstance(self.auto_memories, dict):
+            for key, entries in self.auto_memories.items():
+                if not isinstance(key, str):
+                    auto_changed = True
+                    continue
+                cleaned_entries, changed = _sanitize_memory_entries(
+                    entries,
+                    auto_default=True,
+                    memory_key=key
+                )
+                auto_changed = auto_changed or changed
+                if cleaned_entries:
+                    normalized_auto[key] = cleaned_entries
+        self.auto_memories = normalized_auto
+
+        normalized_lore = {}
+        if isinstance(self.manual_lore, dict):
+            for key, entries in self.manual_lore.items():
+                if not isinstance(key, str):
+                    lore_changed = True
+                    continue
+                cleaned_entries, changed = _sanitize_memory_entries(
+                    entries,
+                    auto_default=False,
+                    memory_key=key
+                )
+                lore_changed = lore_changed or changed
+                if cleaned_entries:
+                    normalized_lore[key] = cleaned_entries
+        self.manual_lore = normalized_lore
+
+        return auto_changed, lore_changed
+
+    def _normalize_memory_state(self) -> bool:
+        """Normalize persisted internal state and drop stale counters."""
+        changed = False
+        if not isinstance(self.memory_state, dict):
+            self.memory_state = {}
+            changed = True
+
+        raw_pending = self.memory_state.get("pending_auto_since_dedup", {})
+        if not isinstance(raw_pending, dict):
+            raw_pending = {}
+            changed = True
+
+        normalized_pending = {}
+        for key, value in raw_pending.items():
+            if key not in self.auto_memories:
+                changed = True
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                changed = True
+                continue
+            if count < 0:
+                count = 0
+                changed = True
+            count = min(count, len(self.auto_memories.get(key, [])))
+            if count:
+                normalized_pending[key] = count
+            elif value:
+                changed = True
+
+        normalized_state = {"pending_auto_since_dedup": normalized_pending}
+        if normalized_state != self.memory_state:
+            changed = True
+            self.memory_state = normalized_state
+        else:
+            self.memory_state = normalized_state
+
+        return changed
+
+    def _pending_auto_counts(self) -> Dict[str, int]:
+        """Return the mutable pending-auto counter mapping."""
+        pending = self.memory_state.setdefault("pending_auto_since_dedup", {})
+        if not isinstance(pending, dict):
+            pending = {}
+            self.memory_state["pending_auto_since_dedup"] = pending
+        return pending
+
+    def _get_pending_auto_count(self, key: str) -> int:
+        """Get the persisted count of new auto memories since the last dedup."""
+        return int(self._pending_auto_counts().get(key, 0))
+
+    def _set_pending_auto_count(self, key: str, count: int):
+        """Persist the number of new auto memories accumulated for a key."""
+        pending = self._pending_auto_counts()
+        current = int(pending.get(key, 0))
+        max_count = len(self.auto_memories.get(key, []))
+        count = max(0, min(int(count), max_count))
+
+        if count == 0:
+            if key in pending:
+                del pending[key]
+                self._mark_dirty('state')
+            return
+
+        if current != count:
+            pending[key] = count
+            self._mark_dirty('state')
+
+    def _increment_pending_auto_count(self, key: str, amount: int = 1):
+        """Increase the persisted pending-auto counter for a key."""
+        self._set_pending_auto_count(key, self._get_pending_auto_count(key) + amount)
+
+    def _decrement_pending_auto_count(self, key: str, amount: int = 1):
+        """Decrease the persisted pending-auto counter for a key."""
+        self._set_pending_auto_count(key, self._get_pending_auto_count(key) - amount)
+
+    def _log_embedding_unavailable_once(self):
+        """Warn once when embedding support is unavailable."""
+        if self._embedding_unavailable_logged:
+            return
+        log.warn(
+            "Embeddings unavailable; semantic auto-memory dedup is disabled for this runtime. "
+            "Using fingerprint/text dedup plus LLM consolidation instead."
+        )
+        self._embedding_unavailable_logged = True
 
     # ==========================================================================
     # KEY HELPERS
@@ -375,6 +558,55 @@ class MemoryManager:
     @staticmethod
     def _bot_lore_key(bot_name: str) -> str:
         return f"bot:{bot_name}"
+
+    @staticmethod
+    def _build_auto_memory_entry(
+        content: str,
+        *,
+        user_id: int,
+        server_id: int,
+        user_name: str = None,
+        server_name: str = None,
+        character_name: str = None,
+        embedding: list = None,
+        timestamp: str = None
+    ) -> dict:
+        """Build a normalized auto-memory entry."""
+        entry = {
+            "content": content,
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "auto": True,
+            "fingerprint": _memory_fingerprint(content),
+            "user_id": int(user_id),
+            "server_id": int(server_id),
+        }
+        if user_name:
+            entry["user_name"] = user_name
+        if server_name:
+            entry["server_name"] = server_name
+        if character_name:
+            entry["character"] = character_name
+        if isinstance(embedding, list):
+            entry["embedding"] = embedding
+        return entry
+
+    @staticmethod
+    def _build_lore_entry(
+        content: str,
+        *,
+        added_by: str = None,
+        timestamp: str = None
+    ) -> dict:
+        """Build a normalized manual-lore entry."""
+        entry = {
+            "content": content,
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "auto": False,
+            "fingerprint": _memory_fingerprint(content),
+        }
+        if added_by:
+            entry["added_by"] = added_by
+        return entry
 
     # ==========================================================================
     # AUTO MEMORIES
@@ -400,32 +632,22 @@ class MemoryManager:
             log.debug(f"Skipping duplicate auto memory: {content[:50]}...")
             return False
 
-        memory = {
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "fingerprint": _memory_fingerprint(content),
-            "user_id": user_id,
-            "server_id": server_id,
-        }
-        if user_name:
-            memory["user_name"] = user_name
-        if server_name:
-            memory["server_name"] = server_name
-        if character_name:
-            memory["character"] = character_name
-        if embedding:
-            memory["embedding"] = embedding
-
-        self.auto_memories[key].append(memory)
+        self.auto_memories[key].append(self._build_auto_memory_entry(
+            content,
+            user_id=user_id,
+            server_id=server_id,
+            user_name=user_name,
+            server_name=server_name,
+            character_name=character_name,
+            embedding=embedding
+        ))
 
         # Cap at 50 memories per key
         if len(self.auto_memories[key]) > 50:
             self.auto_memories[key] = self.auto_memories[key][-50:]
 
         self._mark_dirty('auto')
-
-        # Track creation count for LLM dedup
-        self._memory_creation_counter[key] = self._memory_creation_counter.get(key, 0) + 1
+        self._increment_pending_auto_count(key)
         return True
 
     def get_auto_memories(self, server_id: int, user_id: int, limit: int = 10) -> str:
@@ -464,18 +686,53 @@ class MemoryManager:
         """Delete specific auto memories by index (descending order safe)."""
         if key not in self.auto_memories:
             return
+        removed = 0
         for idx in sorted(indices, reverse=True):
             if 0 <= idx < len(self.auto_memories[key]):
                 self.auto_memories[key].pop(idx)
+                removed += 1
         if not self.auto_memories[key]:
             del self.auto_memories[key]
+            self._set_pending_auto_count(key, 0)
+        elif removed:
+            self._decrement_pending_auto_count(key, removed)
         self._mark_dirty('auto')
 
     def clear_auto_memories(self, key: str):
         """Clear all auto memories for a key."""
         if key in self.auto_memories:
             del self.auto_memories[key]
+            self._set_pending_auto_count(key, 0)
             self._mark_dirty('auto')
+
+    def update_auto_memory(self, key: str, index: int, content: str, character_name: str = None) -> bool:
+        """Update an existing auto memory without changing its source classification."""
+        entries = self.auto_memories.get(key, [])
+        if not (0 <= index < len(entries)):
+            return False
+
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
+
+        existing = entries[index]
+        other_entries = entries[:index] + entries[index + 1:]
+        if _is_duplicate_memory(content, other_entries):
+            return False
+
+        existing["content"] = content
+        existing["timestamp"] = datetime.now().isoformat()
+        existing["auto"] = True
+        existing["fingerprint"] = _memory_fingerprint(content)
+        existing.pop("embedding", None)
+
+        if character_name:
+            existing["character"] = character_name
+        else:
+            existing.pop("character", None)
+
+        self._mark_dirty('auto')
+        return True
 
     # ==========================================================================
     # MANUAL LORE
@@ -504,15 +761,7 @@ class MemoryManager:
             log.debug(f"Skipping duplicate lore: {content[:50]}...")
             return False
 
-        entry = {
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "fingerprint": _memory_fingerprint(content),
-        }
-        if added_by:
-            entry["added_by"] = added_by
-
-        self.manual_lore[key].append(entry)
+        self.manual_lore[key].append(self._build_lore_entry(content, added_by=added_by))
         self._mark_dirty('lore')
         return True
 
@@ -588,14 +837,25 @@ class MemoryManager:
 
     def should_llm_deduplicate(self, key: str) -> bool:
         """Check if a key has accumulated enough new memories to trigger LLM dedup."""
-        count = self._memory_creation_counter.get(key, 0)
-        return count >= self._LLM_DEDUP_EVERY
+        count = self._get_pending_auto_count(key)
+        return count >= self._LLM_DEDUP_EVERY and key not in self._dedup_in_flight
 
     async def llm_deduplicate(self, key: str, provider_manager):
         """Use LLM to consolidate and deduplicate memories for a key."""
-        memories = self.auto_memories.get(key, [])
-        if len(memories) < 3:
+        if key in self._dedup_in_flight:
+            log.debug(f"LLM dedup already in flight for {key}")
             return
+
+        memories = list(self.auto_memories.get(key, []))
+        if len(memories) < 3:
+            self._set_pending_auto_count(key, min(self._get_pending_auto_count(key), len(memories)))
+            return
+
+        self._dedup_in_flight.add(key)
+        memory_snapshot = [
+            (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
+            for m in memories
+        ]
 
         # Build context
         memory_lines = [f"{i+1}. {m['content']}" for i, m in enumerate(memories)]
@@ -623,32 +883,63 @@ Deduplicated memories (one per line):"""
                 result = remove_thinking_tags(result)
                 new_lines = [line.strip() for line in result.strip().split("\n") if line.strip()]
                 # Rebuild memory entries
-                new_memories = []
+                candidate_lines = []
                 for line in new_lines:
-                    # Remove leading "- " or numbering
                     line = re.sub(r'^[\-\d\.\)]+\s*', '', line).strip()
-                    if not line:
-                        continue
-                    new_memories.append({
-                        "content": line,
-                        "timestamp": datetime.now().isoformat(),
-                        "fingerprint": _memory_fingerprint(line),
-                        "user_id": memories[0].get("user_id"),
-                        "server_id": memories[0].get("server_id"),
-                        "user_name": memories[0].get("user_name"),
-                        "server_name": memories[0].get("server_name"),
-                        "character": "consolidated",
-                    })
+                    if line:
+                        candidate_lines.append(line)
+
+                new_lines = deduplicate_memory_strings(candidate_lines)
+                new_memories = []
+                embeddings = []
+                if new_lines:
+                    embeddings = await asyncio.gather(
+                        *[provider_manager.get_embedding(line) for line in new_lines],
+                        return_exceptions=True
+                    )
+
+                default_server_id, default_user_id = _parse_auto_key(key)
+                base_character = next(
+                    (m.get("character") for m in memories if isinstance(m.get("character"), str) and m.get("character")),
+                    "consolidated"
+                )
+                for idx, line in enumerate(new_lines):
+                    embedding = None
+                    if idx < len(embeddings):
+                        candidate = embeddings[idx]
+                        if isinstance(candidate, list):
+                            embedding = candidate
+                        elif candidate is None or isinstance(candidate, Exception):
+                            self._log_embedding_unavailable_once()
+                    new_memories.append(self._build_auto_memory_entry(
+                        line,
+                        user_id=memories[0].get("user_id", default_user_id or 0),
+                        server_id=memories[0].get("server_id", default_server_id or 0),
+                        user_name=memories[0].get("user_name"),
+                        server_name=memories[0].get("server_name"),
+                        character_name=base_character,
+                        embedding=embedding
+                    ))
 
                 if new_memories:
+                    current_snapshot = [
+                        (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
+                        for m in self.auto_memories.get(key, [])
+                    ]
+                    if current_snapshot != memory_snapshot:
+                        log.debug(f"Skipping stale LLM dedup result for {key}")
+                        return
+
                     before_count = len(memories)
                     self.auto_memories[key] = new_memories
                     self._mark_dirty('auto')
-                    self._memory_creation_counter[key] = 0
+                    self._set_pending_auto_count(key, 0)
                     log.info(f"LLM dedup for {key}: {before_count} -> {len(new_memories)} memories")
 
         except Exception as e:
             log.warn(f"LLM deduplication failed for {key}: {e}")
+        finally:
+            self._dedup_in_flight.discard(key)
 
     # ==========================================================================
     # MEMORY GENERATION
@@ -738,6 +1029,8 @@ Memory about {target_user} (or NOTHING):"""
 
                 # Generate embedding for semantic dedup
                 embedding = await provider_manager.get_embedding(result.strip())
+                if embedding is None:
+                    self._log_embedding_unavailable_once()
 
                 # Determine server_id and server_name
                 server_id = id_key if not is_dm else 0
@@ -759,7 +1052,6 @@ Memory about {target_user} (or NOTHING):"""
                     auto_key = self._auto_key(server_id, user_id or id_key)
                     if self.should_llm_deduplicate(auto_key):
                         # Fire-and-forget (will run async)
-                        import asyncio
                         asyncio.create_task(self.llm_deduplicate(auto_key, provider_manager))
 
                 return result.strip()
@@ -802,13 +1094,17 @@ Memory about {target_user} (or NOTHING):"""
             if _is_duplicate_memory(content, auto_memories[key]):
                 stats["skipped_dupes"] += 1
                 return
-            auto_memories[key].append({
-                "content": content,
-                "timestamp": entry.get("timestamp", datetime.now().isoformat()),
-                "fingerprint": entry.get("fingerprint") or _memory_fingerprint(content),
-                "user_name": entry.get("user_name"),
-                "character": entry.get("character") or entry.get("learned_from"),
-            })
+            server_id, user_id = _parse_auto_key(key)
+            auto_memories[key].append(self._build_auto_memory_entry(
+                content,
+                user_id=user_id or 0,
+                server_id=server_id or 0,
+                user_name=entry.get("user_name"),
+                server_name=entry.get("server_name"),
+                character_name=entry.get("character") or entry.get("learned_from"),
+                embedding=entry.get("embedding") if isinstance(entry.get("embedding"), list) else None,
+                timestamp=entry.get("timestamp", datetime.now().isoformat())
+            ))
             stats["migrated"] += 1
 
         # 1. Server memories (memories.json) → auto_memories keyed by server:X:user:0
@@ -831,12 +1127,10 @@ Memory about {target_user} (or NOTHING):"""
                 if not isinstance(lore_text, str) or not lore_text.strip():
                     continue
                 key = f"server:{guild_id}"
-                manual_lore[key] = [{
-                    "content": lore_text.strip(),
-                    "timestamp": datetime.now().isoformat(),
-                    "fingerprint": _memory_fingerprint(lore_text),
-                    "added_by": "migrated"
-                }]
+                manual_lore[key] = [self._build_lore_entry(
+                    lore_text.strip(),
+                    added_by="migrated"
+                )]
                 stats["migrated"] += 1
 
         # 3. Global user profiles → auto_memories (merged across servers)
