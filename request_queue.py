@@ -5,8 +5,8 @@ Manages queued requests to avoid spam.
 
 import asyncio
 import time
-from typing import Dict, List, Callable, Any
-from collections import defaultdict
+from typing import Dict, List, Callable
+from collections import defaultdict, deque
 import discord
 
 
@@ -14,10 +14,60 @@ class RequestQueue:
     """Manages queued requests with safe-locking to prevent spam responses."""
     
     def __init__(self):
-        self.queues: Dict[int, List[dict]] = defaultdict(list)
+        self.queues = defaultdict(deque)
         self.processing: Dict[int, bool] = defaultdict(bool)
         self.locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.pending_counts = defaultdict(lambda: defaultdict(int))
+        self.pending_signatures = defaultdict(lambda: defaultdict(lambda: defaultdict(deque)))
+        self._next_request_id: Dict[int, int] = defaultdict(int)
         self.process_callback: Callable = None
+
+    @staticmethod
+    def _split_target_id(split_reply_target) -> int | None:
+        """Extract a stable identifier for split-reply duplicate detection."""
+        if split_reply_target is None:
+            return None
+        return getattr(split_reply_target, "id", None)
+
+    @staticmethod
+    def _prune_signature_timestamps(signature_timestamps: deque, current_time: float):
+        """Remove timestamps that have aged out of the duplicate-detection window."""
+        while signature_timestamps and (current_time - signature_timestamps[0]) >= 3:
+            signature_timestamps.popleft()
+
+    def _release_request_tracking(self, channel_id: int, request: dict):
+        """Release per-user counters and duplicate signatures once a request leaves the queue."""
+        user_id = request.get("user_id")
+        if user_id is None:
+            return
+
+        counts = self.pending_counts[channel_id]
+        pending = counts.get(user_id, 0) - 1
+        if pending > 0:
+            counts[user_id] = pending
+        else:
+            counts.pop(user_id, None)
+
+        signature = request.get("request_signature")
+        timestamp = request.get("timestamp")
+        user_signatures = self.pending_signatures[channel_id].get(user_id)
+        if not user_signatures or signature is None:
+            return
+
+        signature_timestamps = user_signatures.get(signature)
+        if signature_timestamps:
+            if signature_timestamps and signature_timestamps[0] == timestamp:
+                signature_timestamps.popleft()
+            else:
+                try:
+                    signature_timestamps.remove(timestamp)
+                except ValueError:
+                    pass
+            if not signature_timestamps:
+                user_signatures.pop(signature, None)
+
+        if not user_signatures:
+            self.pending_signatures[channel_id].pop(user_id, None)
     
     def set_processor(self, callback: Callable):
         """Set the callback function to process requests."""
@@ -44,27 +94,29 @@ class RequestQueue:
 
             # Pre-compute stripped content once for comparisons
             content_stripped = content.strip()
+            target_id = self._split_target_id(split_reply_target)
+            request_signature = (content_stripped, target_id)
+            channel_signatures = self.pending_signatures[channel_id][user_id]
+            signature_timestamps = channel_signatures[request_signature]
+            self._prune_signature_timestamps(signature_timestamps, current_time)
 
             # Check for duplicate requests from same user (spam prevention)
-            for queued in self.queues[channel_id]:
-                if (queued['user_id'] == user_id and
-                    current_time - queued['timestamp'] < 3 and
-                    queued['content_stripped'] == content_stripped and
-                    queued.get('split_reply_target') == split_reply_target):
-                    return False
+            if signature_timestamps:
+                return False
 
             # Limit pending requests per user
-            user_pending = sum(1 for req in self.queues[channel_id] if req['user_id'] == user_id)
-            if user_pending >= 3:
+            if self.pending_counts[channel_id][user_id] >= 3:
                 return False
 
             # Add request to queue
+            self._next_request_id[channel_id] += 1
             request = {
-                'id': len(self.queues[channel_id]) + int(current_time),
+                'id': self._next_request_id[channel_id],
                 'timestamp': current_time,
                 'message': message,
                 'content': content,
                 'content_stripped': content_stripped,  # Pre-computed for duplicate checks
+                'request_signature': request_signature,
                 'guild': guild,
                 'attachments': list(attachments) if attachments else [],
                 'user_name': user_name,
@@ -76,6 +128,8 @@ class RequestQueue:
             }
 
             self.queues[channel_id].append(request)
+            self.pending_counts[channel_id][user_id] += 1
+            signature_timestamps.append(current_time)
 
             # Start processing if not already
             if not self.processing[channel_id]:
@@ -97,7 +151,8 @@ class RequestQueue:
                 async with self.locks[channel_id]:
                     if not self.queues[channel_id]:
                         break
-                    request = self.queues[channel_id].pop(0)
+                    request = self.queues[channel_id].popleft()
+                    self._release_request_tracking(channel_id, request)
                 
                 # Process the request
                 if self.process_callback:

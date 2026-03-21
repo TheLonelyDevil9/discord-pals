@@ -10,6 +10,7 @@ import threading
 import json
 import os
 import io
+import hashlib
 import time
 import zipfile
 from pathlib import Path
@@ -32,6 +33,12 @@ bot_instances = []
 DATA_DIR = Path("bot_data")
 CHARACTERS_DIR = Path("characters")
 PROMPTS_DIR = Path("prompts")
+_TOPOLOGY_CACHE_TTL = 10.0
+_topology_cache_lock = threading.Lock()
+_topology_cache = {"built_at": 0.0, "value": None}
+_VERSION_CACHE_TTL = 30 * 60.0
+_github_version_cache_lock = threading.Lock()
+_github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value": False}
 
 # Initialize secret key securely
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -214,6 +221,135 @@ def _get_live_bot_loop():
     return None
 
 
+def _is_bot_ready(bot) -> bool:
+    """Check whether a bot client is available and fully ready."""
+    client = getattr(bot, "client", None)
+    return bool(client and client.is_ready())
+
+
+def _build_visible_topology() -> dict:
+    """Build a deduplicated snapshot of the visible Discord topology."""
+    guilds = []
+    guilds_by_id = {}
+    channels = []
+    channels_by_id = {}
+    accessible_channel_ids = set()
+
+    for bot in bot_instances:
+        if not _is_bot_ready(bot):
+            continue
+
+        for guild in bot.client.guilds:
+            if guild.id not in guilds_by_id:
+                guild_data = {
+                    "id": guild.id,
+                    "name": guild.name,
+                    "icon": str(guild.icon.url) if guild.icon else None,
+                }
+                guilds_by_id[guild.id] = guild_data
+                guilds.append(guild_data)
+
+            for channel in guild.text_channels:
+                accessible_channel_ids.add(channel.id)
+                if channel.id in channels_by_id:
+                    continue
+
+                channel_data = {
+                    "id": channel.id,
+                    "name": channel.name,
+                    "guild_id": guild.id,
+                    "guild_name": guild.name,
+                }
+                channels_by_id[channel.id] = channel_data
+                channels.append(channel_data)
+
+    return {
+        "guilds": guilds,
+        "channels": channels,
+        "channels_by_id": channels_by_id,
+        "accessible_channel_ids": accessible_channel_ids,
+    }
+
+
+def _get_visible_topology(force_refresh: bool = False) -> dict:
+    """Get a cached snapshot of the current visible Discord topology."""
+    now = time.time()
+    with _topology_cache_lock:
+        cached = _topology_cache["value"]
+        if (
+            not force_refresh and
+            cached is not None and
+            (now - _topology_cache["built_at"]) < _TOPOLOGY_CACHE_TTL
+        ):
+            return cached
+
+        topology = _build_visible_topology()
+        _topology_cache["value"] = topology
+        _topology_cache["built_at"] = now
+        return topology
+
+
+def _build_status_payload() -> dict:
+    """Build the current bot-status payload used by the dashboard APIs."""
+    import runtime_config
+
+    last_activity = runtime_config.get_last_activity()
+    bots_info = []
+    for bot in bot_instances:
+        bot_activity = last_activity.get(bot.name)
+        activity_str = _format_activity_time(bot_activity)
+        bots_info.append({
+            "name": bot.name,
+            "character": bot.character.name if bot.character else None,
+            "online": _is_bot_ready(bot),
+            "last_activity": activity_str,
+        })
+
+    return {
+        "bots": bots_info,
+        "global_paused": runtime_config.get("global_paused", False),
+        "bot_interactions_paused": runtime_config.get("bot_interactions_paused", False),
+        "use_single_user": runtime_config.get("use_single_user", True),
+    }
+
+
+def _build_status_etag(payload: dict) -> str:
+    """Compute a stable hash for the current status payload."""
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _build_managed_channels(topology: dict | None = None) -> list:
+    """Build channel-management data using cached topology metadata plus live state."""
+    from discord_utils import autonomous_manager, conversation_history
+
+    topology = topology or _get_visible_topology()
+    channels = []
+    for channel in topology["channels"]:
+        channel_id = channel["id"]
+        auto_enabled = channel_id in autonomous_manager.enabled_channels
+        auto_chance = autonomous_manager.enabled_channels.get(channel_id, 0)
+        auto_cooldown = autonomous_manager.channel_cooldowns.get(channel_id)
+        cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
+        allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel_id, False)
+        history_count = len(conversation_history.get(channel_id, []))
+
+        channels.append({
+            "id": channel_id,
+            "name": channel["name"],
+            "guild_id": channel["guild_id"],
+            "guild_name": channel["guild_name"],
+            "autonomous": auto_enabled,
+            "auto_chance": int(auto_chance * 100) if auto_enabled else 5,
+            "auto_cooldown": cooldown_mins,
+            "allow_bot_triggers": allow_bot_triggers,
+            "nickname_trigger": autonomous_manager.is_nickname_trigger_enabled(channel_id),
+            "history_count": history_count,
+        })
+
+    return channels
+
+
 # --- Login/Logout Routes ---
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -252,48 +388,27 @@ def logout():
 @app.route('/')
 def dashboard():
     """Main dashboard page."""
-    import time
-    import runtime_config
-    
-    last_activity = runtime_config.get_last_activity()
-    bots_info = []
-    for bot in bot_instances:
-        bot_activity = last_activity.get(bot.name)
-        activity_str = _format_activity_time(bot_activity)
-
-        bots_info.append({
-            'name': bot.name,
-            'character': bot.character.name if bot.character else 'None',
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
-            'last_activity': activity_str
-        })
-    
+    status_payload = _build_status_payload()
+    topology = _get_visible_topology()
     memory_count = len(get_memory_files())
     character_count = len(get_character_files())
     
     # Get autonomous channels count (only count channels bots can still access)
     from discord_utils import autonomous_manager
-    accessible_channel_ids = set()
-    for bot in bot_instances:
-        if hasattr(bot, 'client') and bot.client.is_ready():
-            for guild in bot.client.guilds:
-                for channel in guild.text_channels:
-                    accessible_channel_ids.add(channel.id)
-    autonomous_count = sum(1 for ch_id in autonomous_manager.enabled_channels if ch_id in accessible_channel_ids)
-    
-    # Get global state for control panel
-    global_paused = runtime_config.get("global_paused", False)
-    bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
-    use_single_user = runtime_config.get("use_single_user", True)
+    autonomous_count = sum(
+        1 for ch_id in autonomous_manager.enabled_channels
+        if ch_id in topology["accessible_channel_ids"]
+    )
     
     return render_template('dashboard.html',
-        bots=bots_info,
+        bots=status_payload["bots"],
         memory_count=memory_count,
         character_count=character_count,
         autonomous_count=autonomous_count,
-        global_paused=global_paused,
-        bot_interactions_paused=bot_interactions_paused,
-        use_single_user=use_single_user
+        global_paused=status_payload["global_paused"],
+        bot_interactions_paused=status_payload["bot_interactions_paused"],
+        use_single_user=status_payload["use_single_user"],
+        status_etag=_build_status_etag(status_payload)
     )
 
 
@@ -307,19 +422,13 @@ def memories():
     
     # Get guilds for the dropdown
     guilds = []
-    seen_ids = set()
-    for bot in bot_instances:
-        if hasattr(bot, 'client') and bot.client.is_ready():
-            for guild in bot.client.guilds:
-                if guild.id not in seen_ids:
-                    seen_ids.add(guild.id)
-                    # Get lore for this guild
-                    lore = memory_manager.get_lore(guild.id)
-                    guilds.append({
-                        'id': guild.id,
-                        'name': guild.name,
-                        'lore': lore
-                    })
+    for guild in _get_visible_topology()["guilds"]:
+        lore = memory_manager.get_lore(guild["id"])
+        guilds.append({
+            'id': guild["id"],
+            'name': guild["name"],
+            'lore': lore
+        })
     
     # Get available characters for memory assignment
     characters = get_character_files()
@@ -637,33 +746,21 @@ def save_system_prompt():
 @app.route('/api/status')
 def api_status():
     """API endpoint for bot status with extended info."""
-    import time
-    import runtime_config
-    
-    last_activity = runtime_config.get_last_activity()
-    bots_info = []
-    for bot in bot_instances:
-        bot_activity = last_activity.get(bot.name)
-        activity_str = _format_activity_time(bot_activity)
+    return jsonify(_build_status_payload())
 
-        bots_info.append({
-            'name': bot.name,
-            'character': bot.character.name if bot.character else None,
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
-            'last_activity': activity_str
-        })
-    
-    # Include global state
-    global_paused = runtime_config.get("global_paused", False)
-    bot_interactions_paused = runtime_config.get("bot_interactions_paused", False)
-    use_single_user = runtime_config.get("use_single_user", True)
-    
-    return jsonify({
-        'bots': bots_info,
-        'global_paused': global_paused,
-        'bot_interactions_paused': bot_interactions_paused,
-        'use_single_user': use_single_user
-    })
+
+@app.route('/api/status/delta')
+def api_status_delta():
+    """Return status only when it has changed since the client's last etag."""
+    client_etag = (request.args.get('etag') or '').strip()
+    payload = _build_status_payload()
+    etag = _build_status_etag(payload)
+    if client_etag and client_etag == etag:
+        return jsonify({'changed': False, 'etag': etag})
+
+    response = {'changed': True, 'etag': etag}
+    response.update(payload)
+    return jsonify(response)
 
 
 @app.route('/api/killswitch', methods=['GET', 'POST'])
@@ -771,6 +868,8 @@ def config_page():
     
     config = runtime_config.get_all()
     characters = get_character_files()
+    topology = _get_visible_topology()
+    channel_map = topology["channels_by_id"]
     
     # Get providers
     providers = []
@@ -810,15 +909,15 @@ def config_page():
     for bot in bot_instances:
         # Get channel names for autonomous channels this bot can see
         auto_channels = []
-        if hasattr(bot, 'client') and bot.client.is_ready():
+        if _is_bot_ready(bot):
             for channel_id in autonomous_manager.enabled_channels:
                 channel = bot.client.get_channel(channel_id)
-                if channel:
-                    guild_name = channel.guild.name if hasattr(channel, 'guild') else 'DM'
+                channel_meta = channel_map.get(channel_id)
+                if channel and channel_meta:
                     auto_channels.append({
                         'id': channel_id,
-                        'name': channel.name,
-                        'guild': guild_name
+                        'name': channel_meta['name'],
+                        'guild': channel_meta['guild_name']
                     })
 
         current_character = bot.character.name if bot.character else 'None'
@@ -832,7 +931,7 @@ def config_page():
             'name': bot.name,
             'character': current_character,
             'character_key': current_character_key,
-            'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
+            'online': _is_bot_ready(bot),
             'auto_channels': auto_channels,
             'nicknames': getattr(bot, 'nicknames', '')  # Per-bot custom nicknames
         })
@@ -1042,6 +1141,27 @@ def api_contexts():
     return jsonify(runtime_config.get_last_context())
 
 
+@app.route('/api/contexts/delta')
+def api_contexts_delta():
+    """Return context payload only when the revision changes."""
+    import runtime_config
+
+    try:
+        client_revision = int(request.args.get('revision', 0))
+    except (TypeError, ValueError):
+        client_revision = 0
+
+    revision = runtime_config.get_last_context_revision()
+    if client_revision == revision:
+        return jsonify({'changed': False, 'revision': revision})
+
+    return jsonify({
+        'changed': True,
+        'revision': revision,
+        'contexts': runtime_config.get_last_context()
+    })
+
+
 # --- Stats ---
 
 @app.route('/stats')
@@ -1235,6 +1355,19 @@ def api_logs():
     return jsonify(logs)
 
 
+@app.route('/api/logs/delta')
+def api_logs_delta():
+    """Get recent logs after a cursor, with reset detection for clear/rollover."""
+    import logger
+
+    try:
+        after = int(request.args.get('after', 0))
+    except (TypeError, ValueError):
+        after = 0
+
+    return jsonify(logger.get_logs_after(after, limit=100))
+
+
 @app.route('/api/logs/clear', methods=['POST'])
 @requires_csrf
 def api_clear_logs():
@@ -1250,96 +1383,21 @@ def api_clear_logs():
 @app.route('/channels')
 def channels_page():
     """Channel management page."""
-    from discord_utils import autonomous_manager, conversation_history
-    
-    # Collect all channels from all bots
-    channels_data = {}
-    guilds_data = {}
-    
-    for bot in bot_instances:
-        if not hasattr(bot, 'client') or not bot.client.is_ready():
-            continue
-        
-        for guild in bot.client.guilds:
-            if guild.id not in guilds_data:
-                guilds_data[guild.id] = {
-                    'id': guild.id,
-                    'name': guild.name,
-                    'icon': str(guild.icon.url) if guild.icon else None
-                }
-            
-            for channel in guild.text_channels:
-                if channel.id not in channels_data:
-                    # Check if autonomous is enabled
-                    auto_enabled = channel.id in autonomous_manager.enabled_channels
-                    auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
-                    auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
-                    cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
-                    allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel.id, False)
-                    
-                    # Check if we have history for this channel
-                    history_count = len(conversation_history.get(channel.id, []))
-                    
-                    channels_data[channel.id] = {
-                        'id': channel.id,
-                        'name': channel.name,
-                        'guild_id': guild.id,
-                        'guild_name': guild.name,
-                        'autonomous': auto_enabled,
-                        'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
-                        'auto_cooldown': cooldown_mins,
-                        'allow_bot_triggers': allow_bot_triggers,
-                        'nickname_trigger': autonomous_manager.is_nickname_trigger_enabled(channel.id),
-                        'history_count': history_count
-                    }
-    
+    topology = _get_visible_topology()
+    channels_data = {channel["id"]: channel for channel in _build_managed_channels(topology)}
     # Sort channels by autonomous (enabled first), then guild name, then channel name
     sorted_channels = sorted(channels_data.values(), key=lambda c: (not c['autonomous'], c['guild_name'], c['name']))
     
     return render_template('channels.html',
         channels=sorted_channels,
-        guilds=list(guilds_data.values())
+        guilds=list(topology["guilds"])
     )
 
 
 @app.route('/api/channels')
 def api_channels():
     """API endpoint to list all accessible channels."""
-    from discord_utils import autonomous_manager, conversation_history
-    
-    channels = []
-    
-    for bot in bot_instances:
-        if not hasattr(bot, 'client') or not bot.client.is_ready():
-            continue
-        
-        for guild in bot.client.guilds:
-            for channel in guild.text_channels:
-                # Avoid duplicates
-                if any(c['id'] == channel.id for c in channels):
-                    continue
-                
-                auto_enabled = channel.id in autonomous_manager.enabled_channels
-                auto_chance = autonomous_manager.enabled_channels.get(channel.id, 0)
-                auto_cooldown = autonomous_manager.channel_cooldowns.get(channel.id)
-                cooldown_mins = int(auto_cooldown.total_seconds() // 60) if auto_cooldown else 2
-                allow_bot_triggers = autonomous_manager.allow_bot_triggers.get(channel.id, False)
-                history_count = len(conversation_history.get(channel.id, []))
-                
-                channels.append({
-                    'id': channel.id,
-                    'name': channel.name,
-                    'guild_id': guild.id,
-                    'guild_name': guild.name,
-                    'autonomous': auto_enabled,
-                    'auto_chance': int(auto_chance * 100) if auto_enabled else 5,
-                    'auto_cooldown': cooldown_mins,
-                    'allow_bot_triggers': allow_bot_triggers,
-                    'nickname_trigger': autonomous_manager.is_nickname_trigger_enabled(channel.id),
-                    'history_count': history_count
-                })
-    
-    return jsonify({'channels': channels})
+    return jsonify({'channels': _build_managed_channels()})
 
 
 @app.route('/api/channels/<int:channel_id>/clear', methods=['POST'])
@@ -2267,8 +2325,8 @@ def _compare_versions(v1: str, v2: str) -> int:
         return 0
 
 
-def _check_github_latest_version():
-    """Check GitHub API for latest release/tag version."""
+def _fetch_github_latest_version():
+    """Check GitHub API for the latest release/tag version."""
     import urllib.request
     import json
 
@@ -2300,6 +2358,40 @@ def _check_github_latest_version():
             continue
 
     return None
+
+
+def _invalidate_github_version_cache():
+    """Clear the cached GitHub version result."""
+    with _github_version_cache_lock:
+        _github_version_cache["fetched_at"] = 0.0
+        _github_version_cache["github_version"] = None
+        _github_version_cache["has_value"] = False
+
+
+def _check_github_latest_version(force_refresh: bool = False):
+    """Return the latest GitHub version, using a TTL cache to avoid repeated fetches."""
+    now = time.time()
+    with _github_version_cache_lock:
+        has_fresh_cache = (
+            _github_version_cache["has_value"] and
+            not force_refresh and
+            (now - _github_version_cache["fetched_at"]) < _VERSION_CACHE_TTL
+        )
+        if has_fresh_cache:
+            return _github_version_cache["github_version"]
+
+        github_version = _fetch_github_latest_version()
+        if github_version is not None:
+            _github_version_cache["fetched_at"] = now
+            _github_version_cache["github_version"] = github_version
+            _github_version_cache["has_value"] = True
+            return github_version
+
+        if _github_version_cache["has_value"]:
+            return _github_version_cache["github_version"]
+
+        _github_version_cache["fetched_at"] = now
+        return None
 
 
 @app.route('/api/version', methods=['GET'])
@@ -2364,6 +2456,7 @@ def api_update():
         if result.returncode == 0:
             # Check if already up to date
             if 'Already up to date' in output or 'Already up-to-date' in output:
+                _invalidate_github_version_cache()
                 log.info("Git pull: Already up to date")
                 return jsonify({
                     'status': 'ok',
@@ -2406,6 +2499,7 @@ def api_update():
                 log.info(f"Git pull successful: {output}")
                 if version_changed:
                     log.info(f"Version update available: {VERSION} -> {new_version}")
+                _invalidate_github_version_cache()
 
                 return jsonify({
                     'status': 'ok',
@@ -2459,7 +2553,7 @@ def api_restart():
     try:
         from discord_utils import save_history
         from memory import memory_manager
-        save_history()
+        save_history(force=True)
         memory_manager.save_all()
         log.info("State saved before restart")
     except Exception as e:

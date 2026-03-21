@@ -12,6 +12,7 @@ import aiohttp
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
@@ -135,6 +136,7 @@ multipart_responses: Dict[int, Dict[int, str]] = {}
 
 # History persistence file
 HISTORY_CACHE_FILE = os.path.join(DATA_DIR, "history_cache.json")
+HISTORY_CHANNELS_DIR = os.path.join(DATA_DIR, "history_channels")
 
 # Channel name mapping (channel_id -> name) for readable storage
 channel_names: Dict[int, str] = {}
@@ -143,6 +145,7 @@ channel_names: Dict[int, str] = {}
 _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
 _STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
 _channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
+_dirty_history_channels: set[int] = set()
 
 # Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
@@ -180,6 +183,63 @@ RE_WORD = re.compile(r'\w+')
 RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
 
 
+def _history_channel_path(channel_id: int) -> str:
+    """Get the per-channel history cache path."""
+    return os.path.join(HISTORY_CHANNELS_DIR, f"{channel_id}.json")
+
+
+def _mark_history_dirty(channel_id: int):
+    """Mark a channel history entry as needing persistence."""
+    with _history_save_lock:
+        _dirty_history_channels.add(channel_id)
+
+
+def _history_message_hash(role: str, content: str, author_name: str = None, message_id: int = None) -> int:
+    """Build the dedupe hash used for recent-message tracking."""
+    if message_id:
+        return hash((role, content, author_name or '', message_id))
+    return hash((role, content, author_name or ''))
+
+
+def _rebuild_recent_message_hashes(channel_id: int):
+    """Rebuild recent message hashes for a loaded channel history."""
+    hashes = OrderedDict()
+    for msg in conversation_history.get(channel_id, [])[-_RECENT_HASH_LIMIT:]:
+        msg_hash = _history_message_hash(
+            msg.get("role", "user"),
+            msg.get("content", ""),
+            msg.get("author"),
+            msg.get("message_id"),
+        )
+        hashes[msg_hash] = True
+    if hashes:
+        _recent_message_hashes[channel_id] = hashes
+    else:
+        _recent_message_hashes.pop(channel_id, None)
+
+
+def _serialize_channel_history(channel_id: int) -> dict:
+    """Serialize one channel history entry for per-channel persistence."""
+    return {
+        "name": channel_names.get(channel_id, str(channel_id)),
+        "messages": conversation_history.get(channel_id, []),
+        "last_activity": _channel_last_activity.get(channel_id, time.time()),
+    }
+
+
+def _delete_channel_history_file(channel_id: int):
+    """Delete a persisted per-channel history file if it exists."""
+    filepath = _history_channel_path(channel_id)
+    lock = _get_file_lock(filepath)
+    with lock:
+        if not os.path.exists(filepath):
+            return
+        try:
+            os.remove(filepath)
+        except OSError as e:
+            log.warn(f"Failed to delete history cache for channel {channel_id}: {e}")
+
+
 def save_history(force: bool = False):
     """Save conversation history to disk for persistence across restarts.
 
@@ -198,23 +258,28 @@ def save_history(force: bool = False):
             _history_save_pending = True
             return
 
+        dirty_channels = set(_dirty_history_channels)
+        _dirty_history_channels.clear()
         _history_save_pending = False
         _history_last_save = now
 
-    # Build data structure with channel names for readability
-    serializable = {}
-    for channel_id, messages in conversation_history.items():
-        key = str(channel_id)
-        # Store both the channel name (if known) and messages
-        name = channel_names.get(channel_id, str(channel_id))
-        serializable[key] = {
-            "name": name,
-            "messages": messages
-        }
+    if not dirty_channels:
+        return
 
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not safe_json_save(HISTORY_CACHE_FILE, serializable):
-        log.warn("Failed to save history")
+    os.makedirs(HISTORY_CHANNELS_DIR, exist_ok=True)
+    failed_channels = set()
+    for channel_id in dirty_channels:
+        if channel_id in conversation_history:
+            if not safe_json_save(_history_channel_path(channel_id), _serialize_channel_history(channel_id)):
+                failed_channels.add(channel_id)
+        else:
+            _delete_channel_history_file(channel_id)
+
+    if failed_channels:
+        with _history_save_lock:
+            _dirty_history_channels.update(failed_channels)
+            _history_save_pending = True
+        log.warn(f"Failed to save history for {len(failed_channels)} channel(s)")
 
 
 def flush_pending_history():
@@ -228,24 +293,79 @@ def flush_pending_history():
 
 def load_history():
     """Load conversation history from disk on startup."""
-    global conversation_history, channel_names
+    global conversation_history, channel_names, _channel_last_activity, _history_save_pending
+
+    conversation_history = {}
+    channel_names = {}
+    _channel_last_activity = {}
+    _recent_message_hashes.clear()
+
+    with _history_save_lock:
+        _dirty_history_channels.clear()
+        _history_save_pending = False
+
+    history_dir = Path(HISTORY_CHANNELS_DIR)
+    history_files = sorted(history_dir.glob("*.json")) if history_dir.exists() else []
+    if history_files:
+        for path in history_files:
+            try:
+                channel_id = int(path.stem)
+            except ValueError:
+                continue
+
+            data = safe_json_load(str(path), default={})
+            messages = data.get("messages", []) if isinstance(data, dict) else []
+            if not isinstance(messages, list):
+                continue
+
+            conversation_history[channel_id] = messages
+            name = data.get("name") if isinstance(data, dict) else None
+            if isinstance(name, str) and name:
+                channel_names[channel_id] = name
+
+            last_activity = data.get("last_activity") if isinstance(data, dict) else None
+            try:
+                _channel_last_activity[channel_id] = float(last_activity)
+            except (TypeError, ValueError):
+                _channel_last_activity[channel_id] = time.time()
+
+            _rebuild_recent_message_hashes(channel_id)
+
+        log.info(f"Loaded history for {len(conversation_history)} channels")
+        return
 
     data = safe_json_load(HISTORY_CACHE_FILE, default={})
     if not data:
-        conversation_history = {}
         return
 
-    # Handle both old format (list) and new format (dict with name/messages)
+    loaded_channels = []
     for k, v in data.items():
-        channel_id = int(k)
+        try:
+            channel_id = int(k)
+        except (TypeError, ValueError):
+            continue
+
         if isinstance(v, dict) and "messages" in v:
-            # New format with name
-            conversation_history[channel_id] = v["messages"]
-            if "name" in v:
-                channel_names[channel_id] = v["name"]
+            messages = v.get("messages", [])
+            name = v.get("name")
         else:
-            # Old format - just list of messages
-            conversation_history[channel_id] = v
+            messages = v
+            name = None
+
+        if not isinstance(messages, list):
+            continue
+
+        conversation_history[channel_id] = messages
+        if isinstance(name, str) and name:
+            channel_names[channel_id] = name
+        _channel_last_activity[channel_id] = time.time()
+        _rebuild_recent_message_hashes(channel_id)
+        loaded_channels.append(channel_id)
+
+    if loaded_channels:
+        with _history_save_lock:
+            _dirty_history_channels.update(loaded_channels)
+            _history_save_pending = True
 
     log.info(f"Loaded history for {len(conversation_history)} channels")
 
@@ -403,10 +523,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
     # Include message_id when available so different Discord messages with same content aren't deduped
-    if message_id:
-        msg_hash = hash((role, content, author_name or '', message_id))
-    else:
-        msg_hash = hash((role, content, author_name or ''))
+    msg_hash = _history_message_hash(role, content, author_name, message_id)
     if channel_id not in _recent_message_hashes:
         _recent_message_hashes[channel_id] = OrderedDict()
 
@@ -425,6 +542,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         conversation_history[channel_id] = conversation_history[channel_id][-MAX_HISTORY_MESSAGES:]
 
     # Trigger debounced save to prevent data loss on crash
+    _mark_history_dirty(channel_id)
     save_history()
 
     # Periodic cleanup of stale channels (every 100 messages added)
@@ -461,6 +579,9 @@ def cleanup_stale_conversation_history():
         _recent_message_hashes.pop(ch, None)
         _channel_last_activity.pop(ch, None)
         channel_names.pop(ch, None)
+        with _history_save_lock:
+            _dirty_history_channels.discard(ch)
+        _delete_channel_history_file(ch)
 
     if channels_to_remove:
         log.debug(f"Cleaned up {len(channels_to_remove)} stale channels from conversation history")
@@ -478,6 +599,9 @@ def update_history_on_edit(channel_id: int, old_content: str, new_content: str, 
             stored = msg["content"]
             if isinstance(stored, str) and old_content in stored:
                 history[i]["content"] = stored.replace(old_content, new_content)
+                _rebuild_recent_message_hashes(channel_id)
+                _mark_history_dirty(channel_id)
+                save_history()
                 return
 
 
@@ -496,6 +620,11 @@ def remove_assistant_from_history(channel_id: int, count: int = 1):
             del history[i]
             removed += 1
 
+    if removed:
+        _rebuild_recent_message_hashes(channel_id)
+        _mark_history_dirty(channel_id)
+        save_history()
+
 
 # Channels where history was explicitly cleared (suppresses auto-recall)
 _cleared_channels: set = set()
@@ -505,7 +634,13 @@ def clear_history(channel_id: int):
     """Clear conversation history for a channel."""
     if channel_id in conversation_history:
         del conversation_history[channel_id]
+    _recent_message_hashes.pop(channel_id, None)
+    _channel_last_activity.pop(channel_id, None)
+    channel_names.pop(channel_id, None)
+    with _history_save_lock:
+        _dirty_history_channels.discard(channel_id)
     _cleared_channels.add(channel_id)
+    _delete_channel_history_file(channel_id)
 
 
 def was_recently_cleared(channel_id: int) -> bool:

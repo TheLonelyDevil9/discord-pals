@@ -130,8 +130,8 @@
             Live
         </div>
     </div>
-    {% if bots %}
-    <table>
+    <div id="bot-status-empty" class="empty {% if bots %}hidden{% endif %}">No bots running</div>
+    <table id="bot-status-wrapper" {% if not bots %}class="hidden"{% endif %}>
         <thead>
             <tr>
                 <th>Name</th>
@@ -142,7 +142,7 @@
         </thead>
         <tbody id="bot-status-table">
             {% for bot in bots %}
-            <tr>
+            <tr data-bot-name="{{ bot.name }}">
                 <td><strong>{{ bot.name }}</strong></td>
                 <td style="color: var(--text-secondary);">{{ bot.character }}</td>
                 <td>
@@ -157,9 +157,6 @@
             {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <div class="empty">No bots running</div>
-    {% endif %}
 </div>
 
 <style>
@@ -491,39 +488,90 @@ function updateMessageFormatUI(isSingleUser) {
     }
 }
 
-// Auto-refresh status every 5 seconds
+let currentStatusEtag = '{{ status_etag }}';
+
+function buildStatusRow(bot) {
+    const row = document.createElement('tr');
+    updateStatusRow(row, bot);
+    return row;
+}
+
+function updateStatusRow(row, bot) {
+    row.dataset.botName = bot.name || '';
+    row.innerHTML = `
+        <td><strong>${escapeHtml(bot.name || '')}</strong></td>
+        <td style="color: var(--text-secondary);">${escapeHtml(bot.character) || 'None'}</td>
+        <td>
+            ${bot.online
+                ? '<span class="badge badge-success"><span class="badge-dot"></span> Online</span>'
+                : '<span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>'}
+        </td>
+        <td style="color: var(--text-muted);">${escapeHtml(bot.last_activity || 'Never')}</td>
+    `;
+}
+
+function syncStatusRows(bots) {
+    const wrapper = document.getElementById('bot-status-wrapper');
+    const table = document.getElementById('bot-status-table');
+    const empty = document.getElementById('bot-status-empty');
+    if (!wrapper || !table || !empty) return;
+
+    const existingRows = new Map(
+        Array.from(table.querySelectorAll('tr[data-bot-name]')).map(row => [row.dataset.botName, row])
+    );
+    const seen = new Set();
+
+    for (const bot of bots) {
+        const key = bot.name || '';
+        seen.add(key);
+        let row = existingRows.get(key);
+        if (!row) {
+            row = buildStatusRow(bot);
+        } else {
+            updateStatusRow(row, bot);
+        }
+        table.appendChild(row);
+    }
+
+    for (const [key, row] of existingRows.entries()) {
+        if (!seen.has(key)) {
+            row.remove();
+        }
+    }
+
+    if (bots.length > 0) {
+        wrapper.classList.remove('hidden');
+        empty.classList.add('hidden');
+    } else {
+        wrapper.classList.add('hidden');
+        empty.classList.remove('hidden');
+    }
+}
+
 async function refreshStatus() {
     try {
-        const response = await fetch('/api/status');
+        const response = await fetch('/api/status/delta?etag=' + encodeURIComponent(currentStatusEtag));
         const data = await response.json();
+        if (!data.changed) {
+            currentStatusEtag = data.etag || currentStatusEtag;
+            return;
+        }
+
+        currentStatusEtag = data.etag || currentStatusEtag;
 
         updateKillswitchUI(data.global_paused);
         updateBotInteractionsUI(data.bot_interactions_paused);
         if (data.use_single_user !== undefined) {
             updateMessageFormatUI(data.use_single_user);
         }
-
-        const table = document.getElementById('bot-status-table');
-        if (table && data.bots) {
-            table.innerHTML = data.bots.map(bot => `
-                <tr>
-                    <td><strong>${escapeHtml(bot.name)}</strong></td>
-                    <td style="color: var(--text-secondary);">${escapeHtml(bot.character) || 'None'}</td>
-                    <td>
-                        ${bot.online
-                            ? '<span class="badge badge-success"><span class="badge-dot"></span> Online</span>'
-                            : '<span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>'}
-                    </td>
-                    <td style="color: var(--text-muted);">${escapeHtml(bot.last_activity)}</td>
-                </tr>
-            `).join('');
-        }
+        syncStatusRows(data.bots || []);
     } catch (e) {
         console.error('Failed to refresh status:', e);
     }
 }
 
-let statusPollInterval = setInterval(refreshStatus, 10000);
+refreshStatus();
+let statusPollInterval = setInterval(refreshStatus, 15000);
 
 // Check for pending updates on page load
 checkPendingUpdate();
@@ -533,7 +581,7 @@ document.addEventListener('visibilitychange', () => {
         clearInterval(statusPollInterval);
     } else {
         refreshStatus();
-        statusPollInterval = setInterval(refreshStatus, 10000);
+        statusPollInterval = setInterval(refreshStatus, 15000);
     }
 });
 

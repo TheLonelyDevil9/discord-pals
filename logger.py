@@ -4,6 +4,7 @@ Clean, organized logging with emoji indicators.
 """
 
 import sys
+import threading
 from datetime import datetime
 
 # Log levels
@@ -35,34 +36,73 @@ def _timestamp():
 # In-memory log buffer for dashboard
 _log_buffer = []
 MAX_LOG_BUFFER = 200
+_log_sequence = 0
+_log_reset_marker = 0
+_log_lock = threading.Lock()
 
 
 def get_logs(limit: int = 100) -> list:
     """Get recent logs for dashboard."""
-    return _log_buffer[-limit:]
+    with _log_lock:
+        return [dict(entry) for entry in _log_buffer[-limit:]]
+
+
+def get_logs_after(after_seq: int = 0, limit: int = 100) -> dict:
+    """Get log entries after a cursor, with reset detection for clear/rollover."""
+    try:
+        after_seq = int(after_seq or 0)
+    except (TypeError, ValueError):
+        after_seq = 0
+
+    with _log_lock:
+        oldest_seq = _log_buffer[0]["seq"] if _log_buffer else None
+        latest_seq = _log_buffer[-1]["seq"] if _log_buffer else max(after_seq, _log_reset_marker)
+        reset = bool(
+            after_seq and (
+                after_seq <= _log_reset_marker or
+                (oldest_seq is not None and after_seq < oldest_seq)
+            )
+        )
+
+        if reset:
+            entries = _log_buffer[-limit:]
+        else:
+            entries = [entry for entry in _log_buffer if entry["seq"] > after_seq][-limit:]
+
+        return {
+            "entries": [dict(entry) for entry in entries],
+            "cursor": latest_seq,
+            "reset": reset,
+        }
 
 
 def clear_logs():
     """Clear the in-memory log buffer."""
-    global _log_buffer
-    _log_buffer = []
+    global _log_buffer, _log_reset_marker
+    with _log_lock:
+        _log_buffer = []
+        _log_reset_marker = _log_sequence
 
 
 def _log(icon: str, color: str, msg: str, bot_name: str = None, level: int = NORMAL):
     """Internal logging function."""
+    global _log_sequence
     ts_str = _timestamp()
     
     # Always add to buffer for dashboard (regardless of LOG_LEVEL)
-    log_entry = {
-        "time": ts_str,
-        "icon": icon,
-        "level": "ok" if icon == "✓" else "warn" if icon == "⚠" else "error" if icon == "✗" else "info",
-        "bot": bot_name,
-        "message": msg
-    }
-    _log_buffer.append(log_entry)
-    if len(_log_buffer) > MAX_LOG_BUFFER:
-        _log_buffer.pop(0)
+    with _log_lock:
+        _log_sequence += 1
+        log_entry = {
+            "seq": _log_sequence,
+            "time": ts_str,
+            "icon": icon,
+            "level": "ok" if icon == "✓" else "warn" if icon == "⚠" else "error" if icon == "✗" else "info",
+            "bot": bot_name,
+            "message": msg
+        }
+        _log_buffer.append(log_entry)
+        if len(_log_buffer) > MAX_LOG_BUFFER:
+            _log_buffer.pop(0)
     
     # Only print to terminal if level allows
     if level <= LOG_LEVEL:

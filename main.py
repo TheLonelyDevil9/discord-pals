@@ -113,7 +113,7 @@ async def run_bots():
         await asyncio.gather(*[bot.start() for bot in instances])
     except KeyboardInterrupt:
         log.info("Shutting down...")
-        save_history()  # Persist conversation history
+        save_history(force=True)  # Persist conversation history
         memory_manager.save_all()  # Persist memories
         for bot in instances:
             await bot.close()

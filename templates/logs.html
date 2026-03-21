@@ -606,8 +606,109 @@ function switchTab(tabName) {
 }
 
 let autoScroll = true;
-let lastLogCount = 0;
 let allLogs = [];
+let lastLogCursor = 0;
+let logsPollInterval = null;
+let contextPollInterval = null;
+let currentContextRevision = 0;
+
+function createLogNode(log) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry log-' + (log.level || 'info');
+    if (log.seq !== undefined) {
+        entry.dataset.seq = String(log.seq);
+    }
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'log-time';
+    timeSpan.textContent = log.time || '';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'log-icon';
+    iconSpan.textContent = log.icon || '';
+
+    const botSpan = document.createElement('span');
+    botSpan.className = 'log-bot';
+    botSpan.textContent = log.bot ? `[${log.bot}]` : '';
+
+    const messageSpan = document.createElement('span');
+    messageSpan.className = 'log-message';
+    messageSpan.textContent = log.message || '';
+
+    entry.appendChild(timeSpan);
+    entry.appendChild(iconSpan);
+    entry.appendChild(botSpan);
+    entry.appendChild(messageSpan);
+    return entry;
+}
+
+function createContextCard(botName, ctx) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.botName = botName;
+    updateContextCard(card, botName, ctx);
+    return card;
+}
+
+function updateContextCard(card, botName, ctx) {
+    const messages = Array.isArray(ctx.messages) ? ctx.messages : [];
+    const lastMessages = messages.slice(-15);
+
+    card.dataset.botName = botName;
+    card.innerHTML = `
+        <div class="card-header">
+            <span class="card-title">${escapeHtml(botName)}</span>
+            <div class="context-meta">
+                <span>${ctx.message_count || 0} messages</span>
+                <span>~${ctx.token_estimate || 0} tokens</span>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="context-section">
+                <h4 class="context-section-title">System Prompt</h4>
+                <pre class="context-box">${escapeHtml(ctx.system_prompt || '')}</pre>
+            </div>
+            <div class="context-section">
+                <h4 class="context-section-title">Messages (${messages.length})</h4>
+                <div class="messages-list">
+                    ${lastMessages.map(msg => `
+                        <div class="message ${msg.role === 'assistant' ? 'assistant' : ''}">
+                            <span class="message-role">${escapeHtml(msg.role || '')}</span>
+                            <span class="message-content">${escapeHtml((msg.content || '').substring(0, 400))}${(msg.content || '').length > 400 ? '...' : ''}</span>
+                        </div>
+                    `).join('')}
+                    ${messages.length > 15 ? `<div class="messages-more">... and ${messages.length - 15} more</div>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderContextEmptyState() {
+    const container = document.getElementById('context-container');
+    if (!container) return;
+    container.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'card';
+    const body = document.createElement('div');
+    body.className = 'card-body';
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No context stored yet. Make a request to see what\'s sent to the LLM.';
+    body.appendChild(empty);
+    card.appendChild(body);
+    container.appendChild(card);
+}
+
+function isLogFilterActive() {
+    return Boolean(document.getElementById('log-search').value.trim() || document.getElementById('log-level-filter').value);
+}
+
+function trimLogsBuffer() {
+    if (allLogs.length > 200) {
+        allLogs = allLogs.slice(-200);
+    }
+}
 
 function filterLogs() {
     const search = document.getElementById('log-search').value.toLowerCase();
@@ -629,17 +730,12 @@ function renderFilteredLogs(logs) {
         updateLogCount(0);
         return;
     }
-    let html = '';
+    container.innerHTML = '';
+    const fragment = document.createDocumentFragment();
     for (const log of logs) {
-        const bot = log.bot ? `[${log.bot}]` : '';
-        html += `<div class="log-entry log-${escapeHtml(log.level)}">
-            <span class="log-time">${escapeHtml(log.time)}</span>
-            <span class="log-icon">${log.icon}</span>
-            <span class="log-bot">${escapeHtml(bot)}</span>
-            <span class="log-message">${escapeHtml(log.message)}</span>
-        </div>`;
+        fragment.appendChild(createLogNode(log));
     }
-    container.innerHTML = html;
+    container.appendChild(fragment);
     updateLogCount(logs.length);
     if (autoScroll) container.scrollTop = container.scrollHeight;
 }
@@ -657,11 +753,12 @@ async function clearLogs() {
             headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
         });
         if (response.ok) {
-            document.getElementById('logs-container').innerHTML = '<div class="logs-empty">Logs cleared</div>';
-            lastLogCount = 0;
             allLogs = [];
+            lastLogCursor = 0;
+            renderFilteredLogs([]);
             updateLogCount(0);
             showToast('Logs cleared', 'success');
+            fetchLogs();
         } else {
             showToast('Failed to clear logs', 'error');
         }
@@ -681,58 +778,115 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function appendLogs(logs) {
+    if (!logs.length) return;
+
+    const container = document.getElementById('logs-container');
+    if (!container) return;
+    if (container.querySelector('.logs-empty')) {
+        container.innerHTML = '';
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const log of logs) {
+        fragment.appendChild(createLogNode(log));
+    }
+    container.appendChild(fragment);
+    updateLogCount(allLogs.length);
+    if (autoScroll) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+function applyLogDelta(payload) {
+    if (payload.reset) {
+        allLogs = [];
+    }
+
+    const entries = Array.isArray(payload.entries) ? payload.entries : [];
+    if (entries.length > 0) {
+        allLogs = payload.reset ? entries.slice() : allLogs.concat(entries);
+        trimLogsBuffer();
+    }
+
+    if (payload.reset || isLogFilterActive()) {
+        filterLogs();
+    } else if (entries.length > 0) {
+        appendLogs(entries);
+    } else if (allLogs.length === 0) {
+        renderFilteredLogs([]);
+    }
+
+    if (payload.cursor !== undefined) {
+        lastLogCursor = payload.cursor;
+    }
+}
+
 async function fetchLogs() {
     try {
-        const response = await fetch('/api/logs');
-        const logs = await response.json();
-        if (logs.length !== lastLogCount) {
-            allLogs = logs;
-            lastLogCount = logs.length;
-            filterLogs();
-        }
+        const response = await fetch('/api/logs/delta?after=' + encodeURIComponent(lastLogCursor));
+        const payload = await response.json();
+        applyLogDelta(payload);
     } catch (err) {
         console.error('Failed to fetch logs:', err);
     }
 }
 
+function startLogsPolling() {
+    if (!logsPollInterval) {
+        logsPollInterval = setInterval(fetchLogs, 3000);
+    }
+}
+
+function stopLogsPolling() {
+    if (logsPollInterval) {
+        clearInterval(logsPollInterval);
+        logsPollInterval = null;
+    }
+}
+
 fetchLogs();
-let logsPollInterval = setInterval(fetchLogs, 2000);
+startLogsPolling();
 
 // Pause polling when tab is hidden
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-        clearInterval(logsPollInterval);
-        clearInterval(contextPollInterval);
+        stopLogsPolling();
+        stopContextPolling();
     } else {
         fetchLogs();
-        logsPollInterval = setInterval(fetchLogs, 2000);
+        startLogsPolling();
         if (document.getElementById('tab-context').classList.contains('active')) {
             fetchContexts();
-            contextPollInterval = setInterval(fetchContexts, 3000);
+            startContextPolling();
         }
     }
 });
 
-// Context polling
-let contextPollInterval = null;
-
-let _lastContextHash = '';
-
-function simpleHash(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32bit integer
+function startContextPolling() {
+    if (!contextPollInterval) {
+        contextPollInterval = setInterval(fetchContexts, 10000);
     }
-    return hash;
+}
+
+function stopContextPolling() {
+    if (contextPollInterval) {
+        clearInterval(contextPollInterval);
+        contextPollInterval = null;
+    }
 }
 
 async function fetchContexts() {
     try {
-        const response = await fetch('/api/contexts');
-        const contexts = await response.json();
-        renderContexts(contexts);
+        const response = await fetch('/api/contexts/delta?revision=' + encodeURIComponent(currentContextRevision));
+        const payload = await response.json();
+        if (!payload.changed) {
+            currentContextRevision = payload.revision || currentContextRevision;
+            return;
+        }
+
+        currentContextRevision = payload.revision || currentContextRevision;
+        renderContexts(payload.contexts || {});
     } catch (e) {
         console.error('Failed to fetch contexts:', e);
     }
@@ -740,51 +894,38 @@ async function fetchContexts() {
 
 function renderContexts(contexts) {
     const container = document.getElementById('context-container');
-    if (!contexts || Object.keys(contexts).length === 0) {
-        container.innerHTML = '<div class="card"><div class="card-body"><div class="empty">No context stored yet. Make a request to see what\'s sent to the LLM.</div></div></div>';
+    const entries = Object.entries(contexts || {}).sort((a, b) => a[0].localeCompare(b[0]));
+    if (entries.length === 0) {
+        renderContextEmptyState();
         return;
     }
 
-    let html = '';
-    for (const [botName, ctx] of Object.entries(contexts)) {
-        const messages = ctx.messages || [];
-        const lastMessages = messages.slice(-15);
+    Array.from(container.children).forEach(child => {
+        if (!child.dataset.botName) {
+            child.remove();
+        }
+    });
 
-        html += `
-        <div class="card">
-            <div class="card-header">
-                <span class="card-title">${escapeHtml(botName)}</span>
-                <div class="context-meta">
-                    <span>${ctx.message_count || 0} messages</span>
-                    <span>~${ctx.token_estimate || 0} tokens</span>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="context-section">
-                    <h4 class="context-section-title">System Prompt</h4>
-                    <pre class="context-box">${escapeHtml(ctx.system_prompt || '')}</pre>
-                </div>
-                <div class="context-section">
-                    <h4 class="context-section-title">Messages (${messages.length})</h4>
-                    <div class="messages-list">
-                        ${lastMessages.map(msg => `
-                            <div class="message ${msg.role === 'assistant' ? 'assistant' : ''}">
-                                <span class="message-role">${escapeHtml(msg.role)}</span>
-                                <span class="message-content">${escapeHtml((msg.content || '').substring(0, 400))}${(msg.content || '').length > 400 ? '...' : ''}</span>
-                            </div>
-                        `).join('')}
-                     ${messages.length > 15 ? `<div class="messages-more">... and ${messages.length - 15} more</div>` : ''}
-                    </div>
-                </div>
-            </div>
-        </div>`;
+    const existingCards = new Map(
+        Array.from(container.querySelectorAll('.card[data-bot-name]')).map(card => [card.dataset.botName, card])
+    );
+    const seen = new Set();
+
+    for (const [botName, ctx] of entries) {
+        seen.add(botName);
+        let card = existingCards.get(botName);
+        if (!card) {
+            card = createContextCard(botName, ctx);
+        } else {
+            updateContextCard(card, botName, ctx);
+        }
+        container.appendChild(card);
     }
 
-    // Only update DOM if content changed
-    const hash = simpleHash(html);
-    if (hash !== _lastContextHash) {
-        _lastContextHash = hash;
-        container.innerHTML = html;
+    for (const [botName, card] of existingCards.entries()) {
+        if (!seen.has(botName)) {
+            card.remove();
+        }
     }
 }
 
@@ -794,21 +935,16 @@ switchTab = function(tabName) {
     originalSwitchTab(tabName);
     if (tabName === 'context') {
         fetchContexts();
-        if (!contextPollInterval) {
-            contextPollInterval = setInterval(fetchContexts, 10000);
-        }
+        startContextPolling();
     } else {
-        if (contextPollInterval) {
-            clearInterval(contextPollInterval);
-            contextPollInterval = null;
-        }
+        stopContextPolling();
     }
 };
 
 // Initial context fetch if context tab is active
 if (document.getElementById('tab-context').classList.contains('active')) {
     fetchContexts();
-    contextPollInterval = setInterval(fetchContexts, 10000);
+    startContextPolling();
 }
 </script>
 {% endblock %}

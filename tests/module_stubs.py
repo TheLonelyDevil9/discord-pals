@@ -39,6 +39,9 @@ if "discord" not in sys.modules:
     class Message:
         pass
 
+    class Attachment:
+        pass
+
     class Emoji:
         pass
 
@@ -51,6 +54,7 @@ if "discord" not in sys.modules:
     discord.User = User
     discord.Member = Member
     discord.Message = Message
+    discord.Attachment = Attachment
     discord.Emoji = Emoji
     discord.Guild = Guild
     discord.HTTPException = HTTPException

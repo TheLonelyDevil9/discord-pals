@@ -4,6 +4,25 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.0] - 2026-03-21
+
+### Added
+
+- Delta dashboard endpoints for status, logs, and context polling, plus regression coverage for queue behavior, version caching, topology deduplication, and per-channel history persistence
+
+### Changed
+
+- **Dashboard refresh path** — the Dashboard and Logs pages now use incremental polling with keyed DOM patching instead of full container rewrites, reducing flicker and unnecessary work during live updates
+- **Discord topology lookups** — a shared 10-second visible-topology cache now backs the dashboard, memories, config, and channel-management views instead of repeatedly walking every bot, guild, and channel on each request
+- **Request queue internals** — per-channel queues now use `deque` FIFO processing with O(1) per-user pending counts and signature-based duplicate suppression
+- **Conversation history persistence** — history is now stored as per-channel files under `bot_data/history_channels/`, writing only dirty channels while still reading legacy `history_cache.json` for migration
+
+### Fixed
+
+- **Version check chatter** — GitHub release lookups now use a 30-minute server-side cache and invalidate after dashboard-triggered updates instead of rechecking on every request
+- **Bot fall-off hot path** — bot-to-bot response probability now reads only the fall-off settings it needs instead of copying the full runtime config for every bot message
+- **Shutdown/restart history flushing** — restart and shutdown flows now force-save pending history changes so dirty per-channel caches are persisted before the process exits
+
 ## [v1.9.1] - 2026-03-21
 
 ### Fixed

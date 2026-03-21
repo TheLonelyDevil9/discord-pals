@@ -47,6 +47,13 @@ DEFAULTS = {
 _config_cache: dict = None
 _config_cache_time: float = 0.0
 _CONFIG_CACHE_TTL = 30.0  # Seconds before cache expires (increased from 2.0 for performance)
+_BOT_FALLOFF_KEYS = (
+    "bot_falloff_enabled",
+    "bot_falloff_base_chance",
+    "bot_falloff_decay_rate",
+    "bot_falloff_min_chance",
+    "bot_falloff_hard_limit",
+)
 
 
 def ensure_data_dir():
@@ -121,8 +128,15 @@ def get_all() -> dict:
     return load_config().copy()
 
 
+def get_bot_falloff_config() -> dict:
+    """Get only the bot fall-off settings used on the message hot path."""
+    config = load_config()
+    return {key: config[key] for key in _BOT_FALLOFF_KEYS}
+
+
 # Last context storage for visualization
 _last_context = {}
+_last_context_revision = 0
 
 # Last activity tracking
 _last_activity = {}
@@ -131,12 +145,14 @@ _last_activity = {}
 def store_last_context(bot_name: str, system_prompt: str, messages: list,
                        token_estimate: int = 0):
     """Store the last context sent to LLM for visualization."""
+    global _last_context_revision
     _last_context[bot_name] = {
         "system_prompt": system_prompt,
         "messages": messages,
         "token_estimate": token_estimate,
         "message_count": len(messages)
     }
+    _last_context_revision += 1
 
 
 def get_last_context(bot_name: str = None) -> dict:
@@ -144,6 +160,11 @@ def get_last_context(bot_name: str = None) -> dict:
     if bot_name:
         return _last_context.get(bot_name, {})
     return _last_context
+
+
+def get_last_context_revision() -> int:
+    """Get a revision counter for dashboard context polling."""
+    return _last_context_revision
 
 
 def update_last_activity(bot_name: str):
