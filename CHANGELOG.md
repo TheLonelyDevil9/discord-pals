@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.8.7] - 2026-03-21
+
+### Added
+
+- Regression tests for unified memory persistence, dedup state, and dashboard memory APIs
+
+### Changed
+
+- **Auto Memories dashboard** — now reads from the unified v2 auto-memory API and unified store stats instead of inferring source labels from legacy raw JSON structures
+- **Memory dedup contract wording** — documentation and dashboard copy now describe deduplication as running after 5 new auto memories for the same server/user or DM/user key
+
+### Fixed
+
+- **Auto memories misclassified as manual** — unified auto-memory entries now persist `auto: true`, lore persists `auto: false`, and dashboard totals/source labels now reflect the real store
+- **Dedup trigger lost across restarts** — pending auto-memory counts are now persisted in `bot_data/memory_state.json` so LLM consolidation still triggers correctly after a restart
+- **Concurrent/stale dedup runs** — per-key in-flight guarding and stale-result protection now prevent overlapping LLM dedup tasks from overwriting newer memory state
+- **No-embedding fallback behavior** — when embeddings are unavailable, the bot now logs that semantic dedup is disabled for the runtime and continues using fingerprint/text dedup plus LLM consolidation
+
 ## [v1.8.6] - 2026-03-20
 
 ### Fixed
