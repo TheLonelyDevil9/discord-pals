@@ -1,10 +1,12 @@
 import unittest
 import sys
 import types
+import re
 from unittest.mock import patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
+import character as character_module
 
 from test_support import MemorySandboxMixin
 
@@ -154,3 +156,72 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertNotIn("user:456", self.manager.manual_lore)
         self.assertIn("user:999", self.manager.manual_lore)
         self.assertIn("server:123", self.manager.manual_lore)
+
+
+class DashboardConfigPageTests(MemorySandboxMixin, unittest.TestCase):
+    def setUp(self):
+        self.setUpMemorySandbox()
+        self.client = self.make_client()
+
+        self._dashboard_characters_dir = dashboard_module.CHARACTERS_DIR
+        self._character_characters_dir = character_module.CHARACTERS_DIR
+        self._character_cache = dict(character_module.character_manager.characters)
+
+        self.characters_dir = self.data_dir / "characters"
+        self.characters_dir.mkdir(parents=True, exist_ok=True)
+        (self.characters_dir / "nilou.md").write_text("# Nilou\n\n## Persona\n\nGraceful dancer", encoding="utf-8")
+        (self.characters_dir / "nahida.md").write_text("# Nahida\n\n## Persona\n\nWise archon", encoding="utf-8")
+
+        dashboard_module.CHARACTERS_DIR = self.characters_dir
+        character_module.CHARACTERS_DIR = str(self.characters_dir)
+        character_module.character_manager.characters = {}
+
+        class FakeClient:
+            def is_ready(self):
+                return False
+
+        self.nahida_bot = types.SimpleNamespace(
+            name="Nahida",
+            character=types.SimpleNamespace(name="Nahida"),
+            character_name="nahida",
+            client=FakeClient(),
+            nicknames=""
+        )
+        self.nilou_bot = types.SimpleNamespace(
+            name="Nilou",
+            character=types.SimpleNamespace(name="Nilou"),
+            character_name="nilou",
+            client=FakeClient(),
+            nicknames=""
+        )
+        dashboard_module.bot_instances = [self.nahida_bot, self.nilou_bot]
+
+    def tearDown(self):
+        dashboard_module.CHARACTERS_DIR = self._dashboard_characters_dir
+        character_module.CHARACTERS_DIR = self._character_characters_dir
+        character_module.character_manager.characters = self._character_cache
+        self.tearDownMemorySandbox()
+
+    def test_config_page_selects_character_using_stable_key(self):
+        page = self.client.get("/config").get_data(as_text=True)
+
+        nahida_select = re.search(r'<select id="char-Nahida"[^>]*>(.*?)</select>', page, re.S)
+        nilou_select = re.search(r'<select id="char-Nilou"[^>]*>(.*?)</select>', page, re.S)
+
+        self.assertIsNotNone(nahida_select)
+        self.assertIsNotNone(nilou_select)
+        self.assertIn('value="nahida" selected', nahida_select.group(1))
+        self.assertIn('value="nilou" selected', nilou_select.group(1))
+
+    def test_switch_character_updates_bot_character_key(self):
+        response = self.client.post(
+            "/api/switch_character",
+            json={"bot_name": "Nahida", "character": "nilou"},
+            headers=self.csrf_headers()
+        )
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(self.nahida_bot.character.name, "Nilou")
+        self.assertEqual(self.nahida_bot.character_name, "nilou")

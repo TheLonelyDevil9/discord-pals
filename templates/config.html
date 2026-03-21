@@ -156,11 +156,11 @@
             <div class="bot-actions">
                 <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
                     {% for char in characters %}
-                    <option value="{{ char }}" {% if bot.character==char %}selected{% endif %}>{{ char }}</option>
+                    <option value="{{ char }}" {% if bot.character_key == char %}selected{% endif %}>{{ char }}</option>
                     {% endfor %}
                 </select>
                 <button type="button" class="btn btn-ghost btn-sm"
-                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value)">Switch</button>
+                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value, this)">Switch</button>
             </div>
         </div>
         {% endfor %}

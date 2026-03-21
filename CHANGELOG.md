@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.9.1] - 2026-03-21
+
+### Fixed
+
+- **Character switcher selecting the wrong card value** — the Config page now tracks each bot's stable character file key separately from the loaded display name, so mixed-case names like `nahida.md` loading as `Nahida` no longer fall back to the first dropdown option
+- **Character switches not persisting the UI key** — switching a bot's character through the dashboard now updates the bot's stored character key as well as the loaded character object, preventing the selector from drifting back after reload
+
+### Added
+
+- Regression coverage for the config page character switcher, including lower-case file stem vs title-case display name cases
+
 ## [v1.9.0] - 2026-03-21
 
 ### Added

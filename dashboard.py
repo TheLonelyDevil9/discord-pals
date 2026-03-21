@@ -142,6 +142,32 @@ def get_character_files():
     return files
 
 
+def _resolve_character_option(available_characters, *candidates):
+    """Resolve a bot's current character to one of the available option values."""
+    if not available_characters:
+        return None
+
+    normalized = {
+        str(character).strip().lower(): character
+        for character in available_characters
+        if isinstance(character, str) and character
+    }
+
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        cleaned = candidate.strip()
+        if not cleaned:
+            continue
+        if cleaned in available_characters:
+            return cleaned
+        match = normalized.get(cleaned.lower())
+        if match:
+            return match
+
+    return None
+
+
 def _parse_int_list_values(*values):
     """Parse one or more comma-separated / repeated inputs into unique positive ints."""
     parsed = []
@@ -794,10 +820,18 @@ def config_page():
                         'name': channel.name,
                         'guild': guild_name
                     })
+
+        current_character = bot.character.name if bot.character else 'None'
+        current_character_key = _resolve_character_option(
+            characters,
+            getattr(bot, 'character_name', None),
+            current_character,
+        )
         
         bots_info.append({
             'name': bot.name,
-            'character': bot.character.name if bot.character else 'None',
+            'character': current_character,
+            'character_key': current_character_key,
             'online': bot.client.is_ready() if hasattr(bot, 'client') else False,
             'auto_channels': auto_channels,
             'nicknames': getattr(bot, 'nicknames', '')  # Per-bot custom nicknames
@@ -852,6 +886,7 @@ def api_switch_character():
             try:
                 from character import character_manager
                 bot.character = character_manager.load(character_name)
+                bot.character_name = character_name
                 return jsonify({'status': 'ok', 'character': bot.character.name})
             except Exception as e:
                 return jsonify({'status': 'error', 'message': str(e)}), 400
