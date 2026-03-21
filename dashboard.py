@@ -4,6 +4,8 @@ Local web interface for managing bot, memories, and characters.
 """
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file, session
+import asyncio
+import concurrent.futures
 import threading
 import json
 import os
@@ -138,6 +140,52 @@ def get_character_files():
             if f.name != "template.md":
                 files.append(f.name.replace(".md", ""))
     return files
+
+
+def _parse_int_list_values(*values):
+    """Parse one or more comma-separated / repeated inputs into unique positive ints."""
+    parsed = []
+    seen = set()
+
+    def add_candidate(candidate):
+        try:
+            number = int(str(candidate).strip())
+        except (TypeError, ValueError):
+            return
+        if number <= 0 or number in seen:
+            return
+        seen.add(number)
+        parsed.append(number)
+
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add_candidate(item)
+            continue
+        for item in str(value).split(","):
+            add_candidate(item)
+
+    return parsed
+
+
+def _normalize_scope_mode(raw_scope: str) -> str:
+    """Normalize scope mode to one of all/server/dm."""
+    scope = (raw_scope or "all").strip().lower()
+    if scope not in {"all", "server", "dm"}:
+        return "all"
+    return scope
+
+
+def _get_live_bot_loop():
+    """Return a running bot event loop if one is available."""
+    for bot in bot_instances:
+        client = getattr(bot, "client", None)
+        loop = getattr(client, "loop", None)
+        if loop and loop.is_running():
+            return loop
+    return None
 
 
 # --- Login/Logout Routes ---
@@ -1768,16 +1816,44 @@ def api_v2_auto_memories():
     """List auto memories with optional filters."""
     from memory import memory_manager
     search = request.args.get('search', '').lower()
-    server_filter = request.args.get('server_id', '')
-    user_filter = request.args.get('user_id', '')
+    server_filter = request.args.get('server_id', '').strip()
+    scope_filter = request.args.get('scope', '').strip().lower()
+    raw_user_filters = request.args.getlist('user_ids') + request.args.getlist('user_id')
+    user_ids = _parse_int_list_values(
+        request.args.getlist('user_ids'),
+        request.args.get('user_ids'),
+        request.args.getlist('user_id'),
+        request.args.get('user_id'),
+    )
+
+    if not scope_filter:
+        if server_filter.lower() == 'dm' or server_filter == '0':
+            scope_filter = 'dm'
+        elif server_filter:
+            scope_filter = 'server'
+
+    scope_mode = _normalize_scope_mode(scope_filter)
+    server_id = None
+    if scope_mode == 'server' and server_filter and server_filter.lower() not in {'dm', '0'}:
+        try:
+            server_id = int(server_filter)
+        except (TypeError, ValueError):
+            server_id = None
+
+    if raw_user_filters and not user_ids:
+        matched_keys = set()
+    else:
+        matched_keys = set(
+            memory_manager.resolve_auto_memory_keys(
+                user_ids,
+                scope_mode=scope_mode,
+                server_id=server_id if scope_mode == 'server' else None
+            )
+        )
 
     results = []
     for key, entries in memory_manager.auto_memories.items():
-        # Apply filters
-        if server_filter and f"server:{server_filter}" not in key and server_filter != '0':
-            if not (server_filter == 'dm' and key.startswith('dm:')):
-                continue
-        if user_filter and f"user:{user_filter}" not in key:
+        if key not in matched_keys:
             continue
 
         for idx, entry in enumerate(entries):
@@ -1862,12 +1938,89 @@ def api_v2_auto_delete_batch():
 
     deleted = 0
     for key, indices in by_key.items():
-        before = len(memory_manager.auto_memories.get(key, []))
-        memory_manager.delete_auto_memories(key, indices)
-        after = len(memory_manager.auto_memories.get(key, []))
-        deleted += before - after
+        deleted += memory_manager.delete_auto_memories(key, indices)
 
     return jsonify({'status': 'ok', 'deleted': deleted})
+
+
+@app.route('/api/v2/memories/auto/bulk-delete', methods=['POST'])
+@requires_csrf
+def api_v2_auto_bulk_delete():
+    """Delete all auto memories matching targeted users and a scope."""
+    from memory import memory_manager
+
+    data = request.json or {}
+    user_ids = _parse_int_list_values(data.get('user_ids'), data.get('user_id'))
+    if not user_ids:
+        return jsonify({'status': 'error', 'message': 'At least one user ID is required'}), 400
+
+    scope_mode = _normalize_scope_mode(data.get('scope_mode'))
+    server_id = data.get('server_id')
+    if scope_mode == 'server':
+        try:
+            server_id = int(server_id)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Server scope requires an explicit server_id'}), 400
+    else:
+        server_id = None
+
+    result = memory_manager.bulk_delete_auto_memories(
+        user_ids,
+        scope_mode=scope_mode,
+        server_id=server_id
+    )
+    return jsonify({'status': 'ok', **result})
+
+
+@app.route('/api/v2/memories/auto/consolidate', methods=['POST'])
+@requires_csrf
+def api_v2_auto_consolidate():
+    """Manually consolidate auto memories for targeted users."""
+    from memory import memory_manager
+    from providers import provider_manager
+
+    data = request.json or {}
+    user_ids = _parse_int_list_values(data.get('user_ids'), data.get('user_id'))
+    if not user_ids:
+        return jsonify({'status': 'error', 'message': 'At least one user ID is required'}), 400
+
+    scope_mode = _normalize_scope_mode(data.get('scope_mode'))
+    server_id = data.get('server_id')
+    if scope_mode == 'server':
+        try:
+            server_id = int(server_id)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Server scope requires an explicit server_id'}), 400
+    else:
+        server_id = None
+
+    if not getattr(provider_manager, 'providers', None):
+        return jsonify({'status': 'error', 'message': 'No usable provider is configured for manual consolidation'}), 503
+
+    loop = _get_live_bot_loop()
+    if not loop:
+        return jsonify({'status': 'error', 'message': 'Manual consolidation requires a running bot event loop'}), 503
+
+    future = asyncio.run_coroutine_threadsafe(
+        memory_manager.consolidate_auto_memories(
+            user_ids,
+            scope_mode=scope_mode,
+            server_id=server_id,
+            provider_manager=provider_manager
+        ),
+        loop
+    )
+
+    try:
+        result = future.result(timeout=120)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        return jsonify({'status': 'error', 'message': 'Manual consolidation timed out'}), 504
+    except Exception as e:
+        log.error(f"Manual auto-memory consolidation failed: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    return jsonify({'status': 'ok', **result})
 
 
 @app.route('/api/v2/memories/auto/clear', methods=['POST'])
@@ -1877,9 +2030,10 @@ def api_v2_auto_clear():
     from memory import memory_manager
     data = request.json or {}
     key = data.get('key')
+    removed = 0
     if key:
-        memory_manager.clear_auto_memories(key)
-    return jsonify({'status': 'ok'})
+        removed = memory_manager.clear_auto_memories(key)
+    return jsonify({'status': 'ok', 'deleted': removed})
 
 
 @app.route('/api/v2/memories/lore')
@@ -1887,6 +2041,11 @@ def api_v2_lore():
     """List all lore entries."""
     from memory import memory_manager
     type_filter = request.args.get('type', '')  # 'user', 'bot', 'server'
+    raw_target_ids = request.args.getlist('target_ids')
+    target_ids = set(_parse_int_list_values(
+        request.args.getlist('target_ids'),
+        request.args.get('target_ids')
+    ))
 
     results = []
     for key, entries in memory_manager.manual_lore.items():
@@ -1905,6 +2064,17 @@ def api_v2_lore():
 
         if type_filter and lore_type != type_filter:
             continue
+        if raw_target_ids and not target_ids:
+            continue
+        if target_ids:
+            if lore_type != 'user':
+                continue
+            try:
+                target_id = int(target)
+            except (TypeError, ValueError):
+                continue
+            if target_id not in target_ids:
+                continue
 
         for idx, entry in enumerate(entries):
             results.append({
@@ -1984,12 +2154,24 @@ def api_v2_lore_delete_batch():
 
     deleted = 0
     for key, indices in by_key.items():
-        before = len(memory_manager.manual_lore.get(key, []))
-        memory_manager.delete_lore(key, indices)
-        after = len(memory_manager.manual_lore.get(key, []))
-        deleted += before - after
+        deleted += memory_manager.delete_lore(key, indices)
 
     return jsonify({'status': 'ok', 'deleted': deleted})
+
+
+@app.route('/api/v2/memories/lore/bulk-delete', methods=['POST'])
+@requires_csrf
+def api_v2_lore_bulk_delete():
+    """Delete user lore for one or more target users without touching other lore."""
+    from memory import memory_manager
+
+    data = request.json or {}
+    user_ids = _parse_int_list_values(data.get('user_ids'), data.get('target_ids'))
+    if not user_ids:
+        return jsonify({'status': 'error', 'message': 'At least one user ID is required'}), 400
+
+    result = memory_manager.bulk_delete_user_lore(user_ids)
+    return jsonify({'status': 'ok', **result})
 
 
 # --- Version API ---

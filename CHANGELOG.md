@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.9.0] - 2026-03-21
+
+### Added
+
+- Bulk auto-memory cleanup tools in the dashboard, including exact row selection, by-user deletion, and scope-targeted deletes for DMs, a chosen server, or all scopes
+- Manual dashboard consolidation for targeted auto-memory keys, allowing one-click pruning of noisy per-message memories into a shorter bullet-style list
+- Separate bulk user-lore deletion plus regression coverage for targeted delete, filter, and consolidation flows
+
+### Changed
+
+- **Memories dashboard workflow** — the Auto Memories tab now exposes targeted bulk actions directly instead of relying on raw JSON cleanup while the bot is live
+- **Memory APIs** — auto-memory and lore endpoints now support scoped filtering and targeted bulk actions for dashboard pruning workflows
+
+### Fixed
+
+- **Live memory cleanup consistency** — dashboard deletes now keep the unified in-memory stores and persisted dedup counters in sync instead of being vulnerable to raw JSON edits being overwritten at runtime
+- **Manual pruning gap** — noisy per-message auto memories can now be consolidated on demand for specific users without waiting for the 5-new-memory trigger
+
 ## [v1.8.7] - 2026-03-21
 
 ### Added

@@ -126,6 +126,52 @@ class MemoryManagerPersistenceTests(MemorySandboxMixin, unittest.TestCase):
         state = self.read_json("memory_state.json")
         self.assertEqual(state["pending_auto_since_dedup"]["server:123:user:456"], 2)
 
+    def test_bulk_delete_auto_memories_across_all_scopes_clears_matching_keys_and_state(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea")
+        self.manager.add_auto_memory(0, 456, "Alice prefers DMs")
+        self.manager.add_auto_memory(999, 777, "Bob likes coffee")
+        self.manager.save_all()
+
+        result = self.manager.bulk_delete_auto_memories([456], scope_mode="all")
+        self.manager.save_all()
+
+        self.assertEqual(result["affected_keys"], 2)
+        self.assertEqual(result["deleted"], 2)
+        self.assertNotIn("server:123:user:456", self.manager.auto_memories)
+        self.assertNotIn("dm:0:user:456", self.manager.auto_memories)
+        self.assertIn("server:999:user:777", self.manager.auto_memories)
+
+        state = self.read_json("memory_state.json")
+        self.assertNotIn("server:123:user:456", state["pending_auto_since_dedup"])
+        self.assertNotIn("dm:0:user:456", state["pending_auto_since_dedup"])
+        self.assertEqual(state["pending_auto_since_dedup"]["server:999:user:777"], 1)
+
+    def test_bulk_delete_auto_memories_for_one_server_preserves_other_scopes(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea")
+        self.manager.add_auto_memory(999, 456, "Alice likes coffee")
+        self.manager.add_auto_memory(0, 456, "Alice sends DMs")
+
+        result = self.manager.bulk_delete_auto_memories([456], scope_mode="server", server_id=123)
+
+        self.assertEqual(result["affected_keys"], 1)
+        self.assertEqual(result["deleted"], 1)
+        self.assertNotIn("server:123:user:456", self.manager.auto_memories)
+        self.assertIn("server:999:user:456", self.manager.auto_memories)
+        self.assertIn("dm:0:user:456", self.manager.auto_memories)
+
+    def test_bulk_delete_user_lore_only_removes_user_keys(self):
+        self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")
+        self.manager.add_lore("server", 123, "Tea House allows roleplay", added_by="dashboard")
+        self.manager.add_lore("bot", "Firefly", "Speaks softly", added_by="dashboard")
+
+        result = self.manager.bulk_delete_user_lore([456])
+
+        self.assertEqual(result["affected_keys"], 1)
+        self.assertEqual(result["deleted"], 1)
+        self.assertNotIn("user:456", self.manager.manual_lore)
+        self.assertIn("server:123", self.manager.manual_lore)
+        self.assertIn("bot:Firefly", self.manager.manual_lore)
+
 
 class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -189,3 +235,38 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         self.assertEqual(self.manager._get_pending_auto_count(key), 0)
         self.assertTrue(all(entry["auto"] for entry in self.manager.auto_memories[key]))
         self.assertTrue(self.manager._embedding_unavailable_logged)
+
+    async def test_manual_consolidate_rewrites_matching_keys_and_resets_counters(self):
+        self.seed_user_memories(self.manager)
+        key = "server:123:user:456"
+        provider = EmbeddingProvider("Alice likes tea\nAlice keeps tea at home")
+
+        result = await self.manager.consolidate_auto_memory_keys([key], provider)
+
+        self.assertEqual(result["matched_keys"], 1)
+        self.assertEqual(result["consolidated"], 1)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(result["already_running"], 0)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(len(self.manager.auto_memories[key]), 2)
+        self.assertTrue(all(entry["auto"] for entry in self.manager.auto_memories[key]))
+        self.assertEqual(self.manager._get_pending_auto_count(key), 0)
+
+    async def test_manual_consolidate_skips_small_and_inflight_keys(self):
+        busy_key = "server:123:user:456"
+        self.seed_user_memories(self.manager)
+        self.manager.add_auto_memory(123, 999, "Bob likes games")
+        self.manager.add_auto_memory(123, 999, "Bob likes pizza")
+        small_key = "server:123:user:999"
+        self.manager._dedup_in_flight.add(busy_key)
+        provider = NoEmbeddingProvider("Unused")
+
+        result = await self.manager.consolidate_auto_memory_keys([busy_key, small_key], provider)
+
+        self.assertEqual(result["matched_keys"], 2)
+        self.assertEqual(result["consolidated"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["already_running"], 1)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(provider.generate_calls, 0)
+        self.manager._dedup_in_flight.discard(busy_key)

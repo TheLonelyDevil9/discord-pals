@@ -559,6 +559,78 @@ class MemoryManager:
     def _bot_lore_key(bot_name: str) -> str:
         return f"bot:{bot_name}"
 
+    def resolve_auto_memory_keys(
+        self,
+        user_ids: Optional[List[int]] = None,
+        *,
+        scope_mode: str = "all",
+        server_id: int = None
+    ) -> List[str]:
+        """Resolve auto-memory keys matching the given user/scope filters."""
+        try:
+            normalized_user_ids = {
+                int(user_id) for user_id in (user_ids or [])
+                if int(user_id) > 0
+            }
+        except (TypeError, ValueError):
+            normalized_user_ids = set()
+
+        try:
+            normalized_server_id = int(server_id) if server_id is not None else None
+        except (TypeError, ValueError):
+            normalized_server_id = None
+
+        scope = (scope_mode or "all").strip().lower()
+        if scope not in {"all", "server", "dm"}:
+            scope = "all"
+
+        matched_keys = []
+        for key in self.auto_memories.keys():
+            parsed_server_id, parsed_user_id = _parse_auto_key(key)
+            if parsed_user_id is None:
+                continue
+            if normalized_user_ids and parsed_user_id not in normalized_user_ids:
+                continue
+
+            is_dm = parsed_server_id in (None, 0)
+            if scope == "dm" and not is_dm:
+                continue
+            if scope == "server":
+                if is_dm:
+                    continue
+                if normalized_server_id is not None and parsed_server_id != normalized_server_id:
+                    continue
+
+            matched_keys.append(key)
+
+        return sorted(matched_keys)
+
+    def resolve_user_lore_keys(self, user_ids: Optional[List[int]] = None) -> List[str]:
+        """Resolve user-lore keys matching the given user IDs."""
+        try:
+            normalized_user_ids = {
+                int(user_id) for user_id in (user_ids or [])
+                if int(user_id) > 0
+            }
+        except (TypeError, ValueError):
+            normalized_user_ids = set()
+
+        matched_keys = []
+        for key in self.manual_lore.keys():
+            if not key.startswith("user:"):
+                continue
+            if not normalized_user_ids:
+                matched_keys.append(key)
+                continue
+            try:
+                target_user_id = int(key.split(":", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if target_user_id in normalized_user_ids:
+                matched_keys.append(key)
+
+        return sorted(matched_keys)
+
     @staticmethod
     def _build_auto_memory_entry(
         content: str,
@@ -685,7 +757,7 @@ class MemoryManager:
     def delete_auto_memories(self, key: str, indices: List[int]):
         """Delete specific auto memories by index (descending order safe)."""
         if key not in self.auto_memories:
-            return
+            return 0
         removed = 0
         for idx in sorted(indices, reverse=True):
             if 0 <= idx < len(self.auto_memories[key]):
@@ -696,14 +768,19 @@ class MemoryManager:
             self._set_pending_auto_count(key, 0)
         elif removed:
             self._decrement_pending_auto_count(key, removed)
-        self._mark_dirty('auto')
+        if removed:
+            self._mark_dirty('auto')
+        return removed
 
     def clear_auto_memories(self, key: str):
         """Clear all auto memories for a key."""
         if key in self.auto_memories:
+            removed = len(self.auto_memories[key])
             del self.auto_memories[key]
             self._set_pending_auto_count(key, 0)
             self._mark_dirty('auto')
+            return removed
+        return 0
 
     def update_auto_memory(self, key: str, index: int, content: str, character_name: str = None) -> bool:
         """Update an existing auto memory without changing its source classification."""
@@ -733,6 +810,62 @@ class MemoryManager:
 
         self._mark_dirty('auto')
         return True
+
+    def bulk_delete_auto_memories(
+        self,
+        user_ids: Optional[List[int]] = None,
+        *,
+        scope_mode: str = "all",
+        server_id: int = None
+    ) -> dict:
+        """Delete all auto memories matching one or more users and scope filters."""
+        keys = self.resolve_auto_memory_keys(user_ids, scope_mode=scope_mode, server_id=server_id)
+        deleted = 0
+        for key in keys:
+            deleted += self.clear_auto_memories(key)
+
+        return {
+            "affected_keys": len(keys),
+            "deleted": deleted,
+        }
+
+    async def consolidate_auto_memory_keys(self, keys: List[str], provider_manager) -> dict:
+        """Manually consolidate one or more auto-memory keys in sequence."""
+        result = {
+            "matched_keys": len(keys or []),
+            "consolidated": 0,
+            "skipped": 0,
+            "already_running": 0,
+            "failed": 0,
+        }
+
+        if not keys:
+            return result
+
+        for key in keys:
+            status = await self.llm_deduplicate(key, provider_manager)
+            if status == "consolidated":
+                result["consolidated"] += 1
+            elif status == "already_running":
+                result["already_running"] += 1
+            elif status == "failed":
+                result["failed"] += 1
+            else:
+                result["skipped"] += 1
+
+        return result
+
+    async def consolidate_auto_memories(
+        self,
+        user_ids: Optional[List[int]],
+        *,
+        scope_mode: str = "all",
+        server_id: int = None,
+        provider_manager,
+    ) -> dict:
+        """Resolve keys for one or more users, then consolidate each key sequentially."""
+        keys = self.resolve_auto_memory_keys(user_ids, scope_mode=scope_mode, server_id=server_id)
+        return await self.consolidate_auto_memory_keys(keys, provider_manager)
 
     # ==========================================================================
     # MANUAL LORE
@@ -792,19 +925,38 @@ class MemoryManager:
     def delete_lore(self, key: str, indices: List[int]):
         """Delete specific lore entries by index."""
         if key not in self.manual_lore:
-            return
+            return 0
+        removed = 0
         for idx in sorted(indices, reverse=True):
             if 0 <= idx < len(self.manual_lore[key]):
                 self.manual_lore[key].pop(idx)
+                removed += 1
         if not self.manual_lore[key]:
             del self.manual_lore[key]
-        self._mark_dirty('lore')
+        if removed:
+            self._mark_dirty('lore')
+        return removed
 
     def clear_lore(self, key: str):
         """Clear all lore for a key."""
         if key in self.manual_lore:
+            removed = len(self.manual_lore[key])
             del self.manual_lore[key]
             self._mark_dirty('lore')
+            return removed
+        return 0
+
+    def bulk_delete_user_lore(self, user_ids: Optional[List[int]] = None) -> dict:
+        """Delete user-scoped lore for one or more target users."""
+        keys = self.resolve_user_lore_keys(user_ids)
+        deleted = 0
+        for key in keys:
+            deleted += self.clear_lore(key)
+
+        return {
+            "affected_keys": len(keys),
+            "deleted": deleted,
+        }
 
     # Legacy compatibility aliases
     def add_server_memory(self, guild_id: int, content: str, auto: bool = False, embedding: list = None) -> bool:
@@ -844,12 +996,12 @@ class MemoryManager:
         """Use LLM to consolidate and deduplicate memories for a key."""
         if key in self._dedup_in_flight:
             log.debug(f"LLM dedup already in flight for {key}")
-            return
+            return "already_running"
 
         memories = list(self.auto_memories.get(key, []))
         if len(memories) < 3:
             self._set_pending_auto_count(key, min(self._get_pending_auto_count(key), len(memories)))
-            return
+            return "skipped"
 
         self._dedup_in_flight.add(key)
         memory_snapshot = [
@@ -879,67 +1031,75 @@ Deduplicated memories (one per line):"""
                 system_prompt="You are a memory consolidation assistant. Return only the deduplicated list, one per line."
             )
 
-            if result and not result.startswith("❌"):
-                result = remove_thinking_tags(result)
-                new_lines = [line.strip() for line in result.strip().split("\n") if line.strip()]
-                # Rebuild memory entries
-                candidate_lines = []
-                for line in new_lines:
-                    line = re.sub(r'^[\-\d\.\)]+\s*', '', line).strip()
-                    if line:
-                        candidate_lines.append(line)
+            if not result or result.startswith("❌"):
+                return "failed"
 
-                new_lines = deduplicate_memory_strings(candidate_lines)
-                new_memories = []
-                embeddings = []
-                if new_lines:
-                    embeddings = await asyncio.gather(
-                        *[provider_manager.get_embedding(line) for line in new_lines],
-                        return_exceptions=True
-                    )
+            result = remove_thinking_tags(result)
+            new_lines = [line.strip() for line in result.strip().split("\n") if line.strip()]
+            # Rebuild memory entries
+            candidate_lines = []
+            for line in new_lines:
+                line = re.sub(r'^[\-\d\.\)]+\s*', '', line).strip()
+                if line:
+                    candidate_lines.append(line)
 
-                default_server_id, default_user_id = _parse_auto_key(key)
-                base_character = next(
-                    (m.get("character") for m in memories if isinstance(m.get("character"), str) and m.get("character")),
-                    "consolidated"
+            new_lines = deduplicate_memory_strings(candidate_lines)
+            new_memories = []
+            embeddings = []
+            if new_lines:
+                embeddings = await asyncio.gather(
+                    *[provider_manager.get_embedding(line) for line in new_lines],
+                    return_exceptions=True
                 )
-                for idx, line in enumerate(new_lines):
-                    embedding = None
-                    if idx < len(embeddings):
-                        candidate = embeddings[idx]
-                        if isinstance(candidate, list):
-                            embedding = candidate
-                        elif candidate is None or isinstance(candidate, Exception):
-                            self._log_embedding_unavailable_once()
-                    new_memories.append(self._build_auto_memory_entry(
-                        line,
-                        user_id=memories[0].get("user_id", default_user_id or 0),
-                        server_id=memories[0].get("server_id", default_server_id or 0),
-                        user_name=memories[0].get("user_name"),
-                        server_name=memories[0].get("server_name"),
-                        character_name=base_character,
-                        embedding=embedding
-                    ))
 
-                if new_memories:
-                    current_snapshot = [
-                        (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
-                        for m in self.auto_memories.get(key, [])
-                    ]
-                    if current_snapshot != memory_snapshot:
-                        log.debug(f"Skipping stale LLM dedup result for {key}")
-                        return
+            default_server_id, default_user_id = _parse_auto_key(key)
+            base_character = next(
+                (m.get("character") for m in memories if isinstance(m.get("character"), str) and m.get("character")),
+                "consolidated"
+            )
+            for idx, line in enumerate(new_lines):
+                embedding = None
+                if idx < len(embeddings):
+                    candidate = embeddings[idx]
+                    if isinstance(candidate, list):
+                        embedding = candidate
+                    elif candidate is None or isinstance(candidate, Exception):
+                        self._log_embedding_unavailable_once()
+                new_memories.append(self._build_auto_memory_entry(
+                    line,
+                    user_id=memories[0].get("user_id", default_user_id or 0),
+                    server_id=memories[0].get("server_id", default_server_id or 0),
+                    user_name=memories[0].get("user_name"),
+                    server_name=memories[0].get("server_name"),
+                    character_name=base_character,
+                    embedding=embedding
+                ))
 
-                    before_count = len(memories)
-                    self.auto_memories[key] = new_memories
-                    self._mark_dirty('auto')
-                    self._set_pending_auto_count(key, 0)
-                    log.info(f"LLM dedup for {key}: {before_count} -> {len(new_memories)} memories")
+            if not new_memories:
+                return "skipped"
+
+            current_snapshot = [
+                (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
+                for m in self.auto_memories.get(key, [])
+            ]
+            if current_snapshot != memory_snapshot:
+                log.debug(f"Skipping stale LLM dedup result for {key}")
+                return "skipped"
+
+            before_count = len(memories)
+            self.auto_memories[key] = new_memories
+            self._mark_dirty('auto')
+            self._set_pending_auto_count(key, 0)
+            log.info(f"LLM dedup for {key}: {before_count} -> {len(new_memories)} memories")
+            return "consolidated"
 
         except Exception as e:
             log.warn(f"LLM deduplication failed for {key}: {e}")
+            return "failed"
         finally:
             self._dedup_in_flight.discard(key)
+
+        return "skipped"
 
     # ==========================================================================
     # MEMORY GENERATION

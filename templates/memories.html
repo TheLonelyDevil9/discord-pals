@@ -13,6 +13,12 @@
     <button type="button" class="tab" data-tab-button="lore" onclick="switchTab('lore')">Manual Lore</button>
 </div>
 
+<datalist id="known-users">
+    {% for user_id, user_name in user_names.items() %}
+    <option value="{{ user_name }} ({{ user_id }})"></option>
+    {% endfor %}
+</datalist>
+
 <div id="tab-files" class="tab-content active">
     <div class="stats-row">
         <div class="stat-card">
@@ -32,15 +38,24 @@
     <div class="filter-row">
         <div class="form-group">
             <label for="type-filter">Scope</label>
-            <select id="type-filter" onchange="renderAutoMemories()" title="Filter by scope">
+            <select id="type-filter" onchange="loadAutoMemories()" title="Filter by scope">
                 <option value="">All</option>
                 <option value="server">Server</option>
                 <option value="dm">DM</option>
             </select>
         </div>
+        <div class="form-group" id="server-filter-group">
+            <label for="server-filter">Server</label>
+            <select id="server-filter" onchange="loadAutoMemories()" title="Filter by server">
+                <option value="">All Servers</option>
+                {% for guild in guilds %}
+                <option value="{{ guild.id }}">{{ guild.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
         <div class="form-group flex-1">
             <label for="memory-search">Search</label>
-            <input type="text" id="memory-search" placeholder="Search auto memories..." oninput="renderAutoMemories()" title="Search memory content">
+            <input type="text" id="memory-search" placeholder="Search auto memories..." oninput="loadAutoMemories()" title="Search memory content">
         </div>
         <div class="form-group">
             <label for="sort-by">Sort</label>
@@ -61,6 +76,46 @@
         <div class="card-body">
             <p class="tab-description">
                 Auto memories are stored per server/user or DM/user key. Consolidation runs after 5 new auto memories for the same key.
+            </p>
+            <div class="callout-warning">
+                Live JSON edits are not a supported delete path while the bot is running. Use the dashboard actions below so in-memory state and dedup counters stay in sync.
+            </div>
+            <div class="auto-actions-row">
+                <div class="auto-actions-left">
+                    <label class="select-all">
+                        <input type="checkbox" id="auto-select-all" onchange="toggleAllAuto(this.checked)">
+                        Select All Visible
+                    </label>
+                    <button type="button" class="btn btn-danger btn-sm hidden" id="auto-delete-btn" onclick="deleteSelectedAuto()">Delete Selected</button>
+                </div>
+            </div>
+            <div class="auto-bulk-toolbar">
+                <div class="form-group auto-bulk-users">
+                    <label for="auto-target-users">Target Users</label>
+                    <input type="text" id="auto-target-users" list="known-users" placeholder="Alice (123), 456" title="One or more users by name or ID">
+                </div>
+                <div class="form-group auto-bulk-scope">
+                    <label for="auto-bulk-scope">Target Scope</label>
+                    <select id="auto-bulk-scope" onchange="updateAutoBulkScope()" title="Scope for targeted actions">
+                        <option value="all">All Scopes</option>
+                        <option value="server">Server Only</option>
+                        <option value="dm">DM Only</option>
+                    </select>
+                </div>
+                <div class="form-group auto-bulk-server hidden" id="auto-bulk-server-group">
+                    <label for="auto-bulk-server">Server</label>
+                    <select id="auto-bulk-server" title="Server for targeted actions">
+                        <option value="">Select a server...</option>
+                        {% for guild in guilds %}
+                        <option value="{{ guild.id }}">{{ guild.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="button" class="btn btn-danger" onclick="bulkDeleteAutoByUser()">Delete Targeted Users</button>
+                <button type="button" class="btn btn-primary" onclick="bulkConsolidateAutoByUser()">Consolidate Targeted Users</button>
+            </div>
+            <p class="tab-description toolbar-note">
+                Target users accepts cached names like Alice (123) or raw Discord IDs, separated by commas.
             </p>
             <div id="list-auto" class="memory-list">
                 <div class="memory-loading">Loading auto memories...</div>
@@ -141,6 +196,14 @@
                 <button type="button" class="btn btn-primary" onclick="addLoreV2()">Add Lore</button>
             </div>
 
+            <div class="lore-bulk-toolbar">
+                <div class="form-group lore-bulk-users">
+                    <label for="lore-bulk-users">User Lore Targets</label>
+                    <input type="text" id="lore-bulk-users" list="known-users" placeholder="Alice (123), 456" title="One or more user lore targets">
+                </div>
+                <button type="button" class="btn btn-danger" onclick="bulkDeleteUserLore()">Delete Targeted User Lore</button>
+            </div>
+
             <div class="lore-actions-row">
                 <div class="lore-actions-left">
                     <label class="select-all">
@@ -216,6 +279,11 @@
     margin-bottom: 20px;
 }
 
+.toolbar-note {
+    margin-top: 12px;
+    margin-bottom: 16px;
+}
+
 .stats-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -288,6 +356,20 @@
     margin-bottom: 12px;
 }
 
+.memory-card-selectable {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.memory-card-select {
+    padding-top: 4px;
+}
+
+.memory-card-body {
+    flex: 1;
+}
+
 .memory-card:hover {
     border-color: var(--border);
 }
@@ -344,6 +426,17 @@
     color: var(--text-muted);
 }
 
+.callout-warning {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background: color-mix(in srgb, var(--warning, #f59e0b) 10%, var(--bg-secondary));
+    border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 30%, var(--border-subtle));
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
 .form-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -374,18 +467,48 @@
     margin: 0;
 }
 
+.auto-actions-row,
 .lore-actions-row {
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: end;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
 }
 
+.auto-actions-left,
 .lore-actions-left {
     display: flex;
     gap: 12px;
     align-items: center;
+}
+
+.auto-bulk-toolbar,
+.lore-bulk-toolbar {
+    display: grid;
+    gap: 12px;
+    align-items: end;
+    margin-bottom: 16px;
+    padding: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+}
+
+.auto-bulk-toolbar {
+    grid-template-columns: minmax(220px, 2fr) 170px minmax(200px, 1.5fr) auto auto;
+}
+
+.lore-bulk-toolbar {
+    grid-template-columns: minmax(240px, 1fr) auto;
+}
+
+.auto-bulk-toolbar .form-group,
+.lore-bulk-toolbar .form-group {
+    margin: 0;
+}
+
+.lore-actions-row {
+    margin-bottom: 8px;
 }
 
 .select-all {
@@ -464,6 +587,7 @@
 
 @media (max-width: 768px) {
     .filter-row,
+    .auto-actions-row,
     .lore-actions-row {
         flex-direction: column;
         align-items: stretch;
@@ -483,15 +607,30 @@
     .lore-toolbar {
         grid-template-columns: 1fr;
     }
+
+    .auto-bulk-toolbar,
+    .lore-bulk-toolbar {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 
 <script>
 const CSRF_TOKEN = '{{ csrf_token() }}';
+const KNOWN_USERS = {{ user_names | tojson }};
 
 let autoMemoryData = [];
 let memoryStats = { total: 0, auto: 0, manual: 0 };
 let loreData = [];
+let selectedAutoMemories = new Set();
+
+const USER_NAME_LOOKUP = Object.entries(KNOWN_USERS).reduce((lookup, [userId, userName]) => {
+    const normalized = String(userName || '').trim().toLowerCase();
+    if (!normalized) return lookup;
+    if (!lookup[normalized]) lookup[normalized] = [];
+    lookup[normalized].push(String(userId));
+    return lookup;
+}, {});
 
 function escapeHtml(text) {
     if (!text) return '';
@@ -603,16 +742,103 @@ function formatTimestamp(timestamp) {
     return date.toLocaleString();
 }
 
-function getFilteredAutoMemories() {
-    const scope = document.getElementById('type-filter').value;
-    const search = document.getElementById('memory-search').value.toLowerCase();
-    const sortBy = document.getElementById('sort-by').value;
+function parseUserIdsInput(rawValue) {
+    const userIds = [];
+    const seen = new Set();
+    const unresolved = [];
+    const tokens = String(rawValue || '')
+        .split(/[\n,]+/)
+        .map(token => token.trim())
+        .filter(Boolean);
 
-    const items = autoMemoryData.filter(memory => {
-        if (scope && memory.scope !== scope) return false;
-        if (search && !memory.content.toLowerCase().includes(search)) return false;
-        return true;
+    tokens.forEach(token => {
+        if (/^\d+$/.test(token)) {
+            if (!seen.has(token)) {
+                seen.add(token);
+                userIds.push(token);
+            }
+            return;
+        }
+
+        const labeledMatch = token.match(/\((\d+)\)\s*$/);
+        if (labeledMatch) {
+            const userId = labeledMatch[1];
+            if (!seen.has(userId)) {
+                seen.add(userId);
+                userIds.push(userId);
+            }
+            return;
+        }
+
+        const matchingIds = USER_NAME_LOOKUP[token.toLowerCase()] || [];
+        if (matchingIds.length === 1) {
+            const userId = matchingIds[0];
+            if (!seen.has(userId)) {
+                seen.add(userId);
+                userIds.push(userId);
+            }
+            return;
+        }
+
+        unresolved.push(token);
     });
+
+    return { userIds, unresolved };
+}
+
+function autoSelectionId(key, index) {
+    return `${key}::${index}`;
+}
+
+function updateAutoFilterControls() {
+    const scope = document.getElementById('type-filter').value;
+    const serverGroup = document.getElementById('server-filter-group');
+    const serverFilter = document.getElementById('server-filter');
+
+    const showServerFilter = scope === 'server';
+    serverGroup.classList.toggle('hidden', !showServerFilter);
+    if (!showServerFilter) {
+        serverFilter.value = '';
+    }
+}
+
+function updateAutoBulkScope() {
+    const scope = document.getElementById('auto-bulk-scope').value;
+    const serverGroup = document.getElementById('auto-bulk-server-group');
+    const serverSelect = document.getElementById('auto-bulk-server');
+
+    const showServerSelect = scope === 'server';
+    serverGroup.classList.toggle('hidden', !showServerSelect);
+    if (!showServerSelect) {
+        serverSelect.value = '';
+    }
+}
+
+function getAutoQueryParams() {
+    const params = new URLSearchParams();
+    const search = document.getElementById('memory-search').value.trim();
+    const scope = document.getElementById('type-filter').value;
+    const serverId = document.getElementById('server-filter').value;
+
+    if (search) params.set('search', search);
+    if (scope) params.set('scope', scope);
+    if (scope === 'server' && serverId) params.set('server_id', serverId);
+
+    return params;
+}
+
+function resetAutoSelection() {
+    selectedAutoMemories = new Set();
+    const selectAll = document.getElementById('auto-select-all');
+    if (selectAll) {
+        selectAll.checked = false;
+    }
+    updateAutoDeleteBtn();
+}
+
+function getFilteredAutoMemories() {
+    const sortBy = document.getElementById('sort-by').value;
+    const items = [...autoMemoryData];
 
     items.sort((a, b) => {
         const aTime = a.timestamp || '';
@@ -631,28 +857,121 @@ function renderAutoMemoryCard(memory) {
         : (memory.server_name || `Server ${memory.server_id || 'Unknown'}`);
     const userLabel = memory.user_name || (memory.user_id ? `User ${memory.user_id}` : 'Shared');
     const keyLabel = memory.key || '';
+    const selectionKey = autoSelectionId(memory.key, memory.index);
+    const checked = selectedAutoMemories.has(selectionKey) ? 'checked' : '';
 
     return `
-        <div class="memory-card">
-            <div class="memory-card-header">
-                <div class="memory-card-meta">
-                    <span class="badge badge-auto">Auto</span>
-                    <span class="badge badge-muted">${escapeHtml(scopeLabel)}</span>
-                    ${memory.character ? `<span class="badge badge-muted">${escapeHtml(memory.character)}</span>` : ''}
-                    <span style="color: var(--text-muted); font-size: 0.75rem;">about ${escapeHtml(userLabel)}</span>
-                </div>
-                <div class="memory-card-actions">
-                    <button type="button" class="btn btn-ghost btn-sm" onclick='editAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Edit</button>
-                    <button type="button" class="btn btn-danger btn-sm" onclick='deleteAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Delete</button>
-                </div>
+        <div class="memory-card memory-card-selectable">
+            <div class="memory-card-select">
+                <input
+                    type="checkbox"
+                    class="auto-checkbox"
+                    data-key="${escapeHtml(memory.key)}"
+                    data-index="${memory.index}"
+                    onchange="toggleAutoSelection(this)"
+                    ${checked}
+                >
             </div>
-            <div class="memory-card-content">${escapeHtml(memory.content)}</div>
-            <div class="memory-card-footer">
-                <span>${escapeHtml(formatTimestamp(memory.timestamp))}</span>
-                <span>${escapeHtml(keyLabel)}</span>
+            <div class="memory-card-body">
+                <div class="memory-card-header">
+                    <div class="memory-card-meta">
+                        <span class="badge badge-auto">Auto</span>
+                        <span class="badge badge-muted">${escapeHtml(scopeLabel)}</span>
+                        ${memory.character ? `<span class="badge badge-muted">${escapeHtml(memory.character)}</span>` : ''}
+                        <span style="color: var(--text-muted); font-size: 0.75rem;">about ${escapeHtml(userLabel)}</span>
+                    </div>
+                    <div class="memory-card-actions">
+                        <button type="button" class="btn btn-ghost btn-sm" onclick='editAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Edit</button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick='deleteAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Delete</button>
+                    </div>
+                </div>
+                <div class="memory-card-content">${escapeHtml(memory.content)}</div>
+                <div class="memory-card-footer">
+                    <span>${escapeHtml(formatTimestamp(memory.timestamp))}</span>
+                    <span>${escapeHtml(keyLabel)}</span>
+                </div>
             </div>
         </div>
     `;
+}
+
+function updateAutoDeleteBtn() {
+    const checkedCount = selectedAutoMemories.size;
+    const button = document.getElementById('auto-delete-btn');
+    const checkboxes = Array.from(document.querySelectorAll('.auto-checkbox'));
+    const visibleCount = checkboxes.length;
+    const checkedVisible = checkboxes.filter(cb => cb.checked).length;
+
+    button.classList.toggle('hidden', checkedCount === 0);
+    button.textContent = `Delete Selected (${checkedCount})`;
+
+    const selectAll = document.getElementById('auto-select-all');
+    if (selectAll) {
+        selectAll.checked = visibleCount > 0 && checkedVisible === visibleCount;
+    }
+}
+
+function toggleAutoSelection(checkbox) {
+    const selectionKey = autoSelectionId(checkbox.dataset.key, parseInt(checkbox.dataset.index, 10));
+    if (checkbox.checked) {
+        selectedAutoMemories.add(selectionKey);
+    } else {
+        selectedAutoMemories.delete(selectionKey);
+    }
+    updateAutoDeleteBtn();
+}
+
+function toggleAllAuto(checked) {
+    document.querySelectorAll('.auto-checkbox').forEach(cb => {
+        cb.checked = checked;
+        const selectionKey = autoSelectionId(cb.dataset.key, parseInt(cb.dataset.index, 10));
+        if (checked) {
+            selectedAutoMemories.add(selectionKey);
+        } else {
+            selectedAutoMemories.delete(selectionKey);
+        }
+    });
+    updateAutoDeleteBtn();
+}
+
+function buildAutoUserActionPayload() {
+    const { userIds, unresolved } = parseUserIdsInput(document.getElementById('auto-target-users').value);
+    if (!userIds.length) {
+        showToast('Enter at least one target user', 'error');
+        return null;
+    }
+    if (unresolved.length) {
+        showToast(`Could not resolve: ${unresolved.join(', ')}`, 'error');
+        return null;
+    }
+
+    const scopeMode = document.getElementById('auto-bulk-scope').value;
+    const payload = {
+        user_ids: userIds,
+        scope_mode: scopeMode
+    };
+
+    if (scopeMode === 'server') {
+        const serverId = document.getElementById('auto-bulk-server').value;
+        if (!serverId) {
+            showToast('Pick a server for server-only actions', 'error');
+            return null;
+        }
+        payload.server_id = serverId;
+    }
+
+    return payload;
+}
+
+function formatTargetScopeLabel(scopeMode, serverId = '') {
+    if (scopeMode === 'dm') return 'DM memories';
+    if (scopeMode === 'server') {
+        const serverSelect = document.getElementById('auto-bulk-server');
+        const selectedOption = serverSelect && serverSelect.selectedOptions ? serverSelect.selectedOptions[0] : null;
+        const serverName = selectedOption ? selectedOption.textContent : `server ${serverId}`;
+        return `${serverName} memories`;
+    }
+    return 'all scopes';
 }
 
 function renderAutoMemories() {
@@ -663,10 +982,12 @@ function renderAutoMemories() {
 
     if (!items.length) {
         list.innerHTML = '<p class="memory-list-empty">No auto memories match the current filters.</p>';
+        updateAutoDeleteBtn();
         return;
     }
 
     list.innerHTML = items.map(renderAutoMemoryCard).join('');
+    updateAutoDeleteBtn();
 }
 
 function updateStats() {
@@ -687,13 +1008,18 @@ async function loadMemoryStats() {
 }
 
 async function loadAutoMemories() {
+    updateAutoFilterControls();
+    resetAutoSelection();
+
     const list = document.getElementById('list-auto');
     if (list) {
         list.innerHTML = '<div class="memory-loading">Loading auto memories...</div>';
     }
 
     try {
-        const response = await fetch('/api/v2/memories/auto');
+        const params = getAutoQueryParams();
+        const query = params.toString();
+        const response = await fetch(`/api/v2/memories/auto${query ? `?${query}` : ''}`);
         const data = await response.json();
         autoMemoryData = data.memories || [];
         renderAutoMemories();
@@ -705,6 +1031,111 @@ async function loadAutoMemories() {
     }
 
     await loadMemoryStats();
+}
+
+async function deleteSelectedAuto() {
+    const items = Array.from(document.querySelectorAll('.auto-checkbox:checked')).map(cb => ({
+        key: cb.dataset.key,
+        index: parseInt(cb.dataset.index, 10)
+    }));
+
+    if (!items.length) return;
+    if (!confirm(`Delete ${items.length} auto memories?`)) return;
+
+    try {
+        const response = await fetch('/api/v2/memories/auto/delete-batch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: JSON.stringify({ items })
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'ok') {
+            showToast(data.message || 'Failed to delete auto memories', 'error');
+            return;
+        }
+
+        showToast(`Deleted ${data.deleted} auto memories`, 'success');
+        await loadAutoMemories();
+    } catch (error) {
+        showToast('Failed to delete auto memories', 'error');
+    }
+}
+
+async function bulkDeleteAutoByUser() {
+    const payload = buildAutoUserActionPayload();
+    if (!payload) return;
+
+    if (!confirm(`Delete auto memories for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/v2/memories/auto/bulk-delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'ok') {
+            showToast(data.message || 'Failed to bulk delete auto memories', 'error');
+            return;
+        }
+
+        if (!data.affected_keys) {
+            showToast('No matching auto-memory keys found for those users', 'success');
+        } else {
+            showToast(`Deleted ${data.deleted} auto memories across ${data.affected_keys} key(s)`, 'success');
+        }
+        await loadAutoMemories();
+    } catch (error) {
+        showToast('Failed to bulk delete auto memories', 'error');
+    }
+}
+
+async function bulkConsolidateAutoByUser() {
+    const payload = buildAutoUserActionPayload();
+    if (!payload) return;
+
+    if (!confirm(`Consolidate auto memories for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/v2/memories/auto/consolidate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'ok') {
+            showToast(data.message || 'Failed to consolidate auto memories', 'error');
+            return;
+        }
+
+        if (!data.matched_keys) {
+            showToast('No matching auto-memory keys found for those users', 'success');
+        } else {
+            showToast(
+                `Consolidated ${data.consolidated}, skipped ${data.skipped}, already running ${data.already_running}, failed ${data.failed}`,
+                data.failed ? 'error' : 'success'
+            );
+        }
+        await loadAutoMemories();
+    } catch (error) {
+        showToast('Failed to consolidate auto memories', 'error');
+    }
 }
 
 async function editAutoMemory(key, index) {
@@ -884,6 +1315,45 @@ async function addLoreV2() {
     }
 }
 
+async function bulkDeleteUserLore() {
+    const { userIds, unresolved } = parseUserIdsInput(document.getElementById('lore-bulk-users').value);
+    if (!userIds.length) {
+        showToast('Enter at least one user lore target', 'error');
+        return;
+    }
+    if (unresolved.length) {
+        showToast(`Could not resolve: ${unresolved.join(', ')}`, 'error');
+        return;
+    }
+    if (!confirm(`Delete user lore for ${userIds.length} user(s)?`)) return;
+
+    try {
+        const response = await fetch('/api/v2/memories/lore/bulk-delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: JSON.stringify({ user_ids: userIds })
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'ok') {
+            showToast(data.message || 'Failed to delete user lore', 'error');
+            return;
+        }
+
+        if (!data.affected_keys) {
+            showToast('No matching user lore found for those users', 'success');
+        } else {
+            showToast(`Deleted ${data.deleted} lore entries across ${data.affected_keys} user lore key(s)`, 'success');
+        }
+        await loadLoreV2();
+    } catch (error) {
+        showToast('Failed to delete user lore', 'error');
+    }
+}
+
 async function deleteSelectedLore() {
     const items = Array.from(document.querySelectorAll('.lore-checkbox:checked')).map(cb => ({
         key: cb.dataset.key,
@@ -951,6 +1421,8 @@ document.addEventListener('click', function(event) {
 
 document.addEventListener('DOMContentLoaded', async function() {
     updateMemoryForm();
+    updateAutoFilterControls();
+    updateAutoBulkScope();
     await loadAutoMemories();
 });
 </script>

@@ -533,12 +533,13 @@ Changes are saved immediately. Use `/reload` in Discord or click the reload butt
 
 Manage the bot's memory system:
 
-- **Auto Memories** — View, edit, and delete automatically created memories per user/server
+- **Auto Memories** — View, edit, delete, and manually consolidate automatically created memories per user/server
 - **Manual Lore** — Add, edit, and delete lore entries scoped to users, bots, or servers
-- **Mass Delete** — Checkbox selection with "Delete Selected" for bulk cleanup
-- **Filtering** — Filter by server, user, or type
+- **Bulk Cleanup** — Delete selected auto memories, delete auto memories by one or more users, or delete user lore in bulk
+- **Manual Consolidation** — Run a targeted consolidation pass for one or more users without waiting for the automatic 5-memory trigger
+- **Filtering** — Filter auto memories by scope, server, and search term
 - **User Resolution** — User IDs displayed as readable Discord names
-- **Collapsible Cards** — Click card headers to collapse/expand (large sections collapse by default)
+- **Safe Live Editing** — Raw JSON is still viewable, but live cleanup should go through dashboard actions so in-memory state and dedup counters stay in sync
 
 ### Channels Page
 
@@ -590,6 +591,12 @@ The bot uses a unified 2-store memory system:
 
 The bot automatically detects and stores important facts from conversations (preferences, relationships, events). To prevent bloat, an LLM-based deduplication pass runs after 5 new auto memories for the same server/user or DM/user key, consolidating redundant entries.
 
+The dashboard also supports manual cleanup workflows for auto memories:
+
+- Delete exact selected memories
+- Delete all auto memories for one or more users in DMs, one server, or all scopes
+- Manually consolidate one or more users' auto memories into a shorter bullet-style list in place
+
 User IDs are resolved to readable Discord display names in the dashboard for easy management.
 
 ### Manual Lore
@@ -601,6 +608,8 @@ Lore entries are user-created context that the bot references during conversatio
 - **Bot** — Facts about a specific bot/character
 
 Add lore via the dashboard Memories & Lore page, or with the `/lore` slash command.
+
+User lore can also be bulk-deleted by target user from the dashboard without affecting server or bot lore.
 
 ### Legacy Migration
 
