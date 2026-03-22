@@ -740,7 +740,8 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
             all_entries.append((idx, {"role": "user", "content": f"{author}: {msg.get('content', '')}"}))
 
         for idx, msg in bot_responses:
-            all_entries.append((idx, {"role": "assistant", "content": msg.get("content", "")}))
+            assistant_author = msg.get("author") or current_bot_name or "Assistant"
+            all_entries.append((idx, {"role": "assistant", "content": msg.get("content", ""), "author": assistant_author}))
 
         for idx, msg in other_bot_messages:
             author = msg.get("author", "Unknown")
@@ -772,7 +773,13 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
                 content = f"{author}: {content}"
             # If same bot or no author field, keep as assistant (no prefix)
 
-        formatted.append({"role": role, "content": content})
+        formatted_msg = {"role": role, "content": content}
+        if role == "assistant":
+            assistant_author = author or current_bot_name
+            if assistant_author:
+                formatted_msg["author"] = assistant_author
+
+        formatted.append(formatted_msg)
 
     # Split into history and immediate
     if len(formatted) <= immediate_count:

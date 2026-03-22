@@ -963,8 +963,9 @@ def api_config():
         # Validate keys against allowed config keys
         allowed_keys = set(runtime_config.DEFAULTS.keys())
         for key, value in data.items():
-            if key in allowed_keys:
-                runtime_config.set(key, value)
+            normalized_key = runtime_config.LEGACY_KEY_ALIASES.get(key, key)
+            if normalized_key in allowed_keys:
+                runtime_config.set(normalized_key, value)
             else:
                 log.warn(f"Rejected unknown config key: {key}")
         return jsonify({'status': 'ok'})

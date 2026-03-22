@@ -203,7 +203,9 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
     if system_prompt and system_prompt.strip():
         parts.append(f"### Instructions\n{system_prompt.strip()}")
 
-    # Add conversation messages
+    # Add conversation messages, preserving the distinction between the main
+    # system prompt and injected chatroom context when single-user mode flattens
+    # everything into one message.
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -214,7 +216,8 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
             continue
 
         if role == "system":
-            parts.append(f"### Instructions\n{content}")
+            section_title = "Context" if msg.get("kind") == "chatroom_context" else "Instructions"
+            parts.append(f"### {section_title}\n{content}")
         elif role == "user":
             # Check if content already has Author: prefix (from format_history_split)
             # to avoid double-prefixing

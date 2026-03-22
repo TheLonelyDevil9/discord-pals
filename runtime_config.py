@@ -42,6 +42,9 @@ DEFAULTS = {
     "dm_followup_max_count": 1,  # Max follow-up messages before stopping
     "dm_followup_cooldown_hours": 24,  # Hours between follow-up attempts for same user
 }
+LEGACY_KEY_ALIASES = {
+    "context_message_count": "user_only_context_count",
+}
 
 # Config cache to avoid repeated file reads
 _config_cache: dict = None
@@ -62,18 +65,34 @@ def ensure_data_dir():
         os.makedirs(DATA_DIR)
 
 
+def _normalize_key(key: str) -> str:
+    """Map legacy config keys to their current names."""
+    return LEGACY_KEY_ALIASES.get(key, key)
+
+
+def _normalize_config(config: dict | None) -> dict:
+    """Backfill renamed keys and merge missing defaults."""
+    normalized = dict(config or {})
+
+    for legacy_key, current_key in LEGACY_KEY_ALIASES.items():
+        if current_key not in normalized and legacy_key in normalized:
+            normalized[current_key] = normalized[legacy_key]
+        normalized.pop(legacy_key, None)
+
+    for key, value in DEFAULTS.items():
+        if key not in normalized:
+            normalized[key] = value
+
+    return normalized
+
+
 def _load_config_from_disk() -> dict:
     """Load config from disk (internal, no caching)."""
     ensure_data_dir()
     if os.path.exists(RUNTIME_CONFIG_FILE):
         try:
             with open(RUNTIME_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                # Merge with defaults for any missing keys
-                for key, value in DEFAULTS.items():
-                    if key not in config:
-                        config[key] = value
-                return config
+                return _normalize_config(json.load(f))
         except (json.JSONDecodeError, IOError):
             pass
     return DEFAULTS.copy()
@@ -105,6 +124,7 @@ def invalidate_cache():
 def save_config(config: dict):
     """Save runtime config to file and invalidate cache."""
     ensure_data_dir()
+    config = _normalize_config(config)
     with open(RUNTIME_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2)
     invalidate_cache()
@@ -112,12 +132,14 @@ def save_config(config: dict):
 
 def get(key: str, default=None):
     """Get a config value."""
+    key = _normalize_key(key)
     config = load_config()
     return config.get(key, default if default is not None else DEFAULTS.get(key))
 
 
 def set(key: str, value):
     """Set a config value."""
+    key = _normalize_key(key)
     config = load_config().copy()  # Copy only when modifying
     config[key] = value
     save_config(config)

@@ -731,7 +731,7 @@ class BotInstance:
         # Split history into older context and immediate messages
         user_only_context = runtime_config.get('user_only_context', True)
         if user_only_context:
-            context_count = runtime_config.get('context_message_count', 10)
+            context_count = runtime_config.get('user_only_context_count', 20)
             history_msgs, immediate = format_history_split(
                 channel_id,
                 user_only=True,
@@ -774,7 +774,7 @@ class BotInstance:
         messages_for_api = []
         messages_for_api.extend(history_msgs)
         if chatroom_context:
-            messages_for_api.append({"role": "system", "content": chatroom_context})
+            messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
         messages_for_api.extend(immediate)
 
         # Synthetic first-turn fallback for user_only mode
@@ -800,12 +800,15 @@ class BotInstance:
                 if synthetic_turn:
                     # Insert at the beginning of messages_for_api (after system messages)
                     # Find the first non-system message position
-                    insert_pos = 0
+                    insert_pos = len(messages_for_api)
                     for i, msg in enumerate(messages_for_api):
                         if msg.get("role") != "system":
                             insert_pos = i
                             break
-                    messages_for_api.insert(insert_pos, {"role": "assistant", "content": synthetic_turn})
+                    messages_for_api.insert(
+                        insert_pos,
+                        {"role": "assistant", "content": synthetic_turn, "author": self.character.name}
+                    )
 
         return {
             "system_prompt": system_prompt,

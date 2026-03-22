@@ -61,3 +61,22 @@ if "discord" not in sys.modules:
     discord.utils = types.SimpleNamespace(get=lambda iterable, **kwargs: None)
 
     sys.modules["discord"] = discord
+
+
+if "openai" not in sys.modules:
+    openai = types.ModuleType("openai")
+
+    class AsyncOpenAI:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class RateLimitError(Exception):
+        pass
+
+    class APIError(Exception):
+        pass
+
+    openai.AsyncOpenAI = AsyncOpenAI
+    openai.RateLimitError = RateLimitError
+    openai.APIError = APIError
+    sys.modules["openai"] = openai

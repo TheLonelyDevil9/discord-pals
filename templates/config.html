@@ -44,20 +44,20 @@
                     <label for="user_only_context">User-Only Context</label>
                     <label class="toggle-switch">
                         <input type="checkbox" id="user_only_context" name="user_only_context"
-                            {% if config.user_only_context is not defined or config.user_only_context %}checked{% endif %}>
+                            {% if config.user_only_context %}checked{% endif %}>
                         <span class="toggle-slider"></span>
                     </label>
                     <p class="form-hint">Only send human user messages to the AI. Discards all bot/assistant responses from context to prevent impersonation.</p>
                 </div>
 
                 <div class="form-group">
-                    <label for="context_message_count">Context Messages (User-Only Mode)</label>
+                    <label for="user_only_context_count">Context Messages (User-Only Mode)</label>
                     <div class="slider-row">
-                        <input type="range" id="context_message_count" name="context_message_count" min="5" max="20"
-                            step="1" value="{{ config.context_message_count or 10 }}"
+                        <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
+                            step="1" value="{{ config.user_only_context_count or 20 }}"
                             oninput="document.getElementById('context_count_val').textContent = this.value"
                             title="Number of recent user messages to include">
-                        <span class="slider-val" id="context_count_val">{{ config.context_message_count or 10 }}</span>
+                        <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
                     </div>
                     <p class="form-hint">Last N human user messages sent when user-only context is enabled</p>
                 </div>
@@ -1190,7 +1190,7 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
         active_provider: document.getElementById('active_provider')?.value || null,
         user_only_context: document.getElementById('user_only_context').checked,
-        context_message_count: parseInt(document.getElementById('context_message_count').value)
+        user_only_context_count: parseInt(document.getElementById('user_only_context_count').value)
     };
 
     const response = await fetch('/api/config', {

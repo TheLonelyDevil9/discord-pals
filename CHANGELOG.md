@@ -4,6 +4,22 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.1] - 2026-03-22
+
+### Added
+
+- Regression coverage for single-user prompt propagation, assistant-author preservation, and runtime config key migration
+
+### Changed
+
+- **Single-user prompt flattening** — injected chatroom context is now labeled as context instead of a second instructions block, preserving the system prompt hierarchy without changing prompt text
+- **Runtime config compatibility** — legacy `context_message_count` reads and writes are now normalized to `user_only_context_count`, and the dashboard config UI now uses the current key consistently
+
+### Fixed
+
+- **Character voice anchoring** — current-bot assistant turns now retain their author name in both user-only and legacy history formatting, so flattened prompts keep prior replies attributed to the active character instead of generic `Assistant`
+- **Synthetic first-turn ordering** — example-dialogue fallback turns now keep the character author and stay after system/context entries, preventing the first-turn anchor from weakening prompt precedence
+
 ## [v1.10.0] - 2026-03-21
 
 ### Added
