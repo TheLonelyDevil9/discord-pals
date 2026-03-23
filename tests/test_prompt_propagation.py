@@ -166,7 +166,6 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
                 "author": "Nahida",
                 "content": [
                     {"type": "text", "text": "Welcome back"},
-                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
                 ],
             }
@@ -200,7 +199,6 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_messages[0]["role"], "user")
         self.assertIn("### Instructions\nYou are Nahida.", sent_messages[0]["content"])
         self.assertIn("Nahida: Welcome back", sent_messages[0]["content"])
-        self.assertIn("Emoji reference: 😀 (grinning face)", sent_messages[0]["content"])
         self.assertIn("[Visual reference omitted for text-only model]", sent_messages[0]["content"])
 
     async def test_vision_provider_keeps_multimodal_payload(self):
@@ -216,7 +214,6 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Alice: hi"},
-                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
                 ],
             }
@@ -268,7 +265,6 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
                 "author": "Alice",
                 "content": [
                     {"type": "text", "text": "Alice: hi"},
-                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
                 ],
             }

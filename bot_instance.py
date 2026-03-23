@@ -22,7 +22,6 @@ from discord_utils import (
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
-    enrich_messages_with_visual_emojis,
     was_recently_cleared, acknowledge_cleared
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
@@ -886,23 +885,13 @@ class BotInstance:
                         {"role": "assistant", "content": synthetic_turn, "author": self.character.name}
                     )
 
-        preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
         current_message_index = None
         for i in range(len(messages_for_api) - 1, -1, -1):
             if messages_for_api[i].get("role") != "system":
                 current_message_index = i
                 break
 
-        if provider_manager.can_use_vision(preferred_tier):
-            messages_for_api = await enrich_messages_with_visual_emojis(
-                messages_for_api,
-                guild,
-                current_message_index=current_message_index,
-                raw_current_text=message.content,
-                attachment_content=attachment_content,
-                enable_vision=True
-            )
-        elif attachment_content and current_message_index is not None:
+        if attachment_content and current_message_index is not None:
             log.info(f"[DEBUG] Attaching multimodal content to current message")
             messages_for_api[current_message_index] = {
                 **messages_for_api[current_message_index],

@@ -4,6 +4,22 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.8] - 2026-03-23
+
+### Added
+
+- Regression coverage for attachment-only visual context, including emoji-only plain-text payloads and retained image attachment handling
+
+### Fixed
+
+- **Emoji vision rollback** — custom and Unicode emojis are no longer converted into image references inside model prompts, reducing the prompt expansion and repetition risk introduced by emoji visual enrichment
+- **Attachment-only multimodal scope** — real image uploads continue to use the multimodal request path, while emoji text and shortcodes remain plain text context
+- **Text-only fallback compatibility** — non-vision and misdeclared-vision providers still receive the current text-only fallback behavior for real image attachments after the emoji-vision rollback
+
+### Removed
+
+- Emoji-as-image prompt enrichment and its related helper/dependency surface
+
 ## [v1.10.7] - 2026-03-23
 
 ### Added

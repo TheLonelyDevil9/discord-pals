@@ -18,11 +18,6 @@ from datetime import datetime, timedelta
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 
-try:
-    import emoji as emoji_lib
-except ImportError:
-    emoji_lib = None
-
 # Re-export from response_sanitizer for backwards compatibility
 # These are used by other modules that import from discord_utils
 from response_sanitizer import (  # noqa: F401
@@ -154,7 +149,6 @@ _dirty_history_channels: set[int] = set()
 
 # Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
-RE_CUSTOM_EMOJI_TOKEN = re.compile(r'<(a?):([a-zA-Z0-9_]+):(\d+)>')
 RE_USER_MENTION = re.compile(r'<@!?(\d+)>')
 RE_CHANNEL_MENTION = re.compile(r'<#(\d+)>')
 RE_ROLE_MENTION = re.compile(r'<@&(\d+)>')
@@ -856,9 +850,6 @@ def get_sticker_info(message: discord.Message) -> Optional[str]:
 # LRU-style emoji cache using OrderedDict for O(1) operations
 _emoji_cache: OrderedDict[int, Dict[str, discord.Emoji]] = OrderedDict()
 _EMOJI_CACHE_MAX_SIZE = 50  # Max number of guilds to cache
-_emoji_visual_cache: OrderedDict[str, str] = OrderedDict()
-_EMOJI_VISUAL_CACHE_MAX_SIZE = 256
-_TWEMOJI_BASE_URL = "https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72"
 
 
 def _update_emoji_cache_lru(guild_id: int):
@@ -870,17 +861,6 @@ def _update_emoji_cache_lru(guild_id: int):
     # Evict oldest entries if over limit
     while len(_emoji_cache) > _EMOJI_CACHE_MAX_SIZE:
         _emoji_cache.popitem(last=False)  # Remove oldest (first) item
-
-
-def _update_emoji_visual_cache_lru(asset_key: str, data_url: str = None):
-    """Update LRU order for cached emoji visuals."""
-    if asset_key in _emoji_visual_cache:
-        _emoji_visual_cache.move_to_end(asset_key)
-    elif data_url is not None:
-        _emoji_visual_cache[asset_key] = data_url
-
-    while len(_emoji_visual_cache) > _EMOJI_VISUAL_CACHE_MAX_SIZE:
-        _emoji_visual_cache.popitem(last=False)
 
 
 def get_guild_emojis(guild: discord.Guild, max_count: int = MAX_EMOJIS_IN_PROMPT) -> str:
@@ -948,123 +928,6 @@ def convert_emojis_in_text(text: str, guild: discord.Guild) -> str:
     return result.strip()
 
 
-def _discord_emoji_asset_url(emoji_id: int | str, animated: bool = False) -> str:
-    """Build a Discord CDN URL for a custom emoji."""
-    extension = "gif" if animated else "png"
-    return f"https://cdn.discordapp.com/emojis/{emoji_id}.{extension}?size=96&quality=lossless"
-
-
-def _twemoji_asset_url(unicode_emoji: str) -> str:
-    """Build a Twemoji CDN URL for a Unicode emoji."""
-    codepoints = "-".join(f"{ord(char):x}" for char in unicode_emoji)
-    return f"{_TWEMOJI_BASE_URL}/{codepoints}.png"
-
-
-def _extract_custom_emoji_candidates_from_raw_text(text: str) -> List[Tuple[int, dict]]:
-    """Extract custom emoji references from raw Discord message text."""
-    candidates = []
-    for match in RE_CUSTOM_EMOJI_TOKEN.finditer(text or ""):
-        animated = bool(match.group(1))
-        name = match.group(2)
-        emoji_id = match.group(3)
-        candidates.append((
-            match.start(),
-            {
-                "asset_key": f"custom:{emoji_id}:{'gif' if animated else 'png'}",
-                "label": f"Emoji reference: :{name}:",
-                "url": _discord_emoji_asset_url(emoji_id, animated=animated),
-                "mime_type": "image/gif" if animated else "image/png",
-            }
-        ))
-    return candidates
-
-
-def _extract_custom_emoji_candidates_from_shortcodes(text: str, guild: discord.Guild) -> List[Tuple[int, dict]]:
-    """Resolve stored :emoji_name: shortcodes into custom emoji references."""
-    if not text or not guild or guild.id not in _emoji_cache:
-        return []
-
-    candidates = []
-    cache = _emoji_cache[guild.id]
-    for match in RE_EMOJI_SHORTCODE.finditer(text):
-        name = match.group(1)
-        custom_emoji = cache.get(name)
-        if not custom_emoji:
-            continue
-
-        emoji_id = getattr(custom_emoji, "id", None)
-        if not emoji_id:
-            continue
-
-        animated = bool(getattr(custom_emoji, "animated", False))
-        candidates.append((
-            match.start(),
-            {
-                "asset_key": f"custom:{emoji_id}:{'gif' if animated else 'png'}",
-                "label": f"Emoji reference: :{name}:",
-                "url": _discord_emoji_asset_url(emoji_id, animated=animated),
-                "mime_type": "image/gif" if animated else "image/png",
-            }
-        ))
-    return candidates
-
-
-def _extract_unicode_emoji_candidates(text: str) -> List[Tuple[int, dict]]:
-    """Extract Unicode emoji references from plain text."""
-    if not text or emoji_lib is None:
-        return []
-
-    candidates = []
-    for match in emoji_lib.emoji_list(text):
-        unicode_emoji = match.get("emoji")
-        if not unicode_emoji:
-            continue
-
-        codepoints = "-".join(f"{ord(char):x}" for char in unicode_emoji)
-        emoji_name = emoji_lib.demojize(unicode_emoji, delimiters=("", ""))
-        emoji_name = str(emoji_name or "emoji").replace("_", " ").replace("-", " ").strip()
-        if not emoji_name:
-            emoji_name = "emoji"
-
-        candidates.append((
-            int(match.get("match_start", 0)),
-            {
-                "asset_key": f"unicode:{codepoints}",
-                "label": f"Emoji reference: {unicode_emoji} ({emoji_name})",
-                "url": _twemoji_asset_url(unicode_emoji),
-                "mime_type": "image/png",
-            }
-        ))
-    return candidates
-
-
-def collect_visual_emoji_refs(
-    text: str,
-    guild: discord.Guild = None,
-    *,
-    raw_text: str = None
-) -> List[dict]:
-    """Collect custom and Unicode emoji references in the order they appear."""
-    candidates = []
-    if raw_text is not None:
-        candidates.extend(_extract_custom_emoji_candidates_from_raw_text(raw_text))
-        candidates.extend(_extract_unicode_emoji_candidates(raw_text))
-    else:
-        candidates.extend(_extract_custom_emoji_candidates_from_shortcodes(text, guild))
-        candidates.extend(_extract_unicode_emoji_candidates(text))
-
-    seen = set()
-    ordered_refs = []
-    for _, ref in sorted(candidates, key=lambda item: item[0]):
-        asset_key = ref["asset_key"]
-        if asset_key in seen:
-            continue
-        seen.add(asset_key)
-        ordered_refs.append(ref)
-
-    return ordered_refs
-
-
 def parse_reactions(content: str) -> Tuple[str, List[str]]:
     """Parse [REACT: emoji] tags from response."""
     reactions = RE_REACTION_TAG.findall(content)
@@ -1122,107 +985,6 @@ async def download_image_as_base64(url: str) -> Optional[str]:
     except Exception as e:
         log.warn(f"Failed to download image: {e}")
     return None
-
-
-async def download_image_as_data_url(url: str, mime_type: str, cache_key: str = None) -> Optional[str]:
-    """Download an image and return a data URL, optionally caching by asset key."""
-    if cache_key and cache_key in _emoji_visual_cache:
-        _update_emoji_visual_cache_lru(cache_key)
-        return _emoji_visual_cache[cache_key]
-
-    base64_data = await download_image_as_base64(url)
-    if not base64_data:
-        return None
-
-    data_url = f"data:{mime_type};base64,{base64_data}"
-    if cache_key:
-        _update_emoji_visual_cache_lru(cache_key, data_url=data_url)
-    return data_url
-
-
-def _extract_image_parts(content_parts: list | None) -> List[dict]:
-    """Extract only image parts from existing multimodal content."""
-    images = []
-    for part in content_parts or []:
-        if isinstance(part, dict) and part.get("type") == "image_url":
-            images.append(part)
-    return images
-
-
-async def enrich_messages_with_visual_emojis(
-    messages: List[dict],
-    guild: discord.Guild = None,
-    *,
-    current_message_index: int = None,
-    raw_current_text: str = "",
-    attachment_content: list = None,
-    enable_vision: bool = True,
-    max_per_message: int = 3,
-    max_per_request: int = 8,
-) -> List[dict]:
-    """Add labeled emoji image references to current/recent messages for vision models."""
-    if not enable_vision:
-        return [dict(message) for message in messages]
-
-    enriched_messages = []
-    used_assets = set()
-
-    for index, message in enumerate(messages):
-        updated_message = dict(message)
-        content = updated_message.get("content", "")
-
-        if updated_message.get("role") == "system":
-            enriched_messages.append(updated_message)
-            continue
-
-        if not isinstance(content, str):
-            enriched_messages.append(updated_message)
-            continue
-
-        is_current_message = current_message_index is not None and index == current_message_index
-        emoji_refs = collect_visual_emoji_refs(
-            content,
-            guild,
-            raw_text=raw_current_text if is_current_message else None
-        )
-        attachment_images = _extract_image_parts(attachment_content) if is_current_message else []
-
-        if not emoji_refs and not attachment_images:
-            enriched_messages.append(updated_message)
-            continue
-
-        content_parts = []
-        if content.strip():
-            content_parts.append({"type": "text", "text": content.strip()})
-        elif attachment_images:
-            content_parts.append({"type": "text", "text": "(user sent an image)"})
-
-        content_parts.extend(attachment_images)
-
-        added_for_message = 0
-        for ref in emoji_refs:
-            if added_for_message >= max_per_message or len(used_assets) >= max_per_request:
-                break
-
-            asset_key = ref["asset_key"]
-            if asset_key in used_assets:
-                continue
-
-            data_url = await download_image_as_data_url(ref["url"], ref["mime_type"], cache_key=asset_key)
-            if not data_url:
-                continue
-
-            content_parts.append({"type": "text", "text": ref["label"]})
-            content_parts.append({"type": "image_url", "image_url": {"url": data_url}})
-            used_assets.add(asset_key)
-            added_for_message += 1
-
-        if content_parts and (attachment_images or added_for_message):
-            updated_message["content"] = content_parts
-
-        enriched_messages.append(updated_message)
-
-    return enriched_messages
 
 
 async def process_attachments(message: discord.Message) -> List[dict]:

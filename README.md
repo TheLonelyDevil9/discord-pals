@@ -47,7 +47,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Plug-and-play AI providers** - Configure via JSON, no code changes
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
-- **Vision-aware fallback** - Non-vision providers automatically receive text-only messages
+- **Vision-aware fallback** - Image attachments automatically fall back to text-only on non-vision providers
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
 - **Web dashboard** - Full web UI for managing:
   - Memories and lore editing (with user name resolution)
@@ -375,10 +375,12 @@ By default, all providers are assumed to support vision/image recognition. For t
 
 If a provider is mistakenly left vision-enabled but its endpoint rejects image input at runtime, Discord Pals will automatically retry that request as text-only and temporarily treat that tier as non-vision for the rest of the current run.
 
-When a user sends an image:
+Emoji and shortcode context remains text-only; Discord Pals does not convert emojis into image references.
+
+When a user sends an image attachment:
 
 - **Vision providers** receive the full multimodal content (text + image)
-- **Non-vision providers** receive text-only with a note: "[User sent an image that this model cannot see]"
+- **Non-vision providers** receive text-only with a note: "[Visual reference omitted for text-only model]"
 
 This allows graceful fallback - if your primary vision provider fails, a text-only fallback can still respond (without seeing the image).
 
