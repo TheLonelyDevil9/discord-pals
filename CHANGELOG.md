@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.2] - 2026-03-23
+
+### Added
+
+- Regression coverage for DM follow-up delivery when the private channel is no longer available from the in-memory Discord channel cache
+
+### Changed
+
+- **DM follow-up processing** — the background loop now runs through a shared single-pass helper, making the delivery logic easier to test and more reliable across cache misses
+
+### Fixed
+
+- **DM follow-up delivery** — follow-ups now recover private channels via `fetch_channel`, cached/fetched users, and `create_dm()` instead of silently skipping when `client.get_channel()` cannot resolve an older DM
+- **DM follow-up observability** — the bot now logs when a due follow-up cannot resolve its DM channel or when generation returns an empty/error response instead of failing quietly
+
 ## [v1.10.1] - 2026-03-22
 
 ### Added

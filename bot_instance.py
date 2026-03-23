@@ -1253,88 +1253,153 @@ class BotInstance:
         while True:
             try:
                 await asyncio.sleep(60)  # Check every 60 seconds
+                await self._run_dm_followup_cycle()
 
-                if not runtime_config.get("dm_followup_enabled", False):
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Error in DM follow-up loop: {e}", self.name)
+
+    async def _resolve_dm_followup_channel(self, user_id: int, channel_id: int):
+        """Resolve a DM channel even if it has fallen out of cache."""
+        channel = self.client.get_channel(channel_id) if channel_id else None
+        if channel:
+            return channel
+
+        fetch_channel = getattr(self.client, "fetch_channel", None)
+        if callable(fetch_channel) and channel_id:
+            try:
+                channel = await fetch_channel(channel_id)
+            except Exception as e:
+                log.debug(f"DM follow-up fetch_channel failed for {channel_id}: {e}", self.name)
+            else:
+                if channel:
+                    return channel
+
+        user = None
+        get_user = getattr(self.client, "get_user", None)
+        if callable(get_user):
+            user = get_user(user_id)
+
+        if not user:
+            fetch_user = getattr(self.client, "fetch_user", None)
+            if callable(fetch_user):
+                try:
+                    user = await fetch_user(user_id)
+                except Exception as e:
+                    log.debug(f"DM follow-up fetch_user failed for {user_id}: {e}", self.name)
+
+        if not user:
+            return None
+
+        dm_channel = getattr(user, "dm_channel", None)
+        if dm_channel:
+            return dm_channel
+
+        create_dm = getattr(user, "create_dm", None)
+        if callable(create_dm):
+            try:
+                return await create_dm()
+            except Exception as e:
+                log.debug(f"DM follow-up create_dm failed for {user_id}: {e}", self.name)
+
+        return None
+
+    async def _run_dm_followup_cycle(self, now: float | None = None) -> int:
+        """Run one DM follow-up pass and return the number sent."""
+        if not runtime_config.get("dm_followup_enabled", False):
+            return 0
+        if runtime_config.get("global_paused", False):
+            return 0
+
+        timeout_mins = runtime_config.get("dm_followup_timeout_minutes", 120)
+        max_followups = runtime_config.get("dm_followup_max_count", 1)
+        cooldown_hours = runtime_config.get("dm_followup_cooldown_hours", 24)
+        now = time.time() if now is None else now
+        sent_count = 0
+
+        for user_id, state in list(self._dm_followup_state.items()):
+            try:
+                last_msg = state.get("last_user_msg", 0)
+                followups_sent = state.get("followups_sent", 0)
+                last_followup = state.get("last_followup", 0)
+                channel_id = state.get("channel_id")
+
+                if not channel_id or not last_msg:
                     continue
-                if runtime_config.get("global_paused", False):
+
+                # Check timeout
+                if now - last_msg < timeout_mins * 60:
                     continue
 
-                timeout_mins = runtime_config.get("dm_followup_timeout_minutes", 120)
-                max_followups = runtime_config.get("dm_followup_max_count", 1)
-                cooldown_hours = runtime_config.get("dm_followup_cooldown_hours", 24)
-                now = time.time()
+                # Check max follow-ups
+                if followups_sent >= max_followups:
+                    continue
 
-                for user_id, state in list(self._dm_followup_state.items()):
-                    try:
-                        last_msg = state.get("last_user_msg", 0)
-                        followups_sent = state.get("followups_sent", 0)
-                        last_followup = state.get("last_followup", 0)
-                        channel_id = state.get("channel_id")
+                # Check cooldown
+                if last_followup and now - last_followup < cooldown_hours * 3600:
+                    continue
 
-                        if not channel_id or not last_msg:
-                            continue
+                channel = await self._resolve_dm_followup_channel(user_id, channel_id)
+                if not channel:
+                    log.warn(f"DM follow-up skipped for user {user_id}: unable to resolve DM channel", self.name)
+                    continue
 
-                        # Check timeout
-                        if now - last_msg < timeout_mins * 60:
-                            continue
+                resolved_channel_id = getattr(channel, "id", channel_id) or channel_id
+                state["channel_id"] = resolved_channel_id
 
-                        # Check max follow-ups
-                        if followups_sent >= max_followups:
-                            continue
+                # Get recent context for the LLM
+                history = get_history(resolved_channel_id)
+                if not history and resolved_channel_id != channel_id:
+                    history = get_history(channel_id)
+                user_msgs = [m for m in history if m.get("role") == "user"][-5:]
+                context_lines = [f"{m.get('author', 'User')}: {m.get('content', '')[:100]}" for m in user_msgs]
+                context = "\n".join(context_lines) if context_lines else "No recent messages."
 
-                        # Check cooldown
-                        if last_followup and now - last_followup < cooldown_hours * 3600:
-                            continue
-
-                        # Get channel and generate follow-up
-                        channel = self.client.get_channel(channel_id)
-                        if not channel:
-                            continue
-
-                        # Get recent context for the LLM
-                        history = get_history(channel_id)
-                        user_msgs = [m for m in history if m.get("role") == "user"][-5:]
-                        context_lines = [f"{m.get('author', 'User')}: {m.get('content', '')[:100]}" for m in user_msgs]
-                        context = "\n".join(context_lines) if context_lines else "No recent messages."
-
-                        char_name = self.character.name if self.character else "the bot"
-                        prompt = f"""You are {char_name}. The user hasn't replied in a while. Generate a brief, organic follow-up message to re-engage them naturally. Be warm and casual, not pushy. Reference the conversation topic if relevant.
+                char_name = self.character.name if self.character else "the bot"
+                prompt = f"""You are {char_name}. The user hasn't replied in a while. Generate a brief, organic follow-up message to re-engage them naturally. Be warm and casual, not pushy. Reference the conversation topic if relevant.
 
 Recent conversation:
 {context}
 
 Your follow-up message (1-2 sentences, in character):"""
 
-                        response = await provider_manager.generate(
-                            messages=[{"role": "user", "content": prompt}],
-                            system_prompt=f"You are {char_name}. Write a natural follow-up message."
-                        )
+                response = await provider_manager.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=f"You are {char_name}. Write a natural follow-up message."
+                )
 
-                        if response and not response.startswith("❌"):
-                            from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix
-                            response = remove_thinking_tags(response, self.character.name if self.character else None)
-                            response = clean_bot_name_prefix(response, self.character.name if self.character else None)
+                if not response or response.startswith("❌"):
+                    log.warn(f"DM follow-up generation failed for user {user_id}: {response or 'empty response'}", self.name)
+                    continue
 
-                            # Simulate organic typing
-                            async with channel.typing():
-                                await asyncio.sleep(min(len(response) * 0.03, 3))
-                            await channel.send(response)
+                from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix
+                response = remove_thinking_tags(response, self.character.name if self.character else None)
+                response = clean_bot_name_prefix(response, self.character.name if self.character else None)
 
-                            # Add to history
-                            add_to_history(channel_id, "assistant", response, author_name=char_name)
+                # Simulate organic typing
+                typing_context = getattr(channel, "typing", None)
+                if callable(typing_context):
+                    async with channel.typing():
+                        await asyncio.sleep(min(len(response) * 0.03, 3))
+                else:
+                    await asyncio.sleep(min(len(response) * 0.03, 3))
 
-                            # Update state
-                            state["followups_sent"] = followups_sent + 1
-                            state["last_followup"] = now
-                            log.info(f"Sent DM follow-up to user {user_id} ({followups_sent + 1}/{max_followups})", self.name)
+                await channel.send(response)
 
-                    except Exception as e:
-                        log.warn(f"DM follow-up error for user {user_id}: {e}", self.name)
+                # Add to history
+                add_to_history(resolved_channel_id, "assistant", response, author_name=char_name)
 
-            except asyncio.CancelledError:
-                break
+                # Update state
+                state["followups_sent"] = followups_sent + 1
+                state["last_followup"] = now
+                sent_count += 1
+                log.info(f"Sent DM follow-up to user {user_id} ({followups_sent + 1}/{max_followups})", self.name)
+
             except Exception as e:
-                log.error(f"Error in DM follow-up loop: {e}", self.name)
+                log.warn(f"DM follow-up error for user {user_id}: {e}", self.name)
+
+        return sent_count
 
     def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
         """Check if response is too similar to recent responses (anti-loop measure).
