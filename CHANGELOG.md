@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.7] - 2026-03-23
+
+### Added
+
+- Regression coverage for runtime image-input rejection fallback, ensuring providers that unexpectedly reject multimodal input are retried as text-only on the same tier
+
+### Fixed
+
+- **Runtime vision fallback** — providers that return errors like `No endpoints found that support image input` now automatically retry with the text-only version of the same request instead of failing the turn
+- **Capability caching** — once a provider rejects image input at runtime, that tier is temporarily treated as text-only for the rest of the current process so future requests stop sending it multimodal payloads
+
 ## [v1.10.6] - 2026-03-23
 
 ### Added

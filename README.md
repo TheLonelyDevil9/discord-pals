@@ -373,6 +373,8 @@ By default, all providers are assumed to support vision/image recognition. For t
 }
 ```
 
+If a provider is mistakenly left vision-enabled but its endpoint rejects image input at runtime, Discord Pals will automatically retry that request as text-only and temporarily treat that tier as non-vision for the rest of the current run.
+
 When a user sends an image:
 
 - **Vision providers** receive the full multimodal content (text + image)

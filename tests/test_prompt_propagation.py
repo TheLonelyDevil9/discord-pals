@@ -156,6 +156,7 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         manager = object.__new__(providers_module.AIProviderManager)
         manager.providers = {"primary": object()}
         manager.status = {}
+        manager._vision_support_overrides = {}
         manager._build_tier_order = lambda preferred_tier="": ["primary"]
         manager._try_generate = AsyncMock(return_value="ok")
 
@@ -206,6 +207,7 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         manager = object.__new__(providers_module.AIProviderManager)
         manager.providers = {"primary": object()}
         manager.status = {}
+        manager._vision_support_overrides = {}
         manager._build_tier_order = lambda preferred_tier="": ["primary"]
         manager._try_generate = AsyncMock(return_value="ok")
 
@@ -248,3 +250,57 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_messages[0]["content"], "You are Nahida.")
         self.assertIsInstance(sent_messages[1]["content"], list)
         self.assertTrue(any(part.get("type") == "image_url" for part in sent_messages[1]["content"]))
+
+    async def test_vision_rejection_retries_same_provider_as_text_only(self):
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.providers = {"primary": object()}
+        manager.status = {}
+        manager._vision_support_overrides = {}
+        manager._build_tier_order = lambda preferred_tier="": ["primary"]
+        manager._try_generate = AsyncMock(side_effect=[
+            Exception("Error code: 404 - {'error': {'message': 'No endpoints found that support image input', 'code': 404}}"),
+            "ok",
+        ])
+
+        messages = [
+            {
+                "role": "user",
+                "author": "Alice",
+                "content": [
+                    {"type": "text", "text": "Alice: hi"},
+                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+
+        provider_cfg = {
+            "primary": {
+                "model": "misdeclared-vision-model",
+                "supports_vision": True,
+                "timeout": 30,
+                "max_tokens": 256,
+                "temperature": 0.7,
+                "url": "https://example.invalid",
+            }
+        }
+
+        with patch.dict(providers_module.PROVIDERS, provider_cfg, clear=True):
+            with patch.object(providers_module.log, "info"), \
+                    patch.object(providers_module.log, "debug"), \
+                    patch.object(providers_module.log, "warn"), \
+                    patch.object(providers_module.log, "error"):
+                result = await manager.generate(
+                    messages=messages,
+                    system_prompt="You are Nahida.",
+                    use_single_user=True,
+                )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(manager._try_generate.await_count, 2)
+        first_messages = manager._try_generate.await_args_list[0].args[2]
+        second_messages = manager._try_generate.await_args_list[1].args[2]
+        self.assertIsInstance(first_messages[1]["content"], list)
+        self.assertEqual(second_messages[0]["role"], "user")
+        self.assertIn("[Visual reference omitted for text-only model]", second_messages[0]["content"])
+        self.assertFalse(manager.can_use_vision())

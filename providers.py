@@ -256,6 +256,7 @@ class AIProviderManager:
     def __init__(self):
         self.providers: Dict[str, AsyncOpenAI] = {}
         self.status: Dict[str, str] = {tier: "unknown" for tier in PROVIDERS}
+        self._vision_support_overrides: Dict[str, bool] = {}
         
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
@@ -273,6 +274,33 @@ class AIProviderManager:
                     default_headers=default_headers or None
                 )
 
+    def _supports_vision_for_tier(self, tier: str) -> bool:
+        """Resolve whether a tier should receive multimodal requests."""
+        overrides = getattr(self, "_vision_support_overrides", {})
+        if tier in overrides:
+            return overrides[tier]
+        return PROVIDERS[tier].get("supports_vision", True)
+
+    def _looks_like_vision_rejection(self, error: Exception) -> bool:
+        """Detect provider errors that mean image input is not actually supported."""
+        parts = [str(error)]
+        body = getattr(error, "body", None)
+        if body:
+            parts.append(str(body))
+
+        text = " ".join(part.lower() for part in parts if part)
+        hints = (
+            "support image input",
+            "image input",
+            "images are not supported",
+            "does not support images",
+            "does not support image",
+            "vision is not supported",
+            "multimodal is not supported",
+            "multimodal input",
+        )
+        return any(hint in text for hint in hints)
+
     def _build_tier_order(self, preferred_tier: str = "") -> List[str]:
         """Build the provider order for a request."""
         tier_order = list(PROVIDERS.keys())
@@ -286,7 +314,7 @@ class AIProviderManager:
         for tier in self._build_tier_order(preferred_tier):
             if tier not in self.providers:
                 continue
-            if PROVIDERS[tier].get("supports_vision", True):
+            if self._supports_vision_for_tier(tier):
                 return True
         return False
     
@@ -511,7 +539,7 @@ class AIProviderManager:
                     extra_body = {**extra_body, **openrouter_cfg} if extra_body else dict(openrouter_cfg)
 
                 # Check if provider supports vision (default True, set false for text-only models)
-                supports_vision = PROVIDERS[tier].get("supports_vision", True)
+                supports_vision = self._supports_vision_for_tier(tier)
 
                 # Per-provider timeout (falls back to global API_TIMEOUT)
                 effective_timeout = PROVIDERS[tier].get("timeout") or API_TIMEOUT
@@ -564,7 +592,55 @@ class AIProviderManager:
                 except RateLimitError:
                     self.status[tier] = "rate limited"
                     continue
+                except APIError as e:
+                    if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
+                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only")
+                        self._vision_support_overrides[tier] = False
+                        try:
+                            result = await self._try_generate(
+                                client, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
+                                timeout=effective_timeout,
+                                extra_body=extra_body if extra_body else None,
+                                include_body=include_body,
+                                exclude_body=exclude_body,
+                                include_headers=include_headers
+                            )
+                            if result:
+                                self.status[tier] = "ok"
+                                return result
+                            self.status[tier] = "empty response"
+                            continue
+                        except Exception as fallback_error:
+                            self.status[tier] = "error"
+                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}")
+                            continue
+
+                    self.status[tier] = "error"
+                    log.error(f"[{tier}] {str(e)[:100]}")
+                    continue
                 except Exception as e:
+                    if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
+                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only")
+                        self._vision_support_overrides[tier] = False
+                        try:
+                            result = await self._try_generate(
+                                client, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
+                                timeout=effective_timeout,
+                                extra_body=extra_body if extra_body else None,
+                                include_body=include_body,
+                                exclude_body=exclude_body,
+                                include_headers=include_headers
+                            )
+                            if result:
+                                self.status[tier] = "ok"
+                                return result
+                            self.status[tier] = "empty response"
+                            continue
+                        except Exception as fallback_error:
+                            self.status[tier] = "error"
+                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}")
+                            continue
+
                     self.status[tier] = "error"
                     log.error(f"[{tier}] {str(e)[:100]}")
                     continue
