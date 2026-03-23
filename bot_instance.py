@@ -1105,7 +1105,10 @@ class BotInstance:
                 # Generate AI response (handles provider call, sanitization)
                 response = await self._generate_ai_response(context, message)
                 if response is None:
-                    await message.channel.send("Something went wrong - all providers failed.")
+                    await message.channel.send(
+                        "Something went wrong - all providers failed.",
+                        delete_after=ERROR_DELETE_AFTER
+                    )
                     return
 
                 # Get stagger delay for multi-bot responses (prevents simultaneous sends)

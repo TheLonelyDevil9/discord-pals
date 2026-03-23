@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.5] - 2026-03-23
+
+### Added
+
+- Regression coverage for public provider-failure notices, ensuring channel-visible fallback errors use Discord auto-delete
+
+### Fixed
+
+- **Public provider failure notices** — the direct `Something went wrong - all providers failed.` channel message now auto-deletes after the normal transient-error timeout instead of remaining visible in public chat
+
 ## [v1.10.4] - 2026-03-23
 
 ### Added
