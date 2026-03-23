@@ -85,7 +85,9 @@ class RequestQueue:
         user_id: int,
         sticker_info: str = None,
         from_interact_command: bool = False,
-        split_reply_target: discord.Member = None
+        split_reply_target: discord.Member = None,
+        forced_target_user_id: int = None,
+        forced_target_user_name: str = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -124,7 +126,9 @@ class RequestQueue:
                 'user_id': user_id,
                 'sticker_info': sticker_info,
                 'from_interact_command': from_interact_command,
-                'split_reply_target': split_reply_target
+                'split_reply_target': split_reply_target,
+                'forced_target_user_id': forced_target_user_id,
+                'forced_target_user_name': forced_target_user_name
             }
 
             self.queues[channel_id].append(request)

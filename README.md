@@ -746,7 +746,7 @@ All fun interactions use a single unified command:
 
 The bot processes these through the normal message pipeline, so interactions:
 - Generate memories like regular conversations
-- Use full chat history for context-aware responses
+- Use the invoking user's recent conversation context with the current bot, without leaking an unrelated active reply thread from the same channel
 - Support free-form actions (not limited to preset commands)
 
 ---

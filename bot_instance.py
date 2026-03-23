@@ -596,6 +596,58 @@ class BotInstance:
 
     # === REQUEST PROCESSING HELPERS ===
 
+    def _build_interact_history(self, channel_id: int, target_user_id: int,
+                                 target_user_name: str, user_only: bool,
+                                 context_count: int, total_limit: int,
+                                 immediate_count: int) -> tuple[list[dict], list[dict]]:
+        """Keep `/interact` focused on the invoking user instead of the active channel thread."""
+        raw_history = get_history(channel_id)
+        relevant_messages = []
+        current_bot_name = self.character.name if self.character else None
+        keep_following_assistant = False
+
+        for msg in raw_history:
+            role = msg.get("role", "user")
+            if role == "assistant":
+                author = msg.get("author")
+                if (author and current_bot_name and author.lower() != current_bot_name.lower()) or not keep_following_assistant:
+                    continue
+
+                relevant_messages.append({
+                    "role": "assistant",
+                    "content": msg.get("content", ""),
+                    "author": author or current_bot_name or "Assistant"
+                })
+                continue
+
+            keep_following_assistant = False
+
+            if role != "user" or msg.get("is_bot", False):
+                continue
+
+            same_user = msg.get("user_id") == target_user_id
+            if not same_user and msg.get("user_id") is None:
+                same_user = msg.get("author") == target_user_name
+
+            if not same_user:
+                continue
+
+            author = msg.get("author") or target_user_name or "User"
+            relevant_messages.append({
+                "role": "user",
+                "content": f"{author}: {msg.get('content', '')}"
+            })
+            keep_following_assistant = True
+
+        relevant_limit = context_count if user_only else total_limit
+        if relevant_limit > 0:
+            relevant_messages = relevant_messages[-relevant_limit:]
+
+        if user_only or len(relevant_messages) <= immediate_count:
+            return [], relevant_messages
+
+        return relevant_messages[:-immediate_count], relevant_messages[-immediate_count:]
+
     async def _build_request_context(self, request: dict) -> dict | None:
         """Build the context for an AI request.
 
@@ -608,10 +660,18 @@ class BotInstance:
         user_name = request['user_name']
         is_dm = request['is_dm']
         user_id = request['user_id']
+        from_interact_command = request.get('from_interact_command', False)
         split_target = request.get('split_reply_target')
+        forced_target_user_id = request.get('forced_target_user_id')
+        forced_target_user_name = request.get('forced_target_user_name')
 
-        # For split replies, use target user for context instead of sender
-        if split_target:
+        # `/interact` should always stay anchored to the invoking user, even if the
+        # channel is actively carrying another reply thread.
+        if forced_target_user_id is not None:
+            target_user_id = forced_target_user_id
+            target_user_name = forced_target_user_name or user_name
+            split_target = None
+        elif split_target:
             target_user_name = get_user_display_name(split_target)
             target_user_id = split_target.id
         else:
@@ -733,21 +793,43 @@ class BotInstance:
         user_only_context = runtime_config.get('user_only_context', True)
         if user_only_context:
             context_count = runtime_config.get('user_only_context_count', 20)
-            history_msgs, immediate = format_history_split(
-                channel_id,
-                user_only=True,
-                context_count=context_count,
-                current_bot_name=self.character.name
-            )
+            if from_interact_command:
+                history_msgs, immediate = self._build_interact_history(
+                    channel_id,
+                    target_user_id=target_user_id,
+                    target_user_name=target_user_name,
+                    user_only=True,
+                    context_count=context_count,
+                    total_limit=0,
+                    immediate_count=context_count
+                )
+            else:
+                history_msgs, immediate = format_history_split(
+                    channel_id,
+                    user_only=True,
+                    context_count=context_count,
+                    current_bot_name=self.character.name
+                )
         else:
             total_limit = runtime_config.get('history_limit', 200)
             immediate_count = runtime_config.get('immediate_message_count', 5)
-            history_msgs, immediate = format_history_split(
-                channel_id,
-                total_limit=total_limit,
-                immediate_count=immediate_count,
-                current_bot_name=self.character.name
-            )
+            if from_interact_command:
+                history_msgs, immediate = self._build_interact_history(
+                    channel_id,
+                    target_user_id=target_user_id,
+                    target_user_name=target_user_name,
+                    user_only=False,
+                    context_count=0,
+                    total_limit=total_limit,
+                    immediate_count=immediate_count
+                )
+            else:
+                history_msgs, immediate = format_history_split(
+                    channel_id,
+                    total_limit=total_limit,
+                    immediate_count=immediate_count,
+                    current_bot_name=self.character.name
+                )
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
@@ -841,6 +923,7 @@ class BotInstance:
             "user_name": user_name,
             "content": content,
             "split_reply_target": split_target,
+            "from_interact_command": from_interact_command,
             "mentionable_users": mentionable_users,
             "mentionable_bots": mentionable_bots
         }

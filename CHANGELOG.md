@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.4] - 2026-03-23
+
+### Added
+
+- Regression coverage for `/interact` target pinning and cross-thread context isolation
+
+### Changed
+
+- **`/interact` request routing** — synthetic interaction requests now persist an explicit invoking-user target through the queue so context building stays anchored to the slash-command user instead of inheriting channel reply targeting
+- **`/interact` history assembly** — slash-command interactions now use only the invoking user's own recent turns plus directly-following replies from the current bot, preventing unrelated channel conversations from bleeding into the generated response
+
+### Fixed
+
+- **`/interact` cross-thread replies** — using `/interact` while the bot is queued on another user or bot in the same channel no longer sends you a response that was generated for that other conversation
+
 ## [v1.10.3] - 2026-03-23
 
 ### Added
