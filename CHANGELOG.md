@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.10] - 2026-03-23
+
+### Added
+
+- Regression coverage for split-reply target processing, in-flight queue duplicate suppression, safe reply-reference caching, and failed-send history handling
+
+### Fixed
+
+- **Split reply request dropping** — one Discord message can now be processed once per target user, so multi-user split replies no longer discard the second and later targets as duplicate work
+- **Queue in-flight suppression** — pending request counts and duplicate signatures now stay active until processing actually finishes, preventing same-user duplicates from slipping back into the queue while the first request is still running
+- **Phantom assistant history** — assistant turns are now written to history only after Discord successfully delivers content, so failed sends stop poisoning future context with replies that never appeared in chat
+- **Reply reference caching safety** — referenced-message resolution now uses an internal cache instead of mutating Discord message objects, avoiding production failures on slot-based message implementations
+
 ## [v1.10.9] - 2026-03-23
 
 ### Added

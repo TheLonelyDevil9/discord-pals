@@ -163,6 +163,103 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(duplicate)
         self.assertTrue(different_target)
 
+    async def test_pending_limit_and_signature_remain_active_while_request_is_processing(self):
+        queue = request_queue_module.RequestQueue()
+        channel_id = 201
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def processor(request):
+            started.set()
+            await release.wait()
+
+        queue.set_processor(processor)
+
+        first = await queue.add_request(
+            channel_id=channel_id,
+            message=types.SimpleNamespace(),
+            content="Hello there",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+
+        await started.wait()
+
+        duplicate = await queue.add_request(
+            channel_id=channel_id,
+            message=types.SimpleNamespace(),
+            content="Hello there",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(duplicate)
+        self.assertEqual(queue.pending_counts[channel_id][123], 1)
+
+        release.set()
+        for _ in range(20):
+            if queue.pending_counts[channel_id].get(123, 0) == 0 and not queue.processing[channel_id]:
+                break
+            await asyncio.sleep(0.05)
+
+        self.assertEqual(queue.pending_counts[channel_id].get(123, 0), 0)
+
+    async def test_duplicate_signature_window_survives_request_completion(self):
+        queue = request_queue_module.RequestQueue()
+        channel_id = 202
+        queue.processing[channel_id] = True
+
+        with patch.object(request_queue_module.time, "time", return_value=1000.0):
+            added = await queue.add_request(
+                channel_id=channel_id,
+                message=types.SimpleNamespace(),
+                content="Hello there",
+                guild=None,
+                attachments=[],
+                user_name="Alice",
+                is_dm=False,
+                user_id=123,
+            )
+
+        request = queue.queues[channel_id].popleft()
+        with patch.object(request_queue_module.time, "time", return_value=1001.0):
+            queue._release_request_tracking(channel_id, request)
+
+        with patch.object(request_queue_module.time, "time", return_value=1001.0):
+            duplicate = await queue.add_request(
+                channel_id=channel_id,
+                message=types.SimpleNamespace(),
+                content="Hello there",
+                guild=None,
+                attachments=[],
+                user_name="Alice",
+                is_dm=False,
+                user_id=123,
+            )
+
+        with patch.object(request_queue_module.time, "time", return_value=1004.1):
+            allowed = await queue.add_request(
+                channel_id=channel_id,
+                message=types.SimpleNamespace(),
+                content="Hello there",
+                guild=None,
+                attachments=[],
+                user_name="Alice",
+                is_dm=False,
+                user_id=123,
+            )
+
+        self.assertTrue(added)
+        self.assertFalse(duplicate)
+        self.assertTrue(allowed)
+
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
     def setUp(self):

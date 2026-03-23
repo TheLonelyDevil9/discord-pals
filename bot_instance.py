@@ -85,6 +85,7 @@ class BotInstance:
 
         # Processed message tracking (prevents duplicate responses to queued messages)
         self._processed_message_ids: set = set()
+        self._resolved_reference_messages: Dict[int, Optional[discord.Message]] = {}
 
         # Set up events and commands
         self._setup_events()
@@ -244,13 +245,34 @@ class BotInstance:
             "should_respond": should_respond
         }
 
+    @staticmethod
+    def _processed_request_key(message: discord.Message, target_user_id: int | None) -> tuple[int, int | None]:
+        """Build a stable request key so one message can legitimately target multiple users."""
+        message_id = getattr(message, "id", None)
+        if message_id is None:
+            message_id = id(message)
+        return (message_id, target_user_id)
+
+    def _reference_message_cache(self) -> Dict[int, Optional[discord.Message]]:
+        """Return the internal referenced-message cache, creating it lazily for tests."""
+        cache = getattr(self, "_resolved_reference_messages", None)
+        if cache is None:
+            cache = {}
+            self._resolved_reference_messages = cache
+        return cache
+
     async def _get_referenced_message(self, message: discord.Message):
-        """Resolve a referenced Discord message once and cache it on the message object."""
+        """Resolve a referenced Discord message once and cache it without mutating message objects."""
         if not message.reference or not message.reference.message_id:
             return None
 
-        if hasattr(message, "_resolved_reference_message"):
-            return getattr(message, "_resolved_reference_message")
+        cache_key = getattr(message, "id", None)
+        if cache_key is None:
+            cache_key = id(message)
+
+        reference_cache = self._reference_message_cache()
+        if cache_key in reference_cache:
+            return reference_cache[cache_key]
 
         referenced_message = None
         try:
@@ -260,7 +282,10 @@ class BotInstance:
         except Exception:
             referenced_message = None
 
-        setattr(message, "_resolved_reference_message", referenced_message)
+        reference_cache[cache_key] = referenced_message
+        if len(reference_cache) > 1000:
+            oldest_key = next(iter(reference_cache))
+            reference_cache.pop(oldest_key, None)
         return referenced_message
 
     @staticmethod
@@ -506,8 +531,8 @@ class BotInstance:
             if message.author == self.client.user:
                 remove_assistant_from_history(message.channel.id, 1)
     
-    async def _send_organic_response(self, message: discord.Message, response: str) -> list:
-        """Send response organically - split by lines and send separately with delays."""
+    async def _send_organic_response(self, message: discord.Message, response: str) -> tuple[list, str]:
+        """Send response organically and return both message handles and delivered text."""
         lines = []
         for para in response.split('\n\n'):
             para = para.strip()
@@ -529,6 +554,7 @@ class BotInstance:
             lines = [response]
         
         sent_messages = []
+        sent_lines = []
         is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
 
         for i, line in enumerate(lines):
@@ -542,15 +568,19 @@ class BotInstance:
                     else:
                         sent_msg = await message.reply(line)
                     sent_messages.append(sent_msg)
+                    sent_lines.append(line)
                 else:
                     # Add delay between lines (0.5-1 second)
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                     sent_msg = await message.channel.send(line)
                     sent_messages.append(sent_msg)
+                    sent_lines.append(line)
             except discord.HTTPException as e:
                 log.error(f"Failed to send: {e}", self.name)
+                break
 
-        return sent_messages
+        delivered_response = "\n\n".join(sent_lines).strip()
+        return sent_messages, delivered_response
     
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
@@ -726,14 +756,15 @@ class BotInstance:
         # Clear the "recently cleared" flag now that we're processing a new message
         acknowledge_cleared(channel_id)
 
-        # Duplicate detection: check if we've already processed this message_id
+        # Duplicate detection: allow one processed request per target user for split replies.
         message_id = message.id
-        if message_id in self._processed_message_ids:
-            log.debug(f"Skipping - already processed message {message_id} from {user_name}", self.name)
+        processed_key = self._processed_request_key(message, target_user_id)
+        if processed_key in self._processed_message_ids:
+            log.debug(f"Skipping - already processed request {processed_key} from {user_name}", self.name)
             return None
 
         # Mark as processed
-        self._processed_message_ids.add(message_id)
+        self._processed_message_ids.add(processed_key)
 
         # Cleanup: keep only last 1000 processed IDs to prevent unbounded growth
         if len(self._processed_message_ids) > 1000:
@@ -1061,21 +1092,23 @@ class BotInstance:
             response = random.choice(fallbacks)
         else:
             # Check for duplicate/repetitive responses
-            if self._is_duplicate_response(channel_id, response):
+            if self._is_duplicate_response(channel_id, response, record=False):
                 log.warn("Skipping duplicate response", self.name)
                 self._record_failure(channel_id)
                 return False
-            self._reset_failures(channel_id)
 
-        # Record response for rate limiting
+        # Send first so failed Discord sends do not leak phantom assistant turns into history.
+        sent_messages, delivered_response = await self._send_organic_response(message, response)
+        if not delivered_response:
+            log.warn("Response send failed before any content was delivered", self.name)
+            self._record_failure(channel_id)
+            return False
+
+        self._remember_recent_response(channel_id, delivered_response)
+        self._reset_failures(channel_id)
         self._record_response(channel_id)
-
-        # Update mood
-        self._update_mood(channel_id, content, response)
-
-        # Add to history and send
-        add_to_history(channel_id, "assistant", response, author_name=self.character.name, guild=guild)
-        sent_messages = await self._send_organic_response(message, response)
+        self._update_mood(channel_id, content, delivered_response)
+        add_to_history(channel_id, "assistant", delivered_response, author_name=self.character.name, guild=guild)
 
         # Update activity
         runtime_config.update_last_activity(self.name)
@@ -1083,7 +1116,9 @@ class BotInstance:
 
         # Store multipart response
         if len(sent_messages) > 1:
-            store_multipart_response(channel_id, [m.id for m in sent_messages], response)
+            multipart_ids = [msg_id for msg_id in (getattr(m, "id", None) for m in sent_messages) if msg_id is not None]
+            if len(multipart_ids) > 1:
+                store_multipart_response(channel_id, multipart_ids, delivered_response)
 
         # Send reactions
         if reactions:
@@ -1524,7 +1559,19 @@ Your follow-up message (1-2 sentences, in character):"""
 
         return sent_count
 
-    def _is_duplicate_response(self, channel_id: int, response: str) -> bool:
+    def _remember_recent_response(self, channel_id: int, response: str):
+        """Remember a successfully sent response for future duplicate checks."""
+        if not response:
+            return
+
+        sig = response[:100].lower().strip()
+        recent = self._recent_responses.get(channel_id, [])
+        recent.append(sig)
+        if len(recent) > 5:
+            recent = recent[-5:]
+        self._recent_responses[channel_id] = recent
+
+    def _is_duplicate_response(self, channel_id: int, response: str, record: bool = True) -> bool:
         """Check if response is too similar to recent responses (anti-loop measure).
 
         Returns True if duplicate detected (should skip or vary response).
@@ -1541,11 +1588,8 @@ Your follow-up message (1-2 sentences, in character):"""
             log.warn(f"Duplicate response detected in channel {channel_id}", self.name)
             return True
 
-        # Update recent responses (keep last 5)
-        recent.append(sig)
-        if len(recent) > 5:
-            recent = recent[-5:]
-        self._recent_responses[channel_id] = recent
+        if record:
+            self._remember_recent_response(channel_id, response)
         return False
 
     def _check_circuit_breaker(self, channel_id: int) -> bool:

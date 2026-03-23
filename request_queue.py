@@ -36,7 +36,7 @@ class RequestQueue:
             signature_timestamps.popleft()
 
     def _release_request_tracking(self, channel_id: int, request: dict):
-        """Release per-user counters and duplicate signatures once a request leaves the queue."""
+        """Release per-user counters and prune duplicate signatures after processing."""
         user_id = request.get("user_id")
         if user_id is None:
             return
@@ -48,21 +48,13 @@ class RequestQueue:
         else:
             counts.pop(user_id, None)
 
-        signature = request.get("request_signature")
-        timestamp = request.get("timestamp")
         user_signatures = self.pending_signatures[channel_id].get(user_id)
-        if not user_signatures or signature is None:
+        if not user_signatures:
             return
 
-        signature_timestamps = user_signatures.get(signature)
-        if signature_timestamps:
-            if signature_timestamps and signature_timestamps[0] == timestamp:
-                signature_timestamps.popleft()
-            else:
-                try:
-                    signature_timestamps.remove(timestamp)
-                except ValueError:
-                    pass
+        current_time = time.time()
+        for signature, signature_timestamps in list(user_signatures.items()):
+            self._prune_signature_timestamps(signature_timestamps, current_time)
             if not signature_timestamps:
                 user_signatures.pop(signature, None)
 
@@ -156,11 +148,14 @@ class RequestQueue:
                     if not self.queues[channel_id]:
                         break
                     request = self.queues[channel_id].popleft()
-                    self._release_request_tracking(channel_id, request)
-                
-                # Process the request
-                if self.process_callback:
-                    await self.process_callback(request)
+
+                try:
+                    # Process the request while its pending slot/signature remain active.
+                    if self.process_callback:
+                        await self.process_callback(request)
+                finally:
+                    async with self.locks[channel_id]:
+                        self._release_request_tracking(channel_id, request)
                 
                 # Small delay between requests
                 await asyncio.sleep(0.5)

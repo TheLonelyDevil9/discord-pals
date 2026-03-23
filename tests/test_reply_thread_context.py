@@ -1,5 +1,6 @@
 import types
 import unittest
+from unittest.mock import AsyncMock
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -46,3 +47,30 @@ class ReplyThreadContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('[Replying to Cecile: "', content)
         self.assertIn("Ironically that would hurt", content)
         self.assertNotIn("[Replying to TheLonelyDevil", content)
+
+    async def test_get_referenced_message_caches_without_mutating_slotted_messages(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+
+        referenced_message = types.SimpleNamespace(
+            id=600,
+            author=types.SimpleNamespace(id=222, display_name="Cecile", name="Cecile", bot=True),
+            content="Wake up.",
+        )
+
+        class SlottedMessage:
+            __slots__ = ("id", "reference", "channel")
+
+            def __init__(self, fetch_message):
+                self.id = 1234
+                self.reference = types.SimpleNamespace(message_id=600, cached_message=None)
+                self.channel = types.SimpleNamespace(fetch_message=fetch_message)
+
+        fetch_message = AsyncMock(return_value=referenced_message)
+        message = SlottedMessage(fetch_message)
+
+        first = await instance._get_referenced_message(message)
+        second = await instance._get_referenced_message(message)
+
+        self.assertIs(first, referenced_message)
+        self.assertIs(second, referenced_message)
+        fetch_message.assert_awaited_once_with(600)
