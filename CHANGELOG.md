@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.3] - 2026-03-23
+
+### Added
+
+- Regression coverage for active memory target lists and emoji vision enrichment, including custom emoji, Unicode emoji, dedupe caps, and text-only provider fallback behavior
+- A new `GET /api/v2/memories/targets` endpoint for live auto-memory and user-lore target pickers
+
+### Changed
+
+- **Memories target pickers** — the Auto Memories and Manual Lore bulk-action user lists now load from the live unified memory stores instead of stale stats caches, so deleted users disappear as soon as their last matching memory is removed
+- **Vision context assembly** — vision-capable requests now enrich the active conversation window with labeled emoji image references while keeping text-only providers on the existing fallback path
+
+### Fixed
+
+- **Stale target users** — users with no active auto memories or user lore no longer appear in the dashboard target-user pickers
+- **Emoji visual grounding** — custom Discord emojis and Unicode emojis can now be sent as inline visual references for vision-capable providers, including recent user and assistant turns already present in context
+- **Text-only multimodal fallback wording** — stripped image notes now use a generic visual-reference message instead of implying every omitted image came from a user attachment
+
 ## [v1.10.2] - 2026-03-23
 
 ### Added

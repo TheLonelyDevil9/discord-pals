@@ -166,8 +166,8 @@ def strip_images_from_messages(messages: List[dict]) -> List[dict]:
                     text = part.get("text", "")
                     if text:
                         text_parts.append(text)
-            # Add note about image
-            text_parts.append("[User sent an image that this model cannot see]")
+            # Add note about omitted visual context
+            text_parts.append("[Visual reference omitted for text-only model]")
             stripped.append({"role": msg.get("role", "user"), "content": "\n".join(text_parts)})
         else:
             stripped.append(msg)
@@ -272,6 +272,23 @@ class AIProviderManager:
                     timeout=cfg.get("timeout") or API_TIMEOUT,
                     default_headers=default_headers or None
                 )
+
+    def _build_tier_order(self, preferred_tier: str = "") -> List[str]:
+        """Build the provider order for a request."""
+        tier_order = list(PROVIDERS.keys())
+        if preferred_tier and preferred_tier in tier_order:
+            tier_order.remove(preferred_tier)
+            tier_order.insert(0, preferred_tier)
+        return tier_order
+
+    def can_use_vision(self, preferred_tier: str = "") -> bool:
+        """Return True if any configured provider for this request supports vision."""
+        for tier in self._build_tier_order(preferred_tier):
+            if tier not in self.providers:
+                continue
+            if PROVIDERS[tier].get("supports_vision", True):
+                return True
+        return False
     
     async def _try_generate(
         self,
@@ -464,10 +481,8 @@ class AIProviderManager:
             text_only_messages = strip_images_from_messages(full_messages)
 
         # Build tier order dynamically from all configured providers
-        tier_order = list(PROVIDERS.keys())
-        if preferred_tier and preferred_tier in tier_order:
-            tier_order.remove(preferred_tier)
-            tier_order.insert(0, preferred_tier)
+        tier_order = self._build_tier_order(preferred_tier)
+        if preferred_tier and tier_order and tier_order[0] == preferred_tier:
             log.info(f"Using preferred provider tier: {preferred_tier}")
 
         # Retry all providers up to 3 full cycles

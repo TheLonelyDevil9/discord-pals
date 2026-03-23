@@ -108,6 +108,36 @@ if "openai" not in sys.modules:
     sys.modules["openai"] = openai
 
 
+if "emoji" not in sys.modules:
+    emoji = types.ModuleType("emoji")
+    _emoji_names = {
+        "😀": "grinning_face",
+        "🔥": "fire",
+        "❤️": "red_heart",
+        "❤": "red_heart",
+    }
+
+    def emoji_list(text):
+        matches = []
+        for idx, char in enumerate(text or ""):
+            if char in _emoji_names:
+                matches.append({
+                    "emoji": char,
+                    "match_start": idx,
+                    "match_end": idx + len(char),
+                })
+        return matches
+
+    def demojize(value, delimiters=(":", ":")):
+        name = _emoji_names.get(value, "emoji")
+        return f"{delimiters[0]}{name}{delimiters[1]}"
+
+    emoji.emoji_list = emoji_list
+    emoji.demojize = demojize
+    emoji.__version__ = "2.15.0"
+    sys.modules["emoji"] = emoji
+
+
 if "prometheus_client" not in sys.modules:
     prometheus_client = types.ModuleType("prometheus_client")
 

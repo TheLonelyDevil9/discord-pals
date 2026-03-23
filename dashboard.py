@@ -415,10 +415,7 @@ def dashboard():
 @app.route('/memories')
 def memories():
     """Memories management page."""
-    from stats import stats_manager
     from memory import memory_manager
-
-    user_names = stats_manager.get_all_user_names()
     
     # Get guilds for the dropdown
     guilds = []
@@ -434,7 +431,6 @@ def memories():
     characters = get_character_files()
     
     return render_template('memories.html',
-        user_names=user_names,
         guilds=guilds,
         characters=characters,
         auto_memory_file='auto_memories',
@@ -1970,6 +1966,17 @@ def api_v2_auto_memories():
     # Sort by timestamp descending
     results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     return jsonify({'memories': results, 'total': len(results)})
+
+
+@app.route('/api/v2/memories/targets')
+def api_v2_memory_targets():
+    """Return active target users for auto memories and user lore."""
+    from memory import memory_manager
+
+    return jsonify({
+        'auto_users': memory_manager.get_active_auto_user_targets(),
+        'lore_users': memory_manager.get_active_user_lore_targets(),
+    })
 
 
 @app.route('/api/v2/memories/auto/item', methods=['GET', 'PUT', 'DELETE'])

@@ -631,6 +631,77 @@ class MemoryManager:
 
         return sorted(matched_keys)
 
+    def get_active_auto_user_targets(self) -> List[dict]:
+        """List users that currently have at least one active auto-memory entry."""
+        by_user: Dict[int, dict] = {}
+
+        for key, entries in self.auto_memories.items():
+            if not entries:
+                continue
+
+            _, parsed_user_id = _parse_auto_key(key)
+            if parsed_user_id is None or parsed_user_id <= 0:
+                continue
+
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+
+                try:
+                    user_id = int(entry.get("user_id", parsed_user_id))
+                except (TypeError, ValueError):
+                    user_id = parsed_user_id
+
+                if user_id <= 0:
+                    continue
+
+                timestamp = entry.get("timestamp") or ""
+                user_name = str(entry.get("user_name") or "").strip()
+                current = by_user.get(user_id)
+
+                if current is None:
+                    by_user[user_id] = {
+                        "user_id": user_id,
+                        "user_name": user_name or f"User {user_id}",
+                        "_named_timestamp": timestamp if user_name else "",
+                    }
+                    continue
+
+                if user_name and timestamp >= current.get("_named_timestamp", ""):
+                    current["user_name"] = user_name
+                    current["_named_timestamp"] = timestamp
+
+        targets = []
+        for target in by_user.values():
+            targets.append({
+                "user_id": target["user_id"],
+                "user_name": target["user_name"] or f"User {target['user_id']}",
+            })
+
+        return sorted(targets, key=lambda item: ((item.get("user_name") or "").lower(), item["user_id"]))
+
+    def get_active_user_lore_targets(self) -> List[dict]:
+        """List users that currently have at least one active user-lore entry."""
+        from stats import stats_manager
+
+        targets = []
+        for key, entries in self.manual_lore.items():
+            if not key.startswith("user:") or not entries:
+                continue
+
+            try:
+                user_id = int(key.split(":", 1)[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+
+            user_name = stats_manager.get_user_name(user_id) or f"User {user_id}"
+            targets.append({
+                "user_id": user_id,
+                "user_name": user_name,
+            })
+
+        return sorted(targets, key=lambda item: ((item.get("user_name") or "").lower(), item["user_id"]))
+
     @staticmethod
     def _build_auto_memory_entry(
         content: str,

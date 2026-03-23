@@ -7,6 +7,7 @@ from unittest.mock import patch
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
 import character as character_module
+import stats as stats_module
 
 from test_support import MemorySandboxMixin
 
@@ -72,6 +73,7 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("Delete Targeted User Lore", page)
         self.assertIn("Live JSON edits are not a supported delete path", page)
         self.assertIn("/api/v2/memories/auto", page)
+        self.assertIn("/api/v2/memories/targets", page)
         self.assertNotIn("memories.json", page)
 
     def test_auto_memory_api_respects_scope_server_and_user_filters(self):
@@ -156,6 +158,48 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertNotIn("user:456", self.manager.manual_lore)
         self.assertIn("user:999", self.manager.manual_lore)
         self.assertIn("server:123", self.manager.manual_lore)
+
+    def test_memory_target_lists_only_include_active_users(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice", server_name="Tea House")
+        self.manager.add_auto_memory(123, 999, "Bob likes coffee", user_name="Bob", server_name="Tea House")
+        self.manager.add_lore("user", 777, "Carol is trusted", added_by="dashboard")
+
+        with patch.object(stats_module.stats_manager, "get_user_name", side_effect=lambda user_id: {
+            777: "Carol",
+            888: "Ghost",
+        }.get(user_id)):
+            response = self.client.get("/api/v2/memories/targets")
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({item["user_id"] for item in data["auto_users"]}, {456, 999})
+        self.assertEqual({item["user_id"] for item in data["lore_users"]}, {777})
+        self.assertNotIn(888, {item["user_id"] for item in data["lore_users"]})
+
+    def test_users_drop_from_target_lists_after_last_matching_memory_is_deleted(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice", server_name="Tea House")
+        self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")
+
+        before = self.client.get("/api/v2/memories/targets").get_json()
+        self.assertIn(456, {item["user_id"] for item in before["auto_users"]})
+        self.assertIn(456, {item["user_id"] for item in before["lore_users"]})
+
+        auto_delete = self.client.delete(
+            "/api/v2/memories/auto/item",
+            json={"key": "server:123:user:456", "index": 0},
+            headers=self.csrf_headers()
+        )
+        lore_delete = self.client.post(
+            "/api/v2/memories/lore/bulk-delete",
+            json={"user_ids": [456]},
+            headers=self.csrf_headers()
+        )
+        after = self.client.get("/api/v2/memories/targets").get_json()
+
+        self.assertEqual(auto_delete.status_code, 200)
+        self.assertEqual(lore_delete.status_code, 200)
+        self.assertNotIn(456, {item["user_id"] for item in after["auto_users"]})
+        self.assertNotIn(456, {item["user_id"] for item in after["lore_users"]})
 
 
 class DashboardConfigPageTests(MemorySandboxMixin, unittest.TestCase):
