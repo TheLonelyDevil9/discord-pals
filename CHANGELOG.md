@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.9] - 2026-03-23
+
+### Added
+
+- Regression coverage for reply-thread context propagation, ensuring referenced-author context is preserved for short reply messages
+
+### Fixed
+
+- **Reply targeting drift** — human replies to another user or bot now carry explicit reply-thread context into the prompt, so the model keeps the current sender as the conversational target instead of drifting back to the previous speaker
+
 ## [v1.10.8] - 2026-03-23
 
 ### Added

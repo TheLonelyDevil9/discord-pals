@@ -21,7 +21,7 @@ from discord_utils import (
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
-    resolve_discord_formatting, load_history, set_channel_name, get_other_bot_names,
+    resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
@@ -180,21 +180,9 @@ class BotInstance:
 
         # Reply chain detection
         is_reply_to_bot = False
-        if message.reference and message.reference.message_id:
-            try:
-                ref_msg = message.reference.cached_message
-                if ref_msg and ref_msg.author == self.client.user:
-                    is_reply_to_bot = True
-                elif ref_msg is None:
-                    # Cache miss — fetch the referenced message to check authorship
-                    try:
-                        fetched = await message.channel.fetch_message(message.reference.message_id)
-                        if fetched and fetched.author == self.client.user:
-                            is_reply_to_bot = True
-                    except Exception:
-                        pass  # Message deleted or inaccessible
-            except Exception:
-                pass
+        ref_msg = await self._get_referenced_message(message)
+        if ref_msg and ref_msg.author == self.client.user:
+            is_reply_to_bot = True
 
         # Autonomous mode check
         is_autonomous = not mentioned and not is_reply_to_bot and not is_dm and autonomous_manager.should_respond(channel_id)
@@ -256,7 +244,34 @@ class BotInstance:
             "should_respond": should_respond
         }
 
-    def _prepare_message_content(self, message: discord.Message, user_name: str,
+    async def _get_referenced_message(self, message: discord.Message):
+        """Resolve a referenced Discord message once and cache it on the message object."""
+        if not message.reference or not message.reference.message_id:
+            return None
+
+        if hasattr(message, "_resolved_reference_message"):
+            return getattr(message, "_resolved_reference_message")
+
+        referenced_message = None
+        try:
+            referenced_message = message.reference.cached_message
+            if referenced_message is None:
+                referenced_message = await message.channel.fetch_message(message.reference.message_id)
+        except Exception:
+            referenced_message = None
+
+        setattr(message, "_resolved_reference_message", referenced_message)
+        return referenced_message
+
+    @staticmethod
+    def _summarize_reply_content(content: str, limit: int = 160) -> str:
+        """Flatten referenced message content for compact reply context."""
+        summarized = " ".join((content or "").split())
+        if len(summarized) <= limit:
+            return summarized
+        return summarized[: limit - 3].rstrip() + "..."
+
+    async def _prepare_message_content(self, message: discord.Message, user_name: str,
                                   sticker_info: str, is_other_bot: bool,
                                   is_autonomous: bool, guild: discord.Guild) -> str:
         """Prepare message content for processing."""
@@ -278,6 +293,20 @@ class BotInstance:
             other_mentions = [m for m in message.mentions if m != self.client.user]
             if other_mentions:
                 content = f"[Someone else was mentioned, you're chiming in] {content}"
+
+        referenced_message = await self._get_referenced_message(message)
+        if referenced_message and referenced_message.author != message.author:
+            referenced_author = get_user_display_name(referenced_message.author)
+            referenced_content = referenced_message.content or ""
+            if guild:
+                referenced_content = resolve_discord_formatting(referenced_content, guild)
+            else:
+                referenced_content = sanitize_discord_syntax_fallback(referenced_content)
+            referenced_summary = self._summarize_reply_content(referenced_content)
+            if referenced_summary:
+                content = f"[Replying to {referenced_author}: \"{referenced_summary}\"] {content}"
+            else:
+                content = f"[Replying to {referenced_author}] {content}"
 
         if not content and not message.attachments:
             content = "Hello!"
@@ -411,7 +440,7 @@ class BotInstance:
                 self._update_bot_conversation_state(channel_id, is_other_bot)
 
                 # Prepare message content
-                content = self._prepare_message_content(
+                content = await self._prepare_message_content(
                     message, user_name, sticker_info, is_other_bot,
                     triggers["is_autonomous"], guild
                 )
