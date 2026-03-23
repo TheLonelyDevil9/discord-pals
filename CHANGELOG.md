@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.6] - 2026-03-23
+
+### Added
+
+- Regression coverage for mixed vision/text-only provider handling, including single-user formatting preservation for non-vision models when emoji or attachment visuals are present
+
+### Fixed
+
+- **Text-only provider compatibility** — requests with emoji/image visual enrichment now strip back to the normal single-user text format for non-vision models instead of leaving them in the multimessage fallback shape
+- **Provider parity** — vision-capable models continue receiving multimodal requests while text-only models now reliably receive the equivalent text-only request for the same prompt/context
+
 ## [v1.10.5] - 2026-03-23
 
 ### Added

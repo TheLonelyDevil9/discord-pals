@@ -168,9 +168,9 @@ def strip_images_from_messages(messages: List[dict]) -> List[dict]:
                         text_parts.append(text)
             # Add note about omitted visual context
             text_parts.append("[Visual reference omitted for text-only model]")
-            stripped.append({"role": msg.get("role", "user"), "content": "\n".join(text_parts)})
+            stripped.append({**msg, "content": "\n".join(text_parts)})
         else:
-            stripped.append(msg)
+            stripped.append(dict(msg))
     return stripped
 
 
@@ -461,6 +461,7 @@ class AIProviderManager:
         has_images = has_multimodal_message(messages)
 
         # Format messages based on mode
+        text_only_messages = None
         if use_single_user:
             # SillyTavern-style: combine everything into one user message
             # Returns None if messages contain multimodal content (images)
@@ -470,14 +471,20 @@ class AIProviderManager:
                 log.info("Multimodal content detected, using multi-message format")
                 full_messages = [{"role": "system", "content": system_prompt}] + messages
                 full_messages = validate_messages(full_messages)
+                stripped_source_messages = strip_images_from_messages(messages)
+                text_only_messages = format_as_single_user(stripped_source_messages, system_prompt)
+                if text_only_messages is None:
+                    text_only_messages = [{"role": "system", "content": system_prompt}] + stripped_source_messages
+                    text_only_messages = validate_messages(text_only_messages)
         else:
             # Legacy multi-message format with roles
             full_messages = [{"role": "system", "content": system_prompt}] + messages
             full_messages = validate_messages(full_messages)
+            if has_images:
+                text_only_messages = strip_images_from_messages(full_messages)
 
         # Prepare text-only version for non-vision providers
-        text_only_messages = None
-        if has_images:
+        if has_images and text_only_messages is None:
             text_only_messages = strip_images_from_messages(full_messages)
 
         # Build tier order dynamically from all configured providers

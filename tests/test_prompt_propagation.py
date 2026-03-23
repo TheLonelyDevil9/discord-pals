@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
@@ -148,3 +149,102 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config_response.status_code, 200)
         self.assertEqual(config["user_only_context_count"], 9)
         self.assertNotIn("context_message_count", config)
+
+
+class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_only_provider_keeps_single_user_format_after_image_stripping(self):
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.providers = {"primary": object()}
+        manager.status = {}
+        manager._build_tier_order = lambda preferred_tier="": ["primary"]
+        manager._try_generate = AsyncMock(return_value="ok")
+
+        messages = [
+            {
+                "role": "assistant",
+                "author": "Nahida",
+                "content": [
+                    {"type": "text", "text": "Welcome back"},
+                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+
+        provider_cfg = {
+            "primary": {
+                "model": "test-text-model",
+                "supports_vision": False,
+                "timeout": 30,
+                "max_tokens": 256,
+                "temperature": 0.7,
+                "url": "https://example.invalid",
+            }
+        }
+
+        with patch.dict(providers_module.PROVIDERS, provider_cfg, clear=True):
+            with patch.object(providers_module.log, "info"), \
+                    patch.object(providers_module.log, "debug"), \
+                    patch.object(providers_module.log, "warn"), \
+                    patch.object(providers_module.log, "error"):
+                result = await manager.generate(
+                    messages=messages,
+                    system_prompt="You are Nahida.",
+                    use_single_user=True,
+                )
+
+        self.assertEqual(result, "ok")
+        sent_messages = manager._try_generate.await_args.args[2]
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(sent_messages[0]["role"], "user")
+        self.assertIn("### Instructions\nYou are Nahida.", sent_messages[0]["content"])
+        self.assertIn("Nahida: Welcome back", sent_messages[0]["content"])
+        self.assertIn("Emoji reference: 😀 (grinning face)", sent_messages[0]["content"])
+        self.assertIn("[Visual reference omitted for text-only model]", sent_messages[0]["content"])
+
+    async def test_vision_provider_keeps_multimodal_payload(self):
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.providers = {"primary": object()}
+        manager.status = {}
+        manager._build_tier_order = lambda preferred_tier="": ["primary"]
+        manager._try_generate = AsyncMock(return_value="ok")
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Alice: hi"},
+                    {"type": "text", "text": "Emoji reference: 😀 (grinning face)"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            }
+        ]
+
+        provider_cfg = {
+            "primary": {
+                "model": "test-vision-model",
+                "supports_vision": True,
+                "timeout": 30,
+                "max_tokens": 256,
+                "temperature": 0.7,
+                "url": "https://example.invalid",
+            }
+        }
+
+        with patch.dict(providers_module.PROVIDERS, provider_cfg, clear=True):
+            with patch.object(providers_module.log, "info"), \
+                    patch.object(providers_module.log, "debug"), \
+                    patch.object(providers_module.log, "warn"), \
+                    patch.object(providers_module.log, "error"):
+                result = await manager.generate(
+                    messages=messages,
+                    system_prompt="You are Nahida.",
+                    use_single_user=True,
+                )
+
+        self.assertEqual(result, "ok")
+        sent_messages = manager._try_generate.await_args.args[2]
+        self.assertEqual(sent_messages[0]["role"], "system")
+        self.assertEqual(sent_messages[0]["content"], "You are Nahida.")
+        self.assertIsInstance(sent_messages[1]["content"], list)
+        self.assertTrue(any(part.get("type") == "image_url" for part in sent_messages[1]["content"]))
