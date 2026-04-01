@@ -1200,6 +1200,7 @@ def api_preview(name):
         # Build chatroom context with mock values
         chatroom_context = character_manager.build_chatroom_context(
             guild_name="Example Server",
+            character_name=character.name,
             emojis=":wave: :heart: :fire:",
             lore="This is example lore text that would be loaded from the server.",
             memories="User loves cats and hates rainy days.\nUser mentioned they work as a developer.",

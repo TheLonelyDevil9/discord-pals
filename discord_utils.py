@@ -14,7 +14,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 
@@ -181,6 +181,97 @@ RE_WORD = re.compile(r'\w+')
 
 # Pre-compiled pattern for sentence splitting
 RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
+
+_TIME_GAP_THRESHOLD_SECONDS = 30 * 60
+
+
+def _local_timezone():
+    """Get the current local timezone information."""
+    return datetime.now().astimezone().tzinfo
+
+
+def _normalize_history_timestamp(timestamp=None) -> str:
+    """Convert supported timestamp inputs into an ISO string while preserving the source timezone."""
+    local_tz = _local_timezone()
+
+    if isinstance(timestamp, datetime):
+        dt = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=local_tz)
+        return dt.isoformat(timespec="seconds")
+
+    if isinstance(timestamp, (int, float)):
+        return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat(timespec="seconds")
+
+    if isinstance(timestamp, str) and timestamp:
+        try:
+            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=local_tz)
+            return dt.isoformat(timespec="seconds")
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _parse_history_timestamp(value) -> Optional[datetime]:
+    """Parse stored history timestamps into aware datetimes."""
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value.astimezone() if value.tzinfo else value.replace(tzinfo=_local_timezone())
+
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).astimezone()
+        except (TypeError, ValueError, OSError):
+            return None
+
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_local_timezone())
+        return dt.astimezone()
+
+    return None
+
+
+def _format_time_gap(delta_seconds: float) -> str:
+    """Render a readable time-gap label for long pauses in conversation."""
+    seconds = max(int(delta_seconds), 0)
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = max(1, remainder // 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours and len(parts) < 2:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if not parts and minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    elif minutes and len(parts) < 2 and (not days or not hours):
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+
+    return ", ".join(parts) + " later"
+
+
+def _get_time_gap_prefix(previous_msg: Optional[dict], current_msg: Optional[dict]) -> str:
+    """Return a formatted time-gap marker to prepend before a message when needed."""
+    previous_dt = _parse_history_timestamp(previous_msg.get("timestamp") if previous_msg else None)
+    current_dt = _parse_history_timestamp(current_msg.get("timestamp") if current_msg else None)
+    if not previous_dt or not current_dt:
+        return ""
+
+    gap_seconds = (current_dt - previous_dt).total_seconds()
+    if gap_seconds < _TIME_GAP_THRESHOLD_SECONDS:
+        return ""
+
+    return f"[Time gap: {_format_time_gap(gap_seconds)}]\n"
 
 
 def _history_channel_path(channel_id: int) -> str:
@@ -482,7 +573,9 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
     return content
 
 
-def add_to_history(channel_id: int, role: str, content: str, author_name: str = None, user_id: int = None, guild=None, message_id: int = None, is_bot: bool = False):
+def add_to_history(channel_id: int, role: str, content: str, author_name: str = None,
+                   user_id: int = None, guild=None, message_id: int = None,
+                   is_bot: bool = False, timestamp=None):
     """Add a message to conversation history.
 
     Args:
@@ -494,6 +587,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         guild: Discord guild object for resolving mentions (optional)
         message_id: Discord message ID (for precise duplicate detection)
         is_bot: Whether the author is a bot (for context filtering)
+        timestamp: Optional message timestamp (Discord message time or datetime/ISO string)
     """
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
@@ -520,6 +614,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         msg["message_id"] = message_id
     if is_bot:
         msg["is_bot"] = True
+    msg["timestamp"] = _normalize_history_timestamp(timestamp)
 
     # Fast hash-based duplicate detection (O(1) instead of O(n))
     # Include message_id when available so different Discord messages with same content aren't deduped
@@ -658,13 +753,17 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     history = get_history(channel_id)[-limit:]  # Apply limit
     formatted = []
 
-    for msg in history:
+    for idx, msg in enumerate(history):
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
+        gap_prefix = _get_time_gap_prefix(history[idx - 1] if idx > 0 else None, msg)
 
         if role == "user" and author:
             content = f"{author}: {content}"
+
+        if gap_prefix:
+            content = f"{gap_prefix}{content}"
 
         formatted.append({"role": role, "content": content})
 
@@ -737,15 +836,27 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
 
         for idx, msg in recent_user:
             author = msg.get("author", "Unknown")
-            all_entries.append((idx, {"role": "user", "content": f"{author}: {msg.get('content', '')}"}))
+            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
+            content = f"{author}: {msg.get('content', '')}"
+            if gap_prefix:
+                content = f"{gap_prefix}{content}"
+            all_entries.append((idx, {"role": "user", "content": content}))
 
         for idx, msg in bot_responses:
             assistant_author = msg.get("author") or current_bot_name or "Assistant"
-            all_entries.append((idx, {"role": "assistant", "content": msg.get("content", ""), "author": assistant_author}))
+            content = msg.get("content", "")
+            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
+            if gap_prefix:
+                content = f"{gap_prefix}{content}"
+            all_entries.append((idx, {"role": "assistant", "content": content, "author": assistant_author}))
 
         for idx, msg in other_bot_messages:
             author = msg.get("author", "Unknown")
-            all_entries.append((idx, {"role": "user", "content": f"{author}: {msg.get('content', '')}"}))
+            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
+            content = f"{author}: {msg.get('content', '')}"
+            if gap_prefix:
+                content = f"{gap_prefix}{content}"
+            all_entries.append((idx, {"role": "user", "content": content}))
 
         all_entries.sort(key=lambda x: x[0])
         formatted = [entry for _, entry in all_entries]
@@ -772,6 +883,11 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
                 role = "user"
                 content = f"{author}: {content}"
             # If same bot or no author field, keep as assistant (no prefix)
+
+        previous_msg = all_history[len(formatted) - 1] if formatted else None
+        gap_prefix = _get_time_gap_prefix(previous_msg, msg)
+        if gap_prefix:
+            content = f"{gap_prefix}{content}"
 
         formatted_msg = {"role": role, "content": content}
         if role == "assistant":

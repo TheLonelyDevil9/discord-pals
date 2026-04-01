@@ -1,6 +1,7 @@
 # Chatroom Context
 
 Server: {{GUILD_NAME}}
+{{CURRENT_TIME_CONTEXT}}
 
 {{LORE}}
 {{MEMORIES}}

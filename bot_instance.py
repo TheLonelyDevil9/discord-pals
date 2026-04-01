@@ -104,7 +104,12 @@ class BotInstance:
         bot_display = message.author.display_name if hasattr(message.author, 'display_name') else ""
         if _is_same_character(bot_display, self.character.name) or _is_same_character(message.author.name, self.character.name):
             log.debug(f"Ignoring message from bot with same character: {message.author.name}", self.name)
-            add_to_history(message.channel.id, "user", message.content, author_name=get_user_display_name(message.author), user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
+            add_to_history(
+                message.channel.id, "user", message.content,
+                author_name=get_user_display_name(message.author), user_id=message.author.id,
+                guild=message.guild, message_id=message.id, is_bot=True,
+                timestamp=getattr(message, "created_at", None)
+            )
             return True
         return False
 
@@ -118,7 +123,12 @@ class BotInstance:
 
         # Global stop-bot interactions
         if runtime_config.get("bot_interactions_paused", False):
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
+            add_to_history(
+                channel_id, "user", message.content,
+                author_name=user_name, user_id=message.author.id,
+                guild=message.guild, message_id=message.id, is_bot=True,
+                timestamp=getattr(message, "created_at", None)
+            )
             return True
 
         # Initialize or update conversation tracker
@@ -146,13 +156,23 @@ class BotInstance:
                 f"probability: {response_probability:.2%})",
                 self.name
             )
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
+            add_to_history(
+                channel_id, "user", message.content,
+                author_name=user_name, user_id=message.author.id,
+                guild=message.guild, message_id=message.id, is_bot=True,
+                timestamp=getattr(message, "created_at", None)
+            )
             return True
 
         # Keep existing 60-second cooldown as additional safeguard
         last_bot_response = self._last_bot_response.get(channel_id, 0)
         if time.time() - last_bot_response < 60:
-            add_to_history(channel_id, "user", message.content, author_name=user_name, user_id=message.author.id, guild=message.guild, message_id=message.id, is_bot=True)
+            add_to_history(
+                channel_id, "user", message.content,
+                author_name=user_name, user_id=message.author.id,
+                guild=message.guild, message_id=message.id, is_bot=True,
+                timestamp=getattr(message, "created_at", None)
+            )
             return True
 
         return False
@@ -507,7 +527,8 @@ class BotInstance:
                     add_to_history(
                         channel_id, "user", message.content,
                         author_name=user_name, user_id=message.author.id, guild=message.guild,
-                        message_id=message.id, is_bot=is_other_bot
+                        message_id=message.id, is_bot=is_other_bot,
+                        timestamp=getattr(message, "created_at", None)
                     )
 
         @self.client.event
@@ -778,7 +799,11 @@ class BotInstance:
         else:
             already_in = any(m.get('content') == content and m.get('author') == user_name for m in history[-5:])
         if not already_in:
-            add_to_history(channel_id, "user", content, author_name=user_name, user_id=user_id, guild=guild, message_id=message_id)
+            add_to_history(
+                channel_id, "user", content,
+                author_name=user_name, user_id=user_id, guild=guild, message_id=message_id,
+                timestamp=getattr(message, "created_at", None)
+            )
 
         # Store channel name for readable history display
         channel_name = getattr(message.channel, 'name', 'DM')
@@ -894,6 +919,7 @@ class BotInstance:
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
         chatroom_context = character_manager.build_chatroom_context(
             guild_name=guild.name if guild else "DM",
+            character_name=self.character.name if self.character else "",
             emojis=emojis,
             lore=lore,
             memories=memories,
@@ -1108,7 +1134,11 @@ class BotInstance:
         self._reset_failures(channel_id)
         self._record_response(channel_id)
         self._update_mood(channel_id, content, delivered_response)
-        add_to_history(channel_id, "assistant", delivered_response, author_name=self.character.name, guild=guild)
+        add_to_history(
+            channel_id, "assistant", delivered_response,
+            author_name=self.character.name, guild=guild,
+            timestamp=getattr(sent_messages[0], "created_at", None) if sent_messages else None
+        )
 
         # Update activity
         runtime_config.update_last_activity(self.name)
@@ -1543,10 +1573,14 @@ Your follow-up message (1-2 sentences, in character):"""
                 else:
                     await asyncio.sleep(min(len(response) * 0.03, 3))
 
-                await channel.send(response)
+                sent_message = await channel.send(response)
 
                 # Add to history
-                add_to_history(resolved_channel_id, "assistant", response, author_name=char_name)
+                add_to_history(
+                    resolved_channel_id, "assistant", response,
+                    author_name=char_name,
+                    timestamp=getattr(sent_message, "created_at", None)
+                )
 
                 # Update state
                 state["followups_sent"] = followups_sent + 1
@@ -1661,7 +1695,12 @@ Your follow-up message (1-2 sentences, in character):"""
             is_any_bot = msg.author.bot  # Track all bots for context filtering
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
-            add_to_history(channel.id, role, msg.content, author_name=user_name, user_id=msg.author.id, guild=guild, message_id=msg.id, is_bot=is_any_bot)
+            add_to_history(
+                channel.id, role, msg.content,
+                author_name=user_name, user_id=msg.author.id, guild=guild,
+                message_id=msg.id, is_bot=is_any_bot,
+                timestamp=getattr(msg, "created_at", None)
+            )
             count += 1
         
         return count

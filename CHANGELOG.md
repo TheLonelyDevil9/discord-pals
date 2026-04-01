@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.10.11] - 2026-04-01
+
+### Added
+
+- Broad prompt time placeholders, including `{{time}}`, `{{date}}`, `{{weekday}}`, `{{day}}`, `{{month}}`, `{{month_name}}`, `{{year}}`, `{{hour}}`, `{{minute}}`, `{{second}}`, `{{datetime}}`, `{{iso_datetime}}`, `{{timezone}}`, `{{utc_offset}}`, and `{{unix}}`
+- Regression coverage for prompt time placeholder rendering, persisted history timestamps, and long-gap history formatting
+
+### Changed
+
+- **Chatroom time awareness** — chatroom context now injects the current local date/time automatically, so bots can react to mornings, weekdays, day-of-month, and similar time-sensitive context without editing the system prompt text
+- **History timestamps** — stored conversation history entries now persist message timestamps so future prompt assembly can reason about when messages actually happened
+
+### Fixed
+
+- **Long-gap awareness** — when a reply arrives after a significant pause, the active conversation context now includes a readable gap marker such as `Time gap: 1 day later`, so the bot can tell the response was not immediate
+- **Prompt placeholder propagation** — time placeholders are now expanded across rendered prompt sections, including character persona text, special-user context, and chatroom context
+- **Chatroom character placeholder preview** — chatroom context rendering now receives the active character name consistently, so `{{CHARACTER_NAME}}` resolves correctly in preview/runtime paths
+
 ## [v1.10.10] - 2026-03-23
 
 ### Added

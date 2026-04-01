@@ -6,6 +6,7 @@ Prompts are loaded from separate template files.
 
 import os
 import re
+from datetime import datetime
 from typing import Optional, Dict, List
 from config import CHARACTERS_DIR
 
@@ -17,6 +18,62 @@ RE_PERSONA = re.compile(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGN
 RE_DIALOGUE = re.compile(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_SPECIAL_USERS = re.compile(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
 RE_EMPTY_LINES = re.compile(r'\n{3,}')
+RE_TEMPLATE_VAR = re.compile(r'{{\s*([a-zA-Z0-9_]+)\s*}}')
+
+
+def _get_time_variables(now: Optional[datetime] = None) -> Dict[str, str]:
+    """Build placeholder variables for current local date/time awareness."""
+    now = now.astimezone() if now else datetime.now().astimezone()
+    timezone_name = now.strftime("%Z") or now.strftime("UTC%z")
+    utc_offset = now.strftime("%z")
+    if utc_offset and len(utc_offset) == 5:
+        utc_offset = f"{utc_offset[:3]}:{utc_offset[3:]}"
+
+    return {
+        "time": now.strftime("%I:%M %p").lstrip("0") or "12:00 AM",
+        "time_12h": now.strftime("%I:%M %p").lstrip("0") or "12:00 AM",
+        "time_24h": now.strftime("%H:%M"),
+        "date": now.strftime("%Y-%m-%d"),
+        "weekday": now.strftime("%A"),
+        "day": str(now.day),
+        "day_padded": now.strftime("%d"),
+        "month": str(now.month),
+        "month_padded": now.strftime("%m"),
+        "month_name": now.strftime("%B"),
+        "month_short": now.strftime("%b"),
+        "year": now.strftime("%Y"),
+        "hour": str(now.hour),
+        "hour_24": now.strftime("%H"),
+        "hour_12": now.strftime("%I").lstrip("0") or "12",
+        "minute": now.strftime("%M"),
+        "second": now.strftime("%S"),
+        "ampm": now.strftime("%p"),
+        "timezone": timezone_name or utc_offset or "local time",
+        "utc_offset": utc_offset or "",
+        "datetime": now.strftime("%A, %Y-%m-%d %I:%M %p").replace(" 0", " "),
+        "iso_datetime": now.isoformat(timespec="seconds"),
+        "unix": str(int(now.timestamp())),
+    }
+
+
+def _render_template_variables(text: str, replacements: Dict[str, str], now: Optional[datetime] = None) -> str:
+    """Render template variables, including current time placeholders, across the whole text."""
+    if not text:
+        return text
+
+    variables = {key.lower(): value for key, value in replacements.items()}
+    variables.update(_get_time_variables(now))
+
+    rendered = text
+    for _ in range(3):
+        updated = RE_TEMPLATE_VAR.sub(
+            lambda match: str(variables.get(match.group(1).lower(), match.group(0))),
+            rendered
+        )
+        if updated == rendered:
+            break
+        rendered = updated
+    return rendered
 
 
 class PromptManager:
@@ -52,7 +109,8 @@ class PromptManager:
         character_name: str,
         persona: str,
         special_user_context: str = "",
-        example_dialogue: str = ""
+        example_dialogue: str = "",
+        now: Optional[datetime] = None
     ) -> str:
         """Build system prompt (character section) from template."""
         
@@ -61,14 +119,13 @@ class PromptManager:
         
         # Make substitutions (character section only)
         replacements = {
-            "{{CHARACTER_NAME}}": character_name,
-            "{{PERSONA}}": persona,
-            "{{SPECIAL_USER_CONTEXT}}": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
-            "{{EXAMPLE_DIALOGUE}}": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else ""
+            "character_name": character_name,
+            "persona": persona,
+            "special_user_context": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
+            "example_dialogue": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else ""
         }
-        
-        for key, value in replacements.items():
-            prompt = prompt.replace(key, value)
+
+        prompt = _render_template_variables(prompt, replacements, now=now)
         
         # Clean up empty lines from unused placeholders
         prompt = RE_EMPTY_LINES.sub('\n\n', prompt)
@@ -78,6 +135,7 @@ class PromptManager:
     def build_chatroom_context(
         self,
         guild_name: str = "DM",
+        character_name: str = "",
         emojis: str = "",
         lore: str = "",
         memories: str = "",
@@ -86,29 +144,39 @@ class PromptManager:
         mentioned_context: str = "",
         other_bots: str = "",
         mentionable_users: str = "",
-        mentionable_bots: str = ""
+        mentionable_bots: str = "",
+        now: Optional[datetime] = None
     ) -> str:
         """Build chatroom context (injected between history and immediate messages)."""
 
         # Start with template
         context = self.chatroom_context_template
 
+        time_vars = _get_time_variables(now)
+        timezone_display = time_vars["timezone"]
+        if time_vars["utc_offset"] and time_vars["utc_offset"] not in timezone_display:
+            timezone_display = f"{timezone_display} {time_vars['utc_offset']}".strip()
+
         # Make substitutions
         replacements = {
-            "{{GUILD_NAME}}": guild_name,
-            "{{EMOJIS}}": f"Available server emojis (use :emoji_name: format):\n{emojis}" if emojis else "",
-            "{{LORE}}": f"<lore>\n{lore}\n</lore>" if lore else "",
-            "{{MEMORIES}}": f"<memories>\n{memories}\n</memories>" if memories else "",
-            "{{USER_NAME}}": user_name,
-            "{{ACTIVE_USERS}}": active_users,
-            "{{MENTIONED_CONTEXT}}": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else "",
-            "{{OTHER_BOTS}}": other_bots,
-            "{{MENTIONABLE_USERS}}": mentionable_users,
-            "{{MENTIONABLE_BOTS}}": mentionable_bots
+            "guild_name": guild_name,
+            "character_name": character_name,
+            "emojis": f"Available server emojis (use :emoji_name: format):\n{emojis}" if emojis else "",
+            "lore": f"<lore>\n{lore}\n</lore>" if lore else "",
+            "memories": f"<memories>\n{memories}\n</memories>" if memories else "",
+            "user_name": user_name,
+            "active_users": active_users,
+            "mentioned_context": f"--- Context about mentioned users ---\n{mentioned_context}" if mentioned_context else "",
+            "other_bots": other_bots,
+            "mentionable_users": mentionable_users,
+            "mentionable_bots": mentionable_bots,
+            "current_time_context": (
+                f"Current local date/time: {time_vars['weekday']}, {time_vars['date']} "
+                f"at {time_vars['time']} ({timezone_display})"
+            ),
         }
 
-        for key, value in replacements.items():
-            context = context.replace(key, value)
+        context = _render_template_variables(context, replacements, now=now)
 
         # Clean up empty lines from unused placeholders
         context = RE_EMPTY_LINES.sub('\n\n', context)
@@ -270,7 +338,8 @@ class CharacterManager:
     def build_system_prompt(
         self,
         character: Character,
-        user_name: str = ""
+        user_name: str = "",
+        now: Optional[datetime] = None
     ) -> str:
         """Build system prompt (character section only)."""
         special_context = character.get_special_user_context(user_name)
@@ -279,12 +348,14 @@ class CharacterManager:
             character_name=character.name,
             persona=character.persona,
             special_user_context=special_context,
-            example_dialogue=character.example_dialogue
+            example_dialogue=character.example_dialogue,
+            now=now
         )
     
     def build_chatroom_context(
         self,
         guild_name: str = "DM",
+        character_name: str = "",
         emojis: str = "",
         lore: str = "",
         memories: str = "",
@@ -293,7 +364,8 @@ class CharacterManager:
         mentioned_context: str = "",
         other_bot_names: list = None,
         mentionable_users: list = None,
-        mentionable_bots: list = None
+        mentionable_bots: list = None,
+        now: Optional[datetime] = None
     ) -> str:
         """Build chatroom context (injected between history and immediate).
 
@@ -338,6 +410,7 @@ class CharacterManager:
 
         return self.prompt_manager.build_chatroom_context(
             guild_name=guild_name,
+            character_name=character_name,
             emojis=emojis,
             lore=lore,
             memories=memories,
@@ -346,7 +419,8 @@ class CharacterManager:
             mentioned_context=mentioned_context,
             other_bots=other_bots_context,
             mentionable_users=mentionable_users_context,
-            mentionable_bots=mentionable_bots_context
+            mentionable_bots=mentionable_bots_context,
+            now=now
         )
 
 

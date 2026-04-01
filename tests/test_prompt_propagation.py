@@ -1,8 +1,10 @@
 import json
 import unittest
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
+import character as character_module
 import dashboard as dashboard_module
 import discord_utils as discord_utils_module
 import providers as providers_module
@@ -94,6 +96,85 @@ class PromptPropagationTests(unittest.TestCase):
         self.assertIn("Alice: Hello", combined)
         self.assertIn("Nahida: Welcome back", combined)
         self.assertNotIn("Assistant: Welcome back", combined)
+
+    def test_format_history_split_marks_large_time_gaps(self):
+        channel_id = 789
+        discord_utils_module.conversation_history[channel_id] = [
+            {
+                "role": "user",
+                "content": "Hi",
+                "author": "Alice",
+                "timestamp": "2026-03-31T09:00:00+00:00",
+            },
+            {
+                "role": "user",
+                "content": "Back again",
+                "author": "Alice",
+                "timestamp": "2026-04-01T09:30:00+00:00",
+            },
+        ]
+
+        history, immediate = discord_utils_module.format_history_split(
+            channel_id,
+            total_limit=10,
+            immediate_count=10,
+            current_bot_name="Nahida"
+        )
+
+        self.assertEqual(history, [])
+        self.assertEqual(immediate[0]["content"], "Alice: Hi")
+        self.assertIn("[Time gap: 1 day, 30 minutes later]", immediate[1]["content"])
+        self.assertIn("Alice: Back again", immediate[1]["content"])
+
+
+class TimePlaceholderTests(unittest.TestCase):
+    def test_system_prompt_expands_time_placeholders_in_template_and_persona(self):
+        manager = character_module.PromptManager()
+        manager.system_template = "It is {{weekday}}, {{date}} at {{time}} for {{CHARACTER_NAME}}.\n{{PERSONA}}"
+        now = datetime(2026, 4, 1, 18, 5, 9, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+
+        prompt = manager.build_prompt(
+            character_name="Nahida",
+            persona="Today's day-of-month is {{day}} in {{month_name}} {{year}}.",
+            now=now
+        )
+
+        self.assertIn("It is Wednesday, 2026-04-01 at 6:05 PM for Nahida.", prompt)
+        self.assertIn("Today's day-of-month is 1 in April 2026.", prompt)
+
+    def test_chatroom_context_includes_current_time_context_and_time_tokens(self):
+        manager = character_module.PromptManager()
+        manager.chatroom_context_template = (
+            "Server: {{GUILD_NAME}}\n"
+            "{{CURRENT_TIME_CONTEXT}}\n"
+            "Today is {{weekday}} and the day-of-month is {{day}}."
+        )
+        now = datetime(2026, 4, 1, 18, 5, 9, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+
+        context = manager.build_chatroom_context(
+            guild_name="Sumeru",
+            character_name="Nahida",
+            user_name="Traveler",
+            now=now
+        )
+
+        self.assertIn("Server: Sumeru", context)
+        self.assertIn("Current local date/time: Wednesday, 2026-04-01 at 6:05 PM", context)
+        self.assertIn("Today is Wednesday and the day-of-month is 1.", context)
+
+    def test_add_to_history_persists_timestamp_metadata(self):
+        channel_id = 999
+        with patch.object(discord_utils_module, "save_history"):
+            discord_utils_module.add_to_history(
+                channel_id,
+                "user",
+                "Hello there",
+                author_name="Alice",
+                timestamp="2026-04-01T10:15:30+00:00"
+            )
+
+        stored = discord_utils_module.conversation_history[channel_id][0]
+        self.assertEqual(stored["timestamp"], "2026-04-01T10:15:30+00:00")
 
 
 class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
