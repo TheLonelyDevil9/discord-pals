@@ -9,7 +9,12 @@ import discord
 from discord import app_commands
 
 from reminders import reminder_manager
-from time_utils import get_context_now, get_timezone_context, timezone_manager
+from time_utils import (
+    get_context_now,
+    get_timezone_context,
+    search_timezone_options,
+    timezone_manager,
+)
 
 
 def setup_time_commands(bot_instance) -> None:
@@ -37,6 +42,17 @@ def setup_time_commands(bot_instance) -> None:
             f"Current local time: {local_now.strftime('%A, %Y-%m-%d at %I:%M %p').replace(' 0', ' ')}",
             ephemeral=True
         )
+
+    @timezone_set.autocomplete("timezone_name")
+    async def timezone_set_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        del interaction
+        return [
+            app_commands.Choice(name=option["label"], value=option["value"])
+            for option in search_timezone_options(current, limit=25)
+        ]
 
     @timezone_group.command(name="show", description="Show your effective timezone")
     async def timezone_show(interaction: discord.Interaction) -> None:

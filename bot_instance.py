@@ -127,7 +127,10 @@ class BotInstance:
                 message.channel.id, "user", message.content,
                 author_name=get_user_display_name(message.author), user_id=message.author.id,
                 guild=message.guild, message_id=message.id, is_bot=True,
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                mentioned_users=getattr(message, "mentions", None),
+                mentioned_channels=getattr(message, "channel_mentions", None),
+                mentioned_roles=getattr(message, "role_mentions", None),
             )
             return True
         return False
@@ -146,7 +149,10 @@ class BotInstance:
                 channel_id, "user", message.content,
                 author_name=user_name, user_id=message.author.id,
                 guild=message.guild, message_id=message.id, is_bot=True,
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                mentioned_users=getattr(message, "mentions", None),
+                mentioned_channels=getattr(message, "channel_mentions", None),
+                mentioned_roles=getattr(message, "role_mentions", None),
             )
             return True
 
@@ -179,7 +185,10 @@ class BotInstance:
                 channel_id, "user", message.content,
                 author_name=user_name, user_id=message.author.id,
                 guild=message.guild, message_id=message.id, is_bot=True,
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                mentioned_users=getattr(message, "mentions", None),
+                mentioned_channels=getattr(message, "channel_mentions", None),
+                mentioned_roles=getattr(message, "role_mentions", None),
             )
             return True
 
@@ -190,7 +199,10 @@ class BotInstance:
                 channel_id, "user", message.content,
                 author_name=user_name, user_id=message.author.id,
                 guild=message.guild, message_id=message.id, is_bot=True,
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                mentioned_users=getattr(message, "mentions", None),
+                mentioned_channels=getattr(message, "channel_mentions", None),
+                mentioned_roles=getattr(message, "role_mentions", None),
             )
             return True
 
@@ -350,7 +362,13 @@ class BotInstance:
             content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
 
         # Resolve all Discord formatting
-        content = resolve_discord_formatting(content, guild)
+        content = resolve_discord_formatting(
+            content,
+            guild,
+            mentioned_users=getattr(message, "mentions", None),
+            mentioned_channels=getattr(message, "channel_mentions", None),
+            mentioned_roles=getattr(message, "role_mentions", None),
+        )
 
         # For autonomous responses, prefix to indicate bot is chiming in
         if is_autonomous and message.mentions:
@@ -363,7 +381,13 @@ class BotInstance:
             referenced_author = get_user_display_name(referenced_message.author)
             referenced_content = referenced_message.content or ""
             if guild:
-                referenced_content = resolve_discord_formatting(referenced_content, guild)
+                referenced_content = resolve_discord_formatting(
+                    referenced_content,
+                    guild,
+                    mentioned_users=getattr(referenced_message, "mentions", None),
+                    mentioned_channels=getattr(referenced_message, "channel_mentions", None),
+                    mentioned_roles=getattr(referenced_message, "role_mentions", None),
+                )
             else:
                 referenced_content = sanitize_discord_syntax_fallback(referenced_content)
             referenced_summary = self._summarize_reply_content(referenced_content)
@@ -1201,7 +1225,10 @@ Return exactly one JSON object with this shape:
                         channel_id, "user", message.content,
                         author_name=user_name, user_id=message.author.id, guild=message.guild,
                         message_id=message.id, is_bot=is_other_bot,
-                        timestamp=getattr(message, "created_at", None)
+                        timestamp=getattr(message, "created_at", None),
+                        mentioned_users=getattr(message, "mentions", None),
+                        mentioned_channels=getattr(message, "channel_mentions", None),
+                        mentioned_roles=getattr(message, "role_mentions", None),
                     )
 
         @self.client.event
@@ -1320,18 +1347,25 @@ Return exactly one JSON object with this shape:
             if not existing_memories:
                 users_needing_context.append(mentioned_user)
 
+        mentioned_contexts = []
+        mentioned_names = [get_user_display_name(user) for user in users_to_check]
+        if mentioned_names:
+            mentioned_contexts.append(
+                "Users explicitly mentioned in the newest message:\n" +
+                "\n".join(f"- {name}" for name in mentioned_names[:10])
+            )
+
         if not users_needing_context:
-            return ""
+            return "\n\n".join(mentioned_contexts)
 
         # Fetch history ONCE for all users (instead of once per user)
         try:
             history_messages = [msg async for msg in message.channel.history(limit=50)]
         except Exception as e:
             log.warn(f"Failed to fetch channel history for mentioned users: {e}", self.name)
-            return ""
+            return "\n\n".join(mentioned_contexts)
 
         # Build context for each user from the cached history
-        mentioned_contexts = []
         for mentioned_user in users_needing_context:
             user_messages = [
                 msg.content[:200] for msg in history_messages
@@ -1532,6 +1566,25 @@ Return exactly one JSON object with this shape:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
             mention_limit = runtime_config.get("mention_context_limit", 10)
             mentionable_users = get_mentionable_users(channel_id, limit=mention_limit, guild=guild)
+            explicit_mentions = [
+                {
+                    "name": get_user_display_name(user),
+                    "user_id": user.id,
+                    "mention_syntax": f"<@{user.id}>",
+                }
+                for user in message.mentions
+                if not user.bot and user.id != target_user_id
+            ]
+            if explicit_mentions:
+                merged_mentionable_users = []
+                seen_user_ids = set()
+                for candidate in explicit_mentions + mentionable_users:
+                    candidate_id = candidate.get("user_id")
+                    if candidate_id in seen_user_ids:
+                        continue
+                    seen_user_ids.add(candidate_id)
+                    merged_mentionable_users.append(candidate)
+                mentionable_users = merged_mentionable_users
             log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mentionable users for channel {channel_id}")
             if mentionable_users:
                 log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")

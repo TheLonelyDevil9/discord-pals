@@ -861,6 +861,7 @@ def api_message_format():
 def config_page():
     """Runtime configuration page (merged with Settings)."""
     import runtime_config
+    from time_utils import get_timezone_options
     
     config = runtime_config.get_all()
     characters = get_character_files()
@@ -944,6 +945,7 @@ def config_page():
         providers_raw=providers_raw,
         bots_raw=bots_raw,
         autonomous_raw=autonomous_raw,
+        timezone_options=get_timezone_options(),
         message=request.args.get('message'),
         error=request.args.get('error')
     )
@@ -987,14 +989,15 @@ def api_config():
 def api_bot_timezones():
     """Get or update per-bot timezone overrides."""
     import runtime_config
-    from time_utils import normalize_timezone_name
+    from time_utils import get_timezone_options, normalize_timezone_name
 
     if request.method == 'GET':
         return jsonify({
             'bot_timezones': {
                 bot.name: runtime_config.get_bot_timezone(bot.name) or ''
                 for bot in bot_instances
-            }
+            },
+            'timezone_options': get_timezone_options(),
         })
 
     data = request.json or {}
@@ -1016,6 +1019,34 @@ def api_bot_timezones():
         'bot_name': bot_name,
         'timezone': timezone_name or ''
     })
+
+
+def _resolved_guild_name_map() -> dict[int, str]:
+    """Build a guild-id to human-readable guild-name map from the visible topology."""
+    topology = _get_visible_topology()
+    return {
+        int(guild["id"]): guild["name"]
+        for guild in topology.get("guilds", [])
+        if isinstance(guild, dict) and guild.get("id") is not None and guild.get("name")
+    }
+
+
+def _build_auto_memory_labels(*, key: str, entry: dict, guild_name_map: dict[int, str]) -> tuple[str, str]:
+    """Return friendly scope and footer labels for an auto-memory entry."""
+    server_id = entry.get("server_id")
+    user_name = entry.get("user_name") or ""
+    user_id = entry.get("user_id")
+    if server_id in (None, 0):
+        scope_label = "DM"
+    else:
+        try:
+            resolved_server_id = int(server_id)
+        except (TypeError, ValueError):
+            resolved_server_id = None
+        scope_label = entry.get("server_name") or guild_name_map.get(resolved_server_id) or f"Server {server_id}"
+
+    target_label = user_name or (f"User {user_id}" if user_id is not None else "Shared")
+    return scope_label, f"{scope_label} • {target_label}"
 
 
 @app.route('/api/switch_character', methods=['POST'])
@@ -1991,6 +2022,7 @@ def api_v2_auto_memories():
             )
         )
 
+    guild_name_map = _resolved_guild_name_map()
     results = []
     for key, entries in memory_manager.auto_memories.items():
         if key not in matched_keys:
@@ -1999,6 +2031,16 @@ def api_v2_auto_memories():
         for idx, entry in enumerate(entries):
             if search and search not in entry.get('content', '').lower():
                 continue
+            scope_label, key_label = _build_auto_memory_labels(
+                key=key,
+                entry=entry,
+                guild_name_map=guild_name_map,
+            )
+            server_value = entry.get('server_id')
+            try:
+                resolved_server_id = int(server_value)
+            except (TypeError, ValueError):
+                resolved_server_id = None
             results.append({
                 'key': key,
                 'index': idx,
@@ -2006,11 +2048,16 @@ def api_v2_auto_memories():
                 'content': entry.get('content', ''),
                 'timestamp': entry.get('timestamp', ''),
                 'user_name': entry.get('user_name', ''),
-                'server_name': entry.get('server_name', ''),
+                'server_name': entry.get('server_name', '') or (
+                    '' if server_value in (None, 0)
+                    else guild_name_map.get(resolved_server_id, '')
+                ),
                 'character': entry.get('character', ''),
                 'user_id': entry.get('user_id'),
                 'server_id': entry.get('server_id'),
                 'scope': 'dm' if entry.get('server_id') in (None, 0) else 'server',
+                'scope_label': scope_label,
+                'key_label': key_label,
             })
 
     # Sort by timestamp descending

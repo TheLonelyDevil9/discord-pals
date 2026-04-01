@@ -4,6 +4,25 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.1] - 2026-04-01
+
+### Added
+
+- Dashboard bot-timezone picker backed by the app's valid IANA timezone list, plus `/timezone set` autocomplete suggestions sourced from the same list
+- Regression coverage for system-prompt `{{CURRENT_TIME_CONTEXT}}` propagation, explicit mention resolution, friendly auto-memory labels, dashboard timezone picker rendering, and manual-lore editing
+
+### Changed
+
+- **Mention visibility** — current-message and reply/reference mentions now prefer live Discord mention objects over guild-cache lookups, so tagged users resolve into readable names more reliably
+- **Mention context propagation** — explicitly tagged users are now surfaced into prompt context and mentionable-user context, making it clearer to the model that they are real people in the current conversation
+- **Memory dashboard labels** — auto-memory cards now favor human-readable guild names and friendly scope labels instead of exposing raw storage keys in the main UI
+
+### Fixed
+
+- **`{{CURRENT_TIME_CONTEXT}}` in system prompts** — the placeholder now resolves in the system-prompt render path as well as chatroom context, without changing the prompt text itself
+- **Manual lore editing** — the Memories dashboard now exposes in-place lore editing instead of requiring raw JSON edits
+- **Oversized dashboard checkboxes** — checkbox inputs no longer inherit full text-input sizing, preventing giant selection boxes on the Memories page
+
 ## [v1.11.0] - 2026-04-01
 
 ### Added

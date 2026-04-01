@@ -583,7 +583,7 @@ Adjust runtime settings without restarting:
 - **Provider Selection** — Switch between configured providers
 - **Single User Mode** — SillyTavern-style message formatting
 - **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
-- **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set
+- **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set, using a dashboard picker of valid IANA timezone values
 - **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
@@ -682,7 +682,7 @@ If upgrading from v1.7.x or earlier, the old 5-store memory system (server memor
 
 | Command | Description |
 | ------- | ----------- |
-| `/timezone set <iana_timezone>` | Set your personal timezone for prompt time-awareness and reminders |
+| `/timezone set <iana_timezone>` | Set your personal timezone for prompt time-awareness and reminders, with Discord autocomplete suggestions from the valid IANA timezone list |
 | `/timezone show` | Show your effective timezone and where it came from |
 | `/timezone clear` | Remove your personal timezone override |
 | `/reminders list` | List your pending reminders for the current bot |

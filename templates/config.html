@@ -268,9 +268,12 @@
         <div class="bot-row compact">
             <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
             <span class="bot-name">{{ bot.name }}</span>
-            <input type="text" id="timezone-{{ bot.name }}" value="{{ bot.timezone or '' }}"
-                placeholder="e.g., Asia/Calcutta"
-                title="Timezone for {{ bot.name }}">
+            <select
+                id="timezone-{{ bot.name }}"
+                class="timezone-select"
+                data-current="{{ bot.timezone or '' }}"
+                title="Timezone for {{ bot.name }}"
+            ></select>
             <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
         </div>
         {% endfor %}
@@ -798,7 +801,8 @@ select:focus {
     padding: 10px 12px;
 }
 
-.bot-row.compact input[type="text"] {
+.bot-row.compact input[type="text"],
+.bot-row.compact select {
     flex: 1;
     padding: 8px 12px;
     background: var(--bg-secondary);
@@ -809,7 +813,8 @@ select:focus {
     font-size: 0.875rem;
 }
 
-.bot-row.compact input[type="text"]:focus {
+.bot-row.compact input[type="text"]:focus,
+.bot-row.compact select:focus {
     outline: none;
     border-color: var(--accent);
 }
@@ -1470,7 +1475,8 @@ async function saveNicknames(botName) {
 
 // Save bot timezone fallback
 async function saveBotTimezone(botName) {
-    const timezone = document.getElementById('timezone-' + botName).value.trim();
+    const select = document.getElementById('timezone-' + botName);
+    const timezone = select.value.trim();
 
     const response = await fetch('/api/bot-timezones', {
         method: 'POST',
@@ -1484,7 +1490,8 @@ async function saveBotTimezone(botName) {
     const result = await response.json();
     if (result.status === 'ok') {
         const savedValue = result.timezone || '';
-        document.getElementById('timezone-' + botName).value = savedValue;
+        select.dataset.current = savedValue;
+        populateTimezoneSelect(select);
         showToast(savedValue ? `Timezone saved for ${botName}` : `Timezone cleared for ${botName}`, 'success');
     } else {
         showToast(result.message || 'Failed to save timezone', 'error');
@@ -1494,9 +1501,45 @@ async function saveBotTimezone(botName) {
 // ============ Provider Management ============
 
 let providersData = [];
+const timezoneOptions = {{ timezone_options|tojson }};
+
+function populateTimezoneSelect(select) {
+    const currentValue = (select.dataset.current || '').trim();
+    select.innerHTML = '';
+
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Use process/server timezone';
+    select.appendChild(defaultOption);
+
+    let hasCurrentValue = !currentValue;
+    for (const optionData of timezoneOptions) {
+        const option = document.createElement('option');
+        option.value = optionData.value;
+        option.textContent = optionData.label;
+        if (optionData.value === currentValue) {
+            hasCurrentValue = true;
+        }
+        select.appendChild(option);
+    }
+
+    if (currentValue && !hasCurrentValue) {
+        const fallbackOption = document.createElement('option');
+        fallbackOption.value = currentValue;
+        fallbackOption.textContent = `${currentValue} (saved)`;
+        select.appendChild(fallbackOption);
+    }
+
+    select.value = currentValue;
+}
+
+function populateTimezoneSelects() {
+    document.querySelectorAll('.timezone-select').forEach(populateTimezoneSelect);
+}
 
 // Load providers on page load
 document.addEventListener('DOMContentLoaded', () => {
+    populateTimezoneSelects();
     loadProviders();
 });
 

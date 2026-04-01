@@ -76,6 +76,19 @@ def _render_template_variables(text: str, replacements: Dict[str, str], now: Opt
     return rendered
 
 
+def _format_current_time_context(now: Optional[datetime] = None) -> str:
+    """Build a human-readable current time context line for prompt templates."""
+    time_vars = _get_time_variables(now)
+    timezone_display = time_vars["timezone"]
+    if time_vars["utc_offset"] and time_vars["utc_offset"] not in timezone_display:
+        timezone_display = f"{timezone_display} {time_vars['utc_offset']}".strip()
+
+    return (
+        f"Current local date/time: {time_vars['weekday']}, {time_vars['date']} "
+        f"at {time_vars['time']} ({timezone_display})"
+    )
+
+
 class PromptManager:
     """Manages prompt templates."""
     
@@ -113,16 +126,17 @@ class PromptManager:
         now: Optional[datetime] = None
     ) -> str:
         """Build system prompt (character section) from template."""
-        
+
         # Start with template
         prompt = self.system_template
-        
+
         # Make substitutions (character section only)
         replacements = {
             "character_name": character_name,
             "persona": persona,
             "special_user_context": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
-            "example_dialogue": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else ""
+            "example_dialogue": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else "",
+            "current_time_context": _format_current_time_context(now),
         }
 
         prompt = _render_template_variables(prompt, replacements, now=now)
@@ -152,11 +166,6 @@ class PromptManager:
         # Start with template
         context = self.chatroom_context_template
 
-        time_vars = _get_time_variables(now)
-        timezone_display = time_vars["timezone"]
-        if time_vars["utc_offset"] and time_vars["utc_offset"] not in timezone_display:
-            timezone_display = f"{timezone_display} {time_vars['utc_offset']}".strip()
-
         # Make substitutions
         replacements = {
             "guild_name": guild_name,
@@ -170,10 +179,7 @@ class PromptManager:
             "other_bots": other_bots,
             "mentionable_users": mentionable_users,
             "mentionable_bots": mentionable_bots,
-            "current_time_context": (
-                f"Current local date/time: {time_vars['weekday']}, {time_vars['date']} "
-                f"at {time_vars['time']} ({timezone_display})"
-            ),
+            "current_time_context": _format_current_time_context(now),
         }
 
         context = _render_template_variables(context, replacements, now=now)

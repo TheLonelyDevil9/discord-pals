@@ -481,7 +481,13 @@ def strip_character_prefix(content: str) -> str:
     return content
 
 
-def resolve_discord_formatting(content: str, guild=None) -> str:
+def resolve_discord_formatting(
+    content: str,
+    guild=None,
+    mentioned_users: list | None = None,
+    mentioned_channels: list | None = None,
+    mentioned_roles: list | None = None,
+) -> str:
     """
     Convert Discord formatting to readable format for LLMs.
     
@@ -497,33 +503,76 @@ def resolve_discord_formatting(content: str, guild=None) -> str:
     # Custom emojis: <:name:id> or <a:name:id> → :name:
     content = RE_CUSTOM_EMOJI.sub(r':\1:', content)
 
+    explicit_user_mentions = {}
+    for user in mentioned_users or []:
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            continue
+        explicit_user_mentions[int(user_id)] = f"@{get_user_display_name(user)}"
+
+    explicit_channel_mentions = {}
+    for channel in mentioned_channels or []:
+        channel_id = getattr(channel, "id", None)
+        channel_name = getattr(channel, "name", None)
+        if channel_id is None or not channel_name:
+            continue
+        explicit_channel_mentions[int(channel_id)] = f"#{channel_name}"
+
+    explicit_role_mentions = {}
+    for role in mentioned_roles or []:
+        role_id = getattr(role, "id", None)
+        role_name = getattr(role, "name", None)
+        if role_id is None or not role_name:
+            continue
+        explicit_role_mentions[int(role_id)] = f"@{role_name}"
+
     # User mentions: <@123> or <@!123> → @Username
-    if guild:
-        def resolve_user_mention(match):
-            user_id = int(match.group(1))
+    def resolve_user_mention(match):
+        user_id = int(match.group(1))
+        explicit_name = explicit_user_mentions.get(user_id)
+        if explicit_name:
+            return explicit_name
+
+        if guild:
             member = guild.get_member(user_id)
             if member:
                 return f"@{member.display_name}"
-            return match.group(0)  # Keep original if not found
-        content = RE_USER_MENTION.sub(resolve_user_mention, content)
 
-        # Channel mentions: <#123> → #channel-name
-        def resolve_channel_mention(match):
-            channel_id = int(match.group(1))
+        return "@user"
+
+    content = RE_USER_MENTION.sub(resolve_user_mention, content)
+
+    # Channel mentions: <#123> → #channel-name
+    def resolve_channel_mention(match):
+        channel_id = int(match.group(1))
+        explicit_name = explicit_channel_mentions.get(channel_id)
+        if explicit_name:
+            return explicit_name
+
+        if guild:
             channel = guild.get_channel(channel_id)
             if channel:
                 return f"#{channel.name}"
-            return match.group(0)
-        content = RE_CHANNEL_MENTION.sub(resolve_channel_mention, content)
 
-        # Role mentions: <@&123> → @RoleName
-        def resolve_role_mention(match):
-            role_id = int(match.group(1))
+        return "#channel"
+
+    content = RE_CHANNEL_MENTION.sub(resolve_channel_mention, content)
+
+    # Role mentions: <@&123> → @RoleName
+    def resolve_role_mention(match):
+        role_id = int(match.group(1))
+        explicit_name = explicit_role_mentions.get(role_id)
+        if explicit_name:
+            return explicit_name
+
+        if guild:
             role = guild.get_role(role_id)
             if role:
                 return f"@{role.name}"
-            return match.group(0)
-        content = RE_ROLE_MENTION.sub(resolve_role_mention, content)
+
+        return "@role"
+
+    content = RE_ROLE_MENTION.sub(resolve_role_mention, content)
 
     # Timestamps: <t:123:R> → readable date
     def resolve_timestamp(match):
@@ -575,7 +624,8 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
 
 def add_to_history(channel_id: int, role: str, content: str, author_name: str = None,
                    user_id: int = None, guild=None, message_id: int = None,
-                   is_bot: bool = False, timestamp=None):
+                   is_bot: bool = False, timestamp=None, mentioned_users=None,
+                   mentioned_channels=None, mentioned_roles=None):
     """Add a message to conversation history.
 
     Args:
@@ -597,7 +647,13 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
     # Sanitize Discord syntax before storage (fix before sending to LLM)
     if guild:
-        content = resolve_discord_formatting(content, guild)
+        content = resolve_discord_formatting(
+            content,
+            guild,
+            mentioned_users=mentioned_users,
+            mentioned_channels=mentioned_channels,
+            mentioned_roles=mentioned_roles,
+        )
     else:
         content = sanitize_discord_syntax_fallback(content)
 

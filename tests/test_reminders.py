@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import dashboard as dashboard_module
+import memory as memory_module
 import reminders as reminders_module
 import runtime_config as runtime_config_module
 import time_utils as time_utils_module
@@ -143,6 +144,9 @@ class ReminderTimezoneAndDashboardTests(MemorySandboxMixin, unittest.TestCase):
         class FakeBot:
             def __init__(self, name):
                 self.name = name
+                self.character = None
+                self.character_name = None
+                self.nicknames = ""
                 self.client = types.SimpleNamespace(is_ready=lambda: False)
 
         dashboard_module.bot_instances = [FakeBot("Nahida")]
@@ -207,6 +211,64 @@ class ReminderTimezoneAndDashboardTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(timezone_response.status_code, 200)
         self.assertEqual(runtime_config_module.get_bot_timezone("Nahida"), "Asia/Calcutta")
         self.assertIn("Cancel Selected", page)
+
+    def test_config_page_renders_timezone_picker(self):
+        page = self.client.get("/config").get_data(as_text=True)
+
+        self.assertIn('class="timezone-select"', page)
+        self.assertIn("Use process/server timezone", page)
+        self.assertIn("Asia/Calcutta", page)
+
+    def test_auto_memory_api_resolves_guild_name_labels(self):
+        self.manager.auto_memories = {
+            "server:123:user:42": [
+                self.manager._build_auto_memory_entry(
+                    "They like tea.",
+                    user_id=42,
+                    server_id=123,
+                    user_name="Alice",
+                )
+            ]
+        }
+
+        with patch.object(
+            dashboard_module,
+            "_get_visible_topology",
+            return_value={
+                "guilds": [{"id": 123, "name": "Febs' Bruary"}],
+                "channels": [],
+                "channels_by_id": {},
+                "accessible_channel_ids": set(),
+            },
+        ):
+            response = self.client.get("/api/v2/memories/auto")
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["memories"][0]["server_name"], "Febs' Bruary")
+        self.assertEqual(payload["memories"][0]["scope_label"], "Febs' Bruary")
+        self.assertEqual(payload["memories"][0]["key_label"], "Febs' Bruary • Alice")
+
+    def test_lore_edit_endpoint_updates_manual_lore(self):
+        self.manager.manual_lore = {
+            "user:42": [
+                memory_module.MemoryManager._build_lore_entry(
+                    "Old lore note.",
+                    added_by="dashboard",
+                )
+            ]
+        }
+
+        response = self.client.put(
+            "/api/v2/memories/lore/edit",
+            json={"key": "user:42", "index": 0, "content": "Updated lore note."},
+            headers=self.csrf_headers()
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.manager.manual_lore["user:42"][0]["content"], "Updated lore note.")
+        self.assertFalse(self.manager.manual_lore["user:42"][0]["auto"])
 
 
 class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase):

@@ -6,9 +6,10 @@ Shared timezone resolution and per-user timezone persistence.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 import threading
 from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from config import USER_TIMEZONES_FILE
 from discord_utils import safe_json_load, safe_json_save
@@ -30,6 +31,68 @@ def normalize_timezone_name(value: str | None) -> Optional[str]:
         return None
 
     return getattr(zone, "key", candidate)
+
+
+def _format_utc_offset_label(offset: timedelta | None) -> str:
+    """Format a timedelta offset as a UTC label."""
+    total_seconds = int((offset or timedelta()).total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+@lru_cache(maxsize=1)
+def get_timezone_options() -> list[dict[str, str]]:
+    """Return a cached list of valid IANA timezone options for UI pickers."""
+    names = set(available_timezones())
+    names.add("UTC")
+    now_utc = datetime.now(timezone.utc)
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for name in sorted(names):
+        normalized = normalize_timezone_name(name)
+        if not normalized or normalized in seen:
+            continue
+
+        try:
+            local_now = now_utc.astimezone(ZoneInfo(normalized))
+        except ZoneInfoNotFoundError:
+            continue
+
+        seen.add(normalized)
+        options.append({
+            "value": normalized,
+            "label": f"{normalized} ({_format_utc_offset_label(local_now.utcoffset())})",
+        })
+
+    return options
+
+
+def search_timezone_options(query: str | None, *, limit: int = 25) -> list[dict[str, str]]:
+    """Search the cached timezone list for dashboard and slash-command pickers."""
+    options = get_timezone_options()
+    if limit <= 0:
+        return []
+
+    needle = (query or "").strip().lower()
+    if not needle:
+        return options[:limit]
+
+    startswith_matches = []
+    contains_matches = []
+
+    for option in options:
+        value = option["value"].lower()
+        label = option["label"].lower()
+        if value.startswith(needle) or label.startswith(needle):
+            startswith_matches.append(option)
+        elif needle in value or needle in label:
+            contains_matches.append(option)
+
+    return (startswith_matches + contains_matches)[:limit]
 
 
 def _best_effort_timezone_name(now: datetime) -> str:

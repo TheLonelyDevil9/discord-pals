@@ -1,4 +1,5 @@
 import json
+import types
 import unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
@@ -161,6 +162,30 @@ class TimePlaceholderTests(unittest.TestCase):
         self.assertIn("Server: Sumeru", context)
         self.assertIn("Current local date/time: Wednesday, 2026-04-01 at 6:05 PM", context)
         self.assertIn("Today is Wednesday and the day-of-month is 1.", context)
+
+    def test_system_prompt_includes_current_time_context_when_requested(self):
+        manager = character_module.PromptManager()
+        manager.system_template = "{{CURRENT_TIME_CONTEXT}}\n{{PERSONA}}"
+        now = datetime(2026, 4, 1, 18, 5, 9, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+
+        prompt = manager.build_prompt(
+            character_name="Nahida",
+            persona="Stay aware of the date.",
+            now=now
+        )
+
+        self.assertIn("Current local date/time: Wednesday, 2026-04-01 at 6:05 PM", prompt)
+        self.assertIn("Stay aware of the date.", prompt)
+
+    def test_resolve_discord_formatting_prefers_explicit_mentioned_users(self):
+        mentioned_user = types.SimpleNamespace(id=123, display_name="Adam Best Boy", name="Adam")
+
+        rendered = discord_utils_module.resolve_discord_formatting(
+            "I tagged <@123> already.",
+            mentioned_users=[mentioned_user]
+        )
+
+        self.assertEqual(rendered, "I tagged @Adam Best Boy already.")
 
     def test_add_to_history_persists_timestamp_metadata(self):
         channel_id = 999

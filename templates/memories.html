@@ -228,14 +228,14 @@
 <div id="memory-modal" class="modal hidden">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 id="modal-title">Edit Auto Memory</h3>
+            <h3 id="modal-title">Edit Memory</h3>
             <button type="button" class="btn btn-ghost btn-sm" onclick="closeModal()">&times;</button>
         </div>
         <div class="form-group">
             <label for="modal-content-input">Content</label>
             <textarea id="modal-content-input" rows="4" placeholder="Enter memory content..."></textarea>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="modal-character-group">
             <label for="modal-character">Character</label>
             <select id="modal-character">
                 <option value="">None</option>
@@ -246,8 +246,9 @@
         </div>
         <div class="modal-buttons">
             <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-            <button type="button" class="btn btn-primary" onclick="saveAutoMemory()">Save</button>
+            <button type="button" class="btn btn-primary" onclick="saveMemoryModal()">Save</button>
         </div>
+        <input type="hidden" id="modal-mode" value="auto">
         <input type="hidden" id="modal-key">
         <input type="hidden" id="modal-index">
     </div>
@@ -361,6 +362,17 @@
 
 .memory-card-select {
     padding-top: 4px;
+}
+
+.memory-card-select input[type="checkbox"],
+.lore-entry > input[type="checkbox"],
+.select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0;
+    flex: 0 0 16px;
+    accent-color: var(--accent);
 }
 
 .memory-card-body {
@@ -527,6 +539,12 @@
 
 .lore-entry-body {
     flex: 1;
+}
+
+.lore-entry-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
 }
 
 .lore-entry-meta {
@@ -883,11 +901,11 @@ function getFilteredAutoMemories() {
 }
 
 function renderAutoMemoryCard(memory) {
-    const scopeLabel = memory.scope === 'dm'
+    const scopeLabel = memory.scope_label || (memory.scope === 'dm'
         ? 'DM'
-        : (memory.server_name || `Server ${memory.server_id || 'Unknown'}`);
+        : (memory.server_name || `Server ${memory.server_id || 'Unknown'}`));
     const userLabel = memory.user_name || (memory.user_id ? `User ${memory.user_id}` : 'Shared');
-    const keyLabel = memory.key || '';
+    const keyLabel = memory.key_label || scopeLabel;
     const selectionKey = autoSelectionId(memory.key, memory.index);
     const checked = selectedAutoMemories.has(selectionKey) ? 'checked' : '';
 
@@ -919,7 +937,7 @@ function renderAutoMemoryCard(memory) {
                 <div class="memory-card-content">${escapeHtml(memory.content)}</div>
                 <div class="memory-card-footer">
                     <span>${escapeHtml(formatTimestamp(memory.timestamp))}</span>
-                    <span>${escapeHtml(keyLabel)}</span>
+                    <span title="${escapeHtml(memory.key || '')}">${escapeHtml(keyLabel)}</span>
                 </div>
             </div>
         </div>
@@ -1182,21 +1200,53 @@ async function editAutoMemory(key, index) {
             return;
         }
 
-        document.getElementById('modal-key').value = key;
-        document.getElementById('modal-index').value = index;
-        document.getElementById('modal-content-input').value = data.content || '';
-        document.getElementById('modal-character').value = data.character || '';
-        document.getElementById('memory-modal').classList.remove('hidden');
+        openMemoryModal({
+            mode: 'auto',
+            title: 'Edit Auto Memory',
+            key,
+            index,
+            content: data.content || '',
+            character: data.character || ''
+        });
     } catch (error) {
         showToast('Error loading memory', 'error');
     }
+}
+
+function editLoreEntry(key, index) {
+    const item = loreData.find(entry => entry.key === key && entry.index === index);
+    if (!item) {
+        showToast('Lore entry not found', 'error');
+        return;
+    }
+
+    openMemoryModal({
+        mode: 'lore',
+        title: 'Edit Manual Lore',
+        key,
+        index,
+        content: item.content || '',
+        character: ''
+    });
+}
+
+function openMemoryModal({ mode, title, key, index, content, character }) {
+    document.getElementById('modal-mode').value = mode;
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-key').value = key;
+    document.getElementById('modal-index').value = index;
+    document.getElementById('modal-content-input').value = content || '';
+    document.getElementById('modal-character').value = character || '';
+    document.getElementById('modal-character-group').classList.toggle('hidden', mode !== 'auto');
+    document.getElementById('memory-modal').classList.remove('hidden');
 }
 
 function closeModal() {
     document.getElementById('memory-modal').classList.add('hidden');
 }
 
-async function saveAutoMemory() {
+async function saveMemoryModal() {
+    const mode = document.getElementById('modal-mode').value;
     const key = document.getElementById('modal-key').value;
     const index = parseInt(document.getElementById('modal-index').value, 10);
     const content = document.getElementById('modal-content-input').value.trim();
@@ -1208,13 +1258,18 @@ async function saveAutoMemory() {
     }
 
     try {
-        const response = await fetch('/api/v2/memories/auto/item', {
+        const endpoint = mode === 'lore' ? '/api/v2/memories/lore/edit' : '/api/v2/memories/auto/item';
+        const payload = mode === 'lore'
+            ? { key, index, content }
+            : { key, index, content, character };
+
+        const response = await fetch(endpoint, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRF-Token': CSRF_TOKEN
             },
-            body: JSON.stringify({ key, index, content, character })
+            body: JSON.stringify(payload)
         });
         const data = await response.json();
 
@@ -1224,8 +1279,13 @@ async function saveAutoMemory() {
         }
 
         closeModal();
-        showToast('Auto memory updated', 'success');
-        await Promise.all([loadAutoMemories(), loadMemoryTargets()]);
+        if (mode === 'lore') {
+            showToast('Manual lore updated', 'success');
+            await Promise.all([loadLoreV2(), loadMemoryTargets()]);
+        } else {
+            showToast('Auto memory updated', 'success');
+            await Promise.all([loadAutoMemories(), loadMemoryTargets()]);
+        }
     } catch (error) {
         showToast('Error saving memory', 'error');
     }
@@ -1277,7 +1337,10 @@ function renderLoreList() {
                     </div>
                     <div class="lore-entry-content">${escapeHtml(item.content)}</div>
                 </div>
-                <button type="button" class="btn btn-danger btn-sm" onclick='deleteSingleLore(${JSON.stringify(item.key)}, ${item.index})' title="Delete">Delete</button>
+                <div class="lore-entry-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick='editLoreEntry(${JSON.stringify(item.key)}, ${item.index})'>Edit</button>
+                    <button type="button" class="btn btn-danger btn-sm" onclick='deleteSingleLore(${JSON.stringify(item.key)}, ${item.index})' title="Delete">Delete</button>
+                </div>
             </div>
         `;
     }).join('');
