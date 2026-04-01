@@ -5,6 +5,8 @@ from pathlib import Path
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
 import memory as memory_module
+import reminders as reminders_module
+import time_utils as time_utils_module
 
 
 class MemorySandboxMixin:
@@ -27,6 +29,14 @@ class MemorySandboxMixin:
             "MANUAL_LORE_FILE": memory_module.MANUAL_LORE_FILE,
             "MEMORY_STATE_FILE": memory_module.MEMORY_STATE_FILE,
             "memory_manager": memory_module.memory_manager,
+        }
+        self._reminder_originals = {
+            "REMINDERS_FILE": reminders_module.REMINDERS_FILE,
+            "reminder_manager": reminders_module.reminder_manager,
+        }
+        self._timezone_originals = {
+            "USER_TIMEZONES_FILE": time_utils_module.USER_TIMEZONES_FILE,
+            "timezone_manager": time_utils_module.timezone_manager,
         }
         self._dashboard_originals = {
             "DATA_DIR": dashboard_module.DATA_DIR,
@@ -53,6 +63,8 @@ class MemorySandboxMixin:
         memory_module.AUTO_MEMORIES_FILE = str(self.data_dir / "auto_memories.json")
         memory_module.MANUAL_LORE_FILE = str(self.data_dir / "manual_lore.json")
         memory_module.MEMORY_STATE_FILE = str(self.data_dir / "memory_state.json")
+        reminders_module.REMINDERS_FILE = str(self.data_dir / "reminders.json")
+        time_utils_module.USER_TIMEZONES_FILE = str(self.data_dir / "user_timezones.json")
 
         dashboard_module.DATA_DIR = self.data_dir
         dashboard_module.AUTO_MEMORIES_FILE = memory_module.AUTO_MEMORIES_FILE
@@ -67,6 +79,8 @@ class MemorySandboxMixin:
 
         self.manager = self.make_manager()
         memory_module.memory_manager = self.manager
+        reminders_module.reminder_manager = reminders_module.ReminderManager()
+        time_utils_module.timezone_manager = time_utils_module.TimezoneManager()
 
     def tearDownMemorySandbox(self):
         memory_module.DATA_DIR = self._memory_originals["DATA_DIR"]
@@ -81,6 +95,10 @@ class MemorySandboxMixin:
         memory_module.MANUAL_LORE_FILE = self._memory_originals["MANUAL_LORE_FILE"]
         memory_module.MEMORY_STATE_FILE = self._memory_originals["MEMORY_STATE_FILE"]
         memory_module.memory_manager = self._memory_originals["memory_manager"]
+        reminders_module.REMINDERS_FILE = self._reminder_originals["REMINDERS_FILE"]
+        reminders_module.reminder_manager = self._reminder_originals["reminder_manager"]
+        time_utils_module.USER_TIMEZONES_FILE = self._timezone_originals["USER_TIMEZONES_FILE"]
+        time_utils_module.timezone_manager = self._timezone_originals["timezone_manager"]
 
         dashboard_module.DATA_DIR = self._dashboard_originals["DATA_DIR"]
         dashboard_module.AUTO_MEMORIES_FILE = self._dashboard_originals["AUTO_MEMORIES_FILE"]

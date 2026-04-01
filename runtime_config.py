@@ -19,6 +19,7 @@ DEFAULTS = {
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
+    "bot_timezones": {},  # Per-bot IANA timezone overrides
     # Bot-on-bot conversation fall-off settings
     "bot_falloff_enabled": True,  # Enable progressive fall-off for bot-bot conversations
     "bot_falloff_base_chance": 0.8,  # Initial response probability (80%)
@@ -154,6 +155,41 @@ def get_bot_falloff_config() -> dict:
     """Get only the bot fall-off settings used on the message hot path."""
     config = load_config()
     return {key: config[key] for key in _BOT_FALLOFF_KEYS}
+
+
+def get_bot_timezone(bot_name: str | None) -> str | None:
+    """Get a bot-level timezone override."""
+    if not bot_name:
+        return None
+
+    config = load_config()
+    bot_timezones = config.get("bot_timezones", {})
+    if not isinstance(bot_timezones, dict):
+        return None
+
+    timezone_name = bot_timezones.get(bot_name)
+    return timezone_name if isinstance(timezone_name, str) and timezone_name.strip() else None
+
+
+def set_bot_timezone(bot_name: str, timezone_name: str | None):
+    """Set or clear a bot-level timezone override."""
+    if not bot_name:
+        return
+
+    config = load_config().copy()
+    bot_timezones = config.get("bot_timezones", {})
+    if not isinstance(bot_timezones, dict):
+        bot_timezones = {}
+    else:
+        bot_timezones = dict(bot_timezones)
+
+    if timezone_name:
+        bot_timezones[bot_name] = timezone_name
+    else:
+        bot_timezones.pop(bot_name, None)
+
+    config["bot_timezones"] = bot_timezones
+    save_config(config)
 
 
 # Last context storage for visualization

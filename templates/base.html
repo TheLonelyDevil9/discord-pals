@@ -764,6 +764,7 @@
             <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}">Dashboard</a>
             <a href="/characters" class="nav-link {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}active{% endif %}">Characters</a>
             <a href="/memories" class="nav-link {% if request.path=='/memories' %}active{% endif %}">Memories</a>
+            <a href="/reminders" class="nav-link {% if request.path=='/reminders' %}active{% endif %}">Reminders</a>
             <a href="/channels" class="nav-link {% if request.path=='/channels' %}active{% endif %}">Channels</a>
             <a href="/config" class="nav-link {% if request.path=='/config' or request.path=='/settings' %}active{% endif %}">Config</a>
             <a href="/logs" class="nav-link {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}active{% endif %}">Logs</a>

@@ -206,6 +206,8 @@ GLOBAL_USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 AUTO_MEMORIES_FILE = os.path.join(DATA_DIR, "auto_memories.json")
 MANUAL_LORE_FILE = os.path.join(DATA_DIR, "manual_lore.json")
 MEMORY_STATE_FILE = os.path.join(DATA_DIR, "memory_state.json")
+REMINDERS_FILE = os.path.join(DATA_DIR, "reminders.json")
+USER_TIMEZONES_FILE = os.path.join(DATA_DIR, "user_timezones.json")
 
 # Runtime config (live-adjustable settings via dashboard)
 RUNTIME_CONFIG_FILE = os.path.join(DATA_DIR, "runtime_config.json")

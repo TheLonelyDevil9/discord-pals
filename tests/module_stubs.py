@@ -73,6 +73,29 @@ if "discord" not in sys.modules:
         async def sync(self):
             return []
 
+        def add_command(self, command):
+            return command
+
+    class Choice:
+        def __init__(self, name=None, value=None):
+            self.name = name
+            self.value = value
+
+    class Group:
+        def __init__(self, name=None, description=None):
+            self.name = name
+            self.description = description
+
+        def command(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+    def _passthrough_decorator(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
     discord.User = User
     discord.Member = Member
     discord.Message = Message
@@ -83,7 +106,13 @@ if "discord" not in sys.modules:
     discord.HTTPException = HTTPException
     discord.Intents = Intents
     discord.Client = Client
-    discord.app_commands = types.SimpleNamespace(CommandTree=CommandTree)
+    discord.app_commands = types.SimpleNamespace(
+        CommandTree=CommandTree,
+        Choice=Choice,
+        Group=Group,
+        describe=_passthrough_decorator,
+        choices=_passthrough_decorator,
+    )
     discord.utils = types.SimpleNamespace(get=lambda iterable, **kwargs: None)
 
     sys.modules["discord"] = discord

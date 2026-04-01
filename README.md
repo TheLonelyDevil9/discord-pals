@@ -25,6 +25,7 @@ The system instructions were authored by legendary chef @Geechan.
 - [Web Dashboard](#web-dashboard)
 - [Memory Architecture](#memory-architecture)
 - [Commands](#commands)
+- [Reminders & Timezones](#reminders--timezones)
 - [Autonomous Mode](#autonomous-mode)
 - [Bot-on-Bot Fall-off](#bot-on-bot-fall-off)
 - [Impersonation Prevention](#impersonation-prevention)
@@ -48,6 +49,9 @@ The system instructions were authored by legendary chef @Geechan.
 - **Local LLM support** - Use llama.cpp, Ollama, LM Studio, or any OpenAI-compatible API
 - **Provider fallback** - Auto-retry with backup providers if one fails
 - **Vision-aware fallback** - Image attachments automatically fall back to text-only on non-vision providers
+- **Durable reminders** - Bots can schedule one-shot in-character reminders from natural conversation or explicit reminder requests
+- **Timezone-aware prompts** - Time placeholders and chatroom time context follow user timezone first, then bot timezone, then process timezone
+- **Reminder ownership** - Only the specific bot you talked to owns and delivers that reminder later
 - **Rate limit handling** - Automatic retry with exponential backoff on 429 errors
 - **Web dashboard** - Full web UI for managing:
   - Memories and lore editing (with user name resolution)
@@ -79,6 +83,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Anti-spam** - Request queue with rate limiting built-in
 - **History recall** - Recover context with `/recall` (up to 200 messages)
 - **Multi-bot coordination** - Global coordinator prevents crashes when multiple bots tagged simultaneously
+- **Reminder management** - `/reminders list` and `/reminders cancel` plus a dashboard reminder queue for admin cleanup
 - **Bot @mentions** - Bots can mention users/other bots in responses (configurable)
 - **Split replies** - Send separate messages to multiple mentioned users
 - **Custom nicknames** - Define additional trigger words beyond bot name
@@ -87,6 +92,7 @@ The system instructions were authored by legendary chef @Geechan.
   - Per-channel control over whether bots/apps can trigger responses
   - Configurable response chance and cooldown per channel
 - **Autonomous DM follow-ups** - Bots send organic follow-up messages in DMs after configurable silence periods
+- **Config-respected token limits** - Provider `max_tokens` values are honored directly, including Claude/Opus-style models
 
 ---
 
@@ -114,6 +120,7 @@ All dependencies are listed in `requirements.txt` with pinned versions:
 | pyyaml | 6.0.2 | YAML configuration parsing |
 | prometheus-client | 0.20.0 | Metrics and monitoring |
 | audioop-lts | >=0.2.1 | Python 3.13+ compatibility |
+| tzdata | >=2024.1 | IANA timezone database for cross-platform timezone support |
 
 Install with: `pip install -r requirements.txt`
 
@@ -545,6 +552,15 @@ Manage the bot's memory system:
 - **User Resolution** — User IDs displayed as readable Discord names
 - **Safe Live Editing** — Raw JSON is still viewable, but live cleanup should go through dashboard actions so in-memory state and dedup counters stay in sync
 
+### Reminders Page
+
+Review durable reminders that have been scheduled by conversations:
+
+- **Pending Queue** — Browse pending, completed, skipped, failed, or cancelled reminders
+- **Filters** — Filter by bot, user ID, and reminder status
+- **Bulk Cancel** — Cancel one or more pending reminders from the dashboard
+- **Visibility** — See reminder ownership, delivery location, due time, optional pre-reminder time, and creation mode
+
 ### Channels Page
 
 Configure autonomous mode per channel:
@@ -567,6 +583,7 @@ Adjust runtime settings without restarting:
 - **Provider Selection** — Switch between configured providers
 - **Single User Mode** — SillyTavern-style message formatting
 - **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
+- **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set
 - **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
@@ -661,6 +678,47 @@ If upgrading from v1.7.x or earlier, the old 5-store memory system (server memor
 | `/ignorelist` | Show which bots you're ignoring |
 | `/interact <action>` | Perform an action (e.g., "hugs you", "tells you a joke") |
 
+### Time & Reminder Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `/timezone set <iana_timezone>` | Set your personal timezone for prompt time-awareness and reminders |
+| `/timezone show` | Show your effective timezone and where it came from |
+| `/timezone clear` | Remove your personal timezone override |
+| `/reminders list` | List your pending reminders for the current bot |
+| `/reminders cancel <reminder_id>` | Cancel one of your pending reminders for the current bot |
+
+---
+
+## Reminders & Timezones
+
+Reminders are separate from DM follow-ups.
+
+- **DM follow-ups** are silence-based nudges in DMs after a configurable idle period.
+- **Reminders** are durable scheduled items stored in `bot_data/reminders.json` and delivered later at a specific time.
+
+### How reminders are created
+
+- The bot can create a reminder from an explicit ask such as “remind me in 3 hours”.
+- The bot can also infer a reminder from clear future-planning statements in direct bot interactions, such as “I have a flight at 9 AM on Saturday”.
+- If the timing is unclear, the bot asks a clarification question instead of silently guessing.
+
+### How reminders are delivered
+
+- Reminders are **bot-specific**: only the bot you were talking to owns the reminder.
+- Reminders are **one-shot** in this release.
+- A reminder can include an optional **pre-reminder** plus the main due-time reminder.
+- Delivery happens in the **same DM/channel** where the reminder was created. If that source channel is unavailable later, the bot falls back to **DM**.
+- The final reminder text is generated **at send time**, in character, using fresh history/context rather than storing a prewritten line.
+
+### Timezone precedence
+
+- **User timezone** from `/timezone set`
+- **Bot timezone** from the dashboard Config page
+- **Process/server timezone** as the final fallback
+
+This same precedence is used for prompt time placeholders like `{{time}}`, `{{date}}`, `{{weekday}}`, and `{{day}}`, as well as reminder scheduling.
+
 ---
 
 ## Autonomous Mode
@@ -720,6 +778,8 @@ When enabled, the bot sends separate replies to each mentioned user instead of o
 ### DM Follow-ups
 
 When enabled, bots send organic follow-up messages in DMs after a configurable period of silence. This encourages continued conversation without being intrusive.
+
+This is separate from the durable reminder system above. Follow-ups are silence-based and ephemeral; reminders are timestamp-based and persisted.
 
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
@@ -1004,6 +1064,7 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
 | `custom_nicknames` | "" | Comma-separated list of additional nicknames for name triggers |
 | `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
+| `bot_timezones` | {} | Per-bot timezone fallback map used when a user has not set a personal timezone |
 | `bot_falloff_enabled` | true | Enable progressive response decay for bot-to-bot conversations |
 | `bot_falloff_base_chance` | 0.8 | Starting probability (80%) for first bot response |
 | `bot_falloff_decay_rate` | 0.15 | Probability reduction per consecutive bot message |

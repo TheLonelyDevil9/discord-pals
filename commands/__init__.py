@@ -7,6 +7,7 @@ Organizes slash commands into logical groups.
 from .core import setup_core_commands
 from .memory import setup_memory_commands
 from .fun import setup_fun_commands
+from .time import setup_time_commands
 
 
 def setup_all_commands(bot_instance):
@@ -14,3 +15,4 @@ def setup_all_commands(bot_instance):
     setup_core_commands(bot_instance)
     setup_memory_commands(bot_instance)
     setup_fun_commands(bot_instance)
+    setup_time_commands(bot_instance)

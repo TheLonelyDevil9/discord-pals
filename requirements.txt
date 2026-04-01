@@ -9,6 +9,7 @@ pyyaml==6.0.2
 
 # Python 3.13+ compatibility (audioop removed from stdlib)
 audioop-lts>=0.2.1; python_version >= "3.13"
+tzdata>=2024.1
 
 # Monitoring & Metrics
 prometheus-client==0.20.0

@@ -255,6 +255,28 @@
     </div>
 </div>
 
+<!-- Bot Timezones -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Bot Timezones</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 16px;">
+            Bot timezone is the fallback clock for prompts and reminders when a user has not set their own timezone.
+        </p>
+        {% for bot in bots %}
+        <div class="bot-row compact">
+            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+            <span class="bot-name">{{ bot.name }}</span>
+            <input type="text" id="timezone-{{ bot.name }}" value="{{ bot.timezone or '' }}"
+                placeholder="e.g., Asia/Calcutta"
+                title="Timezone for {{ bot.name }}">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- Bot-on-Bot Fall-off -->
 <div class="card">
     <div class="card-header">
@@ -1443,6 +1465,29 @@ async function saveNicknames(botName) {
         showToast('Nicknames saved for ' + botName, 'success');
     } else {
         showToast('Failed to save nicknames', 'error');
+    }
+}
+
+// Save bot timezone fallback
+async function saveBotTimezone(botName) {
+    const timezone = document.getElementById('timezone-' + botName).value.trim();
+
+    const response = await fetch('/api/bot-timezones', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify({ bot_name: botName, timezone: timezone })
+    });
+
+    const result = await response.json();
+    if (result.status === 'ok') {
+        const savedValue = result.timezone || '';
+        document.getElementById('timezone-' + botName).value = savedValue;
+        showToast(savedValue ? `Timezone saved for ${botName}` : `Timezone cleared for ${botName}`, 'success');
+    } else {
+        showToast(result.message || 'Failed to save timezone', 'error');
     }
 }
 

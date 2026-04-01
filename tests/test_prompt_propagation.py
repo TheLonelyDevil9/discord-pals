@@ -381,3 +381,36 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_messages[0]["role"], "user")
         self.assertIn("[Visual reference omitted for text-only model]", second_messages[0]["content"])
         self.assertFalse(manager.can_use_vision())
+
+    async def test_claude_models_use_provider_token_limit_without_local_cap(self):
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.providers = {"primary": object()}
+        manager.status = {}
+        manager._vision_support_overrides = {}
+        manager._build_tier_order = lambda preferred_tier="": ["primary"]
+        manager._try_generate = AsyncMock(return_value="ok")
+
+        provider_cfg = {
+            "primary": {
+                "model": "claude-3-opus",
+                "supports_vision": False,
+                "timeout": 30,
+                "max_tokens": 8192,
+                "temperature": 0.7,
+                "url": "https://example.invalid",
+            }
+        }
+
+        with patch.dict(providers_module.PROVIDERS, provider_cfg, clear=True):
+            with patch.object(providers_module.log, "info"), \
+                    patch.object(providers_module.log, "debug"), \
+                    patch.object(providers_module.log, "warn"), \
+                    patch.object(providers_module.log, "error"):
+                result = await manager.generate(
+                    messages=[{"role": "user", "content": "Hello"}],
+                    system_prompt="You are Nahida.",
+                    use_single_user=False,
+                )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(manager._try_generate.await_args.args[4], 8192)

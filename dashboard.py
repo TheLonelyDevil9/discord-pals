@@ -929,7 +929,8 @@ def config_page():
             'character_key': current_character_key,
             'online': _is_bot_ready(bot),
             'auto_channels': auto_channels,
-            'nicknames': getattr(bot, 'nicknames', '')  # Per-bot custom nicknames
+            'nicknames': getattr(bot, 'nicknames', ''),  # Per-bot custom nicknames
+            'timezone': runtime_config.get_bot_timezone(bot.name) or ''
         })
     
     return render_template('config.html',
@@ -945,6 +946,18 @@ def config_page():
         autonomous_raw=autonomous_raw,
         message=request.args.get('message'),
         error=request.args.get('error')
+    )
+
+
+@app.route('/reminders')
+def reminders_page():
+    """Reminder management page."""
+    return render_template(
+        'reminders.html',
+        bots=[{
+            'name': bot.name,
+            'online': _is_bot_ready(bot)
+        } for bot in bot_instances]
     )
 
 
@@ -967,6 +980,42 @@ def api_config():
         return jsonify({'status': 'ok'})
 
     return jsonify(runtime_config.get_all())
+
+
+@app.route('/api/bot-timezones', methods=['GET', 'POST'])
+@requires_csrf
+def api_bot_timezones():
+    """Get or update per-bot timezone overrides."""
+    import runtime_config
+    from time_utils import normalize_timezone_name
+
+    if request.method == 'GET':
+        return jsonify({
+            'bot_timezones': {
+                bot.name: runtime_config.get_bot_timezone(bot.name) or ''
+                for bot in bot_instances
+            }
+        })
+
+    data = request.json or {}
+    bot_name = data.get('bot_name')
+    if not bot_name:
+        return jsonify({'status': 'error', 'message': 'bot_name is required'}), 400
+
+    if not any(bot.name == bot_name for bot in bot_instances):
+        return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
+
+    raw_timezone = data.get('timezone', '')
+    timezone_name = normalize_timezone_name(raw_timezone) if raw_timezone else None
+    if raw_timezone and not timezone_name:
+        return jsonify({'status': 'error', 'message': 'Invalid IANA timezone'}), 400
+
+    runtime_config.set_bot_timezone(bot_name, timezone_name)
+    return jsonify({
+        'status': 'ok',
+        'bot_name': bot_name,
+        'timezone': timezone_name or ''
+    })
 
 
 @app.route('/api/switch_character', methods=['POST'])
@@ -2274,6 +2323,44 @@ def api_v2_lore_bulk_delete():
 
     result = memory_manager.bulk_delete_user_lore(user_ids)
     return jsonify({'status': 'ok', **result})
+
+
+# --- Reminder Management API ---
+
+@app.route('/api/reminders')
+def api_reminders():
+    """List reminders for the dashboard."""
+    from reminders import reminder_manager
+
+    bot_name = request.args.get('bot_name', '').strip() or None
+    status = request.args.get('status', '').strip() or None
+    user_id = request.args.get('user_id', '').strip()
+    try:
+        user_id = int(user_id) if user_id else None
+    except (TypeError, ValueError):
+        user_id = None
+
+    reminders = reminder_manager.list_reminders(
+        bot_name=bot_name,
+        user_id=user_id,
+        status=status
+    )
+    return jsonify({'status': 'ok', 'reminders': reminders, 'total': len(reminders)})
+
+
+@app.route('/api/reminders/cancel', methods=['POST'])
+@requires_csrf
+def api_reminders_cancel():
+    """Cancel one or more pending reminders."""
+    from reminders import reminder_manager
+
+    data = request.json or {}
+    reminder_ids = data.get('ids') or data.get('reminder_ids') or []
+    if not isinstance(reminder_ids, list):
+        reminder_ids = [reminder_ids]
+
+    cancelled = reminder_manager.cancel_reminders(reminder_ids)
+    return jsonify({'status': 'ok', 'cancelled': cancelled})
 
 
 # --- Version API ---

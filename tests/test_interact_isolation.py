@@ -118,10 +118,11 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(context["split_reply_target"])
         self.assertTrue(context["from_interact_command"])
         memories_mock.assert_called_once_with(5, 42, "Invoker")
-        build_system_prompt_mock.assert_called_once_with(
-            character=instance.character,
-            user_name="Invoker"
-        )
+        build_system_prompt_mock.assert_called_once()
+        prompt_call = build_system_prompt_mock.call_args.kwargs
+        self.assertEqual(prompt_call["character"], instance.character)
+        self.assertEqual(prompt_call["user_name"], "Invoker")
+        self.assertIn("now", prompt_call)
         build_chatroom_context_mock.assert_called_once()
         format_history_split_mock.assert_not_called()
 

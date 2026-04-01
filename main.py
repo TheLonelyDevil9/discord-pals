@@ -23,6 +23,7 @@ from config import DISCORD_TOKEN, DEFAULT_CHARACTER
 from bot_instance import BotInstance
 from discord_utils import save_history
 from memory import memory_manager
+from reminders import reminder_manager
 import logger as log
 
 
@@ -115,6 +116,7 @@ async def run_bots():
         log.info("Shutting down...")
         save_history(force=True)  # Persist conversation history
         memory_manager.save_all()  # Persist memories
+        reminder_manager.save()  # Persist reminders and drafts
         for bot in instances:
             await bot.close()
 

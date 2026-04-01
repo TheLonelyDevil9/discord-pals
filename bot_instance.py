@@ -6,9 +6,11 @@ Encapsulates a single Discord bot with its own client, character, and state.
 import discord
 from discord import app_commands
 import asyncio
+import json
 import random
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
@@ -22,6 +24,7 @@ from discord_utils import (
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, store_multipart_response,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
+    split_message,
     was_recently_cleared, acknowledge_cleared
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
@@ -31,6 +34,8 @@ import runtime_config
 import logger as log
 import user_ignores
 from prometheus_metrics import metrics_manager
+from reminders import reminder_manager
+from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
 
 
 def _is_same_character(bot_author_name: str, character_name: str) -> bool:
@@ -44,6 +49,20 @@ def _is_same_character(bot_author_name: str, character_name: str) -> bool:
     char_name_lower = character_name.lower()
     return (char_name_lower in bot_name_lower or
             bot_name_lower in char_name_lower)
+
+
+RE_REMINDER_KEYWORD = re.compile(
+    r"\b("
+    r"remind|reminder|remember to|dont let me forget|don't let me forget|"
+    r"tomorrow|tonight|today|later|soon|next|monday|tuesday|wednesday|thursday|"
+    r"friday|saturday|sunday|weekend|morning|afternoon|evening|"
+    r"in \d+\s+(minute|minutes|hour|hours|day|days|week|weeks)|"
+    r"\d{1,2}(:\d{2})?\s?(am|pm)|"
+    r"\d{4}-\d{2}-\d{2}|"
+    r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+    r")\b",
+    re.IGNORECASE
+)
 
 
 class BotInstance:
@@ -387,6 +406,636 @@ class BotInstance:
         max_targets = runtime_config.get("split_replies_max_targets", 5)
         return targets[:max_targets]
 
+    def _preferred_provider_tier(self) -> str:
+        """Resolve the preferred provider tier for this bot's current character."""
+        return CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
+
+    @staticmethod
+    def _extract_json_payload(text: str) -> dict | None:
+        """Extract a JSON object from a model response."""
+        if not text:
+            return None
+
+        cleaned = remove_thinking_tags(text).strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+
+        candidates = [cleaned]
+        first_brace = cleaned.find("{")
+        last_brace = cleaned.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidates.append(cleaned[first_brace:last_brace + 1])
+
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if isinstance(payload, dict):
+                return payload
+        return None
+
+    @staticmethod
+    def _default_reminder_creation_mode(content: str) -> str:
+        """Infer whether reminder capture is explicit or implicit."""
+        explicit_patterns = (
+            "remind me",
+            "set a reminder",
+            "reminder",
+            "don't let me forget",
+            "dont let me forget",
+            "remember to remind me",
+        )
+        lowered = (content or "").lower()
+        return "explicit" if any(pattern in lowered for pattern in explicit_patterns) else "auto"
+
+    @staticmethod
+    def _is_likely_reminder_candidate(content: str) -> bool:
+        """Fast prefilter to avoid reminder extraction on every message."""
+        return bool(content and RE_REMINDER_KEYWORD.search(content))
+
+    def _build_recent_reminder_context(self, channel_id: int, limit: int = 8) -> str:
+        """Render recent conversation lines for reminder extraction."""
+        history = get_history(channel_id)[-limit:]
+        lines = []
+        for message in history:
+            role = message.get("role")
+            author = message.get("author") or ("Assistant" if role == "assistant" else "User")
+            content = " ".join(str(message.get("content", "")).split())
+            if not content:
+                continue
+            lines.append(f"{author}: {content[:240]}")
+        return "\n".join(lines) if lines else "No recent conversation."
+
+    async def _extract_reminder_payload(
+        self,
+        *,
+        channel_id: int,
+        content: str,
+        user_id: int,
+        user_name: str,
+        timezone_context: dict,
+        pending_draft: dict | None = None,
+    ) -> dict | None:
+        """Run the structured reminder-extraction pass for the latest message."""
+        local_now = datetime.now(timezone_context["tzinfo"])
+        recent_context = self._build_recent_reminder_context(channel_id)
+        preferred_tier = self._preferred_provider_tier()
+
+        pending_section = ""
+        if pending_draft:
+            pending_section = (
+                "Pending reminder clarification:\n"
+                f"- Event summary so far: {pending_draft.get('event_summary', '')}\n"
+                f"- Clarification prompt: {pending_draft.get('clarification_prompt', '')}\n"
+                "Treat the latest user message as a possible answer to that clarification.\n"
+            )
+
+        prompt = f"""You extract reminders from chat into strict JSON.
+
+Current local datetime for this user: {local_now.isoformat(timespec='seconds')}
+Current local date: {local_now.strftime('%Y-%m-%d')}
+Current local weekday: {local_now.strftime('%A')}
+Effective timezone: {timezone_context.get('timezone_name')}
+Bot: {self.name}
+User: {user_name} ({user_id})
+
+Rules:
+- Only create reminders for the speaking user.
+- Ignore reminders for other people unless the speaker is clearly asking about themselves.
+- Create a reminder when the user explicitly asks for one, or when they clearly tell the bot about their own future plan/appointment/obligation and a reminder would be useful.
+- If the time is ambiguous or missing, return action "clarify".
+- If there is no reminder-worthy future event, return action "none".
+- due_local_iso and pre_due_local_iso must be local timestamps in YYYY-MM-DDTHH:MM:SS format, with no timezone offset.
+- pre_due_local_iso is optional and must be before due_local_iso and within 48 hours of it.
+- Return JSON only.
+
+{pending_section}Recent conversation:
+{recent_context}
+
+Latest user message:
+{content}
+
+Return exactly one JSON object with this shape:
+{{
+  "action": "none" | "create" | "clarify",
+  "creation_mode": "auto" | "explicit",
+  "event_summary": "short summary",
+  "normalized_event": "stable lowercase dedupe phrase",
+  "due_local_iso": "YYYY-MM-DDTHH:MM:SS or null",
+  "pre_due_local_iso": "YYYY-MM-DDTHH:MM:SS or null",
+  "clarification_prompt": "what is still missing if action is clarify",
+  "reason": "short explanation"
+}}"""
+
+        result = await provider_manager.generate(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt="You are a reminder extraction engine. Return strict JSON only.",
+            temperature=0.1,
+            max_tokens=450,
+            use_single_user=False,
+            preferred_tier=preferred_tier
+        )
+        return self._extract_json_payload(result)
+
+    async def _generate_reminder_clarification_message(
+        self,
+        *,
+        user_name: str,
+        timezone_context: dict,
+        clarification_prompt: str,
+        event_summary: str,
+    ) -> str:
+        """Generate a short in-character clarification question for an ambiguous reminder."""
+        prompt_now = datetime.now(timezone_context["tzinfo"])
+        preferred_tier = self._preferred_provider_tier()
+        system_prompt = character_manager.build_system_prompt(
+            character=self.character,
+            user_name=user_name,
+            now=prompt_now
+        )
+        prompt = (
+            "The user may want a reminder, but some details are missing.\n"
+            f"Current reminder summary: {event_summary or 'Unknown event'}\n"
+            f"Missing detail to clarify: {clarification_prompt or 'the timing'}\n"
+            "Ask exactly one short clarification question in character. "
+            "Do not answer anything else."
+        )
+
+        result = await provider_manager.generate(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt=system_prompt,
+            temperature=0.4,
+            max_tokens=120,
+            use_single_user=False,
+            preferred_tier=preferred_tier
+        )
+        if result:
+            return remove_thinking_tags(result, self.character.name).strip()
+
+        if clarification_prompt:
+            return clarification_prompt.strip().rstrip("?") + "?"
+        return "What time should I remind you about that?"
+
+    async def _send_auxiliary_followup(self, message: discord.Message, content: str, guild) -> bool:
+        """Send a short follow-up message such as a reminder clarification."""
+        if not content or not content.strip():
+            return False
+
+        content = content.strip()
+        if guild:
+            content = convert_emojis_in_text(content, guild)
+
+        try:
+            if hasattr(message, "_interaction") and message._interaction is not None:
+                sent = await message._interaction.followup.send(content)
+            else:
+                sent = await message.reply(content)
+        except discord.HTTPException as e:
+            log.warn(f"Failed to send auxiliary follow-up: {e}", self.name)
+            return False
+
+        add_to_history(
+            message.channel.id,
+            "assistant",
+            content,
+            author_name=self.character.name,
+            guild=guild,
+            timestamp=getattr(sent, "created_at", None) if sent else None
+        )
+        return True
+
+    async def _maybe_handle_reminder_capture(self, context: dict, message, request: dict):
+        """Capture reminder intents after the main character response is sent."""
+        pending_draft = request.get("pending_reminder_clarification")
+        if not pending_draft and not request.get("allow_auto_reminders", False):
+            return
+
+        content = context.get("content", "")
+        if not pending_draft and not self._is_likely_reminder_candidate(content):
+            return
+
+        timezone_context = context.get("timezone_context") or get_timezone_context(
+            user_id=context.get("user_id"),
+            bot_name=self.name
+        )
+        payload = await self._extract_reminder_payload(
+            channel_id=context["channel_id"],
+            content=content,
+            user_id=context["user_id"],
+            user_name=context["user_name"],
+            timezone_context=timezone_context,
+            pending_draft=pending_draft,
+        )
+
+        if not payload:
+            return
+
+        action = str(payload.get("action", "none")).strip().lower()
+        event_summary = " ".join(str(payload.get("event_summary", "")).split())
+        normalized_event = " ".join(str(payload.get("normalized_event", "")).split()).lower() or event_summary.lower()
+        source_type = "dm" if context["is_dm"] else "channel"
+        source_channel_name = getattr(message.channel, "name", None) or ("DM" if context["is_dm"] else f"Channel {context['channel_id']}")
+        source_guild_name = request["guild"].name if request.get("guild") else "DM"
+        creation_mode = str(payload.get("creation_mode", "")).strip().lower()
+        if creation_mode not in {"auto", "explicit"}:
+            creation_mode = self._default_reminder_creation_mode(content)
+
+        if action == "none":
+            if pending_draft:
+                reminder_manager.clear_pending_clarification(
+                    bot_name=self.name,
+                    target_user_id=context["user_id"],
+                    source_channel_id=context["channel_id"],
+                )
+            return
+
+        if action == "clarify":
+            clarification_prompt = " ".join(str(payload.get("clarification_prompt", "")).split()) or "What time should I remind you about that?"
+            reminder_manager.create_pending_clarification(
+                bot_name=self.name,
+                target_user_id=context["user_id"],
+                target_user_name=context["user_name"],
+                source_channel_id=context["channel_id"],
+                source_channel_name=source_channel_name,
+                source_guild_id=context["guild_id"],
+                source_guild_name=source_guild_name,
+                source_type=source_type,
+                timezone_name=timezone_context["timezone_name"],
+                timezone_offset_minutes=timezone_context["offset_minutes"],
+                timezone_source=timezone_context["timezone_source"],
+                event_summary=event_summary or (pending_draft or {}).get("event_summary", ""),
+                normalized_event=normalized_event or (pending_draft or {}).get("normalized_event", ""),
+                creation_mode=creation_mode,
+                clarification_prompt=clarification_prompt,
+            )
+            clarification_text = await self._generate_reminder_clarification_message(
+                user_name=context["user_name"],
+                timezone_context=timezone_context,
+                clarification_prompt=clarification_prompt,
+                event_summary=event_summary or (pending_draft or {}).get("event_summary", ""),
+            )
+            await self._send_auxiliary_followup(message, clarification_text, request.get("guild"))
+            return
+
+        if action != "create":
+            return
+
+        due_local_iso = payload.get("due_local_iso")
+        if not due_local_iso:
+            return
+
+        try:
+            due_at_utc = local_naive_iso_to_utc(
+                str(due_local_iso),
+                timezone_name=timezone_context["timezone_name"],
+                offset_minutes=timezone_context["offset_minutes"]
+            )
+        except Exception as e:
+            log.warn(f"Reminder due-time parsing failed: {e}", self.name)
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        if due_at_utc < now_utc - timedelta(minutes=5):
+            log.debug(f"Skipping stale reminder extraction for {context['user_name']}: {due_at_utc.isoformat()}", self.name)
+            if pending_draft:
+                reminder_manager.clear_pending_clarification(
+                    bot_name=self.name,
+                    target_user_id=context["user_id"],
+                    source_channel_id=context["channel_id"],
+                )
+            return
+
+        pre_due_at_utc = None
+        pre_due_local_iso = payload.get("pre_due_local_iso")
+        if pre_due_local_iso:
+            try:
+                candidate = local_naive_iso_to_utc(
+                    str(pre_due_local_iso),
+                    timezone_name=timezone_context["timezone_name"],
+                    offset_minutes=timezone_context["offset_minutes"]
+                )
+            except Exception:
+                candidate = None
+            if candidate and candidate < due_at_utc and (due_at_utc - candidate) <= timedelta(hours=48):
+                pre_due_at_utc = candidate
+
+        status, reminder = reminder_manager.create_or_update_reminder(
+            bot_name=self.name,
+            target_user_id=context["user_id"],
+            target_user_name=context["user_name"],
+            source_type=source_type,
+            source_channel_id=context["channel_id"],
+            source_channel_name=source_channel_name,
+            source_guild_id=context["guild_id"],
+            source_guild_name=source_guild_name,
+            timezone_name=timezone_context["timezone_name"],
+            timezone_offset_minutes=timezone_context["offset_minutes"],
+            timezone_source=timezone_context["timezone_source"],
+            event_summary=event_summary or normalized_event or "upcoming reminder",
+            normalized_event=normalized_event or event_summary.lower() or "reminder",
+            due_at_utc=due_at_utc,
+            pre_due_at_utc=pre_due_at_utc,
+            creation_mode=creation_mode,
+        )
+        log.info(
+            f"Reminder {status} for {context['user_name']} ({reminder['id']}): "
+            f"{reminder['event_summary']} @ {reminder['due_at_utc']}",
+            self.name
+        )
+
+    async def _resolve_user(self, user_id: int):
+        """Resolve a Discord user from cache or API."""
+        user = self.client.get_user(user_id)
+        if user:
+            return user
+
+        fetch_user = getattr(self.client, "fetch_user", None)
+        if callable(fetch_user):
+            try:
+                return await fetch_user(user_id)
+            except Exception as e:
+                log.debug(f"Reminder fetch_user failed for {user_id}: {e}", self.name)
+        return None
+
+    async def _resolve_user_dm_channel(self, user_id: int):
+        """Resolve or create the user's DM channel."""
+        user = await self._resolve_user(user_id)
+        if not user:
+            return None
+
+        dm_channel = getattr(user, "dm_channel", None)
+        if dm_channel:
+            return dm_channel
+
+        create_dm = getattr(user, "create_dm", None)
+        if callable(create_dm):
+            try:
+                return await create_dm()
+            except Exception as e:
+                log.debug(f"Reminder create_dm failed for {user_id}: {e}", self.name)
+        return None
+
+    async def _resolve_channel(self, channel_id: int):
+        """Resolve a Discord channel from cache or API."""
+        channel = self.client.get_channel(channel_id)
+        if channel:
+            return channel
+
+        fetch_channel = getattr(self.client, "fetch_channel", None)
+        if callable(fetch_channel):
+            try:
+                return await fetch_channel(channel_id)
+            except Exception as e:
+                log.debug(f"Reminder fetch_channel failed for {channel_id}: {e}", self.name)
+        return None
+
+    async def _send_scheduled_reminder(self, reminder: dict, response: str) -> tuple[list, int | None]:
+        """Send a scheduled reminder in the original location or DM fallback."""
+        response = response.strip()
+        if not response:
+            return [], None
+
+        source_type = reminder.get("source_type")
+        user_id = int(reminder.get("target_user_id"))
+        source_channel_id = int(reminder.get("source_channel_id"))
+        get_guild = getattr(self.client, "get_guild", None)
+        guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
+
+        primary_channel = None
+        if source_type == "dm":
+            primary_channel = await self._resolve_dm_followup_channel(user_id, source_channel_id)
+        else:
+            primary_channel = await self._resolve_channel(source_channel_id)
+
+        channels_to_try = []
+        if primary_channel:
+            channels_to_try.append(("primary", primary_channel))
+
+        if source_type != "dm":
+            fallback_dm = await self._resolve_user_dm_channel(user_id)
+            if fallback_dm and all(getattr(channel, "id", None) != getattr(fallback_dm, "id", None) for _, channel in channels_to_try):
+                channels_to_try.append(("dm_fallback", fallback_dm))
+
+        for channel_mode, channel in channels_to_try:
+            sent_messages = []
+            try:
+                rendered_response = convert_emojis_in_text(response, guild) if guild else response
+                lines = split_message(rendered_response)
+                for index, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if channel_mode == "primary" and source_type != "dm" and index == 0:
+                        line = f"<@{user_id}> {line}"
+                    sent = await channel.send(line)
+                    sent_messages.append(sent)
+
+                if sent_messages:
+                    delivered = "\n\n".join(
+                        getattr(sent, "content", "") or ""
+                        for sent in sent_messages
+                    ).strip()
+                    add_to_history(
+                        getattr(channel, "id", source_channel_id),
+                        "assistant",
+                        delivered,
+                        author_name=self.character.name,
+                        guild=getattr(channel, "guild", None),
+                        timestamp=getattr(sent_messages[0], "created_at", None)
+                    )
+                    if len(sent_messages) > 1:
+                        multipart_ids = [getattr(sent, "id", None) for sent in sent_messages if getattr(sent, "id", None) is not None]
+                        if len(multipart_ids) > 1:
+                            store_multipart_response(getattr(channel, "id", source_channel_id), multipart_ids, delivered)
+                    return sent_messages, getattr(channel, "id", source_channel_id)
+            except discord.HTTPException as e:
+                log.warn(f"Reminder send failed via {channel_mode}: {e}", self.name)
+                continue
+
+        return [], None
+
+    async def _generate_scheduled_reminder_text(self, reminder: dict, stage: str) -> str | None:
+        """Generate the in-character reminder text at send time."""
+        target_user_id = int(reminder.get("target_user_id"))
+        target_user_name = reminder.get("target_user_name") or f"User {target_user_id}"
+        source_channel_id = int(reminder.get("source_channel_id"))
+        is_dm = reminder.get("source_type") == "dm"
+        get_guild = getattr(self.client, "get_guild", None)
+        guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
+        server_id = 0 if is_dm else int(reminder.get("source_guild_id") or 0)
+        prompt_now = get_context_now(user_id=target_user_id, bot_name=self.name)
+
+        emojis = get_guild_emojis(guild) if guild else ""
+        lore = memory_manager.get_server_lore(server_id) if server_id else ""
+        bot_lore = memory_manager.get_bot_lore(self.character.name) if self.character else ""
+        if bot_lore and lore:
+            lore = f"{lore}\n{bot_lore}"
+        elif bot_lore:
+            lore = bot_lore
+
+        memories = memory_manager.get_all_memories_for_context(server_id, target_user_id, target_user_name)
+        if memories:
+            memories = remove_thinking_tags(memories)
+
+        active_users = get_active_users(source_channel_id) if not is_dm else []
+        other_bot_names = get_other_bot_names(source_channel_id, self.character.name if self.character else "")
+        system_prompt = character_manager.build_system_prompt(
+            character=self.character,
+            user_name=target_user_name,
+            now=prompt_now
+        )
+        chatroom_context = character_manager.build_chatroom_context(
+            guild_name=guild.name if guild else "DM",
+            character_name=self.character.name if self.character else "",
+            emojis=emojis,
+            lore=lore,
+            memories=memories,
+            user_name=target_user_name,
+            active_users=active_users,
+            other_bot_names=other_bot_names,
+            now=prompt_now
+        )
+
+        user_only_context = runtime_config.get("user_only_context", True)
+        if user_only_context:
+            history_msgs, immediate = format_history_split(
+                source_channel_id,
+                user_only=True,
+                context_count=runtime_config.get("user_only_context_count", 20),
+                current_bot_name=self.character.name if self.character else None
+            )
+        else:
+            history_msgs, immediate = format_history_split(
+                source_channel_id,
+                total_limit=runtime_config.get("history_limit", 200),
+                immediate_count=runtime_config.get("immediate_message_count", 5),
+                current_bot_name=self.character.name if self.character else None
+            )
+
+        reminder_local_display = utc_iso_to_local_display(
+            reminder.get("due_at_utc"),
+            timezone_name=reminder.get("timezone_name"),
+            offset_minutes=reminder.get("timezone_offset_minutes"),
+        )
+        reminder_stage = "before the event" if stage == "pre" else "right when the event is due"
+        reminder_context = (
+            f"Scheduled reminder details:\n"
+            f"- Event: {reminder.get('event_summary')}\n"
+            f"- Delivery stage: {reminder_stage}\n"
+            f"- Reminder time: {reminder_local_display}\n"
+            f"- Current target user: {target_user_name}\n"
+        )
+        instruction = (
+            "Write one brief in-character reminder message for the user. "
+            "Sound natural and conversational. Do not mention internal scheduling, JSON, or system details."
+        )
+
+        messages_for_api = []
+        messages_for_api.extend(history_msgs)
+        if chatroom_context:
+            messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
+        messages_for_api.extend(immediate)
+        messages_for_api.append({"role": "system", "content": reminder_context})
+        messages_for_api.append({"role": "user", "content": instruction})
+
+        response = await provider_manager.generate(
+            messages=messages_for_api,
+            system_prompt=system_prompt,
+            temperature=None,
+            max_tokens=None,
+            use_single_user=runtime_config.get("use_single_user", False),
+            preferred_tier=self._preferred_provider_tier()
+        )
+        if not response:
+            return None
+
+        response = remove_thinking_tags(response, self.character.name)
+        response = clean_bot_name_prefix(response, self.character.name)
+        response = clean_em_dashes(response)
+        response = self._strip_other_bot_prefixes(response, other_bot_names)
+        return response.strip()
+
+    async def _run_reminder_cycle(self, now: datetime | None = None) -> int:
+        """Run one reminder delivery pass for this bot."""
+        if runtime_config.get("global_paused", False):
+            return 0
+
+        sent_count = 0
+        deliveries = reminder_manager.get_due_deliveries(self.name, now=now)
+        for delivery in deliveries:
+            reminder = delivery["reminder"]
+            stage = delivery["stage"]
+            reminder_id = reminder["id"]
+
+            char_name = self.character.name if self.character else ""
+            if char_name and user_ignores.is_ignored(str(reminder["target_user_id"]), char_name):
+                reminder_manager.mark_skipped(reminder_id, stage=stage, reason="User is currently ignoring this bot")
+                continue
+
+            try:
+                response = await self._generate_scheduled_reminder_text(reminder, stage)
+                if not response:
+                    reminder_manager.mark_delivery_result(
+                        reminder_id,
+                        stage=stage,
+                        success=False,
+                        error_message="Reminder generation failed"
+                    )
+                    continue
+
+                if not reminder_manager.is_pending(reminder_id):
+                    reminder_manager.mark_skipped(reminder_id, stage=stage, reason="Reminder was cancelled before delivery")
+                    continue
+
+                sent_messages, actual_channel_id = await self._send_scheduled_reminder(reminder, response)
+                if not sent_messages:
+                    reminder_manager.mark_delivery_result(
+                        reminder_id,
+                        stage=stage,
+                        success=False,
+                        error_message="Failed to send reminder message"
+                    )
+                    continue
+
+                runtime_config.update_last_activity(self.name)
+                metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
+                reminder_manager.mark_delivery_result(
+                    reminder_id,
+                    stage=stage,
+                    success=True,
+                    sent_at=datetime.now(timezone.utc)
+                )
+                sent_count += 1
+                log.info(
+                    f"Sent scheduled {stage} reminder {reminder_id} to user {reminder['target_user_id']} "
+                    f"in channel {actual_channel_id}",
+                    self.name
+                )
+            except Exception as e:
+                reminder_manager.mark_delivery_result(
+                    reminder_id,
+                    stage=stage,
+                    success=False,
+                    error_message=str(e)
+                )
+                log.warn(f"Reminder delivery failed for {reminder_id}: {e}", self.name)
+
+        return sent_count
+
+    async def _reminder_loop(self):
+        """Background task that delivers due reminders owned by this bot."""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                await self._run_reminder_cycle()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Error in reminder loop: {e}", self.name)
+
     def _setup_events(self):
         """Register event handlers."""
         
@@ -417,6 +1066,9 @@ class BotInstance:
 
             # Start DM follow-up loop
             asyncio.create_task(self._dm_followup_loop())
+
+            # Start durable reminder loop
+            asyncio.create_task(self._reminder_loop())
 
             # Initialize Prometheus metrics for this bot
             metrics_manager.update_bot_status(
@@ -461,6 +1113,14 @@ class BotInstance:
                     return
                 self._record_user_message(message.author.id)
 
+            pending_reminder_clarification = None
+            if not is_other_bot:
+                pending_reminder_clarification = reminder_manager.get_pending_clarification(
+                    bot_name=self.name,
+                    target_user_id=message.author.id,
+                    source_channel_id=channel_id,
+                )
+
             # Prevent self-loop: Don't respond to messages from bots with same character name
             if is_other_bot and self._should_ignore_self_loop(message):
                 return
@@ -474,6 +1134,9 @@ class BotInstance:
 
             # Detect all response triggers
             triggers = await self._detect_response_triggers(message, is_dm, is_other_bot, guild)
+            if pending_reminder_clarification:
+                triggers["pending_reminder_clarification"] = True
+                triggers["should_respond"] = True
 
             # Debug: log why this bot is responding
             if triggers["should_respond"]:
@@ -506,7 +1169,9 @@ class BotInstance:
                             is_dm=is_dm,
                             user_id=message.author.id,
                             sticker_info=sticker_info,
-                            split_reply_target=target
+                            split_reply_target=target,
+                            allow_auto_reminders=False,
+                            pending_reminder_clarification=pending_reminder_clarification
                         )
                 else:
                     # Normal single request
@@ -519,7 +1184,15 @@ class BotInstance:
                         user_name=user_name,
                         is_dm=is_dm,
                         user_id=message.author.id,
-                        sticker_info=sticker_info
+                        sticker_info=sticker_info,
+                        allow_auto_reminders=(
+                            is_dm
+                            or triggers.get("mentioned", False)
+                            or triggers.get("is_reply_to_bot", False)
+                            or triggers.get("name_triggered", False)
+                            or triggers.get("pending_reminder_clarification", False)
+                        ),
+                        pending_reminder_clarification=pending_reminder_clarification
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -867,10 +1540,14 @@ class BotInstance:
                 bot_user_id = self.client.user.id if self.client.user else None
                 mentionable_bots = get_other_bots_mentionable(bot_user_id, guild)
 
+        timezone_context = get_timezone_context(user_id=target_user_id, bot_name=self.name)
+        prompt_now = datetime.now(timezone_context["tzinfo"])
+
         # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
             character=self.character,
-            user_name=target_user_name
+            user_name=target_user_name,
+            now=prompt_now
         )
 
         # Split history into older context and immediate messages
@@ -928,7 +1605,8 @@ class BotInstance:
             mentioned_context=mentioned_context,
             other_bot_names=other_bot_names,
             mentionable_users=mentionable_users,
-            mentionable_bots=mentionable_bots
+            mentionable_bots=mentionable_bots,
+            now=prompt_now
         )
 
         # Build complete message list for API
@@ -1000,7 +1678,9 @@ class BotInstance:
             "split_reply_target": split_target,
             "from_interact_command": from_interact_command,
             "mentionable_users": mentionable_users,
-            "mentionable_bots": mentionable_bots
+            "mentionable_bots": mentionable_bots,
+            "timezone_context": timezone_context,
+            "prompt_now": prompt_now
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -1156,6 +1836,9 @@ class BotInstance:
 
         # Auto-memory
         asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
+
+        # Durable reminder capture
+        asyncio.create_task(self._maybe_handle_reminder_capture(context, message, request))
 
         return True
 

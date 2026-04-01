@@ -4,6 +4,29 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.0] - 2026-04-01
+
+### Added
+
+- Durable one-shot in-character reminders with persistent storage in `bot_data/reminders.json`
+- Per-user timezone storage in `bot_data/user_timezones.json`, with `/timezone set`, `/timezone show`, and `/timezone clear`
+- `/reminders list` and `/reminders cancel` slash commands for reminder inspection and cancellation
+- Dashboard reminder queue with filtering and bulk cancellation
+- Bot-level timezone fallbacks in the dashboard Config page
+- Regression coverage for reminder deduplication, reminder scheduling/delivery state, reminder dashboard APIs, timezone precedence, and provider token-limit behavior
+
+### Changed
+
+- **Reminder scheduling** — reminder text is now generated at send time using fresh character context/history instead of storing a prewritten line at creation
+- **Prompt time resolution** — prompt time-awareness now shares the same timezone precedence used by reminders: user timezone, then bot timezone, then process timezone
+- **Timezone support on Windows and similar environments** — added `tzdata` dependency so IANA timezone names work reliably cross-platform
+
+### Fixed
+
+- **Claude/Opus token handling** — removed the local `450` max-token cap so provider-configured or request-configured token limits are respected directly
+- **Reminder ownership** — reminders now belong to the specific bot that handled the interaction, so multiple bots do not all schedule the same future ping
+- **Reminder delivery fallback** — reminders now fall back to DM if the original server channel is unavailable at send time
+
 ## [v1.10.11] - 2026-04-01
 
 ### Added

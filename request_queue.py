@@ -79,7 +79,9 @@ class RequestQueue:
         from_interact_command: bool = False,
         split_reply_target: discord.Member = None,
         forced_target_user_id: int = None,
-        forced_target_user_name: str = None
+        forced_target_user_name: str = None,
+        allow_auto_reminders: bool = False,
+        pending_reminder_clarification: dict = None
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -120,7 +122,9 @@ class RequestQueue:
                 'from_interact_command': from_interact_command,
                 'split_reply_target': split_reply_target,
                 'forced_target_user_id': forced_target_user_id,
-                'forced_target_user_name': forced_target_user_name
+                'forced_target_user_name': forced_target_user_name,
+                'allow_auto_reminders': allow_auto_reminders,
+                'pending_reminder_clarification': dict(pending_reminder_clarification) if pending_reminder_clarification else None,
             }
 
             self.queues[channel_id].append(request)
