@@ -187,6 +187,71 @@ class TimePlaceholderTests(unittest.TestCase):
 
         self.assertEqual(rendered, "I tagged @Adam Best Boy already.")
 
+    def test_get_mentionable_users_includes_guild_member_even_with_busy_history(self):
+        channel_id = 321
+        discord_utils_module.conversation_history[channel_id] = [
+            {"role": "user", "content": "hi", "author": f"User{i}", "user_id": i}
+            for i in range(1, 6)
+        ]
+        guild_member = types.SimpleNamespace(
+            id=99,
+            bot=False,
+            display_name="Febs WaWa",
+            global_name="Febs",
+            name="febs1996",
+        )
+        guild = types.SimpleNamespace(members=[guild_member])
+
+        users = discord_utils_module.get_mentionable_users(channel_id, limit=None, guild=guild)
+
+        self.assertTrue(any(user["user_id"] == 99 for user in users))
+
+    def test_process_outgoing_mentions_prefers_high_priority_alias_match(self):
+        rendered = discord_utils_module.process_outgoing_mentions(
+            "@Febs WaWa hey",
+            mentionable_users=[
+                {
+                    "name": "Febs WaWa",
+                    "user_id": 10,
+                    "mention_syntax": "<@10>",
+                    "aliases": ["Febs WaWa"],
+                    "priority": 0,
+                },
+                {
+                    "name": "Febs WaWa",
+                    "user_id": 11,
+                    "mention_syntax": "<@11>",
+                    "aliases": ["Febs WaWa"],
+                    "priority": 2,
+                },
+            ],
+        )
+
+        self.assertEqual(rendered, "<@10> hey")
+
+    def test_process_outgoing_mentions_leaves_ambiguous_same_priority_alias_as_text(self):
+        rendered = discord_utils_module.process_outgoing_mentions(
+            "@Febs WaWa hey",
+            mentionable_users=[
+                {
+                    "name": "Febs WaWa",
+                    "user_id": 10,
+                    "mention_syntax": "<@10>",
+                    "aliases": ["Febs WaWa"],
+                    "priority": 2,
+                },
+                {
+                    "name": "Febs WaWa",
+                    "user_id": 11,
+                    "mention_syntax": "<@11>",
+                    "aliases": ["Febs WaWa"],
+                    "priority": 2,
+                },
+            ],
+        )
+
+        self.assertEqual(rendered, "@Febs WaWa hey")
+
     def test_add_to_history_persists_timestamp_metadata(self):
         channel_id = 999
         with patch.object(discord_utils_module, "save_history"):

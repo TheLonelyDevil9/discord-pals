@@ -94,6 +94,216 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_organic_response_keeps_single_newline_in_one_message_by_default(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+
+        sent_message = types.SimpleNamespace(id=1)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=sent_message),
+            channel=types.SimpleNamespace(send=AsyncMock()),
+        )
+
+        sent = await instance._send_organic_response(
+            message,
+            "still thinking about it\nand continuing the same thought"
+        )
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["content"], "still thinking about it\nand continuing the same thought")
+        message.channel.send.assert_not_called()
+
+    async def test_send_organic_response_can_split_short_single_newlines(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "Sure.\nI'll tag them now."
+            )
+
+        self.assertEqual([item["content"] for item in sent], ["Sure.", "I'll tag them now."])
+
+    async def test_send_organic_response_caps_natural_burst_length(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        third = types.SimpleNamespace(id=3)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(side_effect=[second, third])),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "One.\n\nTwo.\n\nThree.\n\nFour."
+            )
+
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(sent[0]["content"], "One.")
+        self.assertEqual(sent[1]["content"], "Two.")
+        self.assertEqual(sent[2]["content"], "Three.\n\nFour.")
+
+    async def test_send_and_finalize_records_each_sent_part_separately(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance._check_rate_limit = Mock(return_value=False)
+        instance._check_circuit_breaker = Mock(return_value=False)
+        instance._is_duplicate_response = Mock(return_value=False)
+        instance._remember_recent_response = Mock()
+        instance._reset_failures = Mock()
+        instance._record_response = Mock()
+        instance._update_mood = Mock()
+        instance._record_failure = Mock()
+        instance._send_organic_response = AsyncMock(return_value=[
+            {"message": types.SimpleNamespace(id=11, created_at="t1"), "content": "One."},
+            {"message": types.SimpleNamespace(id=12, created_at="t2"), "content": "Two."},
+        ])
+
+        context = {
+            "channel_id": 1,
+            "is_dm": False,
+            "guild_id": 5,
+            "user_id": 42,
+            "user_name": "Invoker",
+            "content": "hi",
+            "split_reply_target": None,
+            "mention_resolution_users": [],
+            "mentionable_users": [],
+            "mentionable_bots": [],
+        }
+        request = {"guild": None}
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
+                patch.object(bot_instance_module, "parse_reactions", return_value=("hello", [])), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
+                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
+                patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
+                patch.object(bot_instance_module.log, "warn"):
+            sent = await instance._send_and_finalize_response("hello", context, message, request)
+
+        self.assertTrue(sent)
+        self.assertEqual(add_history_mock.call_count, 2)
+        self.assertEqual(add_history_mock.call_args_list[0].kwargs["message_id"], 11)
+        self.assertEqual(add_history_mock.call_args_list[0].args[2], "One.")
+        self.assertEqual(add_history_mock.call_args_list[1].kwargs["message_id"], 12)
+        self.assertEqual(add_history_mock.call_args_list[1].args[2], "Two.")
+        multipart_mock.assert_called_once_with(1, [11, 12], "One.\n\nTwo.")
+
+    async def test_split_reply_target_mention_survives_send_processing(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance._check_rate_limit = Mock(return_value=False)
+        instance._check_circuit_breaker = Mock(return_value=False)
+        instance._is_duplicate_response = Mock(return_value=False)
+        instance._remember_recent_response = Mock()
+        instance._reset_failures = Mock()
+        instance._record_response = Mock()
+        instance._update_mood = Mock()
+        instance._record_failure = Mock()
+        instance._send_organic_response = AsyncMock(return_value=[
+            {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "<@555> hello"},
+        ])
+
+        context = {
+            "channel_id": 1,
+            "is_dm": False,
+            "guild_id": 5,
+            "user_id": 42,
+            "user_name": "Invoker",
+            "content": "hi",
+            "split_reply_target": types.SimpleNamespace(id=555),
+            "mention_resolution_users": [],
+            "mentionable_users": [],
+            "mentionable_bots": [],
+        }
+        request = {"guild": None}
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=True), \
+                patch.object(bot_instance_module, "parse_reactions", side_effect=lambda value: (value, [])), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
+                patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
+                patch.object(bot_instance_module.log, "warn"):
+            sent = await instance._send_and_finalize_response("hello", context, message, request)
+
+        self.assertTrue(sent)
+        instance._send_organic_response.assert_awaited_once_with(message, "<@555> hello")
+        self.assertEqual(add_history_mock.call_args.args[2], "<@555> hello")
+
+    async def test_send_and_finalize_avoids_phantom_history_after_later_send_failure(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance._check_rate_limit = Mock(return_value=False)
+        instance._check_circuit_breaker = Mock(return_value=False)
+        instance._is_duplicate_response = Mock(return_value=False)
+        instance._remember_recent_response = Mock()
+        instance._reset_failures = Mock()
+        instance._record_response = Mock()
+        instance._update_mood = Mock()
+        instance._record_failure = Mock()
+
+        first_sent = types.SimpleNamespace(id=21, created_at="t1")
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first_sent),
+            channel=types.SimpleNamespace(send=AsyncMock(side_effect=bot_instance_module.discord.HTTPException("boom"))),
+        )
+        context = {
+            "channel_id": 1,
+            "is_dm": False,
+            "guild_id": 5,
+            "user_id": 42,
+            "user_name": "Invoker",
+            "content": "hi",
+            "split_reply_target": None,
+            "mention_resolution_users": [],
+            "mentionable_users": [],
+            "mentionable_bots": [],
+        }
+        request = {"guild": None}
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
+                patch.object(bot_instance_module, "parse_reactions", return_value=("One.\n\nTwo.", [])), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
+                patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
+                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
+                patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            sent = await instance._send_and_finalize_response("One.\n\nTwo.", context, message, request)
+
+        self.assertTrue(sent)
+        self.assertEqual(add_history_mock.call_count, 1)
+        self.assertEqual(add_history_mock.call_args.kwargs["message_id"], 21)
+        multipart_mock.assert_not_called()
+
     async def test_send_and_finalize_skips_history_when_discord_send_fails(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
@@ -106,7 +316,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=([], ""))
+        instance._send_organic_response = AsyncMock(return_value=[])
 
         context = {
             "channel_id": 1,

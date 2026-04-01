@@ -85,6 +85,7 @@ The system instructions were authored by legendary chef @Geechan.
 - **Multi-bot coordination** - Global coordinator prevents crashes when multiple bots tagged simultaneously
 - **Reminder management** - `/reminders list` and `/reminders cancel` plus a dashboard reminder queue for admin cleanup
 - **Bot @mentions** - Bots can mention users/other bots in responses (configurable)
+- **Natural message pacing** - Paragraph breaks can become 2-3 Discord messages when they read like separate chat thoughts
 - **Split replies** - Send separate messages to multiple mentioned users
 - **Custom nicknames** - Define additional trigger words beyond bot name
 - **Autonomous mode** - Bot randomly joins conversations (configurable per-channel)
@@ -1038,7 +1039,7 @@ Bots can generate Discord @mentions in their responses:
 
 - **User Mentions**: Bots can @mention users in autonomous mode (enabled by default)
 - **Bot-to-Bot Mentions**: Bots can @mention other bots (disabled by default to prevent loops)
-- **Context-Aware**: AI receives list of mentionable users from recent conversation
+- **Context-Aware**: AI sees recent mention candidates in prompt context, while send-time conversion can resolve explicit mentions, reply targets, recent participants, and visible guild members
 
 ### Configuration
 

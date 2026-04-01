@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.2] - 2026-04-01
+
+### Added
+
+- Regression coverage for guild-wide mention resolution, ambiguous-name safety, natural multi-message delivery, and per-message assistant history persistence
+
+### Changed
+
+- **Mention conversion** — outgoing `@Name` resolution now prioritizes explicit current-message mentions and reply targets first, recent human participants second, and visible guild members last
+- **Natural reply pacing** — generated line breaks now survive to Discord more naturally: double newlines always split, short self-contained single-newline thoughts may split, and one response burst is capped at 3 Discord messages
+- **Assistant history shape** — multipart bot replies are now stored as separate assistant turns with per-message IDs and timestamps instead of one collapsed assistant blob
+
+### Fixed
+
+- **Guild member tagging coverage** — bots can now convert `@Name` into a real Discord mention even when that member has not spoken recently in the channel
+- **Ambiguous mention safety** — duplicate same-priority display-name matches now stay plain text instead of risking a ping to the wrong user
+- **Deleted bot-message cleanup** — assistant history removal now targets the exact deleted Discord message by ID before falling back to tail-pruning
+
 ## [v1.11.1] - 2026-04-01
 
 ### Added

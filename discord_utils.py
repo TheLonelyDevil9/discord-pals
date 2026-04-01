@@ -777,6 +777,23 @@ def remove_assistant_from_history(channel_id: int, count: int = 1):
         save_history()
 
 
+def remove_message_from_history(channel_id: int, message_id: int) -> bool:
+    """Remove a specific stored message by Discord message ID."""
+    if channel_id not in conversation_history or message_id is None:
+        return False
+
+    history = conversation_history[channel_id]
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("message_id") == message_id:
+            del history[i]
+            _rebuild_recent_message_hashes(channel_id)
+            _mark_history_dirty(channel_id)
+            save_history()
+            return True
+
+    return False
+
+
 # Channels where history was explicitly cleared (suppresses auto-recall)
 _cleared_channels: set = set()
 
@@ -1384,6 +1401,24 @@ autonomous_manager = AutonomousManager()
 _bot_registry: Dict[int, dict] = {}  # bot_user_id -> {name, character_name, user_id}
 
 
+def _normalize_mention_alias(alias: str) -> str:
+    """Normalize a full-handle alias for case-insensitive mention matching."""
+    if not isinstance(alias, str):
+        return ""
+    cleaned = " ".join(alias.replace("\u200b", "").strip().lstrip("@").split())
+    return cleaned.casefold()
+
+
+def _collect_member_aliases(member) -> List[str]:
+    """Collect full-name aliases for a Discord member/user without generating partial names."""
+    aliases = []
+    for attr in ("display_name", "global_name", "name"):
+        value = getattr(member, attr, None)
+        if isinstance(value, str) and value.strip():
+            aliases.append(" ".join(value.strip().split()))
+    return list(dict.fromkeys(aliases))
+
+
 def register_bot(bot_instance):
     """Register a bot instance for cross-bot awareness.
 
@@ -1437,54 +1472,113 @@ def get_other_bots_mentionable(current_bot_id: int, guild) -> List[dict]:
     return bots
 
 
-def get_mentionable_users(channel_id: int, limit: int = 10, guild=None) -> List[dict]:
-    """Get list of users who can be mentioned based on conversation history.
+def get_mentionable_users(
+    channel_id: int,
+    limit: int | None = 10,
+    guild=None,
+    explicit_users: list | None = None,
+    reply_target=None,
+) -> List[dict]:
+    """Get prioritized users who can be mentioned.
 
-    Args:
-        channel_id: Discord channel ID
-        limit: Maximum number of users to return
-        guild: Optional guild object for fallback member lookup
-
-    Returns:
-        List of dicts with 'name', 'user_id', 'mention_syntax'
+    Priority order:
+    1. Explicitly mentioned users and reply targets from the newest message
+    2. Recent human conversation participants from history
+    3. Any visible human guild member
     """
-    users = []
-    seen_ids = set()
+    users_by_id: Dict[int, dict] = {}
+    sequence = 0
 
-    # Primary: Get from recent message authors in history
+    def register_candidate(*, user_id, name: str, aliases: List[str], priority: int):
+        nonlocal sequence
+        try:
+            resolved_user_id = int(user_id)
+        except (TypeError, ValueError):
+            return
+        if resolved_user_id <= 0:
+            return
+
+        cleaned_aliases = []
+        for alias in aliases or []:
+            if isinstance(alias, str) and alias.strip():
+                collapsed = " ".join(alias.strip().split())
+                if collapsed and collapsed not in cleaned_aliases:
+                    cleaned_aliases.append(collapsed)
+        if not cleaned_aliases:
+            if not isinstance(name, str) or not name.strip():
+                return
+            cleaned_aliases = [" ".join(name.strip().split())]
+
+        primary_name = " ".join((name or cleaned_aliases[0]).strip().split())
+        existing = users_by_id.get(resolved_user_id)
+        if existing:
+            for alias in cleaned_aliases:
+                if alias not in existing["aliases"]:
+                    existing["aliases"].append(alias)
+            if priority < existing["priority"]:
+                existing["priority"] = priority
+                existing["order"] = sequence
+                existing["name"] = primary_name
+            sequence += 1
+            return
+
+        users_by_id[resolved_user_id] = {
+            "name": primary_name,
+            "user_id": resolved_user_id,
+            "mention_syntax": f"<@{resolved_user_id}>",
+            "aliases": cleaned_aliases,
+            "priority": priority,
+            "order": sequence,
+        }
+        sequence += 1
+
+    if reply_target and not getattr(reply_target, "bot", False):
+        register_candidate(
+            user_id=getattr(reply_target, "id", None),
+            name=get_user_display_name(reply_target),
+            aliases=_collect_member_aliases(reply_target),
+            priority=0,
+        )
+
+    for user in explicit_users or []:
+        if getattr(user, "bot", False):
+            continue
+        register_candidate(
+            user_id=getattr(user, "id", None),
+            name=get_user_display_name(user),
+            aliases=_collect_member_aliases(user),
+            priority=0,
+        )
+
     history = get_history(channel_id)
     for msg in reversed(history[-50:]):
+        if msg.get("is_bot", False):
+            continue
         user_id = msg.get("user_id")
         author = msg.get("author")
+        if user_id and author:
+            register_candidate(
+                user_id=user_id,
+                name=author,
+                aliases=[author],
+                priority=1,
+            )
 
-        if user_id and user_id not in seen_ids and author:
-            seen_ids.add(user_id)
-            users.append({
-                "name": author,
-                "user_id": user_id,
-                "mention_syntax": f"<@{user_id}>"
-            })
-            if len(users) >= limit:
-                break
-
-    # Fallback: If history is sparse and guild is provided, add recent active members
-    if len(users) < 3 and guild:
-        log.debug(f"[MENTIONS] History sparse ({len(users)} users), checking guild members")
-        # Get members who are online or recently active
+    if guild:
         for member in guild.members:
             if member.bot:
-                continue  # Skip bots
-            if member.id not in seen_ids:
-                seen_ids.add(member.id)
-                users.append({
-                    "name": get_user_display_name(member),
-                    "user_id": member.id,
-                    "mention_syntax": f"<@{member.id}>"
-                })
-                if len(users) >= limit:
-                    break
+                continue
+            register_candidate(
+                user_id=member.id,
+                name=get_user_display_name(member),
+                aliases=_collect_member_aliases(member),
+                priority=2,
+            )
 
-    return users
+    users = sorted(users_by_id.values(), key=lambda item: (item["priority"], item["order"]))
+    if limit is None:
+        return users
+    return users[:max(0, int(limit))]
 
 
 def process_outgoing_mentions(content: str, mentionable_users: list = None,
@@ -1505,22 +1599,53 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
     if not content:
         return content
 
-    # Build lookup of name -> mention syntax (case-insensitive)
-    mention_lookup = {}
+    # Build lookup of full-handle alias -> mention syntax while preserving priority
+    # and refusing ambiguous matches at the same priority.
+    alias_lookup = {}
+
+    def register_alias(alias: str, mention_syntax: str, user_id, priority: int):
+        normalized = _normalize_mention_alias(alias)
+        if not normalized or not mention_syntax:
+            return
+
+        existing = alias_lookup.get(normalized)
+        if existing is None or priority < existing["priority"]:
+            alias_lookup[normalized] = {
+                "alias": " ".join(alias.strip().split()),
+                "mention_syntax": mention_syntax,
+                "user_id": str(user_id),
+                "priority": priority,
+                "ambiguous": False,
+            }
+            return
+
+        if priority > existing["priority"]:
+            return
+
+        if str(user_id) != existing["user_id"]:
+            existing["ambiguous"] = True
+            alias_lookup[normalized] = existing
 
     if mentionable_users:
         for user in mentionable_users:
-            name_lower = user['name'].lower()
-            mention_lookup[name_lower] = user['mention_syntax']
-        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users: {list(mention_lookup.keys())}")
+            aliases = user.get("aliases") or [user.get("name", "")]
+            priority = int(user.get("priority", 1))
+            for alias in aliases:
+                register_alias(alias, user.get("mention_syntax"), user.get("user_id"), priority)
+        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users")
     else:
         log.debug(f"[MENTIONS] mentionable_users is empty or None")
 
     if mentionable_bots:
         for bot in mentionable_bots:
             if bot.get('character_name'):
-                name_lower = bot['character_name'].lower()
-                mention_lookup[name_lower] = bot['mention_syntax']
+                register_alias(bot['character_name'], bot['mention_syntax'], bot.get('user_id'), 99)
+
+    mention_lookup = {
+        entry["alias"]: entry["mention_syntax"]
+        for entry in alias_lookup.values()
+        if not entry.get("ambiguous")
+    }
 
     if not mention_lookup:
         log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
@@ -1542,7 +1667,8 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
         mention_syntax = mention_lookup[name]
         # Match @Name with word boundary awareness (case-insensitive)
         # Handles both single-word and multi-word names
-        pattern = re.compile(r'@' + re.escape(name) + r'(?=\W|$)', re.IGNORECASE)
+        pattern_body = re.escape(name).replace(r'\ ', r'\s+')
+        pattern = re.compile(r'@' + pattern_body + r'(?=\W|$)', re.IGNORECASE)
         if pattern.search(content):
             log.debug(f"[MENTIONS] Matched @{name} -> {mention_syntax}")
             content = pattern.sub(mention_syntax, content)

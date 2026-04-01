@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
+from constants import MAX_MESSAGE_LENGTH, MAX_RESPONSE_MESSAGE_PARTS
 from providers import provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
@@ -22,7 +23,7 @@ from discord_utils import (
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
-    update_history_on_edit, remove_assistant_from_history, store_multipart_response,
+    update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     split_message,
     was_recently_cleared, acknowledge_cleared
@@ -1250,32 +1251,72 @@ Return exactly one JSON object with this shape:
         @self.client.event
         async def on_message_delete(message: discord.Message):
             if message.author == self.client.user:
-                remove_assistant_from_history(message.channel.id, 1)
-    
-    async def _send_organic_response(self, message: discord.Message, response: str) -> tuple[list, str]:
-        """Send response organically and return both message handles and delivered text."""
-        lines = []
-        for para in response.split('\n\n'):
-            para = para.strip()
-            if para:
-                if '\n' in para:
-                    sublines = para.split('\n')
-                    current = []
-                    for sub in sublines:
-                        current.append(sub.strip())
-                        if len(current) >= 2:
-                            lines.append('\n'.join(current))
-                            current = []
-                    if current:
-                        lines.append('\n'.join(current))
+                if not remove_message_from_history(message.channel.id, message.id):
+                    remove_assistant_from_history(message.channel.id, 1)
+
+    @staticmethod
+    def _should_split_single_newline(previous_line: str, next_line: str) -> bool:
+        """Decide when a single newline reads like a new chat message instead of formatting."""
+        previous_line = (previous_line or "").strip()
+        next_line = (next_line or "").strip()
+        if not previous_line or not next_line:
+            return False
+        if len(previous_line) > 140 or len(next_line) > 140:
+            return False
+
+        ends_cleanly = previous_line[-1] in ".!?~…)]}\"'"
+        starts_like_new_thought = (
+            next_line[0].isupper() or
+            next_line.startswith(("@", "<@", "*")) or
+            next_line.startswith(("—", "-", "•"))
+        )
+        return starts_like_new_thought and (ends_cleanly or len(previous_line) <= 60)
+
+    def _split_response_for_delivery(self, response: str) -> list[str]:
+        """Turn one model response into natural Discord-sized message parts."""
+        normalized = (response or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            return []
+
+        logical_parts = []
+        for paragraph in re.split(r"\n{2,}", normalized):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            lines = [line.strip() for line in paragraph.split("\n") if line.strip()]
+            if not lines:
+                continue
+
+            current_part = lines[0]
+            for next_line in lines[1:]:
+                if self._should_split_single_newline(current_part, next_line):
+                    logical_parts.append(current_part)
+                    current_part = next_line
                 else:
-                    lines.append(para)
-        
+                    current_part = f"{current_part}\n{next_line}"
+            logical_parts.append(current_part)
+
+        if not logical_parts:
+            logical_parts = [normalized]
+
+        if len(logical_parts) > MAX_RESPONSE_MESSAGE_PARTS:
+            overflow = "\n\n".join(logical_parts[MAX_RESPONSE_MESSAGE_PARTS - 1:])
+            logical_parts = logical_parts[:MAX_RESPONSE_MESSAGE_PARTS - 1] + [overflow]
+
+        final_parts = []
+        for part in logical_parts:
+            final_parts.extend(split_message(part, max_length=MAX_MESSAGE_LENGTH))
+
+        return [part for part in final_parts if part and part.strip()]
+
+    async def _send_organic_response(self, message: discord.Message, response: str) -> list[dict]:
+        """Send response organically and return the sent Discord messages with their delivered content."""
+        lines = self._split_response_for_delivery(response)
         if not lines:
-            lines = [response]
-        
-        sent_messages = []
-        sent_lines = []
+            return []
+
+        sent_records = []
         is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
 
         for i, line in enumerate(lines):
@@ -1288,20 +1329,16 @@ Return exactly one JSON object with this shape:
                         sent_msg = await message._interaction.followup.send(line)
                     else:
                         sent_msg = await message.reply(line)
-                    sent_messages.append(sent_msg)
-                    sent_lines.append(line)
                 else:
                     # Add delay between lines (0.5-1 second)
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                     sent_msg = await message.channel.send(line)
-                    sent_messages.append(sent_msg)
-                    sent_lines.append(line)
+                sent_records.append({"message": sent_msg, "content": line})
             except discord.HTTPException as e:
                 log.error(f"Failed to send: {e}", self.name)
                 break
 
-        delivered_response = "\n\n".join(sent_lines).strip()
-        return sent_messages, delivered_response
+        return sent_records
     
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
@@ -1561,31 +1598,29 @@ Return exactly one JSON object with this shape:
 
         # Get mentionable users and bots for @mention feature
         mentionable_users = []
+        mention_resolution_users = []
         mentionable_bots = []
         if runtime_config.get("allow_bot_mentions", True) and not is_dm:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
             mention_limit = runtime_config.get("mention_context_limit", 10)
-            mentionable_users = get_mentionable_users(channel_id, limit=mention_limit, guild=guild)
+            referenced_message = await self._get_referenced_message(message)
+            reply_target = None
+            if referenced_message and not getattr(referenced_message.author, "bot", False):
+                reply_target = referenced_message.author
+
             explicit_mentions = [
-                {
-                    "name": get_user_display_name(user),
-                    "user_id": user.id,
-                    "mention_syntax": f"<@{user.id}>",
-                }
-                for user in message.mentions
-                if not user.bot and user.id != target_user_id
+                user for user in message.mentions
+                if not user.bot
             ]
-            if explicit_mentions:
-                merged_mentionable_users = []
-                seen_user_ids = set()
-                for candidate in explicit_mentions + mentionable_users:
-                    candidate_id = candidate.get("user_id")
-                    if candidate_id in seen_user_ids:
-                        continue
-                    seen_user_ids.add(candidate_id)
-                    merged_mentionable_users.append(candidate)
-                mentionable_users = merged_mentionable_users
-            log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mentionable users for channel {channel_id}")
+            mention_resolution_users = get_mentionable_users(
+                channel_id,
+                limit=None,
+                guild=guild,
+                explicit_users=explicit_mentions,
+                reply_target=reply_target,
+            )
+            mentionable_users = mention_resolution_users[:mention_limit]
+            log.debug(f"[MENTIONS] Retrieved {len(mention_resolution_users)} mention candidates for channel {channel_id}")
             if mentionable_users:
                 log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")
 
@@ -1731,6 +1766,7 @@ Return exactly one JSON object with this shape:
             "split_reply_target": split_target,
             "from_interact_command": from_interact_command,
             "mentionable_users": mentionable_users,
+            "mention_resolution_users": mention_resolution_users,
             "mentionable_bots": mentionable_bots,
             "timezone_context": timezone_context,
             "prompt_now": prompt_now
@@ -1815,7 +1851,7 @@ Return exactly one JSON object with this shape:
         # Process outgoing mentions (@Name -> <@user_id>)
         if runtime_config.get("allow_bot_mentions", True):
             from discord_utils import process_outgoing_mentions
-            mentionable_users = context.get("mentionable_users")
+            mentionable_users = context.get("mention_resolution_users") or context.get("mentionable_users")
             mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
             response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
 
@@ -1857,29 +1893,37 @@ Return exactly one JSON object with this shape:
                 return False
 
         # Send first so failed Discord sends do not leak phantom assistant turns into history.
-        sent_messages, delivered_response = await self._send_organic_response(message, response)
-        if not delivered_response:
+        sent_records = await self._send_organic_response(message, response)
+        if not sent_records:
             log.warn("Response send failed before any content was delivered", self.name)
             self._record_failure(channel_id)
             return False
 
+        delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
         self._remember_recent_response(channel_id, delivered_response)
         self._reset_failures(channel_id)
         self._record_response(channel_id)
         self._update_mood(channel_id, content, delivered_response)
-        add_to_history(
-            channel_id, "assistant", delivered_response,
-            author_name=self.character.name, guild=guild,
-            timestamp=getattr(sent_messages[0], "created_at", None) if sent_messages else None
-        )
+        for record in sent_records:
+            sent_message = record["message"]
+            add_to_history(
+                channel_id, "assistant", record["content"],
+                author_name=self.character.name, guild=guild,
+                message_id=getattr(sent_message, "id", None),
+                timestamp=getattr(sent_message, "created_at", None)
+            )
 
         # Update activity
         runtime_config.update_last_activity(self.name)
         metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
 
         # Store multipart response
-        if len(sent_messages) > 1:
-            multipart_ids = [msg_id for msg_id in (getattr(m, "id", None) for m in sent_messages) if msg_id is not None]
+        if len(sent_records) > 1:
+            multipart_ids = [
+                msg_id for msg_id in
+                (getattr(record["message"], "id", None) for record in sent_records)
+                if msg_id is not None
+            ]
             if len(multipart_ids) > 1:
                 store_multipart_response(channel_id, multipart_ids, delivered_response)
 

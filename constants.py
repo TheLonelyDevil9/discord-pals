@@ -21,6 +21,7 @@ MESSAGE_DELAY_MIN = 0.5          # Minimum delay between message parts (seconds)
 MESSAGE_DELAY_MAX = 1.0          # Maximum delay between message parts (seconds)
 ERROR_DELETE_AFTER = 10          # Seconds before error messages auto-delete
 MAX_MESSAGE_LENGTH = 2000        # Discord's max message length
+MAX_RESPONSE_MESSAGE_PARTS = 3   # Max Discord messages to send for one AI response burst
 
 # =============================================================================
 # MEMORY LIMITS
