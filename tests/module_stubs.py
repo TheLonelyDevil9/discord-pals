@@ -30,6 +30,19 @@ if "aiohttp" not in sys.modules:
 if "discord" not in sys.modules:
     discord = types.ModuleType("discord")
 
+    class _CommandLike:
+        def __init__(self, callback=None, name=None, description=None):
+            self.callback = callback
+            self.name = name or getattr(callback, "__name__", "")
+            self.description = description or ""
+            self._autocomplete = {}
+
+        def autocomplete(self, param_name):
+            def decorator(func):
+                self._autocomplete[param_name] = func
+                return func
+            return decorator
+
     class User:
         pass
 
@@ -62,6 +75,7 @@ if "discord" not in sys.modules:
     class Client:
         def __init__(self, *args, **kwargs):
             self.loop = types.SimpleNamespace(is_running=lambda: False)
+            self.guilds = []
 
         def event(self, func):
             return func
@@ -69,12 +83,32 @@ if "discord" not in sys.modules:
     class CommandTree:
         def __init__(self, client):
             self.client = client
+            self._commands = []
 
-        async def sync(self):
-            return []
+        def command(self, *args, **kwargs):
+            def decorator(func):
+                command = _CommandLike(
+                    callback=func,
+                    name=kwargs.get("name"),
+                    description=kwargs.get("description"),
+                )
+                self._commands.append(command)
+                return command
+            return decorator
+
+        async def sync(self, guild=None):
+            del guild
+            return list(self._commands)
 
         def add_command(self, command):
+            self._commands.append(command)
             return command
+
+        def clear_commands(self, guild=None):
+            del guild
+
+        def copy_global_to(self, guild=None):
+            del guild
 
     class Choice:
         def __init__(self, name=None, value=None):
@@ -85,10 +119,17 @@ if "discord" not in sys.modules:
         def __init__(self, name=None, description=None):
             self.name = name
             self.description = description
+            self.commands = []
 
         def command(self, *args, **kwargs):
             def decorator(func):
-                return func
+                command = _CommandLike(
+                    callback=func,
+                    name=kwargs.get("name"),
+                    description=kwargs.get("description"),
+                )
+                self.commands.append(command)
+                return command
             return decorator
 
     def _passthrough_decorator(*args, **kwargs):
@@ -112,6 +153,7 @@ if "discord" not in sys.modules:
         Group=Group,
         describe=_passthrough_decorator,
         choices=_passthrough_decorator,
+        default_permissions=_passthrough_decorator,
     )
     discord.utils = types.SimpleNamespace(get=lambda iterable, **kwargs: None)
 

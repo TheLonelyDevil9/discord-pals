@@ -9,6 +9,7 @@ from typing import Optional, Set
 
 from discord_utils import clear_history, remove_assistant_from_history
 from character import character_manager
+from .registry import maintenance_visibility, register_command_metadata
 import logger as log
 import user_ignores
 
@@ -38,6 +39,7 @@ def setup_core_commands(bot_instance) -> None:
     tree = bot_instance.tree
     
     @tree.command(name="reload", description="Reload character from file")
+    @maintenance_visibility()
     async def cmd_reload(interaction: discord.Interaction) -> None:
         if bot_instance.character:
             bot_instance.character = character_manager.load(bot_instance.character_name)
@@ -46,9 +48,11 @@ def setup_core_commands(bot_instance) -> None:
             )
         else:
             await interaction.response.send_message("❌ No character loaded", ephemeral=True)
+    register_command_metadata(bot_instance, name="reload", audience="maintenance", description="Reload character from file")
     
     @tree.command(name="switch", description="Switch to a different character")
     @app_commands.describe(character="Character name (leave empty to list available)")
+    @maintenance_visibility()
     async def cmd_switch(interaction: discord.Interaction, character: Optional[str] = None) -> None:
         available = character_manager.list_available()
         
@@ -90,27 +94,34 @@ def setup_core_commands(bot_instance) -> None:
             await interaction.response.send_message(
                 f"❌ Failed to load '{match}'", ephemeral=True
             )
+    register_command_metadata(bot_instance, name="switch", audience="maintenance", description="Switch to a different character")
     
     @tree.command(name="clear", description="Clear conversation history")
+    @maintenance_visibility()
     async def cmd_clear(interaction: discord.Interaction) -> None:
         clear_history(interaction.channel_id)
         await interaction.response.send_message("✅ History cleared", ephemeral=True)
+    register_command_metadata(bot_instance, name="clear", audience="maintenance", description="Clear conversation history")
     
     @tree.command(name="recall", description="Load recent Discord messages into context")
     @app_commands.describe(count="Number of messages to recall (1-200)")
+    @maintenance_visibility()
     async def cmd_recall(interaction: discord.Interaction, count: int = 20) -> None:
         count = max(1, min(200, count))
         await interaction.response.defer(ephemeral=True)
         loaded = await bot_instance._recall_channel_history(interaction.channel, count)
         await interaction.followup.send(f"✅ Loaded {loaded} messages into context", ephemeral=True)
+    register_command_metadata(bot_instance, name="recall", audience="maintenance", description="Load recent Discord messages into context")
     
     @tree.command(name="status", description="Check bot status")
+    @maintenance_visibility()
     async def cmd_status(interaction: discord.Interaction) -> None:
         from providers import provider_manager
         char_name = bot_instance.character.name if bot_instance.character else "None"
         provider_status = provider_manager.get_status()
         msg = f"**Bot:** {bot_instance.name}\n**Character:** {char_name}\n\n{provider_status}"
         await interaction.response.send_message(msg, ephemeral=True)
+    register_command_metadata(bot_instance, name="status", audience="maintenance", description="Check bot status")
     
     @tree.command(name="autonomous", description="Toggle autonomous responses (owner only)")
     @app_commands.describe(
@@ -118,6 +129,7 @@ def setup_core_commands(bot_instance) -> None:
         chance="Response chance % (default: 5)",
         cooldown="Cooldown in minutes (default: 2)"
     )
+    @maintenance_visibility()
     async def cmd_autonomous(
         interaction: discord.Interaction,
         enabled: bool,
@@ -148,9 +160,11 @@ def setup_core_commands(bot_instance) -> None:
         else:
             autonomous_manager.set_channel(interaction.channel_id, False)
             await interaction.response.send_message("✅ Autonomous mode OFF", ephemeral=True)
+    register_command_metadata(bot_instance, name="autonomous", audience="maintenance", description="Toggle autonomous responses (owner only)")
     
     @tree.command(name="stop", description="Pause/resume bot-to-bot conversations globally")
     @app_commands.describe(enable="True to pause bot interactions, False to resume (omit to toggle)")
+    @maintenance_visibility()
     async def cmd_stop(interaction: discord.Interaction, enable: Optional[bool] = None) -> None:
         import runtime_config
         current = runtime_config.get("bot_interactions_paused", False)
@@ -165,9 +179,11 @@ def setup_core_commands(bot_instance) -> None:
             await interaction.response.send_message(
                 "▶️ Bot-to-bot interactions **RESUMED**", ephemeral=True
             )
+    register_command_metadata(bot_instance, name="stop", audience="maintenance", description="Pause/resume bot-to-bot conversations globally")
     
     @tree.command(name="pause", description="⚠️ KILLSWITCH: Pause/resume ALL bot activity globally (owner only)")
     @app_commands.describe(enable="True to pause all activity, False to resume (omit to toggle)")
+    @maintenance_visibility()
     async def cmd_pause(interaction: discord.Interaction, enable: Optional[bool] = None) -> None:
         # Owner-only check
         if not await is_owner(interaction):
@@ -191,9 +207,11 @@ def setup_core_commands(bot_instance) -> None:
                 "✅ **KILLSWITCH RELEASED** - Bot responses RESUMED", ephemeral=False
             )
             log.ok("Global killswitch released", bot_instance.name)
+    register_command_metadata(bot_instance, name="pause", audience="maintenance", description="Pause/resume all bot activity globally")
     
     @tree.command(name="delete_messages", description="Delete bot's last N messages")
     @app_commands.describe(count="Number of messages to delete (1-20)")
+    @maintenance_visibility()
     async def cmd_delete_messages(interaction: discord.Interaction, count: int = 1) -> None:
         count = max(1, min(20, count))
         await interaction.response.defer(ephemeral=True)
@@ -211,6 +229,7 @@ def setup_core_commands(bot_instance) -> None:
                     log.debug(f"Failed to delete message: {e}", bot_instance.name)
 
         await interaction.followup.send(f"✅ Deleted {deleted} messages", ephemeral=True)
+    register_command_metadata(bot_instance, name="delete_messages", audience="maintenance", description="Delete bot's last N messages")
 
     @tree.command(name="ignore", description="Block a bot from responding to you")
     @app_commands.describe(bot_name="Name of the bot/character to ignore")
@@ -225,6 +244,7 @@ def setup_core_commands(bot_instance) -> None:
             await interaction.response.send_message(
                 f"ℹ️ You're already ignoring **{bot_name}**.", ephemeral=True
             )
+    register_command_metadata(bot_instance, name="ignore", audience="user", description="Block a bot from responding to you")
 
     @tree.command(name="unignore", description="Allow a bot to respond to you again")
     @app_commands.describe(bot_name="Name of the bot/character to unignore")
@@ -239,6 +259,7 @@ def setup_core_commands(bot_instance) -> None:
             await interaction.response.send_message(
                 f"ℹ️ You weren't ignoring **{bot_name}**.", ephemeral=True
             )
+    register_command_metadata(bot_instance, name="unignore", audience="user", description="Allow a bot to respond to you again")
 
     @tree.command(name="ignorelist", description="Show which bots you're ignoring")
     async def cmd_ignorelist(interaction: discord.Interaction) -> None:
@@ -256,11 +277,13 @@ def setup_core_commands(bot_instance) -> None:
                 "You're not ignoring any bots. Use `/ignore <name>` to block a bot from responding to you.",
                 ephemeral=True
             )
+    register_command_metadata(bot_instance, name="ignorelist", audience="user", description="Show which bots you're ignoring")
 
     @tree.command(name="nickname-trigger", description="Enable/disable nickname-based triggers for this channel")
     @app_commands.describe(
         enabled="Enable or disable nickname triggers in this channel"
     )
+    @maintenance_visibility()
     async def cmd_nickname_trigger(
         interaction: discord.Interaction,
         enabled: bool
@@ -288,3 +311,4 @@ def setup_core_commands(bot_instance) -> None:
                 f"Nickname triggers OFF for this channel — the bot will only respond to @mentions and replies.",
                 ephemeral=True
             )
+    register_command_metadata(bot_instance, name="nickname-trigger", audience="maintenance", description="Enable/disable nickname-based triggers for this channel")

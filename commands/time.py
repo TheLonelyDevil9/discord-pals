@@ -15,6 +15,7 @@ from time_utils import (
     search_timezone_options,
     timezone_manager,
 )
+from .registry import register_command_metadata
 
 
 def setup_time_commands(bot_instance) -> None:
@@ -124,3 +125,26 @@ def setup_time_commands(bot_instance) -> None:
 
     tree.add_command(timezone_group)
     tree.add_command(reminders_group)
+    register_command_metadata(
+        bot_instance,
+        name="timezone",
+        audience="user",
+        description="Manage your personal timezone",
+        kind="group",
+        subcommands=[
+            {"name": "set", "description": "Set your personal timezone"},
+            {"name": "show", "description": "Show your effective timezone"},
+            {"name": "clear", "description": "Clear your personal timezone override"},
+        ],
+    )
+    register_command_metadata(
+        bot_instance,
+        name="reminders",
+        audience="user",
+        description="View or cancel your reminders",
+        kind="group",
+        subcommands=[
+            {"name": "list", "description": "List your pending reminders for this bot"},
+            {"name": "cancel", "description": "Cancel one of your pending reminders"},
+        ],
+    )

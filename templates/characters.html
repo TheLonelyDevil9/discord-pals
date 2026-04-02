@@ -61,7 +61,7 @@
 
 <!-- Preview Tab -->
 <div id="tab-preview" class="tab-content">
-    <p class="tab-description">See how the complete system prompt looks for each character with mock values.</p>
+    <p class="tab-description">See the complete prompt plus which character-file blocks always inject, only inject for matching users, or are ignored by the parser.</p>
     <div class="preview-controls">
         <select id="character-select" onchange="loadPreview()" title="Select a character to preview">
             <option value="">Select a character...</option>
@@ -69,13 +69,17 @@
             <option value="{{ char }}">{{ char }}</option>
             {% endfor %}
         </select>
+        <input type="text" id="preview-user-name" value="ExampleUser" placeholder="Preview user name" title="Preview user for gated User Context blocks">
         <button type="button" class="btn btn-primary" onclick="loadPreview()">Preview</button>
     </div>
     <div class="card">
         <div id="preview-meta" class="preview-meta hidden">
             <span>Character: <strong id="preview-char"></strong></span>
+            <span>User: <strong id="preview-user"></strong></span>
+            <span>Schema: <strong id="preview-schema"></strong></span>
             <span>Est. Tokens: <strong id="preview-tokens"></strong></span>
         </div>
+        <div id="preview-structure" class="preview-structure hidden"></div>
         <div id="preview-content" class="preview-content">
             <div class="empty">Select a character to preview the system prompt</div>
         </div>
@@ -263,6 +267,10 @@
     min-width: 220px;
 }
 
+.preview-controls input {
+    min-width: 220px;
+}
+
 .preview-meta {
     display: flex;
     gap: 24px;
@@ -274,6 +282,71 @@
 
 .preview-meta.hidden {
     display: none;
+}
+
+.preview-structure {
+    padding: 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: grid;
+    gap: 16px;
+}
+
+.preview-structure.hidden {
+    display: none;
+}
+
+.preview-structure-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.preview-structure-section h4 {
+    margin-bottom: 10px;
+    font-size: 0.875rem;
+}
+
+.preview-structure-item {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+
+.preview-structure-item.active {
+    border-color: var(--accent, #3b82f6);
+}
+
+.preview-structure-item.inactive {
+    opacity: 0.75;
+}
+
+.preview-structure-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.preview-structure-tag {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.preview-structure-body {
+    white-space: pre-wrap;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.preview-structure-empty {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
 }
 
 .preview-content {
@@ -412,28 +485,102 @@ function confirmDeleteCharacter(name) {
     });
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderPreviewItems(items, emptyText, formatter) {
+    if (!items || !items.length) {
+        return `<div class="preview-structure-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return items.map(formatter).join('');
+}
+
+function renderPreviewStructure(data) {
+    const structure = document.getElementById('preview-structure');
+    const matchedLabel = data.matched_user_context
+        ? `Matched preview user to <code>${escapeHtml(data.matched_user_context)}</code>.`
+        : 'No gated user context matches this preview user.';
+
+    structure.innerHTML = `
+        <div class="preview-structure-grid">
+            <div class="preview-structure-section">
+                <h4>Always Injected</h4>
+                ${renderPreviewItems(data.always_injected, 'No always-injected blocks found.', (item) => `
+                    <div class="preview-structure-item ${item.included ? 'active' : 'inactive'}">
+                        <div class="preview-structure-header">
+                            <strong>${escapeHtml(item.label)}</strong>
+                            <span class="preview-structure-tag">&lt;${escapeHtml(item.tag)}&gt;</span>
+                        </div>
+                        <div class="preview-structure-body">${escapeHtml(item.content || '(empty)')}</div>
+                    </div>
+                `)}
+            </div>
+            <div class="preview-structure-section">
+                <h4>Conditional User Context</h4>
+                <div class="preview-structure-empty" style="margin-bottom: 10px;">${matchedLabel}</div>
+                ${renderPreviewItems(data.conditional_user_contexts, 'No user-specific context blocks found.', (item) => `
+                    <div class="preview-structure-item ${item.included ? 'active' : 'inactive'}">
+                        <div class="preview-structure-header">
+                            <strong>${escapeHtml(item.label)}</strong>
+                            <span class="preview-structure-tag">${item.included ? 'injects' : 'inactive'}</span>
+                        </div>
+                        <div class="preview-structure-body">${escapeHtml(item.content || '(empty)')}</div>
+                    </div>
+                `)}
+            </div>
+            <div class="preview-structure-section">
+                <h4>Ignored Sections</h4>
+                ${renderPreviewItems(data.unused_sections, 'No ignored sections detected.', (item) => `
+                    <div class="preview-structure-item inactive">
+                        <div class="preview-structure-header">
+                            <strong>${escapeHtml(item.label)}</strong>
+                            <span class="preview-structure-tag">not injected</span>
+                        </div>
+                        <div class="preview-structure-body">${escapeHtml(item.content || '(empty)')}</div>
+                    </div>
+                `)}
+            </div>
+        </div>
+    `;
+    structure.classList.remove('hidden');
+}
+
 async function loadPreview() {
     const select = document.getElementById('character-select');
     const charName = select.value;
+    const previewUser = document.getElementById('preview-user-name').value.trim() || 'ExampleUser';
     if (!charName) {
         document.getElementById('preview-content').innerHTML = '<div class="empty">Select a character to preview the system prompt</div>';
         document.getElementById('preview-meta').classList.add('hidden');
+        document.getElementById('preview-structure').classList.add('hidden');
         return;
     }
     document.getElementById('preview-content').innerHTML = '<div class="empty">Loading...</div>';
     try {
-        const response = await fetch('/api/preview/' + encodeURIComponent(charName));
+        const params = new URLSearchParams({ user_name: previewUser });
+        const response = await fetch('/api/preview/' + encodeURIComponent(charName) + '?' + params.toString());
         const data = await response.json();
         if (data.error) {
             document.getElementById('preview-content').textContent = 'Error: ' + data.error;
+            document.getElementById('preview-structure').classList.add('hidden');
         } else {
+            renderPreviewStructure(data);
             document.getElementById('preview-content').textContent = data.prompt;
             document.getElementById('preview-char').textContent = data.character;
+            document.getElementById('preview-user').textContent = data.preview_user;
+            document.getElementById('preview-schema').textContent = data.schema_format;
             document.getElementById('preview-tokens').textContent = '~' + data.token_estimate;
             document.getElementById('preview-meta').classList.remove('hidden');
         }
     } catch (err) {
         document.getElementById('preview-content').textContent = 'Error loading preview: ' + err.message;
+        document.getElementById('preview-structure').classList.add('hidden');
     }
 }
 </script>

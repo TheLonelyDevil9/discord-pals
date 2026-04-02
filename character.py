@@ -14,11 +14,18 @@ PROMPTS_DIR = "prompts"
 
 # Pre-compiled regex patterns for character parsing
 RE_TITLE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
-RE_PERSONA = re.compile(r'##\s*Persona\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
-RE_DIALOGUE = re.compile(r'##\s*Example Dialogue\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
-RE_SPECIAL_USERS = re.compile(r'##\s*Special Users?\s*\n(.*?)(?=\n##|\Z)', re.DOTALL | re.IGNORECASE)
+RE_SECTION_HEADING = re.compile(r'^##\s+(.+?)\s*$', re.MULTILINE)
 RE_EMPTY_LINES = re.compile(r'\n{3,}')
 RE_TEMPLATE_VAR = re.compile(r'{{\s*([a-zA-Z0-9_]+)\s*}}')
+
+SECTION_ALIASES = {
+    "system persona": "persona",
+    "persona": "persona",
+    "example dialogue": "example_dialogue",
+    "user context": "special_users",
+    "special user": "special_users",
+    "special users": "special_users",
+}
 
 
 def _get_time_variables(now: Optional[datetime] = None) -> Dict[str, str]:
@@ -89,6 +96,117 @@ def _format_current_time_context(now: Optional[datetime] = None) -> str:
     )
 
 
+def _normalize_section_name(section_name: str) -> str:
+    """Normalize a markdown section heading for schema matching."""
+    return " ".join((section_name or "").strip().lower().split())
+
+
+def _extract_markdown_sections(content: str) -> list[tuple[str, str]]:
+    """Extract top-level ## markdown sections in file order."""
+    sections = []
+    matches = list(RE_SECTION_HEADING.finditer(content or ""))
+    for index, match in enumerate(matches):
+        section_name = match.group(1).strip()
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        section_body = (content[start:end] or "").strip()
+        sections.append((section_name, section_body))
+    return sections
+
+
+def _parse_special_user_blocks(section_body: str) -> tuple[dict[str, str], str]:
+    """Parse ### username blocks from a User Context/Special Users section."""
+    special_users = {}
+    orphan_lines = []
+    current_user = None
+    current_context = []
+
+    for raw_line in (section_body or "").splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("### "):
+            if current_user:
+                special_users[current_user] = "\n".join(current_context).strip()
+            current_user = line[4:].strip()
+            current_context = []
+            continue
+
+        if current_user:
+            current_context.append(line)
+        elif line.strip():
+            orphan_lines.append(line)
+
+    if current_user:
+        special_users[current_user] = "\n".join(current_context).strip()
+
+    cleaned_users = {
+        user_name: context.strip()
+        for user_name, context in special_users.items()
+        if user_name and context.strip()
+    }
+    orphan_content = "\n".join(orphan_lines).strip()
+    return cleaned_users, orphan_content
+
+
+def parse_character_content(name: str, content: str) -> "Character":
+    """Parse a character markdown file into a Character object."""
+    char_name = name.title()
+    title_match = RE_TITLE.search(content or "")
+    if title_match:
+        char_name = title_match.group(1).strip()
+
+    persona = ""
+    example_dialogue = ""
+    special_users: dict[str, str] = {}
+    unused_sections: dict[str, str] = {}
+    saw_explicit_section = False
+    saw_legacy_section = False
+
+    for section_name, section_body in _extract_markdown_sections(content or ""):
+        normalized_name = _normalize_section_name(section_name)
+        canonical_name = SECTION_ALIASES.get(normalized_name)
+
+        if normalized_name in {"system persona", "user context"}:
+            saw_explicit_section = True
+        elif normalized_name in {"persona", "special user", "special users"}:
+            saw_legacy_section = True
+
+        if canonical_name == "persona":
+            persona = f"{persona}\n\n{section_body}".strip() if persona and section_body else (section_body or persona).strip()
+        elif canonical_name == "example_dialogue":
+            example_dialogue = (
+                f"{example_dialogue}\n\n{section_body}".strip()
+                if example_dialogue and section_body else
+                (section_body or example_dialogue).strip()
+            )
+        elif canonical_name == "special_users":
+            parsed_users, orphan_content = _parse_special_user_blocks(section_body)
+            for user_name, user_context in parsed_users.items():
+                if user_name in special_users:
+                    special_users[user_name] = f"{special_users[user_name]}\n\n{user_context}".strip()
+                else:
+                    special_users[user_name] = user_context
+            if orphan_content:
+                unused_sections[f"{section_name} (ungated)"] = orphan_content
+        elif section_body:
+            unused_sections[section_name] = section_body
+
+    if saw_explicit_section and saw_legacy_section:
+        schema_format = "mixed"
+    elif saw_explicit_section:
+        schema_format = "explicit"
+    else:
+        schema_format = "legacy"
+
+    return Character(
+        char_name,
+        persona,
+        special_users,
+        example_dialogue,
+        unused_sections=unused_sections,
+        schema_format=schema_format,
+    )
+
+
 class PromptManager:
     """Manages prompt templates."""
     
@@ -133,9 +251,9 @@ class PromptManager:
         # Make substitutions (character section only)
         replacements = {
             "character_name": character_name,
-            "persona": persona,
+            "persona": f"<character_persona>\n{persona}\n</character_persona>" if persona else "",
             "special_user_context": f"<special_context>\n{special_user_context}\n</special_context>" if special_user_context else "",
-            "example_dialogue": f"## Example Dialogue\n\n{example_dialogue}" if example_dialogue else "",
+            "example_dialogue": f"<example_dialogue>\n{example_dialogue}\n</example_dialogue>" if example_dialogue else "",
             "current_time_context": _format_current_time_context(now),
         }
 
@@ -193,25 +311,32 @@ class PromptManager:
 class Character:
     """Represents a loaded character definition."""
 
-    def __init__(self, name: str, persona: str, special_users: Dict[str, str] = None, example_dialogue: str = ""):
+    def __init__(
+        self,
+        name: str,
+        persona: str,
+        special_users: Dict[str, str] = None,
+        example_dialogue: str = "",
+        *,
+        unused_sections: Dict[str, str] = None,
+        schema_format: str = "legacy",
+    ):
         self.name = name
         self.persona = persona
         self.special_users = special_users or {}
         self.example_dialogue = example_dialogue
+        self.unused_sections = unused_sections or {}
+        self.schema_format = schema_format
 
-    def get_special_user_context(self, user_name: str) -> str:
-        """Get special context for a user with fuzzy matching for Discord display names.
+    def match_special_user_context(self, user_name: str) -> tuple[str | None, str]:
+        """Return the matched special-user key and content for a display name."""
+        if not user_name:
+            return None, ""
 
-        Matching order:
-        1. Exact match (fastest path)
-        2. Display name starts with special user name ("Kris WaWa" matches "Kris")
-        3. Special user name appears as a word in display name ("The Real Kris" matches "Kris")
-        """
         # Exact match first
         if user_name in self.special_users:
-            return self.special_users[user_name]
+            return user_name, self.special_users[user_name]
 
-        # Fuzzy matching for Discord display names
         user_lower = user_name.lower()
         for special_name, context in self.special_users.items():
             special_lower = special_name.lower()
@@ -221,14 +346,52 @@ class Character:
             if (user_lower.startswith(special_lower + " ") or
                 user_lower.startswith(special_lower + "_") or
                 user_lower == special_lower):
-                return context
+                return special_name, context
 
             # Check if special name appears as a complete word
             # Handles "The Real Kris" matching "Kris"
             if re.search(rf'\b{re.escape(special_lower)}\b', user_lower):
-                return context
+                return special_name, context
 
-        return ""
+        return None, ""
+
+    def get_special_user_context(self, user_name: str) -> str:
+        """Get special context for a user with fuzzy matching for Discord display names."""
+        return self.match_special_user_context(user_name)[1]
+
+    def get_preview_data(self, user_name: str) -> dict:
+        """Return structured preview data for dashboard gating and schema visibility."""
+        matched_user, _ = self.match_special_user_context(user_name)
+        return {
+            "always_injected": [
+                {
+                    "label": "System Persona",
+                    "tag": "character_persona",
+                    "included": bool(self.persona.strip()),
+                    "content": self.persona,
+                },
+                {
+                    "label": "Example Dialogue",
+                    "tag": "example_dialogue",
+                    "included": bool(self.example_dialogue.strip()),
+                    "content": self.example_dialogue,
+                },
+            ],
+            "conditional_user_contexts": [
+                {
+                    "label": special_name,
+                    "tag": "special_context",
+                    "included": matched_user == special_name,
+                    "content": context,
+                }
+                for special_name, context in self.special_users.items()
+            ],
+            "unused_sections": [
+                {"label": section_name, "content": section_body}
+                for section_name, section_body in self.unused_sections.items()
+            ],
+            "matched_user_context": matched_user,
+        }
 
 
 class CharacterManager:
@@ -266,48 +429,8 @@ class CharacterManager:
         
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-        
-        # Parse sections
-        char_name = name.title()
-        persona = ""
-        example_dialogue = ""
-        special_users = {}
 
-        # Extract character name from title
-        title_match = RE_TITLE.search(content)
-        if title_match:
-            char_name = title_match.group(1).strip()
-
-        # Extract Persona section
-        persona_match = RE_PERSONA.search(content)
-        if persona_match:
-            persona = persona_match.group(1).strip()
-
-        # Extract Example Dialogue section
-        dialogue_match = RE_DIALOGUE.search(content)
-        if dialogue_match:
-            example_dialogue = dialogue_match.group(1).strip()
-
-        # Extract Special Users section
-        special_match = RE_SPECIAL_USERS.search(content)
-        if special_match:
-            lines = special_match.group(1).strip().split('\n')
-            current_user = None
-            current_context = []
-
-            for line in lines:
-                if line.startswith('### '):
-                    if current_user:
-                        special_users[current_user] = '\n'.join(current_context).strip()
-                    current_user = line[4:].strip()
-                    current_context = []
-                elif current_user:
-                    current_context.append(line)
-
-            if current_user:
-                special_users[current_user] = '\n'.join(current_context).strip()
-
-        character = Character(char_name, persona, special_users, example_dialogue)
+        character = parse_character_content(name, content)
         self.characters[name] = character
         return character
     

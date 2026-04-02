@@ -641,6 +641,16 @@ If upgrading from v1.7.x or earlier, the old 5-store memory system (server memor
 
 ## Commands
 
+Slash commands include both user-facing actions and maintenance/admin actions. Grouped commands show up in Discord as nested entries such as `/timezone set` and `/reminders list`, not as flat commands.
+
+Regular users should primarily see and use:
+
+- `/interact`
+- `/ignore`, `/unignore`, `/ignorelist`
+- `/memory`, `/memories`
+- `/timezone set`, `/timezone show`, `/timezone clear`
+- `/reminders list`, `/reminders cancel`
+
 ### Core Commands
 
 | Command | Description |
@@ -890,28 +900,52 @@ IMPORTANT: Do NOT roleplay as or impersonate these other bots: [BotA, BotB, ...]
 ```markdown
 # Character Name
 
-## Persona
+## System Persona
 
 Write your character's personality, backstory, appearance, mannerisms here.
 Be as detailed as you want - the AI will use all of it!
 
-## Special Users
+## Example Dialogue
+
+Optional sample lines that show how the character actually talks.
+
+## User Context
 
 ### YourDiscordName (this has to be the full username such as thelonelydevil)
-How to treat this specific user differently.
+How to treat this specific user differently. This block only injects when the current reply target matches this user.
 
 ### DiscordName2
 Stuff/special treatment, etc.
 ```
 
-1. Run `/character set mycharacter`
+3. Use `/switch mycharacter` or the dashboard Character Switcher to activate it.
+
+### What Injects Into Context
+
+- `## System Persona` always injects into the character/system prompt
+- `## Example Dialogue` injects when present
+- `## User Context` only injects the matching `### username` block for the current reply target
+- any other `## Section` is ignored by the parser and shown as ignored in preview
+
+The Characters preview tab now shows:
+
+- always-injected blocks
+- gated user-context blocks for a chosen preview user
+- ignored sections that are not consumed by the parser
 
 ### Advanced Character Template
 
 ```markdown
 # Samuel
 
-## Persona
+## System Persona
+
+Samuel's personality: warm, sarcastic, loyal, coffee-addict, night-owl;
+Samuel's likes: vinyl records, black coffee, rainy days, deep conversations;
+Samuel's dislikes: mornings, small talk, dishonesty;
+Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
+
+## Example Dialogue
 
 `{{user}}`: Introduction?
 `Samuel`: *smiles warmly* "Hey there! I'm Sam - short for Samuel.
@@ -922,36 +956,16 @@ I'm a coffee addict, terrible at mornings, and I collect vintage vinyl records."
 definitely loyal to my friends. I hate small talk but I'll debate
 philosophy for hours."
 
-```
-
-Samuel's personality: warm, sarcastic, loyal, coffee-addict, night-owl;
-Samuel's likes: vinyl records, black coffee, rainy days, deep conversations;
-Samuel's dislikes: mornings, small talk, dishonesty;
-Samuel's speech: casual, uses contractions, occasional swearing, dry humor;
-
-```
-
-## Provider
-
-primary
-
-## Special Users
+## User Context
 
 ### TheLonelyDevil
 
 Samuel's best friend. Very comfortable around them, teases them often.
-
 ```
 
 ### Per-Character Provider Selection
 
-You can specify a preferred AI provider tier for each character by adding a `## Provider` section to the character file:
-
-```markdown
-## Provider
-
-primary
-```
+Per-character provider preference is managed in the dashboard Config page, not in the character markdown file.
 
 Valid values are:
 
@@ -964,8 +978,6 @@ Valid values are:
 **Note:** Discord Pals supports **unlimited providers** in your fallback chain. The first three get named tiers for convenience, but you can add as many as you need. The web dashboard shows tier names next to each provider for clarity.
 
 This is useful when different characters work better with different models. For example, you might want a complex character to always use your best model, while simpler characters can use faster/cheaper providers.
-
-The provider dropdown in the character edit page automatically manages this section for you.
 
 ## Running Multiple Bots
 
@@ -1316,7 +1328,10 @@ discord-pals/
 
 ### Commands don't show up
 
-→ Wait 1 hour or kick and re-invite the bot
+1. Fully restart the bot process so it re-syncs commands on startup
+2. Confirm the bot invite includes the `applications.commands` scope
+3. Check the dashboard Config page's **Slash Command Sync** section for the last global/guild sync result
+4. Look for grouped commands as `/timezone set` and `/reminders list`, not flat commands like `/timezone`
 
 ### "All providers failed"
 

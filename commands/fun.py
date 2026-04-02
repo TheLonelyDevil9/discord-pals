@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 
 from discord_utils import get_user_display_name
+from .registry import register_command_metadata
 
 
 class SyntheticMessage:
@@ -86,3 +87,4 @@ def setup_fun_commands(bot_instance) -> None:
     @app_commands.describe(action="What you do (e.g., 'hugs you', 'asks how you feel about me')")
     async def cmd_interact(interaction: discord.Interaction, action: str) -> None:
         await handle_interact_command(bot_instance, interaction, action)
+    register_command_metadata(bot_instance, name="interact", audience="user", description="Perform a free-form interaction")

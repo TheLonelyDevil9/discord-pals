@@ -8,6 +8,7 @@ from discord import app_commands
 from typing import Optional
 
 from memory import memory_manager
+from .registry import maintenance_visibility, register_command_metadata
 
 
 def setup_memory_commands(bot_instance) -> None:
@@ -46,6 +47,7 @@ def setup_memory_commands(bot_instance) -> None:
                 await interaction.response.send_message("Duplicate memory — already saved", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"Error saving memory: {str(e)}", ephemeral=True)
+    register_command_metadata(bot_instance, name="memory", audience="user", description="Save a memory about yourself or a user")
 
     @tree.command(name="memories", description="View saved memories")
     async def cmd_memories(interaction: discord.Interaction) -> None:
@@ -61,6 +63,7 @@ def setup_memory_commands(bot_instance) -> None:
             )
         else:
             await interaction.response.send_message("No memories saved yet.", ephemeral=True)
+    register_command_metadata(bot_instance, name="memories", audience="user", description="View saved memories")
 
     @tree.command(name="lore", description="Add/view lore")
     @app_commands.describe(
@@ -73,6 +76,7 @@ def setup_memory_commands(bot_instance) -> None:
         app_commands.Choice(name="User", value="user"),
         app_commands.Choice(name="Bot", value="bot"),
     ])
+    @maintenance_visibility()
     async def cmd_lore(
         interaction: discord.Interaction,
         content: Optional[str] = None,
@@ -115,6 +119,7 @@ def setup_memory_commands(bot_instance) -> None:
                 )
             else:
                 await interaction.response.send_message(f"No lore set for {lore_type}: {tid}", ephemeral=True)
+    register_command_metadata(bot_instance, name="lore", audience="maintenance", description="Add or view lore")
 
     @tree.command(name="clearmemories", description="Clear saved memories")
     @app_commands.describe(
@@ -127,6 +132,7 @@ def setup_memory_commands(bot_instance) -> None:
         app_commands.Choice(name="User Lore", value="user_lore"),
         app_commands.Choice(name="Bot Lore", value="bot_lore")
     ])
+    @maintenance_visibility()
     async def cmd_clearmemories(
         interaction: discord.Interaction,
         memory_type: app_commands.Choice[str],
@@ -163,3 +169,4 @@ def setup_memory_commands(bot_instance) -> None:
                 await interaction.response.send_message(f"Bot lore cleared for {target_id}", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"Error: {str(e)}", ephemeral=True)
+    register_command_metadata(bot_instance, name="clearmemories", audience="maintenance", description="Clear saved memories")

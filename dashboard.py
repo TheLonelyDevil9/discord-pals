@@ -149,6 +149,38 @@ def get_character_files():
     return files
 
 
+def _serialize_command_sync_status(bot) -> dict:
+    """Return a dashboard-safe command sync status payload for a bot."""
+    status = getattr(bot, "command_sync_status", None)
+    if isinstance(status, dict) and status.get("top_level_commands") is not None:
+        return {
+            "bot_name": status.get("bot_name", getattr(bot, "name", "Unknown")),
+            "last_attempt_at": status.get("last_attempt_at"),
+            "last_success_at": status.get("last_success_at"),
+            "top_level_commands": list(status.get("top_level_commands", [])),
+            "grouped_subcommands": dict(status.get("grouped_subcommands", {})),
+            "commands": list(status.get("commands", [])),
+            "audiences": {
+                "user": list(status.get("audiences", {}).get("user", [])),
+                "maintenance": list(status.get("audiences", {}).get("maintenance", [])),
+            },
+            "global": dict(status.get("global", {})),
+            "guilds": list(status.get("guilds", [])),
+        }
+
+    return {
+        "bot_name": getattr(bot, "name", "Unknown"),
+        "last_attempt_at": None,
+        "last_success_at": None,
+        "top_level_commands": [],
+        "grouped_subcommands": {},
+        "commands": [],
+        "audiences": {"user": [], "maintenance": []},
+        "global": {"ok": False, "count": 0, "error": None},
+        "guilds": [],
+    }
+
+
 def _resolve_character_option(available_characters, *candidates):
     """Resolve a bot's current character to one of the available option values."""
     if not available_characters:
@@ -621,7 +653,16 @@ def new_character():
             if not path.exists():
                 CHARACTERS_DIR.mkdir(exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f:
-                    f.write(f"# {name}\n\n## Persona\n\nDescribe your character here.\n\n## Special Users\n\n")
+                    f.write(
+                        f"# {name}\n\n"
+                        "## System Persona\n\n"
+                        "Describe the character's personality, voice, values, and behavior here.\n\n"
+                        "## Example Dialogue\n\n"
+                        "Optional sample lines that show how they speak.\n\n"
+                        "## User Context\n\n"
+                        "### ExampleUser\n"
+                        "Optional gated context for this specific user only.\n"
+                    )
             return redirect(url_for('edit_character', name=name))
         except ValueError as e:
             log.warn(f"Invalid character name: {e}")
@@ -942,6 +983,7 @@ def config_page():
         providers_dict=PROVIDERS,
         character_providers=CHARACTER_PROVIDERS,
         bots=bots_info,
+        command_sync_statuses=[_serialize_command_sync_status(bot) for bot in bot_instances],
         providers_raw=providers_raw,
         bots_raw=bots_raw,
         autonomous_raw=autonomous_raw,
@@ -1018,6 +1060,16 @@ def api_bot_timezones():
         'status': 'ok',
         'bot_name': bot_name,
         'timezone': timezone_name or ''
+    })
+
+
+@app.route('/api/command-sync-status')
+def api_command_sync_status():
+    """Return per-bot slash-command inventory and latest sync results."""
+    return jsonify({
+        'status': 'ok',
+        'bots': [_serialize_command_sync_status(bot) for bot in bot_instances],
+        'total': len(bot_instances),
     })
 
 
@@ -1254,11 +1306,8 @@ def stats_page():
 
 @app.route('/preview')
 def preview_page():
-    """Character preview page."""
-    from character import character_manager
-    
-    characters = character_manager.list_available()
-    return render_template('preview.html', characters=characters)
+    """Redirect to the merged Characters page preview tab."""
+    return redirect(url_for('characters'))
 
 
 @app.route('/api/preview/<name>')
@@ -1270,11 +1319,13 @@ def api_preview(name):
         character = character_manager.load(name)
         if not character:
             return jsonify({'error': f'Character "{name}" not found'})
+
+        preview_user = request.args.get('user_name', 'ExampleUser').strip() or "ExampleUser"
         
         # Build system prompt (character section only)
         system_prompt = character_manager.build_system_prompt(
             character=character,
-            user_name="ExampleUser"
+            user_name=preview_user
         )
         
         # Build chatroom context with mock values
@@ -1284,17 +1335,24 @@ def api_preview(name):
             emojis=":wave: :heart: :fire:",
             lore="This is example lore text that would be loaded from the server.",
             memories="User loves cats and hates rainy days.\nUser mentioned they work as a developer.",
-            user_name="ExampleUser",
+            user_name=preview_user,
             active_users=["Alice", "Bob", "Charlie"]
         )
         
         # Combine both sections for full preview
         full_prompt = f"{system_prompt}\n\n---\n\n{chatroom_context}"
+        preview_data = character.get_preview_data(preview_user)
         
         token_estimate = len(full_prompt) // 4
         
         return jsonify({
             'character': character.name,
+            'preview_user': preview_user,
+            'schema_format': character.schema_format,
+            'always_injected': preview_data["always_injected"],
+            'conditional_user_contexts': preview_data["conditional_user_contexts"],
+            'matched_user_context': preview_data["matched_user_context"],
+            'unused_sections': preview_data["unused_sections"],
             'prompt': full_prompt,
             'token_estimate': token_estimate
         })

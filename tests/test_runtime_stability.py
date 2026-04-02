@@ -133,6 +133,29 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([item["content"] for item in sent], ["Sure.", "I'll tag them now."])
 
+    async def test_send_organic_response_can_split_long_single_paragraph_on_sentences(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "Both? Himeko already made a pot earlier but I'll never say no to more coffee. "
+                "And the hugs are non-negotiable, I've been on that observation deck for hours and I'm cold."
+            )
+
+        self.assertEqual(len(sent), 2)
+        self.assertTrue(sent[0]["content"].startswith("Both?"))
+        self.assertTrue(sent[1]["content"].startswith("And the hugs"))
+
     async def test_send_organic_response_caps_natural_burst_length(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"

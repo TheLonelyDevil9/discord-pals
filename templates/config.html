@@ -280,6 +280,84 @@
     </div>
 </div>
 
+<!-- Slash Command Sync -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Slash Command Sync</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 16px;">
+            Commands are globally synced and then copied into connected guilds for faster visibility. Your bot invite still needs the
+            <code>applications.commands</code> scope.
+        </p>
+        {% for status in command_sync_statuses %}
+        <div class="auto-section">
+            <div class="auto-section-header">{{ status.bot_name }}</div>
+            <p class="form-hint">
+                Last attempt: {{ status.last_attempt_at or 'Never' }} |
+                Last success: {{ status.last_success_at or 'Never' }}
+            </p>
+            <p class="form-hint">
+                Global sync:
+                {% if status.global.ok %}
+                OK ({{ status.global.count }} entries)
+                {% else %}
+                Failed{% if status.global.error %} — {{ status.global.error }}{% endif %}
+                {% endif %}
+            </p>
+            <p class="form-hint">
+                User-facing:
+                {% if status.audiences.user %}
+                    {% for name in status.audiences.user %}
+                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                {% else %}
+                none
+                {% endif %}
+            </p>
+            <p class="form-hint">
+                Maintenance:
+                {% if status.audiences.maintenance %}
+                    {% for name in status.audiences.maintenance %}
+                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                {% else %}
+                none
+                {% endif %}
+            </p>
+            {% if status.grouped_subcommands %}
+            <ul class="channel-list">
+                {% for group_name, subcommands in status.grouped_subcommands.items() %}
+                <li>
+                    <span class="channel-tag">/{{ group_name }}</span>
+                    <span class="text-muted">{{ subcommands|join(', ') }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            {% if status.guilds %}
+            <ul class="channel-list">
+                {% for guild in status.guilds %}
+                <li>
+                    <span class="channel-tag">{{ guild.name }}</span>
+                    <span class="text-muted">
+                        {% if guild.ok %}
+                        synced {{ guild.count }} entries
+                        {% else %}
+                        sync failed{% if guild.error %}: {{ guild.error }}{% endif %}
+                        {% endif %}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="text-muted">No guild sync results recorded yet.</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- Bot-on-Bot Fall-off -->
 <div class="card">
     <div class="card-header">

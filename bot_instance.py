@@ -28,7 +28,7 @@ from discord_utils import (
     split_message,
     was_recently_cleared, acknowledge_cleared
 )
-from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes
+from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
@@ -110,6 +110,122 @@ class BotInstance:
         # Set up events and commands
         self._setup_events()
         self._setup_commands()
+        self.command_sync_status = self._build_command_sync_status()
+
+    def _get_command_inventory(self) -> list[dict]:
+        """Return registered slash-command metadata for this bot."""
+        from commands.registry import get_command_inventory
+
+        return get_command_inventory(self)
+
+    def _build_command_sync_status(
+        self,
+        *,
+        last_attempt_at: str | None = None,
+        last_success_at: str | None = None,
+        global_ok: bool = False,
+        global_count: int = 0,
+        global_error: str | None = None,
+        guild_results: list[dict] | None = None,
+    ) -> dict:
+        """Build a serializable command sync status payload for logs and dashboard."""
+        inventory = self._get_command_inventory()
+        grouped_subcommands = {
+            entry["name"]: [sub["name"] for sub in entry.get("subcommands", [])]
+            for entry in inventory
+            if entry.get("kind") == "group"
+        }
+        audiences = {
+            "user": [entry["name"] for entry in inventory if entry.get("audience") == "user"],
+            "maintenance": [entry["name"] for entry in inventory if entry.get("audience") == "maintenance"],
+        }
+
+        return {
+            "bot_name": self.name,
+            "last_attempt_at": last_attempt_at,
+            "last_success_at": last_success_at,
+            "top_level_commands": [entry["name"] for entry in inventory],
+            "grouped_subcommands": grouped_subcommands,
+            "commands": inventory,
+            "audiences": audiences,
+            "global": {
+                "ok": global_ok,
+                "count": global_count,
+                "error": global_error,
+            },
+            "guilds": list(guild_results or []),
+        }
+
+    def _format_command_inventory_for_log(self, inventory: list[dict]) -> str:
+        """Render a compact slash-command inventory string for startup logs."""
+        rendered = []
+        for entry in inventory:
+            if entry.get("kind") == "group":
+                subcommands = ", ".join(sub["name"] for sub in entry.get("subcommands", []))
+                rendered.append(f"/{entry['name']} [{subcommands}]")
+            else:
+                rendered.append(f"/{entry['name']}")
+        return ", ".join(rendered)
+
+    async def _sync_slash_commands(self) -> dict:
+        """Sync slash commands globally and per guild, recording detailed status."""
+        inventory = self._get_command_inventory()
+        if inventory:
+            log.info(f"Slash command inventory: {self._format_command_inventory_for_log(inventory)}", self.name)
+
+        last_attempt_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        last_success_at = None
+        global_ok = False
+        global_count = 0
+        global_error = None
+        guild_results = []
+
+        try:
+            synced = await self.tree.sync()
+            global_ok = True
+            global_count = len(synced)
+            last_success_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            log.ok(f"Globally synced {global_count} slash command entries", self.name)
+        except Exception as e:
+            global_error = str(e)
+            log.error(f"Global command sync failed: {e}", self.name)
+
+        for guild in getattr(self.client, "guilds", []):
+            guild_result = {
+                "id": getattr(guild, "id", None),
+                "name": getattr(guild, "name", f"Guild {getattr(guild, 'id', '?')}"),
+                "ok": False,
+                "count": 0,
+                "error": None,
+            }
+            try:
+                if hasattr(self.tree, "clear_commands"):
+                    self.tree.clear_commands(guild=guild)
+                if hasattr(self.tree, "copy_global_to"):
+                    self.tree.copy_global_to(guild=guild)
+                guild_synced = await self.tree.sync(guild=guild)
+                guild_result["ok"] = True
+                guild_result["count"] = len(guild_synced)
+                last_success_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                log.info(
+                    f"Guild slash sync ok for {guild_result['name']} ({guild_result['count']} entries)",
+                    self.name,
+                )
+            except Exception as e:
+                guild_result["error"] = str(e)
+                log.warn(f"Guild slash sync failed for {guild_result['name']}: {e}", self.name)
+            guild_results.append(guild_result)
+
+        status = self._build_command_sync_status(
+            last_attempt_at=last_attempt_at,
+            last_success_at=last_success_at,
+            global_ok=global_ok,
+            global_count=global_count,
+            global_error=global_error,
+            guild_results=guild_results,
+        )
+        self.command_sync_status = status
+        return status
 
     # === MESSAGE HANDLING HELPERS (for on_message) ===
 
@@ -1102,12 +1218,7 @@ Return exactly one JSON object with this shape:
                 online=True
             )
 
-            # Sync commands
-            try:
-                synced = await self.tree.sync()
-                log.ok(f"Synced {len(synced)} commands", self.name)
-            except Exception as e:
-                log.error(f"Command sync failed: {e}", self.name)
+            await self._sync_slash_commands()
 
             log.online(f"{self.client.user} is online!", self.name)
         
@@ -1272,6 +1383,31 @@ Return exactly one JSON object with this shape:
         )
         return starts_like_new_thought and (ends_cleanly or len(previous_line) <= 60)
 
+    @staticmethod
+    def _split_plain_response_sentences(response: str) -> list[str]:
+        """Split long single-paragraph responses into short natural bursts."""
+        normalized = (response or "").strip()
+        if not normalized or "\n" in normalized or len(normalized) < 80:
+            return []
+
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?…])\s+", normalized) if part.strip()]
+        if len(sentences) < 2:
+            return []
+
+        grouped = []
+        current_sentences = [sentences[0]]
+        for sentence in sentences[1:]:
+            current = " ".join(current_sentences).strip()
+            candidate = f"{current} {sentence}".strip()
+            if len(current_sentences) >= 2 or len(current) >= 90 or len(candidate) > 120:
+                grouped.append(current)
+                current_sentences = [sentence]
+            else:
+                current_sentences.append(sentence)
+        grouped.append(" ".join(current_sentences).strip())
+
+        return grouped if len(grouped) > 1 else []
+
     def _split_response_for_delivery(self, response: str) -> list[str]:
         """Turn one model response into natural Discord-sized message parts."""
         normalized = (response or "").replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -1299,6 +1435,11 @@ Return exactly one JSON object with this shape:
 
         if not logical_parts:
             logical_parts = [normalized]
+
+        if len(logical_parts) == 1:
+            sentence_parts = self._split_plain_response_sentences(logical_parts[0])
+            if sentence_parts:
+                logical_parts = sentence_parts
 
         if len(logical_parts) > MAX_RESPONSE_MESSAGE_PARTS:
             overflow = "\n\n".join(logical_parts[MAX_RESPONSE_MESSAGE_PARTS - 1:])
@@ -1826,9 +1967,7 @@ Return exactly one JSON object with this shape:
             return None
 
         # Sanitize response (pass character name for third-person self-reference detection)
-        response = remove_thinking_tags(response, self.character.name)
-        response = clean_bot_name_prefix(response, self.character.name)
-        response = clean_em_dashes(response)
+        response = sanitize_response(response, self.character.name)
         response = self._strip_other_bot_prefixes(response, other_bot_names)
 
         return response

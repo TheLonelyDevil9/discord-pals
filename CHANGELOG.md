@@ -4,6 +4,27 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.3] - 2026-04-02
+
+### Added
+
+- Dashboard-visible slash-command sync status, plus a read-only `/api/command-sync-status` endpoint for remote verification
+- Regression coverage for grouped slash-command registration/sync, command status rendering, explicit character schema parsing, preview gating, and sentence-based reply bursting
+
+### Changed
+
+- **Slash-command rollout** — bots now sync commands globally and then copy/sync them per connected guild at startup so grouped commands like `/timezone set` and `/reminders list` appear faster to end users
+- **Command audit** — grouped `/timezone` and `/reminders` commands stay in place, while maintenance/admin commands are now classified separately and restricted with Discord-side default permissions where supported
+- **Character markdown schema** — new character files now scaffold with `## System Persona`, `## Example Dialogue`, and `## User Context`, and the preview UI now shows always-injected, gated, and ignored sections explicitly
+- **Character prompt injection** — character-file headings are now parser-only; runtime prompt assembly injects tagged blocks like `<character_persona>`, `<example_dialogue>`, and `<special_context>` instead of reinserting markdown headers
+- **Docs** — command troubleshooting now points to restart, sync status, and `applications.commands` scope guidance, and character docs no longer claim provider preference lives in the markdown file
+
+### Fixed
+
+- **Grouped command discoverability** — startup logs now print grouped slash-command inventory clearly, reducing confusion around `/timezone` and `/reminders` not appearing as flat commands
+- **Character preview routing** — the legacy `/preview` route now redirects to the merged Characters page instead of targeting a missing template
+- **Legacy user-context parsing** — legacy `## Special Users` files now preserve fuzzy user matching correctly under the new parser
+- **Natural multi-message fallback** — long one-line replies without explicit newlines can now split into multiple Discord sends on sentence boundaries, so chat pacing still works when the model returns one flat paragraph
 ## [v1.11.2] - 2026-04-01
 
 ### Added
