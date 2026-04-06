@@ -41,6 +41,12 @@ RE_MARKDOWN_THINKING = re.compile(r'\*\*(?:Thinking|Reasoning|Internal|Analysis)
 RE_REASONING_PREFIX = re.compile(r'^(?:Thinking:|Reasoning:|Let me think|I need to think|First, I should).*$', re.MULTILINE | re.IGNORECASE)
 RE_OUTPUT_WRAPPER = re.compile(r'<output>(.*?)</output>', re.DOTALL | re.IGNORECASE)
 RE_RESPONSE_WRAPPER = re.compile(r'<response>(.*?)</response>', re.DOTALL | re.IGNORECASE)
+RE_HTML_BREAK = re.compile(r'<br\s*/?>', re.IGNORECASE)
+RE_XML_CDATA = re.compile(r'<!\[CDATA\[(.*?)\]\]>', re.DOTALL)
+RE_XML_PROCESSING = re.compile(r'<\?.*?\?>', re.DOTALL)
+RE_XML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
+RE_XML_DOCTYPE = re.compile(r'<!DOCTYPE.*?>', re.DOTALL | re.IGNORECASE)
+RE_GENERIC_MARKUP_TAG = re.compile(r'</?[A-Za-z][\w:-]*(?:\s+[^<>]*?)?\s*/?>')
 RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
 
 # GLM 4.7 plain-text reasoning
@@ -358,6 +364,25 @@ def clean_em_dashes(text: str) -> str:
     return text
 
 
+def clean_markup_leakage(text: str) -> str:
+    """Strip leaked XML/HTML-ish markup while preserving Discord syntax."""
+    if not text or "<" not in text or ">" not in text:
+        return text
+
+    text = RE_HTML_BREAK.sub("\n", text)
+    text = RE_XML_CDATA.sub(r'\1', text)
+    text = RE_XML_PROCESSING.sub('', text)
+    text = RE_XML_COMMENT.sub('', text)
+    text = RE_XML_DOCTYPE.sub('', text)
+    text = RE_GENERIC_MARKUP_TAG.sub('', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n[ \t]+', '\n', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'\s+([,.;!?])', r'\1', text)
+    text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
+    return text.strip()
+
+
 def sanitize_response(text: str, character_name: str = None) -> str:
     """Apply all sanitization steps to a response.
 
@@ -373,5 +398,6 @@ def sanitize_response(text: str, character_name: str = None) -> str:
 
     text = remove_thinking_tags(text)
     text = clean_bot_name_prefix(text, character_name)
+    text = clean_markup_leakage(text)
     text = clean_em_dashes(text)
     return text.strip()

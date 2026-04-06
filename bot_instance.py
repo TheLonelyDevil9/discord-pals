@@ -86,6 +86,41 @@ _NON_TERMINAL_ABBREVIATIONS = frozenset({
     "u.k.",
 })
 
+_FOLLOWUP_TOPIC_STOPWORDS = frozenset({
+    "about",
+    "after",
+    "again",
+    "been",
+    "before",
+    "being",
+    "from",
+    "have",
+    "into",
+    "just",
+    "like",
+    "make",
+    "more",
+    "only",
+    "really",
+    "some",
+    "still",
+    "that",
+    "them",
+    "then",
+    "they",
+    "this",
+    "those",
+    "very",
+    "what",
+    "when",
+    "where",
+    "while",
+    "with",
+    "would",
+    "your",
+    "youre",
+})
+
 
 class BotInstance:
     """Encapsulates a single Discord bot with its own client, character, and state."""
@@ -222,8 +257,6 @@ class BotInstance:
             try:
                 if hasattr(self.tree, "clear_commands"):
                     self.tree.clear_commands(guild=guild)
-                if hasattr(self.tree, "copy_global_to"):
-                    self.tree.copy_global_to(guild=guild)
                 guild_synced = await self.tree.sync(guild=guild)
                 guild_result["ok"] = True
                 guild_result["count"] = len(guild_synced)
@@ -1261,7 +1294,8 @@ Return exactly one JSON object with this shape:
                     "last_user_msg": time.time(),
                     "followups_sent": 0,
                     "last_followup": self._dm_followup_state.get(message.author.id, {}).get("last_followup", 0),
-                    "channel_id": channel_id
+                    "channel_id": channel_id,
+                    "user_name": get_user_display_name(message.author),
                 }
 
             # User rate limiting - prevent spam
@@ -2486,6 +2520,123 @@ Return exactly one JSON object with this shape:
 
         return None
 
+    @staticmethod
+    def _extract_followup_topic_terms(text: str) -> set[str]:
+        """Extract lightweight topic terms so long-gap follow-ups can pivot cleanly."""
+        normalized = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+        return {
+            word for word in normalized.split()
+            if len(word) >= 3 and word not in _FOLLOWUP_TOPIC_STOPWORDS
+        }
+
+    @classmethod
+    def _choose_distinct_followup_memory_hook(cls, memories_text: str, recent_topic: str) -> str | None:
+        """Pick a memory hook with minimal overlap against the most recent topic."""
+        memory_lines = [
+            line[2:].strip()
+            for line in (memories_text or "").splitlines()
+            if line.strip().startswith("- ")
+        ]
+        if not memory_lines:
+            return None
+
+        recent_terms = cls._extract_followup_topic_terms(recent_topic)
+        best_line = None
+        best_score = None
+
+        for idx, line in enumerate(memory_lines):
+            line_terms = cls._extract_followup_topic_terms(line)
+            overlap = len(recent_terms & line_terms) if recent_terms and line_terms else 0
+            score = (overlap, idx)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_line = line
+
+        return best_line
+
+    @staticmethod
+    def _is_long_gap_dm_followup(idle_seconds: float, timeout_mins: int) -> bool:
+        """Treat long DM silences as a cue to pivot topics instead of resuming directly."""
+        return idle_seconds >= max(timeout_mins * 60 * 2, 4 * 60 * 60)
+
+    def _build_dm_followup_prompt(
+        self,
+        *,
+        user_id: int,
+        user_name: str,
+        history: list[dict],
+        idle_seconds: float,
+        timeout_mins: int,
+    ) -> tuple[str, str]:
+        """Build a DM follow-up prompt that pivots topics after long silences."""
+        char_name = self.character.name if self.character else "the bot"
+        recent_messages = history[-6:]
+        context_lines = []
+        for item in recent_messages:
+            content = " ".join(str(item.get("content", "")).split())
+            if not content:
+                continue
+            author = item.get("author") or ("You" if item.get("role") == "assistant" else user_name or "User")
+            context_lines.append(f"{author}: {content[:160]}")
+        context = "\n".join(context_lines) if context_lines else "No recent messages."
+
+        recent_topic_lines = []
+        for item in history[-4:]:
+            content = " ".join(str(item.get("content", "")).split())
+            if content:
+                recent_topic_lines.append(content[:160])
+        recent_topic = " ".join(recent_topic_lines).strip() or "No clear recent topic."
+
+        memories = memory_manager.get_all_memories_for_context(0, user_id, user_name)
+        memories = remove_thinking_tags(memories).strip() if memories else ""
+        memory_lines = [line.strip() for line in memories.splitlines() if line.strip()]
+        memories_excerpt = "\n".join(memory_lines[:8]) if memory_lines else "No saved memories."
+
+        idle_hours = idle_seconds / 3600
+        long_gap = self._is_long_gap_dm_followup(idle_seconds, timeout_mins)
+        distinct_hook = self._choose_distinct_followup_memory_hook(memories, recent_topic) if long_gap else None
+
+        rules = [
+            "- Write 1-2 sentences, in character.",
+            "- Be warm, casual, and low-pressure.",
+            "- Do not output XML, HTML, tags, transcript labels, or speaker prefixes.",
+            "- Do not quote the conversation transcript back verbatim.",
+        ]
+        if long_gap:
+            rules.extend([
+                f"- The silence gap is long ({idle_hours:.1f} hours), so do not continue the last thread directly.",
+                "- If you mention the old topic at all, do it briefly and pivot away from it.",
+            ])
+            if distinct_hook:
+                rules.append(f"- Base the follow-up on this different hook instead of the recent thread: {distinct_hook}")
+            else:
+                rules.append("- Base the follow-up on a fresh, lightweight topic instead of the recent thread.")
+        else:
+            rules.append("- You can lightly continue the recent thread if it still feels natural, but keep it fresh.")
+
+        prompt = f"""You are {char_name}. {user_name or 'The user'} hasn't replied in a while.
+
+Silence gap: {idle_hours:.1f} hours
+
+Recent conversation:
+{context}
+
+Recent topic:
+{recent_topic}
+
+Relevant memories:
+{memories_excerpt}
+
+Rules:
+{"\n".join(rules)}
+
+Your follow-up message:"""
+        system_prompt = (
+            f"You are {char_name}. Write a natural DM follow-up message. "
+            "Never output XML, HTML, tags, speaker labels, or transcript formatting."
+        )
+        return prompt, system_prompt
+
     async def _run_dm_followup_cycle(self, now: float | None = None) -> int:
         """Run one DM follow-up pass and return the number sent."""
         if not runtime_config.get("dm_followup_enabled", False):
@@ -2533,30 +2684,28 @@ Return exactly one JSON object with this shape:
                 history = get_history(resolved_channel_id)
                 if not history and resolved_channel_id != channel_id:
                     history = get_history(channel_id)
-                user_msgs = [m for m in history if m.get("role") == "user"][-5:]
-                context_lines = [f"{m.get('author', 'User')}: {m.get('content', '')[:100]}" for m in user_msgs]
-                context = "\n".join(context_lines) if context_lines else "No recent messages."
-
                 char_name = self.character.name if self.character else "the bot"
-                prompt = f"""You are {char_name}. The user hasn't replied in a while. Generate a brief, organic follow-up message to re-engage them naturally. Be warm and casual, not pushy. Reference the conversation topic if relevant.
-
-Recent conversation:
-{context}
-
-Your follow-up message (1-2 sentences, in character):"""
+                prompt, system_prompt = self._build_dm_followup_prompt(
+                    user_id=user_id,
+                    user_name=state.get("user_name", ""),
+                    history=history,
+                    idle_seconds=max(0.0, now - last_msg),
+                    timeout_mins=timeout_mins,
+                )
 
                 response = await provider_manager.generate(
                     messages=[{"role": "user", "content": prompt}],
-                    system_prompt=f"You are {char_name}. Write a natural follow-up message."
+                    system_prompt=system_prompt
                 )
 
                 if not response or response.startswith("❌"):
                     log.warn(f"DM follow-up generation failed for user {user_id}: {response or 'empty response'}", self.name)
                     continue
 
-                from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix
-                response = remove_thinking_tags(response, self.character.name if self.character else None)
-                response = clean_bot_name_prefix(response, self.character.name if self.character else None)
+                response = sanitize_response(response, self.character.name if self.character else None)
+                if not response:
+                    log.warn(f"DM follow-up sanitized to empty response for user {user_id}", self.name)
+                    continue
 
                 # Simulate organic typing
                 typing_context = getattr(channel, "typing", None)

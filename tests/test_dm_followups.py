@@ -93,3 +93,54 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         add_history_mock.assert_called_once_with(
             555, "assistant", "Checking in.", author_name="Nahida", timestamp=None
         )
+
+    async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        fake_user = _FakeUser(dm_channel)
+        instance.client = _FakeClient(fake_user)
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+                "user_name": "Alice",
+            }
+        }
+        generate_mock = AsyncMock(return_value="Checking in.")
+        history = [
+            {"role": "assistant", "author": "Nahida", "content": "It reminds me of how knowledge works, in a way."},
+            {"role": "user", "author": "Alice", "content": "Each new thing you learn opens doors to places you couldn't reach before."},
+            {"role": "assistant", "author": "Nahida", "content": "Have you found any particularly tricky spots you're itching to get back to?"},
+        ]
+        memories = (
+            "What you know about Alice:\n"
+            "- Loves stargazing on quiet nights.\n"
+            "- Keeps a notebook full of mushroom sketches."
+        )
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 120,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=history), \
+                patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", return_value=memories), \
+                patch.object(bot_instance_module, "add_to_history"), \
+                patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.asyncio, "sleep", new=AsyncMock(return_value=None)):
+            sent = await instance._run_dm_followup_cycle(now=19_000.0)
+
+        self.assertEqual(sent, 1)
+        prompt = generate_mock.await_args.kwargs["messages"][0]["content"]
+        self.assertIn("do not continue the last thread directly", prompt.lower())
+        self.assertIn("Loves stargazing on quiet nights.", prompt)
+        self.assertIn("Recent topic:", prompt)

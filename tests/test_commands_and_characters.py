@@ -82,7 +82,7 @@ class CommandSyncTests(unittest.IsolatedAsyncioTestCase):
             status = await instance._sync_slash_commands()
 
         self.assertEqual(instance.tree.sync_calls, [None, 101, 202])
-        self.assertEqual(instance.tree.copied_guild_ids, [101, 202])
+        self.assertEqual(instance.tree.copied_guild_ids, [])
         self.assertEqual(instance.tree.cleared_guild_ids, [101, 202])
         self.assertTrue(status["global"]["ok"])
         self.assertEqual(status["global"]["count"], 2)

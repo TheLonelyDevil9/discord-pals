@@ -285,13 +285,18 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         instance.character = types.SimpleNamespace(name="Nahida")
         instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
         instance._send_auxiliary_followup = AsyncMock(return_value=True)
+        timezone_info = ZoneInfo("Asia/Calcutta")
+        due_local = (datetime.now(timezone_info) + timedelta(days=2)).replace(
+            hour=9, minute=0, second=0, microsecond=0
+        )
+        pre_due_local = due_local - timedelta(hours=3)
         instance._extract_reminder_payload = AsyncMock(return_value={
             "action": "create",
             "creation_mode": "explicit",
             "event_summary": "Catch the flight",
             "normalized_event": "catch the flight",
-            "due_local_iso": "2026-04-05T09:00:00",
-            "pre_due_local_iso": "2026-04-05T06:00:00",
+            "due_local_iso": due_local.strftime("%Y-%m-%dT%H:%M:%S"),
+            "pre_due_local_iso": pre_due_local.strftime("%Y-%m-%dT%H:%M:%S"),
         })
 
         context = {
@@ -305,7 +310,7 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
                 "timezone_name": "Asia/Calcutta",
                 "timezone_source": "user",
                 "offset_minutes": 330,
-                "tzinfo": ZoneInfo("Asia/Calcutta"),
+                "tzinfo": timezone_info,
             },
         }
         message = types.SimpleNamespace(
