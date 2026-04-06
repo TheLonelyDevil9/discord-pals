@@ -2614,6 +2614,8 @@ Return exactly one JSON object with this shape:
         else:
             rules.append("- You can lightly continue the recent thread if it still feels natural, but keep it fresh.")
 
+        rules_text = "\n".join(rules)
+
         prompt = f"""You are {char_name}. {user_name or 'The user'} hasn't replied in a while.
 
 Silence gap: {idle_hours:.1f} hours
@@ -2628,7 +2630,7 @@ Relevant memories:
 {memories_excerpt}
 
 Rules:
-{"\n".join(rules)}
+{rules_text}
 
 Your follow-up message:"""
         system_prompt = (
