@@ -65,6 +65,27 @@ RE_REMINDER_KEYWORD = re.compile(
     re.IGNORECASE
 )
 
+_NON_TERMINAL_ABBREVIATIONS = frozenset({
+    "mr.",
+    "mrs.",
+    "ms.",
+    "miss.",
+    "mx.",
+    "dr.",
+    "prof.",
+    "sr.",
+    "jr.",
+    "st.",
+    "vs.",
+    "etc.",
+    "e.g.",
+    "i.e.",
+    "a.m.",
+    "p.m.",
+    "u.s.",
+    "u.k.",
+})
+
 
 class BotInstance:
     """Encapsulates a single Discord bot with its own client, character, and state."""
@@ -1366,22 +1387,51 @@ Return exactly one JSON object with this shape:
                     remove_assistant_from_history(message.channel.id, 1)
 
     @staticmethod
+    def _starts_like_new_thought(text: str) -> bool:
+        """Check whether text starts like a fresh Discord thought."""
+        text = (text or "").lstrip()
+        if not text:
+            return False
+
+        return (
+            text[0].isupper() or
+            text[0].isdigit() or
+            text.startswith(("@", "<@", "*", "—", "-", "•", "\"", "'", "(", "["))
+        )
+
+    @staticmethod
+    def _ends_with_nonterminal_abbreviation(text: str) -> bool:
+        """Detect titles and abbreviations that should not count as a hard break."""
+        trimmed = (text or "").strip()
+        if not trimmed or "." not in trimmed:
+            return False
+
+        trimmed = trimmed.rstrip(")]}\"'>")
+        match = re.search(r"([A-Za-z][A-Za-z.]*)$", trimmed)
+        if not match:
+            return False
+
+        token = match.group(1).lower()
+        return (
+            token in _NON_TERMINAL_ABBREVIATIONS or
+            re.fullmatch(r"(?:[A-Za-z]\.){2,}", token) is not None or
+            re.fullmatch(r"[A-Za-z]\.", token) is not None
+        )
+
+    @staticmethod
     def _should_split_single_newline(previous_line: str, next_line: str) -> bool:
         """Decide when a single newline reads like a new chat message instead of formatting."""
         previous_line = (previous_line or "").strip()
         next_line = (next_line or "").strip()
         if not previous_line or not next_line:
             return False
-        if len(previous_line) > 140 or len(next_line) > 140:
+        if not BotInstance._starts_like_new_thought(next_line):
             return False
-
-        ends_cleanly = previous_line[-1] in ".!?~…)]}\"'"
-        starts_like_new_thought = (
-            next_line[0].isupper() or
-            next_line.startswith(("@", "<@", "*")) or
-            next_line.startswith(("—", "-", "•"))
-        )
-        return starts_like_new_thought and (ends_cleanly or len(previous_line) <= 60)
+        if BotInstance._ends_with_nonterminal_abbreviation(previous_line):
+            return False
+        if previous_line[-1] in ",:;/-–—([{":
+            return False
+        return True
 
     @staticmethod
     def _split_plain_response_sentences(response: str) -> list[str]:
@@ -1390,7 +1440,31 @@ Return exactly one JSON object with this shape:
         if not normalized or "\n" in normalized or len(normalized) < 80:
             return []
 
-        sentences = [part.strip() for part in re.split(r"(?<=[.!?…])\s+", normalized) if part.strip()]
+        sentences = []
+        start = 0
+        for match in re.finditer(r"[.!?…]+(?=\s+)", normalized):
+            candidate = normalized[start:match.end()].strip()
+            if not candidate:
+                continue
+
+            next_start = match.end()
+            while next_start < len(normalized) and normalized[next_start].isspace():
+                next_start += 1
+
+            next_segment = normalized[next_start:]
+            if not next_segment:
+                continue
+            if not BotInstance._starts_like_new_thought(next_segment):
+                continue
+            if match.group(0).endswith(".") and BotInstance._ends_with_nonterminal_abbreviation(candidate):
+                continue
+
+            sentences.append(candidate)
+            start = next_start
+
+        remainder = normalized[start:].strip()
+        if remainder:
+            sentences.append(remainder)
         if len(sentences) < 2:
             return []
 

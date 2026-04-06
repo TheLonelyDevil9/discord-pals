@@ -133,6 +133,48 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([item["content"] for item in sent], ["Sure.", "I'll tag them now."])
 
+    async def test_send_organic_response_splits_explicit_newline_without_terminal_punctuation(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "Don't you start, I'm still recovering\nYou weren't even here for the worst of it."
+            )
+
+        self.assertEqual(
+            [item["content"] for item in sent],
+            ["Don't you start, I'm still recovering", "You weren't even here for the worst of it."]
+        )
+
+    async def test_send_organic_response_keeps_salutation_newline_in_one_message(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+
+        sent_message = types.SimpleNamespace(id=1)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=sent_message),
+            channel=types.SimpleNamespace(send=AsyncMock()),
+        )
+
+        sent = await instance._send_organic_response(
+            message,
+            "Tell Mr.\nAnderson I'm busy."
+        )
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["content"], "Tell Mr.\nAnderson I'm busy.")
+        message.channel.send.assert_not_called()
+
     async def test_send_organic_response_can_split_long_single_paragraph_on_sentences(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
@@ -155,6 +197,30 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 2)
         self.assertTrue(sent[0]["content"].startswith("Both?"))
         self.assertTrue(sent[1]["content"].startswith("And the hugs"))
+
+    async def test_send_organic_response_sentence_split_ignores_salutations(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "I still can't believe Mr. Rogers talked me into this prank earlier, and now everyone thinks it was my idea. "
+                "Anyway I'm hiding in the kitchen until the teasing stops."
+            )
+
+        self.assertEqual(len(sent), 2)
+        self.assertNotEqual(sent[0]["content"], "I still can't believe Mr.")
+        self.assertIn("Mr. Rogers", sent[0]["content"])
+        self.assertTrue(sent[1]["content"].startswith("Anyway"))
 
     async def test_send_organic_response_caps_natural_burst_length(self):
         instance = object.__new__(bot_instance_module.BotInstance)
