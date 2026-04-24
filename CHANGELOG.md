@@ -4,6 +4,22 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.5] - 2026-04-24
+
+### Added
+
+- **Scope helpers** — centralized local history, DM memory, stats, and display-label identifiers in `scopes.py` with lightweight typed request, memory, and delivery context dataclasses
+- Regression coverage for bot/user DM history isolation, bot/user DM memory isolation, typed request scopes, and release tag ordering
+
+### Changed
+
+- **Release flow** — `bump_version.py --tag` now commits version/changelog updates before creating the git tag so future release tags point at release commits
+- **Runtime scope construction** — bot runtime, memory, and Discord history helpers now use the shared scope helpers instead of scattered ad-hoc key construction
+
+### Fixed
+
+- **Tag hygiene** — corrected local `v1.11.4` to point at release commit `ae24002`
+
 ## [v1.11.4] - 2026-04-24
 
 ### Added

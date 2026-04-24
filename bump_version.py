@@ -11,6 +11,7 @@ Usage:
 Options:
     --tag         Create a git tag for the new version
     --no-tag      Skip git tag creation (default)
+    --commit      Commit version/changelog changes before tagging
     --message "X" Custom message for changelog entry
 
 Examples:
@@ -218,10 +219,63 @@ def create_git_tag(version):
         return False
 
 
+def run_git(args):
+    """Run a git command from the repository root."""
+    return subprocess.run(
+        ['git', *args],
+        cwd=get_script_dir(),
+        capture_output=True,
+        text=True
+    )
+
+
+def ensure_clean_release_worktree():
+    """Ensure only release files may be dirty before auto-committing."""
+    result = run_git(['status', '--porcelain'])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to inspect git status: {result.stderr.strip()}")
+
+    allowed = {'CHANGELOG.md', 'version.py'}
+    dirty = []
+    for line in result.stdout.splitlines():
+        path = line[3:].replace('\\', '/')
+        if path not in allowed:
+            dirty.append(line)
+    if dirty:
+        raise RuntimeError(
+            "Refusing release commit because unrelated files are dirty:\n" +
+            "\n".join(dirty)
+        )
+
+
+def commit_release(version):
+    """Commit version and changelog updates before tag creation."""
+    ensure_clean_release_worktree()
+
+    add_result = run_git(['add', 'version.py', 'CHANGELOG.md'])
+    if add_result.returncode != 0:
+        raise RuntimeError(f"Failed to stage release files: {add_result.stderr.strip()}")
+
+    diff_result = run_git(['diff', '--cached', '--quiet'])
+    if diff_result.returncode == 0:
+        print("No version/changelog changes to commit")
+        return False
+    if diff_result.returncode not in (0, 1):
+        raise RuntimeError(f"Failed to inspect staged diff: {diff_result.stderr.strip()}")
+
+    commit_result = run_git(['commit', '-m', f'Release v{version}'])
+    if commit_result.returncode != 0:
+        raise RuntimeError(f"Failed to commit release: {commit_result.stderr.strip()}")
+
+    print(f"Committed release v{version}")
+    return True
+
+
 def parse_args(args):
     """Parse command line arguments."""
     bump_type = 'patch'
     create_tag = False
+    commit = False
     message = None
 
     i = 0
@@ -229,6 +283,8 @@ def parse_args(args):
         arg = args[i]
         if arg == '--tag':
             create_tag = True
+        elif arg == '--commit':
+            commit = True
         elif arg == '--no-tag':
             create_tag = False
         elif arg == '--message' or arg == '-m':
@@ -241,12 +297,12 @@ def parse_args(args):
             bump_type = arg
         i += 1
 
-    return bump_type, create_tag, message
+    return bump_type, create_tag, commit, message
 
 
-def main():
-    args = sys.argv[1:]
-    bump_type, create_tag, message = parse_args(args)
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
+    bump_type, create_tag, commit, message = parse_args(args)
 
     try:
         current = read_version()
@@ -259,7 +315,11 @@ def main():
         # Update changelog
         update_changelog(new_version, message)
 
-        # Create git tag if requested
+        # Commit before tagging so release tags point at commits containing the bump.
+        if commit or create_tag:
+            commit_release(new_version)
+
+        # Create git tag if requested, after the release commit exists.
         if create_tag:
             create_git_tag(new_version)
 

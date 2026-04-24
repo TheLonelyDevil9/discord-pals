@@ -19,6 +19,7 @@ from config import (
     AUTO_MEMORIES_FILE, MANUAL_LORE_FILE, MEMORY_STATE_FILE
 )
 from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
+from scopes import auto_memory_key, dm_auto_memory_key as scoped_dm_auto_memory_key, dm_memory_server_id
 from constants import (
     MEMORY_SAVE_INTERVAL, SEMANTIC_SIMILARITY_THRESHOLD,
     TEXTUAL_SIMILARITY_THRESHOLD, KEY_TERM_OVERLAP_THRESHOLD
@@ -120,12 +121,12 @@ def _safe_key_part(value: str) -> str:
 
 def dm_server_id_for_bot(bot_name: str | None) -> str:
     """Return the auto-memory namespace used for one bot's DMs."""
-    return f"dm:bot:{_safe_key_part(bot_name or 'default')}"
+    return dm_memory_server_id(bot_name)
 
 
 def dm_auto_memory_key(bot_name: str | None, user_id: int) -> str:
     """Return the per-bot, per-user DM auto-memory key."""
-    return f"{dm_server_id_for_bot(bot_name)}:user:{user_id}"
+    return scoped_dm_auto_memory_key(bot_name, user_id)
 
 
 def get_dm_server_id_for_bot(bot_name: str | None) -> str:
@@ -591,11 +592,7 @@ class MemoryManager:
     @staticmethod
     def _auto_key(server_id: int | str, user_id: int) -> str:
         """Build a key for auto memories. server_id=0 means DM."""
-        if isinstance(server_id, str) and server_id.startswith('dm:'):
-            return f"{server_id}:user:{user_id}"
-        if server_id and server_id != 0:
-            return f"server:{server_id}:user:{user_id}"
-        return f"dm:0:user:{user_id}"
+        return auto_memory_key(server_id, user_id)
 
     @staticmethod
     def _server_lore_key(guild_id: int) -> str:

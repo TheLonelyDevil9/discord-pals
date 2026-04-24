@@ -17,7 +17,7 @@ from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, 
 from constants import MAX_MESSAGE_LENGTH, MAX_RESPONSE_MESSAGE_PARTS
 from providers import provider_manager
 from character import character_manager, Character
-from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings, get_dm_server_id_for_bot
+from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split, dm_history_key,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
@@ -36,6 +36,14 @@ import logger as log
 import user_ignores
 from prometheus_metrics import metrics_manager
 from reminders import reminder_manager
+from scopes import (
+    DeliveryTarget,
+    MemoryScope,
+    RequestContext,
+    channel_display_label,
+    conversation_history_id,
+    memory_server_id,
+)
 from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
 
 
@@ -480,13 +488,12 @@ class BotInstance:
         """Return the local history key, isolating DMs by bot and user."""
         channel = getattr(message_or_channel, "channel", message_or_channel)
         is_dm = isinstance(channel, discord.DMChannel)
-        if is_dm and user_id is not None:
-            return dm_history_key(self.name, user_id)
-        return getattr(channel, "id", channel)
+        channel_id = getattr(channel, "id", channel)
+        return conversation_history_id(self.name, channel_id, is_dm=is_dm, user_id=user_id)
 
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""
-        return get_dm_server_id_for_bot(self.name)
+        return memory_server_id(self.name, None, is_dm=True)
 
     def _detect_dm_invite(self, content: str) -> bool:
         """Detect requests like 'could you DM me?' from server context."""
@@ -1851,6 +1858,24 @@ Return exactly one JSON object with this shape:
         channel_id = self._conversation_key(message, user_id)
         discord_channel_id = message.channel.id
         guild_id = guild.id if guild else None
+        request_scope = RequestContext(
+            bot_name=self.name,
+            user_id=target_user_id,
+            user_name=target_user_name,
+            discord_channel_id=discord_channel_id,
+            history_id=channel_id,
+            memory_scope=MemoryScope(
+                server_id=memory_server_id(self.name, guild_id, is_dm=is_dm),
+                user_id=target_user_id,
+            ),
+            display_label=channel_display_label(
+                getattr(message.channel, 'name', 'DM'),
+                getattr(guild, 'name', None),
+                is_dm=is_dm,
+            ),
+            is_dm=is_dm,
+            guild_id=guild_id,
+        )
 
         # Check for duplicate message - only skip if THIS BOT already processed it
         history = get_history(channel_id)
@@ -1898,9 +1923,7 @@ Return exactly one JSON object with this shape:
             )
 
         # Store channel name for readable history display
-        channel_name = getattr(message.channel, 'name', 'DM')
-        if guild:
-            channel_name = f"#{channel_name} ({guild.name})"
+        channel_name = request_scope.display_label
         set_channel_name(channel_id, channel_name)
 
         # Track stats
@@ -1935,8 +1958,11 @@ Return exactly one JSON object with this shape:
             lore = bot_lore
 
         # Get memories from unified store
-        server_id = guild_id if guild_id else self._dm_memory_server_id()
-        memories = memory_manager.get_all_memories_for_context(server_id, target_user_id, target_user_name)
+        memories = memory_manager.get_all_memories_for_context(
+            request_scope.memory_scope.server_id,
+            target_user_id,
+            target_user_name,
+        )
 
         if memories:
             memories = remove_thinking_tags(memories)
@@ -2291,7 +2317,7 @@ Return exactly one JSON object with this shape:
             asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
 
         # Auto-memory
-        memory_scope_id = guild_id if not is_dm else self._dm_memory_server_id()
+        memory_scope_id = memory_server_id(self.name, guild_id, is_dm=is_dm)
         asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, memory_scope_id, user_id, content, user_name))
 
         # Durable reminder capture
@@ -2801,9 +2827,14 @@ Your follow-up message:"""
 
                 resolved_channel_id = getattr(channel, "id", channel_id) or channel_id
                 state["channel_id"] = resolved_channel_id
+                delivery_target = DeliveryTarget(
+                    channel_id=resolved_channel_id,
+                    history_id=history_key,
+                    is_dm=True,
+                )
 
                 # Get recent context for the LLM
-                history = get_history(history_key)
+                history = get_history(delivery_target.history_id)
                 if not history:
                     history = get_history(resolved_channel_id)
                 if not history and resolved_channel_id != channel_id:
@@ -2843,7 +2874,7 @@ Your follow-up message:"""
 
                 # Add to history
                 add_to_history(
-                    history_key, "assistant", response,
+                    delivery_target.history_id, "assistant", response,
                     author_name=char_name,
                     timestamp=getattr(sent_message, "created_at", None)
                 )

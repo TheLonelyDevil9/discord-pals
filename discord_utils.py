@@ -17,6 +17,7 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
+from scopes import dm_history_id
 
 # Re-export from response_sanitizer for backwards compatibility
 # These are used by other modules that import from discord_utils
@@ -129,8 +130,7 @@ conversation_history: Dict[int, List[dict]] = {}
 
 def dm_history_key(bot_name: str | None, user_id: int | str) -> str:
     """Return a stable per-bot/per-user key for DM conversation history."""
-    safe_bot = re.sub(r'[^a-zA-Z0-9_-]+', '-', str(bot_name or 'default')).strip('-') or 'default'
-    return f"dm:{safe_bot[:48]}:user:{user_id}"
+    return dm_history_id(bot_name, user_id)
 
 # Recent message hashes for fast duplicate detection (channel_id -> OrderedDict of hashes)
 # Using OrderedDict instead of set to maintain insertion order for proper FIFO eviction
