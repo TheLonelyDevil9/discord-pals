@@ -280,6 +280,38 @@
     </div>
 </div>
 
+<!-- Bot Availability Schedules -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Bot Availability Schedules</span>
+    </div>
+    <div class="card-body">
+        <p class="form-hint" style="margin-bottom: 16px;">
+            Mark when each character is unavailable. Autonomous responses and DM follow-ups pause during these windows.
+        </p>
+        {% for bot in bots %}
+        {% set schedule = bot.schedule or {} %}
+        {% set window = (schedule.unavailable or [{}])[0] if schedule.unavailable else {} %}
+        <div class="schedule-row">
+            <label class="checkbox-label schedule-enabled">
+                <input type="checkbox" id="schedule-enabled-{{ bot.name }}" {% if schedule.enabled %}checked{% endif %}>
+                <span>{{ bot.name }}</span>
+            </label>
+            <select id="schedule-days-{{ bot.name }}" multiple title="Unavailable days for {{ bot.name }}">
+                {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
+                <option value="{{ value }}" {% if value in (window.days or []) %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <input type="time" id="schedule-start-{{ bot.name }}" value="{{ window.start or '22:00' }}" title="Unavailable start time">
+            <span class="text-muted">to</span>
+            <input type="time" id="schedule-end-{{ bot.name }}" value="{{ window.end or '08:00' }}" title="Unavailable end time">
+            <select id="schedule-timezone-{{ bot.name }}" class="timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotSchedule('{{ bot.name }}')">Save</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <!-- Slash Command Sync -->
 <div class="card">
     <div class="card-header">
@@ -895,6 +927,27 @@ select:focus {
 .bot-row.compact select:focus {
     outline: none;
     border-color: var(--accent);
+}
+
+.schedule-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) minmax(120px, 1.1fr) 110px auto 110px minmax(180px, 1.4fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 12px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.schedule-row input[type="time"],
+.schedule-row select {
+    min-width: 0;
+    background: var(--bg-secondary);
+}
+
+.schedule-enabled {
+    margin: 0;
 }
 
 .status-dot {
@@ -1573,6 +1626,39 @@ async function saveBotTimezone(botName) {
         showToast(savedValue ? `Timezone saved for ${botName}` : `Timezone cleared for ${botName}`, 'success');
     } else {
         showToast(result.message || 'Failed to save timezone', 'error');
+    }
+}
+
+async function saveBotSchedule(botName) {
+    const enabled = document.getElementById('schedule-enabled-' + botName).checked;
+    const daysSelect = document.getElementById('schedule-days-' + botName);
+    const days = Array.from(daysSelect.selectedOptions).map(option => option.value);
+    const start = document.getElementById('schedule-start-' + botName).value;
+    const end = document.getElementById('schedule-end-' + botName).value;
+    const timezoneSelect = document.getElementById('schedule-timezone-' + botName);
+    const timezone = timezoneSelect.value.trim();
+
+    const response = await fetch('/api/bot-schedules', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify({
+            bot_name: botName,
+            enabled,
+            timezone,
+            window: { days, start, end }
+        })
+    });
+
+    const result = await response.json();
+    if (result.status === 'ok') {
+        timezoneSelect.dataset.current = result.schedule?.timezone || timezone || '';
+        populateTimezoneSelect(timezoneSelect);
+        showToast(enabled ? `Schedule saved for ${botName}` : `Schedule cleared for ${botName}`, 'success');
+    } else {
+        showToast(result.message || 'Failed to save schedule', 'error');
     }
 }
 

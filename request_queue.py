@@ -81,7 +81,9 @@ class RequestQueue:
         forced_target_user_id: int = None,
         forced_target_user_name: str = None,
         allow_auto_reminders: bool = False,
-        pending_reminder_clarification: dict = None
+        pending_reminder_clarification: dict = None,
+        is_autonomous: bool = False,
+        dm_invite_requested: bool = False,
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -125,6 +127,8 @@ class RequestQueue:
                 'forced_target_user_name': forced_target_user_name,
                 'allow_auto_reminders': allow_auto_reminders,
                 'pending_reminder_clarification': dict(pending_reminder_clarification) if pending_reminder_clarification else None,
+                'is_autonomous': is_autonomous,
+                'dm_invite_requested': dm_invite_requested,
             }
 
             self.queues[channel_id].append(request)

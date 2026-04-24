@@ -972,7 +972,8 @@ def config_page():
             'online': _is_bot_ready(bot),
             'auto_channels': auto_channels,
             'nicknames': getattr(bot, 'nicknames', ''),  # Per-bot custom nicknames
-            'timezone': runtime_config.get_bot_timezone(bot.name) or ''
+            'timezone': runtime_config.get_bot_timezone(bot.name) or '',
+            'schedule': runtime_config.get_bot_schedule(bot.name),
         })
     
     return render_template('config.html',
@@ -1061,6 +1062,43 @@ def api_bot_timezones():
         'bot_name': bot_name,
         'timezone': timezone_name or ''
     })
+
+
+@app.route('/api/bot-schedules', methods=['POST'])
+@requires_csrf
+def api_bot_schedules():
+    """Update per-bot unavailable schedules."""
+    import runtime_config
+    from time_utils import normalize_timezone_name
+
+    data = request.json or {}
+    bot_name = data.get('bot_name')
+    if not bot_name:
+        return jsonify({'status': 'error', 'message': 'bot_name is required'}), 400
+    if not any(bot.name == bot_name for bot in bot_instances):
+        return jsonify({'status': 'error', 'message': 'Bot not found'}), 404
+
+    raw_timezone = data.get('timezone') or runtime_config.get_bot_timezone(bot_name)
+    timezone_name = normalize_timezone_name(raw_timezone) if raw_timezone else None
+    if raw_timezone and not timezone_name:
+        return jsonify({'status': 'error', 'message': 'Invalid IANA timezone'}), 400
+
+    window = data.get('window') or {}
+    days = window.get('days') or []
+    if not isinstance(days, list):
+        days = []
+    days = [str(day).strip().lower()[:3] for day in days if str(day).strip()]
+    schedule = {
+        'enabled': bool(data.get('enabled')),
+        'timezone': timezone_name or '',
+        'unavailable': [{
+            'days': days or ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+            'start': str(window.get('start') or '').strip(),
+            'end': str(window.get('end') or '').strip(),
+        }]
+    }
+    runtime_config.set_bot_schedule(bot_name, schedule)
+    return jsonify({'status': 'ok', 'bot_name': bot_name, 'schedule': runtime_config.get_bot_schedule(bot_name)})
 
 
 @app.route('/api/command-sync-status')

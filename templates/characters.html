@@ -97,7 +97,7 @@
             <div class="card-body">
                 <form action="/prompts/system/save" method="post">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <textarea name="content" class="prompt-textarea" title="System prompt content">{{ system_content }}</textarea>
+                    <textarea name="content" class="prompt-textarea" title="System prompt content">{{- system_content -}}</textarea>
                     <div class="prompt-actions">
                         <button type="submit" class="btn btn-primary">Save Prompt</button>
                     </div>

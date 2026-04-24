@@ -17,9 +17,9 @@ from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, 
 from constants import MAX_MESSAGE_LENGTH, MAX_RESPONSE_MESSAGE_PARTS
 from providers import provider_manager
 from character import character_manager, Character
-from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
+from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings, get_dm_server_id_for_bot
 from discord_utils import (
-    get_history, add_to_history, clear_history, format_history_split,
+    get_history, add_to_history, clear_history, format_history_split, dm_history_key,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
@@ -152,6 +152,7 @@ class BotInstance:
         self._consecutive_failures: Dict[int, int] = {}  # channel_id -> failure count
         self._response_timestamps: Dict[int, list] = {}  # channel_id -> list of response timestamps
         self._user_timestamps: Dict[int, list] = {}  # user_id -> list of message timestamps (per-user rate limit)
+        self._emoji_response_window: Dict[int, list[int]] = {}  # channel_id -> emoji counts over last 5 bot responses
 
         # Bot-on-bot conversation fall-off tracker
         self._bot_conversation_tracker: Dict[int, dict] = {}  # channel_id -> {consecutive_bot_messages, last_message_time, last_human_message_time}
@@ -474,6 +475,69 @@ class BotInstance:
         if message_id is None:
             message_id = id(message)
         return (message_id, target_user_id)
+
+    def _conversation_key(self, message_or_channel, user_id: int | None = None):
+        """Return the local history key, isolating DMs by bot and user."""
+        channel = getattr(message_or_channel, "channel", message_or_channel)
+        is_dm = isinstance(channel, discord.DMChannel)
+        if is_dm and user_id is not None:
+            return dm_history_key(self.name, user_id)
+        return getattr(channel, "id", channel)
+
+    def _dm_memory_server_id(self) -> str:
+        """Return this bot's private DM memory namespace."""
+        return get_dm_server_id_for_bot(self.name)
+
+    def _detect_dm_invite(self, content: str) -> bool:
+        """Detect requests like 'could you DM me?' from server context."""
+        text = re.sub(r"\s+", " ", (content or "").lower()).strip()
+        if not text:
+            return False
+        dm_terms = ("dm me", "message me", "send me a dm", "send me a message", "talk in dms", "in my dms")
+        request_terms = ("can you", "could you", "would you", "please", "real quick", "quick")
+        return any(term in text for term in dm_terms) and any(term in text for term in request_terms)
+
+    @staticmethod
+    def _emoji_matches(text: str) -> list[re.Match]:
+        """Find Unicode/custom/shortcode emoji-like tokens in a response."""
+        pattern = re.compile(
+            r"<a?:\w{2,32}:\d{15,25}>|:[a-zA-Z0-9_]{2,32}:|"
+            r"[\U0001F300-\U0001FAFF\u2600-\u27BF]"
+        )
+        return list(pattern.finditer(text or ""))
+
+    def _apply_emoji_budget(self, channel_id, response: str) -> str:
+        """Limit emojis to at most 2 per rolling 5 bot responses and 1 per response."""
+        if not hasattr(self, "_emoji_response_window"):
+            self._emoji_response_window = {}
+        window = self._emoji_response_window.get(channel_id, [])[-4:]
+        remaining = max(0, 2 - sum(window))
+        allowed = min(1, remaining)
+        matches = self._emoji_matches(response)
+        if len(matches) <= allowed:
+            return response
+
+        pieces = []
+        last_end = 0
+        kept = 0
+        for match in matches:
+            pieces.append(response[last_end:match.start()])
+            if kept < allowed:
+                pieces.append(match.group(0))
+                kept += 1
+            last_end = match.end()
+        pieces.append(response[last_end:])
+        cleaned = re.sub(r"[ \t]{2,}", " ", "".join(pieces))
+        return re.sub(r"\s+([,.!?])", r"\1", cleaned).strip()
+
+    def _record_emoji_budget(self, channel_id, response: str):
+        """Record delivered emoji usage for rolling-limit enforcement."""
+        if not hasattr(self, "_emoji_response_window"):
+            self._emoji_response_window = {}
+        count = min(2, len(self._emoji_matches(response)))
+        window = self._emoji_response_window.get(channel_id, [])
+        window.append(count)
+        self._emoji_response_window[channel_id] = window[-5:]
 
     def _reference_message_cache(self) -> Dict[int, Optional[discord.Message]]:
         """Return the internal referenced-message cache, creating it lazily for tests."""
@@ -1157,6 +1221,8 @@ Return exactly one JSON object with this shape:
         """Run one reminder delivery pass for this bot."""
         if runtime_config.get("global_paused", False):
             return 0
+        if not runtime_config.is_bot_available(self.name):
+            return 0
 
         sent_count = 0
         deliveries = reminder_manager.get_due_deliveries(self.name, now=now)
@@ -1285,7 +1351,8 @@ Return exactly one JSON object with this shape:
 
             is_dm = isinstance(message.channel, discord.DMChannel)
             is_other_bot = message.author.bot
-            channel_id = message.channel.id
+            discord_channel_id = message.channel.id
+            channel_id = self._conversation_key(message, message.author.id)
             guild = message.guild
 
             # Track DM activity for follow-up system
@@ -1294,7 +1361,8 @@ Return exactly one JSON object with this shape:
                     "last_user_msg": time.time(),
                     "followups_sent": 0,
                     "last_followup": self._dm_followup_state.get(message.author.id, {}).get("last_followup", 0),
-                    "channel_id": channel_id,
+                    "channel_id": discord_channel_id,
+                    "history_key": channel_id,
                     "user_name": get_user_display_name(message.author),
                 }
 
@@ -1343,6 +1411,12 @@ Return exactly one JSON object with this shape:
                     message, user_name, sticker_info, is_other_bot,
                     triggers["is_autonomous"], guild
                 )
+                dm_invite_requested = (
+                    not is_dm
+                    and not is_other_bot
+                    and (triggers.get("mentioned") or triggers.get("is_reply_to_bot") or triggers.get("name_triggered"))
+                    and self._detect_dm_invite(content)
+                )
 
                 # Check for split reply targets
                 split_targets = self._get_split_reply_targets(message, is_other_bot)
@@ -1362,7 +1436,9 @@ Return exactly one JSON object with this shape:
                             sticker_info=sticker_info,
                             split_reply_target=target,
                             allow_auto_reminders=False,
-                            pending_reminder_clarification=pending_reminder_clarification
+                            pending_reminder_clarification=pending_reminder_clarification,
+                            is_autonomous=triggers.get("is_autonomous", False),
+                            dm_invite_requested=dm_invite_requested,
                         )
                 else:
                     # Normal single request
@@ -1383,7 +1459,9 @@ Return exactly one JSON object with this shape:
                             or triggers.get("name_triggered", False)
                             or triggers.get("pending_reminder_clarification", False)
                         ),
-                        pending_reminder_clarification=pending_reminder_clarification
+                        pending_reminder_clarification=pending_reminder_clarification,
+                        is_autonomous=triggers.get("is_autonomous", False),
+                        dm_invite_requested=dm_invite_requested,
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -1588,6 +1666,26 @@ Return exactly one JSON object with this shape:
                 break
 
         return sent_records
+
+    async def _send_organic_response_to_channel(self, channel, response: str) -> list[dict]:
+        """Send an organic response directly to a channel without replying to a source message."""
+        lines = self._split_response_for_delivery(response)
+        if not lines:
+            return []
+
+        sent_records = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                if i > 0:
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
+                sent_msg = await channel.send(line)
+                sent_records.append({"message": sent_msg, "content": line})
+            except discord.HTTPException as e:
+                log.error(f"Failed to send: {e}", self.name)
+                break
+        return sent_records
     
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
@@ -1750,7 +1848,8 @@ Return exactly one JSON object with this shape:
             target_user_name = user_name
             target_user_id = user_id
 
-        channel_id = message.channel.id
+        channel_id = self._conversation_key(message, user_id)
+        discord_channel_id = message.channel.id
         guild_id = guild.id if guild else None
 
         # Check for duplicate message - only skip if THIS BOT already processed it
@@ -1760,7 +1859,7 @@ Return exactly one JSON object with this shape:
         # Skip if history was explicitly cleared (user wants a fresh start)
         if len(history) < 5 and not was_recently_cleared(channel_id):
             try:
-                recalled = await self._recall_channel_history(message.channel, limit=30)
+                recalled = await self._recall_channel_history(message.channel, limit=30, history_key=channel_id)
                 if recalled > 0:
                     log.info(f"Recalled {recalled} messages from Discord for context", self.name)
                     history = get_history(channel_id)
@@ -1805,7 +1904,7 @@ Return exactly one JSON object with this shape:
         set_channel_name(channel_id, channel_name)
 
         # Track stats
-        stats_manager.record_message(user_id, user_name, channel_id, channel_name)
+        stats_manager.record_message(user_id, user_name, discord_channel_id, channel_name)
         metrics_manager.record_message(bot_name=self.name, channel_type='dm' if is_dm else 'server')
 
         # Process attachments and gather mentioned context in parallel
@@ -1836,7 +1935,7 @@ Return exactly one JSON object with this shape:
             lore = bot_lore
 
         # Get memories from unified store
-        server_id = guild_id if guild_id else 0
+        server_id = guild_id if guild_id else self._dm_memory_server_id()
         memories = memory_manager.get_all_memories_for_context(server_id, target_user_id, target_user_name)
 
         if memories:
@@ -2007,6 +2106,7 @@ Return exactly one JSON object with this shape:
             "chatroom_context": chatroom_context,
             "other_bot_names": other_bot_names,
             "channel_id": channel_id,
+            "discord_channel_id": discord_channel_id,
             "guild_id": guild_id,
             "is_dm": is_dm,
             "user_id": user_id,
@@ -2112,6 +2212,7 @@ Return exactly one JSON object with this shape:
         # Convert emojis
         if guild:
             response = convert_emojis_in_text(response, guild)
+        response = self._apply_emoji_budget(channel_id, response)
 
         # Anti-looping: Check rate limit
         if self._check_rate_limit(channel_id):
@@ -2140,13 +2241,24 @@ Return exactly one JSON object with this shape:
                 return False
 
         # Send first so failed Discord sends do not leak phantom assistant turns into history.
-        sent_records = await self._send_organic_response(message, response)
+        sent_records = None
+        if request.get("dm_invite_requested"):
+            target_channel = await self._resolve_user_dm_channel(user_id)
+            if target_channel:
+                response = f"Hey, you asked me to DM you from the server. {response}"
+                sent_records = await self._send_organic_response_to_channel(target_channel, response)
+            else:
+                log.warn(f"Could not open requested DM for user {user_id}", self.name)
+
+        if sent_records is None:
+            sent_records = await self._send_organic_response(message, response)
         if not sent_records:
             log.warn("Response send failed before any content was delivered", self.name)
             self._record_failure(channel_id)
             return False
 
         delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
+        self._record_emoji_budget(channel_id, delivered_response)
         self._remember_recent_response(channel_id, delivered_response)
         self._reset_failures(channel_id)
         self._record_response(channel_id)
@@ -2179,7 +2291,8 @@ Return exactly one JSON object with this shape:
             asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
 
         # Auto-memory
-        asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, guild_id if not is_dm else user_id, user_id, content, user_name))
+        memory_scope_id = guild_id if not is_dm else self._dm_memory_server_id()
+        asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, memory_scope_id, user_id, content, user_name))
 
         # Durable reminder capture
         asyncio.create_task(self._maybe_handle_reminder_capture(context, message, request))
@@ -2196,6 +2309,10 @@ Return exactly one JSON object with this shape:
             return
 
         message = request['message']
+        if request.get('is_autonomous') and not runtime_config.is_bot_available(self.name):
+            log.debug("Autonomous request skipped - bot is in an unavailable schedule window", self.name)
+            return
+
         message_id = message.id
 
         if not self.character:
@@ -2587,7 +2704,7 @@ Return exactly one JSON object with this shape:
                 recent_topic_lines.append(content[:160])
         recent_topic = " ".join(recent_topic_lines).strip() or "No clear recent topic."
 
-        memories = memory_manager.get_all_memories_for_context(0, user_id, user_name)
+        memories = memory_manager.get_all_memories_for_context(self._dm_memory_server_id(), user_id, user_name)
         memories = remove_thinking_tags(memories).strip() if memories else ""
         memory_lines = [line.strip() for line in memories.splitlines() if line.strip()]
         memories_excerpt = "\n".join(memory_lines[:8]) if memory_lines else "No saved memories."
@@ -2597,10 +2714,12 @@ Return exactly one JSON object with this shape:
         distinct_hook = self._choose_distinct_followup_memory_hook(memories, recent_topic) if long_gap else None
 
         rules = [
-            "- Write 1-2 sentences, in character.",
+            "- Write 2-3 substantial sentences, in character.",
+            "- Give the user at least one concrete thing to respond to.",
             "- Be warm, casual, and low-pressure.",
             "- Do not output XML, HTML, tags, transcript labels, or speaker prefixes.",
             "- Do not quote the conversation transcript back verbatim.",
+            "- Bring up a fresh topic or angle; do not directly continue the prior thread.",
         ]
         if long_gap:
             rules.extend([
@@ -2612,7 +2731,7 @@ Return exactly one JSON object with this shape:
             else:
                 rules.append("- Base the follow-up on a fresh, lightweight topic instead of the recent thread.")
         else:
-            rules.append("- You can lightly continue the recent thread if it still feels natural, but keep it fresh.")
+            rules.append("- Briefly acknowledge the silence if useful, then pivot to a new hook.")
 
         rules_text = "\n".join(rules)
 
@@ -2658,6 +2777,7 @@ Your follow-up message:"""
                 followups_sent = state.get("followups_sent", 0)
                 last_followup = state.get("last_followup", 0)
                 channel_id = state.get("channel_id")
+                history_key = state.get("history_key") or dm_history_key(self.name, user_id)
 
                 if not channel_id or not last_msg:
                     continue
@@ -2683,7 +2803,9 @@ Your follow-up message:"""
                 state["channel_id"] = resolved_channel_id
 
                 # Get recent context for the LLM
-                history = get_history(resolved_channel_id)
+                history = get_history(history_key)
+                if not history:
+                    history = get_history(resolved_channel_id)
                 if not history and resolved_channel_id != channel_id:
                     history = get_history(channel_id)
                 char_name = self.character.name if self.character else "the bot"
@@ -2721,7 +2843,7 @@ Your follow-up message:"""
 
                 # Add to history
                 add_to_history(
-                    resolved_channel_id, "assistant", response,
+                    history_key, "assistant", response,
                     author_name=char_name,
                     timestamp=getattr(sent_message, "created_at", None)
                 )
@@ -2789,7 +2911,7 @@ Your follow-up message:"""
         """Reset failure counter on successful response."""
         self._consecutive_failures[channel_id] = 0
     
-    async def _maybe_auto_memory(self, channel_id: int, is_dm: bool, id_key: int, user_id: int = None, last_message: str = "", user_name: str = None):
+    async def _maybe_auto_memory(self, channel_id, is_dm: bool, id_key, user_id: int = None, last_message: str = "", user_name: str = None):
         """Check if the latest message contains significant information worth remembering."""
         # Quick pre-filter: skip very short messages (reduced from 20 to 10)
         if len(last_message) < 10:
@@ -2820,7 +2942,7 @@ Your follow-up message:"""
         from commands import setup_all_commands
         setup_all_commands(self)
     
-    async def _recall_channel_history(self, channel, limit: int = 20) -> int:
+    async def _recall_channel_history(self, channel, limit: int = 20, history_key=None) -> int:
         """Fetch recent messages from Discord and load into context."""
         count = 0
         messages = []
@@ -2840,7 +2962,7 @@ Your follow-up message:"""
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
             add_to_history(
-                channel.id, role, msg.content,
+                history_key or channel.id, role, msg.content,
                 author_name=user_name, user_id=msg.author.id, guild=guild,
                 message_id=msg.id, is_bot=is_any_bot,
                 timestamp=getattr(msg, "created_at", None)

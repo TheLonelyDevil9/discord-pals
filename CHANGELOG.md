@@ -4,6 +4,27 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.11.4] - 2026-04-24
+
+### Added
+
+- **Per-character availability schedules** ? dashboard controls now let each bot define unavailable time windows, with autonomous responses and DM follow-ups paused during those periods
+- **Server-to-DM shortcut** ? bots can now open a DM when a user asks them in server context to message them privately
+- **Emoji spam guard** ? bot responses now enforce a rolling emoji budget of one emoji per response and at most two emojis across five responses
+- Regression coverage for DM follow-up history isolation, schedule blocking, DM invite detection, and emoji budget enforcement
+
+### Changed
+
+- **DM follow-up prompts** ? autonomous DM follow-ups now ask for a fresh topic or angle and require fuller 2?3 sentence messages with something concrete to answer
+- **History clearing command** ? conversation history clearing moved from `/clear` to grouped `/history clear` so it is easier to distinguish from `/timezone clear` in large multi-bot installs
+
+### Fixed
+
+- **DM memory isolation** ? DM memories are now scoped by bot and user instead of sharing one DM memory bucket across all characters
+- **DM context isolation** ? local DM conversation history now uses bot/user-specific keys to prevent separate users' DMs from contaminating each other's context
+- **Timezone contamination** ? DM prompt context now resolves user timezones from the isolated target-user context instead of shared/stale DM history context
+- **Dashboard text saves** ? character and prompt textareas no longer inject extra leading/trailing whitespace on each save
+
 ## [v1.11.3] - 2026-04-02
 
 ### Added

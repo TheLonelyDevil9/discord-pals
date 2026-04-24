@@ -6,6 +6,8 @@ Live-adjustable settings via the web dashboard.
 import json
 import os
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from config import RUNTIME_CONFIG_FILE, DATA_DIR
 
 # Default values
@@ -20,6 +22,7 @@ DEFAULTS = {
     "custom_nicknames": "",  # Comma-separated list of additional nicknames the bot should respond to
     "raw_generation_logging": False,  # Log raw LLM output to live logs
     "bot_timezones": {},  # Per-bot IANA timezone overrides
+    "bot_schedules": {},  # Per-bot availability schedules
     # Bot-on-bot conversation fall-off settings
     "bot_falloff_enabled": True,  # Enable progressive fall-off for bot-bot conversations
     "bot_falloff_base_chance": 0.8,  # Initial response probability (80%)
@@ -190,6 +193,76 @@ def set_bot_timezone(bot_name: str, timezone_name: str | None):
 
     config["bot_timezones"] = bot_timezones
     save_config(config)
+
+
+def get_bot_schedule(bot_name: str | None) -> dict:
+    """Get a bot availability schedule."""
+    if not bot_name:
+        return {}
+    schedules = load_config().get("bot_schedules", {})
+    if not isinstance(schedules, dict):
+        return {}
+    schedule = schedules.get(bot_name, {})
+    return schedule if isinstance(schedule, dict) else {}
+
+
+def set_bot_schedule(bot_name: str, schedule: dict):
+    """Set or clear a bot availability schedule."""
+    if not bot_name:
+        return
+    config = load_config().copy()
+    schedules = config.get("bot_schedules", {})
+    schedules = dict(schedules) if isinstance(schedules, dict) else {}
+    if schedule and schedule.get("enabled") and schedule.get("unavailable"):
+        schedules[bot_name] = schedule
+    else:
+        schedules.pop(bot_name, None)
+    config["bot_schedules"] = schedules
+    save_config(config)
+
+
+def is_bot_available(bot_name: str | None, now: datetime | None = None) -> bool:
+    """Return False when the bot is inside a configured unavailable window."""
+    schedule = get_bot_schedule(bot_name)
+    if not schedule.get("enabled"):
+        return True
+
+    timezone_name = schedule.get("timezone") or get_bot_timezone(bot_name)
+    try:
+        tzinfo = ZoneInfo(timezone_name) if timezone_name else datetime.now().astimezone().tzinfo
+    except Exception:
+        tzinfo = datetime.now().astimezone().tzinfo
+    if now is None:
+        local_now = datetime.now(tzinfo)
+    elif now.tzinfo is None:
+        local_now = now.replace(tzinfo=tzinfo)
+    else:
+        local_now = now.astimezone(tzinfo)
+    current_minutes = local_now.hour * 60 + local_now.minute
+    current_day = local_now.strftime("%a").lower()[:3]
+
+    for window in schedule.get("unavailable", []):
+        if not isinstance(window, dict):
+            continue
+        days = window.get("days") or ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        if isinstance(days, str):
+            days = [part.strip().lower()[:3] for part in days.split(",") if part.strip()]
+        if current_day not in days:
+            continue
+        try:
+            start_hour, start_min = [int(part) for part in str(window.get("start", "")).split(":", 1)]
+            end_hour, end_min = [int(part) for part in str(window.get("end", "")).split(":", 1)]
+        except Exception:
+            continue
+        start_minutes = start_hour * 60 + start_min
+        end_minutes = end_hour * 60 + end_min
+        if start_minutes == end_minutes:
+            return False
+        if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes:
+            return False
+        if start_minutes > end_minutes and (current_minutes >= start_minutes or current_minutes < end_minutes):
+            return False
+    return True
 
 
 # Last context storage for visualization

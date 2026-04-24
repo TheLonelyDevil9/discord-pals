@@ -126,6 +126,12 @@ HISTORY_SAVE_DEBOUNCE = 30.0  # Minimum seconds between saves (increased from 5s
 # Conversation history storage (in-memory, per channel/DM)
 conversation_history: Dict[int, List[dict]] = {}
 
+
+def dm_history_key(bot_name: str | None, user_id: int | str) -> str:
+    """Return a stable per-bot/per-user key for DM conversation history."""
+    safe_bot = re.sub(r'[^a-zA-Z0-9_-]+', '-', str(bot_name or 'default')).strip('-') or 'default'
+    return f"dm:{safe_bot[:48]}:user:{user_id}"
+
 # Recent message hashes for fast duplicate detection (channel_id -> OrderedDict of hashes)
 # Using OrderedDict instead of set to maintain insertion order for proper FIFO eviction
 _recent_message_hashes: Dict[int, OrderedDict] = {}

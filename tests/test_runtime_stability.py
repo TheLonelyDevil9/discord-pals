@@ -1,10 +1,12 @@
 import types
 import unittest
+from datetime import datetime
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
+import runtime_config
 
 
 class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -437,3 +439,33 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response.assert_not_called()
         instance._update_mood.assert_not_called()
         instance._record_failure.assert_called_once()
+
+
+class NewRuntimeBehaviorTests(unittest.TestCase):
+    def test_emoji_budget_limits_one_per_response_and_two_per_five(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        response = instance._apply_emoji_budget(123, "Hi ?? :wave: <:party:123456789012345678>")
+        self.assertEqual(len(instance._emoji_matches(response)), 1)
+        instance._record_emoji_budget(123, response)
+        second = instance._apply_emoji_budget(123, "Again ?? :sparkles:")
+        self.assertEqual(len(instance._emoji_matches(second)), 1)
+        instance._record_emoji_budget(123, second)
+        third = instance._apply_emoji_budget(123, "No more ?? :sparkles:")
+        self.assertEqual(len(instance._emoji_matches(third)), 0)
+
+    def test_bot_schedule_blocks_unavailable_window(self):
+        schedule = {
+            "enabled": True,
+            "timezone": "UTC",
+            "unavailable": [{"days": ["fri"], "start": "12:00", "end": "13:00"}],
+        }
+        with patch.object(runtime_config, "get_bot_schedule", return_value=schedule), \
+                patch.object(runtime_config, "get_bot_timezone", return_value=None):
+            self.assertFalse(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 24, 12, 30)))
+            self.assertTrue(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 24, 13, 30)))
+
+    def test_dm_invite_detection_requires_dm_and_request_terms(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        self.assertTrue(instance._detect_dm_invite("Hey, could you DM me real quick?"))
+        self.assertTrue(instance._detect_dm_invite("Please send me a message"))
+        self.assertFalse(instance._detect_dm_invite("I opened my DMs yesterday"))

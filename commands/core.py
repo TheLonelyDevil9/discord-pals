@@ -1,13 +1,13 @@
 """
 Discord Pals - Core Commands
-Essential bot management commands: reload, switch, clear, recall, status, autonomous, stop, delete_messages, ignore
+Essential bot management commands: reload, switch, history clear, recall, status, autonomous, stop, delete_messages, ignore
 """
 
 import discord
 from discord import app_commands
 from typing import Optional, Set
 
-from discord_utils import clear_history, remove_assistant_from_history
+from discord_utils import clear_history, remove_assistant_from_history, dm_history_key
 from character import character_manager
 from .registry import maintenance_visibility, register_command_metadata
 import logger as log
@@ -96,12 +96,27 @@ def setup_core_commands(bot_instance) -> None:
             )
     register_command_metadata(bot_instance, name="switch", audience="maintenance", description="Switch to a different character")
     
-    @tree.command(name="clear", description="Clear conversation history")
+    history_group = app_commands.Group(name="history", description="Manage conversation history")
+
+    @history_group.command(name="clear", description="Clear this chat's conversation history")
     @maintenance_visibility()
-    async def cmd_clear(interaction: discord.Interaction) -> None:
-        clear_history(interaction.channel_id)
-        await interaction.response.send_message("✅ History cleared", ephemeral=True)
-    register_command_metadata(bot_instance, name="clear", audience="maintenance", description="Clear conversation history")
+    async def history_clear(interaction: discord.Interaction) -> None:
+        if isinstance(interaction.channel, discord.DMChannel):
+            history_key = dm_history_key(bot_instance.name, interaction.user.id)
+        else:
+            history_key = interaction.channel_id
+        clear_history(history_key)
+        await interaction.response.send_message("? Conversation history cleared", ephemeral=True)
+
+    tree.add_command(history_group)
+    register_command_metadata(
+        bot_instance,
+        name="history",
+        audience="maintenance",
+        description="Manage conversation history",
+        kind="group",
+        subcommands=[{"name": "clear", "description": "Clear this chat's conversation history"}],
+    )
     
     @tree.command(name="recall", description="Load recent Discord messages into context")
     @app_commands.describe(count="Number of messages to recall (1-200)")

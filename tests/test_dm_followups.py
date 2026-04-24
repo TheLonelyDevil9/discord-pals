@@ -91,7 +91,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 1)
         self.assertEqual(instance._dm_followup_state[42]["last_followup"], 2_000.0)
         add_history_mock.assert_called_once_with(
-            555, "assistant", "Checking in.", author_name="Nahida", timestamp=None
+            "dm:Nahida:user:42", "assistant", "Checking in.", author_name="Nahida", timestamp=None
         )
 
     async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):

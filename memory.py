@@ -99,7 +99,55 @@ def _parse_auto_key(key: str) -> Tuple[Optional[int], Optional[int]]:
     if dm_match:
         return 0, int(dm_match.group(1))
 
+    dm_bot_match = re.fullmatch(r'dm:bot:[^:]+:user:(\d+)', key)
+    if dm_bot_match:
+        return 0, int(dm_bot_match.group(1))
+
+    dm_bot_hash_match = re.fullmatch(r'dm:bot:[0-9a-f]{16}:user:(\d+)', key)
+    if dm_bot_hash_match:
+        return 0, int(dm_bot_hash_match.group(1))
+
     return None, None
+
+
+def _safe_key_part(value: str) -> str:
+    """Build a compact filesystem/JSON-key-safe identifier segment."""
+    normalized = re.sub(r'[^a-zA-Z0-9_-]+', '-', str(value or '').strip()).strip('-')
+    if normalized:
+        return normalized[:48]
+    return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()[:16]
+
+
+def dm_server_id_for_bot(bot_name: str | None) -> str:
+    """Return the auto-memory namespace used for one bot's DMs."""
+    return f"dm:bot:{_safe_key_part(bot_name or 'default')}"
+
+
+def dm_auto_memory_key(bot_name: str | None, user_id: int) -> str:
+    """Return the per-bot, per-user DM auto-memory key."""
+    return f"{dm_server_id_for_bot(bot_name)}:user:{user_id}"
+
+
+def get_dm_server_id_for_bot(bot_name: str | None) -> str:
+    """Public helper for callers that need a DM memory namespace."""
+    return dm_server_id_for_bot(bot_name)
+
+
+def get_dm_auto_memory_key(bot_name: str | None, user_id: int) -> str:
+    """Public helper for callers that need a concrete DM auto-memory key."""
+    return dm_auto_memory_key(bot_name, user_id)
+
+
+def is_dm_memory_server_id(server_id) -> bool:
+    """Return whether a server_id value represents a DM auto-memory namespace."""
+    return server_id == 0 or (isinstance(server_id, str) and server_id.startswith('dm:'))
+
+
+def _parse_legacy_dm_auto_key(key: str) -> Optional[int]:
+    dm_match = re.fullmatch(r'dm:0:user:(\d+)', key)
+    if dm_match:
+        return int(dm_match.group(1))
+    return None
 
 
 def _memory_entry_is_valid(entry: dict) -> bool:
@@ -541,8 +589,10 @@ class MemoryManager:
     # ==========================================================================
 
     @staticmethod
-    def _auto_key(server_id: int, user_id: int) -> str:
+    def _auto_key(server_id: int | str, user_id: int) -> str:
         """Build a key for auto memories. server_id=0 means DM."""
+        if isinstance(server_id, str) and server_id.startswith('dm:'):
+            return f"{server_id}:user:{user_id}"
         if server_id and server_id != 0:
             return f"server:{server_id}:user:{user_id}"
         return f"dm:0:user:{user_id}"
@@ -592,7 +642,7 @@ class MemoryManager:
             if normalized_user_ids and parsed_user_id not in normalized_user_ids:
                 continue
 
-            is_dm = parsed_server_id in (None, 0)
+            is_dm = key.startswith('dm:') or parsed_server_id in (None, 0)
             if scope == "dm" and not is_dm:
                 continue
             if scope == "server":
@@ -1264,7 +1314,7 @@ Memory about {target_user} (or NOTHING):"""
                     self._log_embedding_unavailable_once()
 
                 # Determine server_id and server_name
-                server_id = id_key if not is_dm else 0
+                server_id = id_key
                 server_name = None  # Will be populated by caller if available
 
                 # Store in unified auto memories
