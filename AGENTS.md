@@ -1,4 +1,8 @@
-# Codex Instructions for discord-pals
+# AGENTS.md
+
+OpenCode compatibility entrypoint for `discord-pals`. Keep this file in parity with [CLAUDE.md](CLAUDE.md) when project instructions change.
+
+OpenCode's higher-priority git safety rules still apply: do not commit, tag, or push unless the user explicitly asks in the current conversation.
 
 ## Development Principles
 
