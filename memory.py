@@ -1,10 +1,9 @@
 """
 Discord Pals - Memory System
 Unified 2-store memory system: auto memories + manual lore.
-With debounced saving, LLM deduplication, and legacy migration.
+With debounced saving, LLM profile consolidation, and legacy migration.
 """
 
-import asyncio
 import os
 import re
 import time
@@ -87,7 +86,29 @@ def _memory_fingerprint(content: str) -> str:
     return digest[:24]  # Use first 24 chars for compact storage
 
 
-def _parse_auto_key(key: str) -> Tuple[Optional[int], Optional[int]]:
+PROFILE_ENTRY = "profile"
+PENDING_ENTRY = "pending"
+LEGACY_ENTRY = "legacy"
+
+
+def _is_dm_scope_value(value) -> bool:
+    """Return whether a stored server_id/key value represents a DM memory scope."""
+    return value == 0 or (isinstance(value, str) and value.startswith("dm:"))
+
+
+def _normalize_server_id_value(value, fallback=None):
+    """Normalize server_id while preserving per-bot DM namespace strings."""
+    if value is None:
+        value = fallback
+    if isinstance(value, str) and value.startswith("dm:"):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback if isinstance(fallback, str) and fallback.startswith("dm:") else None
+
+
+def _parse_auto_key(key: str) -> Tuple[Optional[int | str], Optional[int]]:
     """Parse a unified auto-memory key into server_id and user_id."""
     if not isinstance(key, str):
         return None, None
@@ -96,17 +117,13 @@ def _parse_auto_key(key: str) -> Tuple[Optional[int], Optional[int]]:
     if server_match:
         return int(server_match.group(1)), int(server_match.group(2))
 
-    dm_match = re.fullmatch(r'dm:0:user:(\d+)', key)
+    dm_match = re.fullmatch(r'(dm:0):user:(\d+)', key)
     if dm_match:
-        return 0, int(dm_match.group(1))
+        return 0, int(dm_match.group(2))
 
-    dm_bot_match = re.fullmatch(r'dm:bot:[^:]+:user:(\d+)', key)
+    dm_bot_match = re.fullmatch(r'(dm:bot:[^:]+):user:(\d+)', key)
     if dm_bot_match:
-        return 0, int(dm_bot_match.group(1))
-
-    dm_bot_hash_match = re.fullmatch(r'dm:bot:[0-9a-f]{16}:user:(\d+)', key)
-    if dm_bot_hash_match:
-        return 0, int(dm_bot_hash_match.group(1))
+        return dm_bot_match.group(1), int(dm_bot_match.group(2))
 
     return None, None
 
@@ -141,7 +158,7 @@ def get_dm_auto_memory_key(bot_name: str | None, user_id: int) -> str:
 
 def is_dm_memory_server_id(server_id) -> bool:
     """Return whether a server_id value represents a DM auto-memory namespace."""
-    return server_id == 0 or (isinstance(server_id, str) and server_id.startswith('dm:'))
+    return _is_dm_scope_value(server_id)
 
 
 def _parse_legacy_dm_auto_key(key: str) -> Optional[int]:
@@ -182,6 +199,8 @@ def _sanitize_memory_entries(
     seen_fingerprints = set()
     changed = False
 
+    missing_entry_type_default = PROFILE_ENTRY if len(entries) <= 1 else LEGACY_ENTRY
+
     for entry in entries:
         if not _memory_entry_is_valid(entry):
             changed = True
@@ -210,6 +229,12 @@ def _sanitize_memory_entries(
             "fingerprint": fingerprint
         }
 
+        if auto_default:
+            entry_type = entry.get("entry_type")
+            if entry_type not in {PROFILE_ENTRY, PENDING_ENTRY, LEGACY_ENTRY}:
+                entry_type = missing_entry_type_default if not entry_type else LEGACY_ENTRY
+            cleaned["entry_type"] = entry_type
+
         # Preserve optional string metadata when valid.
         for key in ("character", "user_name", "server_name", "learned_from", "added_by"):
             value = entry.get(key)
@@ -222,6 +247,15 @@ def _sanitize_memory_entries(
                 value = fallback_user_id
             if key == "server_id" and value is None and fallback_server_id is not None:
                 value = fallback_server_id
+
+            if key == "server_id":
+                value = _normalize_server_id_value(value, fallback=fallback_server_id)
+                if value is None:
+                    continue
+                if isinstance(value, int) and value < 0:
+                    continue
+                cleaned[key] = value
+                continue
 
             try:
                 value = int(value)
@@ -377,8 +411,8 @@ class MemoryManager:
     """Unified 2-store memory system.
 
     Store 1: Auto Memories (auto_memories.json)
-      - Keyed by "server:{guild_id}:user:{user_id}" or "dm:0:user:{user_id}"
-      - Auto-generated from conversations, with LLM deduplication after 5 new memories per key
+      - Keyed by "server:{guild_id}:user:{user_id}" or "dm:bot:{bot}:user:{user_id}"
+      - Auto-generated from conversations, with one living profile plus one temporary pending entry
 
     Store 2: Manual Lore (manual_lore.json)
       - Keyed by "user:{user_id}", "bot:{bot_name}", or "server:{guild_id}"
@@ -387,7 +421,7 @@ class MemoryManager:
     Includes migration from the legacy 5-store system.
     """
 
-    # LLM dedup trigger threshold
+    # Legacy compatibility: older memory_state files stored a threshold counter.
     _LLM_DEDUP_EVERY = 5
 
     def __init__(self):
@@ -412,7 +446,7 @@ class MemoryManager:
         self._dedup_in_flight: set = set()
 
         # Global channel-level memory generation cooldown (prevents multi-bot duplication)
-        self._channel_memory_cooldown: Dict[int, float] = {}
+        self._channel_memory_cooldown: Dict[int | str, float] = {}
         self._MEMORY_COOLDOWN_SECONDS = 30
 
         # Only warn once per runtime when embeddings are unavailable.
@@ -515,18 +549,19 @@ class MemoryManager:
             if key not in self.auto_memories:
                 changed = True
                 continue
-            try:
-                count = int(value)
-            except (TypeError, ValueError):
-                changed = True
-                continue
-            if count < 0:
-                count = 0
-                changed = True
-            count = min(count, len(self.auto_memories.get(key, [])))
+            count = 1 if self._pending_index(key) is not None else 0
             if count:
                 normalized_pending[key] = count
-            elif value:
+            try:
+                previous_count = int(value or 0)
+            except (TypeError, ValueError):
+                previous_count = None
+            if previous_count != count:
+                changed = True
+
+        for key in self.auto_memories.keys():
+            if self._pending_index(key) is not None and key not in normalized_pending:
+                normalized_pending[key] = 1
                 changed = True
 
         normalized_state = {"pending_auto_since_dedup": normalized_pending}
@@ -574,6 +609,13 @@ class MemoryManager:
     def _decrement_pending_auto_count(self, key: str, amount: int = 1):
         """Decrease the persisted pending-auto counter for a key."""
         self._set_pending_auto_count(key, self._get_pending_auto_count(key) - amount)
+
+    def _sync_pending_auto_count_for_key(self, key: str):
+        """Keep the legacy pending counter aligned with profile pending state."""
+        if self._pending_index(key) is not None:
+            self._set_pending_auto_count(key, 1)
+        else:
+            self._set_pending_auto_count(key, 0)
 
     def _log_embedding_unavailable_once(self):
         """Warn once when embedding support is unavailable."""
@@ -750,25 +792,160 @@ class MemoryManager:
         return sorted(targets, key=lambda item: ((item.get("user_name") or "").lower(), item["user_id"]))
 
     @staticmethod
+    def _entry_type(entry: dict) -> str:
+        """Return a normalized auto-memory entry type."""
+        if not isinstance(entry, dict):
+            return LEGACY_ENTRY
+        entry_type = entry.get("entry_type")
+        if entry_type in {PROFILE_ENTRY, PENDING_ENTRY, LEGACY_ENTRY}:
+            return entry_type
+        return LEGACY_ENTRY
+
+    def _entry_index(self, key: str, entry_type: str) -> Optional[int]:
+        """Return the first index for an auto-memory entry type."""
+        for idx, entry in enumerate(self.auto_memories.get(key, [])):
+            if self._entry_type(entry) == entry_type:
+                return idx
+        return None
+
+    def _profile_index(self, key: str) -> Optional[int]:
+        return self._entry_index(key, PROFILE_ENTRY)
+
+    def _pending_index(self, key: str) -> Optional[int]:
+        return self._entry_index(key, PENDING_ENTRY)
+
+    def _profile_entry(self, key: str) -> Optional[dict]:
+        idx = self._profile_index(key)
+        if idx is None:
+            return None
+        return self.auto_memories.get(key, [])[idx]
+
+    def _pending_entry(self, key: str) -> Optional[dict]:
+        idx = self._pending_index(key)
+        if idx is None:
+            return None
+        return self.auto_memories.get(key, [])[idx]
+
+    def auto_memory_key_needs_merge(self, key: str) -> bool:
+        """Return whether a key is not yet a single clean profile entry."""
+        entries = self.auto_memories.get(key, [])
+        if not entries:
+            return False
+
+        profile_count = 0
+        pending_count = 0
+        legacy_count = 0
+        for entry in entries:
+            entry_type = self._entry_type(entry)
+            if entry_type == PROFILE_ENTRY:
+                profile_count += 1
+            elif entry_type == PENDING_ENTRY:
+                pending_count += 1
+            else:
+                legacy_count += 1
+
+        return (
+            pending_count > 0
+            or legacy_count > 0
+            or profile_count != 1
+            or len(entries) != 1
+        )
+
+    def get_auto_memory_profile_keys_needing_merge(self) -> List[str]:
+        """Return auto-memory keys queued for LLM profile consolidation."""
+        return sorted(
+            key for key in self.auto_memories.keys()
+            if self.auto_memory_key_needs_merge(key)
+        )
+
+    def _entry_metadata(
+        self,
+        key: str,
+        entries: Optional[List[dict]] = None,
+        *,
+        user_id=None,
+        server_id=None,
+        user_name: str = None,
+        server_name: str = None,
+        character_name: str = None,
+    ) -> dict:
+        """Resolve stable metadata for a rewritten profile entry."""
+        entries = entries if entries is not None else self.auto_memories.get(key, [])
+        parsed_server_id, parsed_user_id = _parse_auto_key(key)
+
+        def _first_string(*field_names):
+            for field_name in field_names:
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    value = entry.get(field_name)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+            return None
+
+        resolved_user_id = user_id if user_id is not None else None
+        if resolved_user_id is None:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                value = entry.get("user_id")
+                try:
+                    resolved_user_id = int(value)
+                    break
+                except (TypeError, ValueError):
+                    continue
+        if resolved_user_id is None:
+            resolved_user_id = parsed_user_id or 0
+
+        resolved_server_id = _normalize_server_id_value(server_id, fallback=parsed_server_id)
+        if resolved_server_id is None:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                resolved_server_id = _normalize_server_id_value(
+                    entry.get("server_id"),
+                    fallback=parsed_server_id,
+                )
+                if resolved_server_id is not None:
+                    break
+        if resolved_server_id is None:
+            resolved_server_id = parsed_server_id or 0
+
+        return {
+            "user_id": int(resolved_user_id),
+            "server_id": resolved_server_id,
+            "user_name": user_name or _first_string("user_name"),
+            "server_name": server_name or _first_string("server_name"),
+            "character_name": character_name or _first_string("character", "learned_from"),
+        }
+
+    @staticmethod
     def _build_auto_memory_entry(
         content: str,
         *,
         user_id: int,
-        server_id: int,
+        server_id: int | str,
         user_name: str = None,
         server_name: str = None,
         character_name: str = None,
         embedding: list = None,
-        timestamp: str = None
+        timestamp: str = None,
+        entry_type: str = PROFILE_ENTRY
     ) -> dict:
         """Build a normalized auto-memory entry."""
+        normalized_server_id = _normalize_server_id_value(server_id, fallback=server_id)
+        if normalized_server_id is None:
+            normalized_server_id = 0
+        if entry_type not in {PROFILE_ENTRY, PENDING_ENTRY, LEGACY_ENTRY}:
+            entry_type = PROFILE_ENTRY
         entry = {
             "content": content,
             "timestamp": timestamp or datetime.now().isoformat(),
             "auto": True,
             "fingerprint": _memory_fingerprint(content),
             "user_id": int(user_id),
-            "server_id": int(server_id),
+            "server_id": normalized_server_id,
+            "entry_type": entry_type,
         }
         if user_name:
             entry["user_name"] = user_name
@@ -802,53 +979,267 @@ class MemoryManager:
     # AUTO MEMORIES
     # ==========================================================================
 
-    def add_auto_memory(self, server_id: int, user_id: int, content: str,
+    @staticmethod
+    def _normalize_profile_text(content: str) -> str:
+        """Normalize provider output into one editable profile string."""
+        if not isinstance(content, str):
+            return ""
+        content = remove_thinking_tags(content).strip()
+        if not content:
+            return ""
+
+        lines = []
+        for line in content.splitlines():
+            line = re.sub(r'^\s*(?:[-*]+|\d+[\.\)])\s*', '', line).strip()
+            if line:
+                lines.append(line)
+
+        if not lines:
+            return ""
+        return _sanitize_memory_content("; ".join(lines))
+
+    @staticmethod
+    def _combine_pending_content(*contents: str) -> str:
+        """Combine pending facts into one readable temporary entry."""
+        parts = []
+        for content in contents:
+            if not isinstance(content, str) or not content.strip():
+                continue
+            for part in re.split(r'(?:\r?\n|;)\s*', content):
+                cleaned = _sanitize_memory_content(part)
+                if cleaned:
+                    parts.append(cleaned)
+
+        unique_parts = deduplicate_memory_strings(parts)
+        return "; ".join(unique_parts)
+
+    @staticmethod
+    def _auto_entry_snapshot(entries: List[dict]) -> List[tuple]:
+        """Return a compact snapshot used to detect concurrent key changes."""
+        return [
+            (
+                MemoryManager._entry_type(entry),
+                entry.get("fingerprint"),
+                entry.get("content"),
+                entry.get("timestamp"),
+            )
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+
+    def _upsert_pending_entry(
+        self,
+        key: str,
+        content: str,
+        *,
+        user_id: int = None,
+        server_id: int | str = None,
+        user_name: str = None,
+        server_name: str = None,
+        character_name: str = None,
+        embedding: list = None,
+    ) -> bool:
+        """Create or update the single pending entry for a key."""
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
+
+        entries = self.auto_memories.setdefault(key, [])
+        metadata = self._entry_metadata(
+            key,
+            entries,
+            user_id=user_id,
+            server_id=server_id,
+            user_name=user_name,
+            server_name=server_name,
+            character_name=character_name,
+        )
+
+        pending_indices = [
+            idx for idx, entry in enumerate(entries)
+            if self._entry_type(entry) == PENDING_ENTRY
+        ]
+        pending_contents = [entries[idx].get("content", "") for idx in pending_indices]
+        pending_content = self._combine_pending_content(*pending_contents, content)
+        if not pending_content:
+            return False
+
+        pending_entry = self._build_auto_memory_entry(
+            pending_content,
+            user_id=metadata["user_id"],
+            server_id=metadata["server_id"],
+            user_name=metadata["user_name"],
+            server_name=metadata["server_name"],
+            character_name=metadata["character_name"],
+            embedding=embedding if not pending_indices else None,
+            entry_type=PENDING_ENTRY,
+        )
+
+        if pending_indices:
+            entries[pending_indices[0]] = pending_entry
+            for idx in reversed(pending_indices[1:]):
+                entries.pop(idx)
+        else:
+            entries.append(pending_entry)
+
+        self._mark_dirty('auto')
+        self._sync_pending_auto_count_for_key(key)
+        return True
+
+    def add_auto_memory(self, server_id: int | str, user_id: int, content: str,
                         character_name: str = None, user_name: str = None,
                         server_name: str = None, embedding: list = None) -> bool:
-        """Add an auto-generated memory.
+        """Add an auto-generated memory using local profile/pending semantics.
 
-        Returns True if memory was added, False if duplicate detected.
+        First memory for a key becomes the profile. Later sync additions update
+        the single pending entry; async callers should use
+        upsert_auto_memory_profile() to merge immediately through a provider.
         """
         content = _sanitize_memory_content(content)
         if not content:
             return False
 
         key = self._auto_key(server_id, user_id)
-        if key not in self.auto_memories:
-            self.auto_memories[key] = []
+        entries = self.auto_memories.setdefault(key, [])
 
-        # Check for duplicates
-        if _is_duplicate_memory(content, self.auto_memories[key], new_embedding=embedding):
+        if _is_duplicate_memory(content, entries, new_embedding=embedding):
             log.debug(f"Skipping duplicate auto memory: {content[:50]}...")
             return False
 
-        self.auto_memories[key].append(self._build_auto_memory_entry(
+        if not entries:
+            self.auto_memories[key] = [self._build_auto_memory_entry(
+                content,
+                user_id=user_id,
+                server_id=server_id,
+                user_name=user_name,
+                server_name=server_name,
+                character_name=character_name,
+                embedding=embedding,
+                entry_type=PROFILE_ENTRY,
+            )]
+            self._mark_dirty('auto')
+            self._set_pending_auto_count(key, 0)
+            return True
+
+        return self._upsert_pending_entry(
+            key,
             content,
             user_id=user_id,
             server_id=server_id,
             user_name=user_name,
             server_name=server_name,
             character_name=character_name,
-            embedding=embedding
-        ))
+            embedding=embedding,
+        )
 
-        # Cap at 50 memories per key
-        if len(self.auto_memories[key]) > 50:
-            self.auto_memories[key] = self.auto_memories[key][-50:]
+    async def upsert_auto_memory_profile(
+        self,
+        server_id: int | str,
+        user_id: int,
+        content: str,
+        provider_manager,
+        *,
+        character_name: str = None,
+        user_name: str = None,
+        server_name: str = None,
+        embedding: list = None,
+    ) -> bool:
+        """Merge a newly learned fact into the one living profile for its key."""
+        content = _sanitize_memory_content(content)
+        if not content:
+            return False
 
-        self._mark_dirty('auto')
-        self._increment_pending_auto_count(key)
-        return True
-
-    def get_auto_memories(self, server_id: int, user_id: int, limit: int = 10) -> str:
-        """Get formatted auto memories for a user in a server/DM."""
         key = self._auto_key(server_id, user_id)
-        memories = self.auto_memories.get(key, [])[-limit:]
-        if not memories:
-            return ""
-        return "\n".join([f"- {remove_thinking_tags(m['content'])}" for m in memories])
+        entries = self.auto_memories.setdefault(key, [])
+        if _is_duplicate_memory(content, entries, new_embedding=embedding):
+            log.debug(f"Skipping duplicate auto memory: {content[:50]}...")
+            return False
 
-    def get_all_memories_for_context(self, server_id: int, user_id: int, user_name: str = "") -> str:
+        if not entries:
+            self.auto_memories[key] = [self._build_auto_memory_entry(
+                content,
+                user_id=user_id,
+                server_id=server_id,
+                user_name=user_name,
+                server_name=server_name,
+                character_name=character_name,
+                embedding=embedding,
+                entry_type=PROFILE_ENTRY,
+            )]
+            self._mark_dirty('auto')
+            self._set_pending_auto_count(key, 0)
+            return True
+
+        new_fact_entry = self._build_auto_memory_entry(
+            content,
+            user_id=user_id,
+            server_id=server_id,
+            user_name=user_name,
+            server_name=server_name,
+            character_name=character_name,
+            embedding=embedding,
+            entry_type=PENDING_ENTRY,
+        )
+        status = await self._merge_auto_memory_profile(
+            key,
+            provider_manager,
+            new_fact_entry=new_fact_entry,
+            metadata_overrides={
+                "user_id": user_id,
+                "server_id": server_id,
+                "user_name": user_name,
+                "server_name": server_name,
+                "character_name": character_name,
+            },
+        )
+        if status == "consolidated":
+            return True
+
+        return self._upsert_pending_entry(
+            key,
+            content,
+            user_id=user_id,
+            server_id=server_id,
+            user_name=user_name,
+            server_name=server_name,
+            character_name=character_name,
+            embedding=embedding,
+        )
+
+    def get_auto_memories(self, server_id: int | str, user_id: int, limit: int = 10) -> str:
+        """Get formatted auto memories for a user in a server/DM."""
+        try:
+            limit = max(1, int(limit))
+        except (TypeError, ValueError):
+            limit = 10
+        key = self._auto_key(server_id, user_id)
+        entries = self.auto_memories.get(key, [])
+        if not entries:
+            return ""
+
+        profile_entries = [entry for entry in entries if self._entry_type(entry) == PROFILE_ENTRY]
+        pending_entries = [entry for entry in entries if self._entry_type(entry) == PENDING_ENTRY]
+        legacy_entries = [entry for entry in entries if self._entry_type(entry) == LEGACY_ENTRY]
+
+        visible_entries = []
+        if profile_entries:
+            visible_entries.append((PROFILE_ENTRY, profile_entries[0]))
+            legacy_limit = max(limit - 1, 0)
+            visible_entries.extend((LEGACY_ENTRY, entry) for entry in legacy_entries[-legacy_limit:])
+        else:
+            visible_entries.extend((LEGACY_ENTRY, entry) for entry in legacy_entries[-limit:])
+        visible_entries.extend((PENDING_ENTRY, entry) for entry in pending_entries[:1])
+
+        lines = []
+        for entry_type, entry in visible_entries:
+            content = remove_thinking_tags(entry.get('content', '')).strip()
+            if not content:
+                continue
+            prefix = "Pending merge: " if entry_type == PENDING_ENTRY else ""
+            lines.append(f"- {prefix}{content}")
+        return "\n".join(lines)
+
+    def get_all_memories_for_context(self, server_id: int | str, user_id: int, user_name: str = "") -> str:
         """Get all relevant memories for LLM context — combines auto memories and lore."""
         parts = []
 
@@ -885,7 +1276,7 @@ class MemoryManager:
             del self.auto_memories[key]
             self._set_pending_auto_count(key, 0)
         elif removed:
-            self._decrement_pending_auto_count(key, removed)
+            self._sync_pending_auto_count_for_key(key)
         if removed:
             self._mark_dirty('auto')
         return removed
@@ -919,6 +1310,7 @@ class MemoryManager:
         existing["timestamp"] = datetime.now().isoformat()
         existing["auto"] = True
         existing["fingerprint"] = _memory_fingerprint(content)
+        existing["entry_type"] = self._entry_type(existing)
         existing.pop("embedding", None)
 
         if character_name:
@@ -927,6 +1319,7 @@ class MemoryManager:
             existing.pop("character", None)
 
         self._mark_dirty('auto')
+        self._sync_pending_auto_count_for_key(key)
         return True
 
     def bulk_delete_auto_memories(
@@ -949,18 +1342,26 @@ class MemoryManager:
 
     async def consolidate_auto_memory_keys(self, keys: List[str], provider_manager) -> dict:
         """Manually consolidate one or more auto-memory keys in sequence."""
+        unique_keys = []
+        seen_keys = set()
+        for key in keys or []:
+            if not isinstance(key, str) or key not in self.auto_memories or key in seen_keys:
+                continue
+            unique_keys.append(key)
+            seen_keys.add(key)
+
         result = {
-            "matched_keys": len(keys or []),
+            "matched_keys": len(unique_keys),
             "consolidated": 0,
             "skipped": 0,
             "already_running": 0,
             "failed": 0,
         }
 
-        if not keys:
+        if not unique_keys:
             return result
 
-        for key in keys:
+        for key in unique_keys:
             status = await self.llm_deduplicate(key, provider_manager)
             if status == "consolidated":
                 result["consolidated"] += 1
@@ -984,6 +1385,13 @@ class MemoryManager:
         """Resolve keys for one or more users, then consolidate each key sequentially."""
         keys = self.resolve_auto_memory_keys(user_ids, scope_mode=scope_mode, server_id=server_id)
         return await self.consolidate_auto_memory_keys(keys, provider_manager)
+
+    async def retry_pending_auto_profiles(self, provider_manager) -> dict:
+        """Retry all profile keys that still need LLM consolidation."""
+        return await self.consolidate_auto_memory_keys(
+            self.get_auto_memory_profile_keys_needing_merge(),
+            provider_manager,
+        )
 
     # ==========================================================================
     # MANUAL LORE
@@ -1106,118 +1514,151 @@ class MemoryManager:
     # ==========================================================================
 
     def should_llm_deduplicate(self, key: str) -> bool:
-        """Check if a key has accumulated enough new memories to trigger LLM dedup."""
-        count = self._get_pending_auto_count(key)
-        return count >= self._LLM_DEDUP_EVERY and key not in self._dedup_in_flight
+        """Check if a key needs profile consolidation and is available to merge."""
+        return self.auto_memory_key_needs_merge(key) and key not in self._dedup_in_flight
 
-    async def llm_deduplicate(self, key: str, provider_manager):
-        """Use LLM to consolidate and deduplicate memories for a key."""
+    def _build_profile_merge_prompt(
+        self,
+        key: str,
+        entries: List[dict],
+        *,
+        new_fact_entry: dict = None,
+    ) -> str:
+        """Build the LLM prompt that rewrites entries into one profile."""
+        metadata = self._entry_metadata(key, entries + ([new_fact_entry] if new_fact_entry else []))
+        user_name = metadata.get("user_name") or f"User {metadata.get('user_id')}"
+
+        profile_lines = []
+        pending_lines = []
+        legacy_lines = []
+        for entry in entries:
+            content = remove_thinking_tags(entry.get("content", "")).strip()
+            if not content:
+                continue
+            entry_type = self._entry_type(entry)
+            if entry_type == PROFILE_ENTRY:
+                profile_lines.append(content)
+            elif entry_type == PENDING_ENTRY:
+                pending_lines.append(content)
+            else:
+                legacy_lines.append(content)
+
+        if new_fact_entry:
+            new_fact = remove_thinking_tags(new_fact_entry.get("content", "")).strip()
+        else:
+            new_fact = ""
+
+        sections = []
+        if profile_lines:
+            sections.append("Current profile:\n" + "\n".join(f"- {line}" for line in profile_lines))
+        if legacy_lines:
+            sections.append("Legacy memories to preserve:\n" + "\n".join(f"- {line}" for line in legacy_lines))
+        if pending_lines:
+            sections.append("Pending facts waiting for merge:\n" + "\n".join(f"- {line}" for line in pending_lines))
+        if new_fact:
+            sections.append("New fact to merge now:\n" + f"- {new_fact}")
+
+        memory_text = "\n\n".join(sections) if sections else "No stored facts."
+
+        return f"""Rewrite the stored memories below into one living editable memory profile about {user_name}.
+
+Preserve every durable, non-duplicate fact. Merge overlaps. Remove exact duplicates and throwaway wording.
+Write one concise profile in plain text. Do not include numbering, explanations, JSON, headings, or metadata.
+
+{memory_text}
+
+Final memory profile:"""
+
+    async def _merge_auto_memory_profile(
+        self,
+        key: str,
+        provider_manager,
+        *,
+        new_fact_entry: dict = None,
+        metadata_overrides: dict = None,
+    ) -> str:
+        """Use the provider to rewrite a key into exactly one profile entry."""
         if key in self._dedup_in_flight:
-            log.debug(f"LLM dedup already in flight for {key}")
+            log.debug(f"LLM profile merge already in flight for {key}")
             return "already_running"
 
-        memories = list(self.auto_memories.get(key, []))
-        if len(memories) < 3:
-            self._set_pending_auto_count(key, min(self._get_pending_auto_count(key), len(memories)))
+        entries = list(self.auto_memories.get(key, []))
+        if not entries and not new_fact_entry:
+            return "skipped"
+        if not new_fact_entry and not self.auto_memory_key_needs_merge(key):
+            self._set_pending_auto_count(key, 0)
             return "skipped"
 
         self._dedup_in_flight.add(key)
-        memory_snapshot = [
-            (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
-            for m in memories
-        ]
-
-        # Build context
-        memory_lines = [f"{i+1}. {m['content']}" for i, m in enumerate(memories)]
-        memory_text = "\n".join(memory_lines)
-
-        user_name = memories[0].get('user_name', 'the user') if memories else 'the user'
-
-        prompt = f"""Here are {len(memories)} stored memories about {user_name}. Some may be duplicates or redundant.
-
-Consolidate them into a clean, deduplicated list. Merge similar facts. Remove exact duplicates.
-Keep all unique information. Return one memory per line, no numbering.
-
-Memories:
-{memory_text}
-
-Deduplicated memories (one per line):"""
+        memory_snapshot = self._auto_entry_snapshot(entries)
 
         try:
+            prompt = self._build_profile_merge_prompt(key, entries, new_fact_entry=new_fact_entry)
             result = await provider_manager.generate(
                 messages=[{"role": "user", "content": prompt}],
-                system_prompt="You are a memory consolidation assistant. Return only the deduplicated list, one per line."
+                system_prompt=(
+                    "You are a memory consolidation assistant. "
+                    "Return only one concise editable memory profile."
+                )
             )
 
             if not result or result.startswith("❌"):
                 return "failed"
 
-            result = remove_thinking_tags(result)
-            new_lines = [line.strip() for line in result.strip().split("\n") if line.strip()]
-            # Rebuild memory entries
-            candidate_lines = []
-            for line in new_lines:
-                line = re.sub(r'^[\-\d\.\)]+\s*', '', line).strip()
-                if line:
-                    candidate_lines.append(line)
+            profile_text = self._normalize_profile_text(remove_thinking_tags(result))
+            if not profile_text:
+                return "failed"
 
-            new_lines = deduplicate_memory_strings(candidate_lines)
-            new_memories = []
-            embeddings = []
-            if new_lines:
-                embeddings = await asyncio.gather(
-                    *[provider_manager.get_embedding(line) for line in new_lines],
-                    return_exceptions=True
-                )
-
-            default_server_id, default_user_id = _parse_auto_key(key)
-            base_character = next(
-                (m.get("character") for m in memories if isinstance(m.get("character"), str) and m.get("character")),
-                "consolidated"
-            )
-            for idx, line in enumerate(new_lines):
+            embedding = await provider_manager.get_embedding(profile_text)
+            if embedding is None:
+                self._log_embedding_unavailable_once()
                 embedding = None
-                if idx < len(embeddings):
-                    candidate = embeddings[idx]
-                    if isinstance(candidate, list):
-                        embedding = candidate
-                    elif candidate is None or isinstance(candidate, Exception):
-                        self._log_embedding_unavailable_once()
-                new_memories.append(self._build_auto_memory_entry(
-                    line,
-                    user_id=memories[0].get("user_id", default_user_id or 0),
-                    server_id=memories[0].get("server_id", default_server_id or 0),
-                    user_name=memories[0].get("user_name"),
-                    server_name=memories[0].get("server_name"),
-                    character_name=base_character,
-                    embedding=embedding
-                ))
+            elif not isinstance(embedding, list):
+                embedding = None
 
-            if not new_memories:
-                return "skipped"
+            all_entries = entries + ([new_fact_entry] if new_fact_entry else [])
+            overrides = metadata_overrides or {}
+            metadata = self._entry_metadata(
+                key,
+                all_entries,
+                user_id=overrides.get("user_id"),
+                server_id=overrides.get("server_id"),
+                user_name=overrides.get("user_name"),
+                server_name=overrides.get("server_name"),
+                character_name=overrides.get("character_name"),
+            )
+            profile_entry = self._build_auto_memory_entry(
+                profile_text,
+                user_id=metadata["user_id"],
+                server_id=metadata["server_id"],
+                user_name=metadata["user_name"],
+                server_name=metadata["server_name"],
+                character_name=metadata["character_name"] or "consolidated",
+                embedding=embedding,
+                entry_type=PROFILE_ENTRY,
+            )
 
-            current_snapshot = [
-                (m.get("fingerprint"), m.get("content"), m.get("timestamp"))
-                for m in self.auto_memories.get(key, [])
-            ]
+            current_snapshot = self._auto_entry_snapshot(self.auto_memories.get(key, []))
             if current_snapshot != memory_snapshot:
-                log.debug(f"Skipping stale LLM dedup result for {key}")
+                log.debug(f"Skipping stale LLM profile merge result for {key}")
                 return "skipped"
 
-            before_count = len(memories)
-            self.auto_memories[key] = new_memories
+            before_count = len(entries)
+            self.auto_memories[key] = [profile_entry]
             self._mark_dirty('auto')
             self._set_pending_auto_count(key, 0)
-            log.info(f"LLM dedup for {key}: {before_count} -> {len(new_memories)} memories")
+            log.info(f"LLM profile merge for {key}: {before_count} -> 1 profile")
             return "consolidated"
 
         except Exception as e:
-            log.warn(f"LLM deduplication failed for {key}: {e}")
+            log.warn(f"LLM profile merge failed for {key}: {e}")
             return "failed"
         finally:
             self._dedup_in_flight.discard(key)
 
-        return "skipped"
+    async def llm_deduplicate(self, key: str, provider_manager):
+        """Use LLM to consolidate a key into one editable profile entry."""
+        return await self._merge_auto_memory_profile(key, provider_manager)
 
     # ==========================================================================
     # MEMORY GENERATION
@@ -1228,7 +1669,7 @@ Deduplicated memories (one per line):"""
         provider_manager,
         messages: List[dict],
         is_dm: bool,
-        id_key: int,
+        id_key: int | str,
         character_name: str = "the character",
         user_id: int = None,
         user_name: str = None
@@ -1314,23 +1755,17 @@ Memory about {target_user} (or NOTHING):"""
                 server_id = id_key
                 server_name = None  # Will be populated by caller if available
 
-                # Store in unified auto memories
-                added = self.add_auto_memory(
+                # Store in unified auto memory profile.
+                added = await self.upsert_auto_memory_profile(
                     server_id=server_id,
                     user_id=user_id or id_key,
                     content=result.strip(),
+                    provider_manager=provider_manager,
                     character_name=character_name,
                     user_name=user_name,
                     server_name=server_name,
                     embedding=embedding
                 )
-
-                if added:
-                    # Check if LLM dedup should run
-                    auto_key = self._auto_key(server_id, user_id or id_key)
-                    if self.should_llm_deduplicate(auto_key):
-                        # Fire-and-forget (will run async)
-                        asyncio.create_task(self.llm_deduplicate(auto_key, provider_manager))
 
                 return result.strip()
         except Exception as e:
@@ -1381,7 +1816,8 @@ Memory about {target_user} (or NOTHING):"""
                 server_name=entry.get("server_name"),
                 character_name=entry.get("character") or entry.get("learned_from"),
                 embedding=entry.get("embedding") if isinstance(entry.get("embedding"), list) else None,
-                timestamp=entry.get("timestamp", datetime.now().isoformat())
+                timestamp=entry.get("timestamp", datetime.now().isoformat()),
+                entry_type=LEGACY_ENTRY,
             ))
             stats["migrated"] += 1
 

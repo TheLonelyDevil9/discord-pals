@@ -64,14 +64,14 @@ The system instructions were authored by legendary chef @Geechan.
   - Autonomous channel monitoring
 - **Character hot-swap** - Switch characters via dashboard or `/switch` command
 - **Multi-bot support** - Run multiple bots from a single terminal/process
-- **Memory system** - Unified 2-store system: auto memories (per-user, per-server) and manual lore (attachable to users, bots, or servers)
-- **Auto-memory** - Automatically remembers important facts from conversations
-- **Memory deduplication** - LLM-based consolidation after 5 new auto memories for the same user key to prevent redundancy
+- **Memory system** - Unified 2-store system: auto memory profiles (one per server/user or per-bot DM/user) and manual lore (attachable to users, bots, or servers)
+- **Auto-memory** - Automatically remembers important facts from conversations and merges them into the right editable profile
+- **Memory consolidation** - LLM-based profile merging prevents long unmanaged auto-memory lists; failed merges keep one pending entry for retry
 - **History persistence** - Conversation history survives restarts
 - **User-only context mode** - Send only human messages to the LLM (opt-in), reduces impersonation and context poisoning
 - **Mention-triggered context** - Gathers ephemeral context about mentioned users without storing
 - **Instant responses** - Bot responds to every message immediately (no batching delay)
-- **Memory deduplication** - LLM-based consolidation after 5 new auto memories for the same user key to prevent redundancy
+- **Per-bot DM memory** - DM auto-memory profiles are isolated by bot and user, so different characters do not share a user's private DM profile
 - **Bot-bot control** - `/stop` command to pause bot-to-bot reply chains globally
 - **Killswitch** - `/pause` command for emergency stop of all bot activity
 - **Bot-on-bot fall-off** - Progressive probability decay prevents infinite bot conversations
@@ -545,11 +545,11 @@ Changes are saved immediately. Use `/reload` in Discord or click the reload butt
 
 Manage the bot's memory system:
 
-- **Auto Memories** — View, edit, delete, and manually consolidate automatically created memories per user/server
+- **Auto Memory Profiles** — View, edit, delete, and manually merge automatically created profiles per server/user or per-bot DM/user
 - **Manual Lore** — Add, edit, and delete lore entries scoped to users, bots, or servers
-- **Bulk Cleanup** — Delete selected auto memories, delete auto memories by one or more users, or delete user lore in bulk
-- **Manual Consolidation** — Run a targeted consolidation pass for one or more users without waiting for the automatic 5-memory trigger
-- **Filtering** — Filter auto memories by scope, server, and search term
+- **Bulk Cleanup** — Delete selected profile or pending entries, delete auto profiles by one or more users, or delete user lore in bulk
+- **Manual Merge** — Run a targeted merge pass for one or more users or a specific memory key
+- **Filtering** — Filter auto memory profiles by scope, server, user, and search term
 - **User Resolution** — User IDs displayed as readable Discord names
 - **Safe Live Editing** — Raw JSON is still viewable, but live cleanup should go through dashboard actions so in-memory state and dedup counters stay in sync
 
@@ -607,18 +607,21 @@ The bot uses a unified 2-store memory system:
 
 | Store | Scope | File Location |
 | ----- | ----- | ------------- |
-| **Auto Memories** | Per-user, per-server (fingerprinted by user ID + server ID) | `bot_data/auto_memories.json` |
+| **Auto Memory Profiles** | One profile per `server:{server_id}:user:{user_id}` or `dm:bot:{bot}:user:{user_id}` scope | `bot_data/auto_memories.json` |
 | **Manual Lore** | Attachable to users, bots, or servers | `bot_data/manual_lore.json` |
 
-### Auto Memories
+### Auto Memory Profiles
 
-The bot automatically detects and stores important facts from conversations (preferences, relationships, events). To prevent bloat, an LLM-based deduplication pass runs after 5 new auto memories for the same server/user or DM/user key, consolidating redundant entries.
+The bot automatically detects and stores important facts from conversations (preferences, relationships, events). Each server/user or per-bot DM/user scope keeps one living `profile` entry in `auto_memories.json`; new facts are merged into that profile immediately when a provider is available.
 
-The dashboard also supports manual cleanup workflows for auto memories:
+If the provider merge fails, the bot keeps one temporary `pending` entry for that same key instead of appending more cards. Later automatic retries or the dashboard's **Merge Now** action fold that pending content into the profile after a successful LLM merge. Existing multi-entry legacy keys are queued for this same consolidation path and are not rewritten until the LLM returns a valid merged profile.
 
-- Delete exact selected memories
-- Delete all auto memories for one or more users in DMs, one server, or all scopes
-- Manually consolidate one or more users' auto memories into a shorter bullet-style list in place
+The dashboard also supports manual cleanup workflows for auto memory profiles:
+
+- Edit or delete the profile entry for a key
+- Edit or delete the single pending entry when one exists
+- Delete all auto memory profiles for one or more users in DMs, one server, or all scopes
+- Manually merge one specific key or targeted users/scopes in place
 
 User IDs are resolved to readable Discord display names in the dashboard for easy management.
 

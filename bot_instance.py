@@ -1131,11 +1131,11 @@ Return exactly one JSON object with this shape:
         is_dm = reminder.get("source_type") == "dm"
         get_guild = getattr(self.client, "get_guild", None)
         guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
-        server_id = 0 if is_dm else int(reminder.get("source_guild_id") or 0)
+        server_id = self._dm_memory_server_id() if is_dm else int(reminder.get("source_guild_id") or 0)
         prompt_now = get_context_now(user_id=target_user_id, bot_name=self.name)
 
         emojis = get_guild_emojis(guild) if guild else ""
-        lore = memory_manager.get_server_lore(server_id) if server_id else ""
+        lore = "" if is_dm else memory_manager.get_server_lore(server_id)
         bot_lore = memory_manager.get_bot_lore(self.character.name) if self.character else ""
         if bot_lore and lore:
             lore = f"{lore}\n{bot_lore}"
@@ -1337,6 +1337,10 @@ Return exactly one JSON object with this shape:
 
             # Start durable reminder loop
             asyncio.create_task(self._reminder_loop())
+
+            # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
+            if getattr(provider_manager, "providers", None):
+                asyncio.create_task(memory_manager.retry_pending_auto_profiles(provider_manager))
 
             # Initialize Prometheus metrics for this bot
             metrics_manager.update_bot_status(
@@ -1731,8 +1735,8 @@ Return exactly one JSON object with this shape:
                     message.guild.id, mentioned_user.id, character_name=char_name
                 )
             else:
-                existing_memories = memory_manager.get_dm_memories(
-                    mentioned_user.id, character_name=char_name
+                existing_memories = memory_manager.get_auto_memories(
+                    self._dm_memory_server_id(), mentioned_user.id
                 )
 
             if not existing_memories:

@@ -8,6 +8,8 @@ from discord import app_commands
 from typing import Optional
 
 from memory import memory_manager
+from providers import provider_manager
+from scopes import memory_server_id
 from .registry import maintenance_visibility, register_command_metadata
 
 
@@ -27,16 +29,17 @@ def setup_memory_commands(bot_instance) -> None:
     ) -> None:
         is_dm = isinstance(interaction.channel, discord.DMChannel)
         char_name = bot_instance.character.name if bot_instance.character else None
-        server_id = interaction.guild_id if not is_dm else 0
+        server_id = memory_server_id(bot_instance.name, interaction.guild_id, is_dm=is_dm)
         target_user_id = int(user_id) if user_id else interaction.user.id
         user_name = interaction.user.display_name
-        server_name = interaction.guild.name if interaction.guild else "DM"
+        server_name = interaction.guild.name if interaction.guild else f"DM ({bot_instance.name})"
 
         try:
-            added = memory_manager.add_auto_memory(
+            added = await memory_manager.upsert_auto_memory_profile(
                 server_id=server_id,
                 user_id=target_user_id,
                 content=content,
+                provider_manager=provider_manager,
                 character_name=char_name,
                 user_name=user_name,
                 server_name=server_name
@@ -52,7 +55,7 @@ def setup_memory_commands(bot_instance) -> None:
     @tree.command(name="memories", description="View saved memories")
     async def cmd_memories(interaction: discord.Interaction) -> None:
         is_dm = isinstance(interaction.channel, discord.DMChannel)
-        server_id = interaction.guild_id if not is_dm else 0
+        server_id = memory_server_id(bot_instance.name, interaction.guild_id, is_dm=is_dm)
         user_id = interaction.user.id
 
         memories = memory_manager.get_auto_memories(server_id, user_id, limit=15)
@@ -144,7 +147,7 @@ def setup_memory_commands(bot_instance) -> None:
         # Build the key and clear
         try:
             if memory_type_value == "auto":
-                server_id = interaction.guild_id if not is_dm else 0
+                server_id = memory_server_id(bot_instance.name, interaction.guild_id, is_dm=is_dm)
                 key = memory_manager._auto_key(server_id, interaction.user.id)
                 memory_manager.clear_auto_memories(key)
                 await interaction.response.send_message("Memories cleared", ephemeral=True)

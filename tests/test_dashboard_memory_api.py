@@ -2,6 +2,8 @@ import unittest
 import sys
 import types
 import re
+import asyncio
+import threading
 from unittest.mock import patch
 
 import module_stubs  # noqa: F401
@@ -10,6 +12,19 @@ import character as character_module
 import stats as stats_module
 
 from test_support import MemorySandboxMixin
+
+
+class DashboardEmbeddingProvider:
+    providers = {"test": object()}
+
+    def __init__(self, result: str):
+        self.result = result
+
+    async def generate(self, messages, system_prompt):
+        return self.result
+
+    async def get_embedding(self, text):
+        return [float(len(text)), 1.0]
 
 
 class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
@@ -59,6 +74,10 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertTrue(data["memories"][0]["auto"])
         self.assertEqual(data["memories"][0]["scope"], "server")
         self.assertEqual(data["memories"][0]["key"], "server:123:user:456")
+        self.assertEqual(data["memories"][0]["entry_type"], "profile")
+        self.assertFalse(data["memories"][0]["needs_merge"])
+        self.assertEqual(data["memories"][0]["profile_index"], 0)
+        self.assertIsNone(data["memories"][0]["pending_index"])
 
         item_response = self.client.get("/api/v2/memories/auto/item?key=server%3A123%3Auser%3A456&index=0")
         item = item_response.get_json()
@@ -66,10 +85,12 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertTrue(item["auto"])
 
         page = self.client.get("/memories").get_data(as_text=True)
-        self.assertIn("Consolidation runs after 5 new auto memories for the same key.", page)
+        self.assertIn("Auto Memory Profiles", page)
+        self.assertIn("A single pending entry appears only while a merge is waiting to succeed.", page)
         self.assertIn("Select All Visible", page)
         self.assertIn("Delete Targeted Users", page)
-        self.assertIn("Consolidate Targeted Users", page)
+        self.assertIn("Merge Targeted Users", page)
+        self.assertIn("Merge Now", page)
         self.assertIn("Delete Targeted User Lore", page)
         self.assertIn("Live JSON edits are not a supported delete path", page)
         self.assertIn("/api/v2/memories/auto", page)
@@ -79,6 +100,7 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
     def test_auto_memory_api_respects_scope_server_and_user_filters(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice", server_name="Tea House")
         self.manager.add_auto_memory(0, 456, "Alice prefers DMs", user_name="Alice", server_name="DM")
+        self.manager.add_auto_memory("dm:bot:Nahida", 456, "Alice asks Nahida for gentle nudges", user_name="Alice")
         self.manager.add_auto_memory(123, 999, "Bob likes coffee", user_name="Bob", server_name="Tea House")
 
         response = self.client.get("/api/v2/memories/auto?scope=server&server_id=123&user_ids=456")
@@ -88,6 +110,15 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["memories"][0]["key"], "server:123:user:456")
         self.assertEqual(data["memories"][0]["scope"], "server")
+
+        dm_response = self.client.get("/api/v2/memories/auto?scope=dm&user_ids=456&search=gentle")
+        dm_data = dm_response.get_json()
+
+        self.assertEqual(dm_response.status_code, 200)
+        self.assertEqual(dm_data["total"], 1)
+        self.assertEqual(dm_data["memories"][0]["key"], "dm:bot:Nahida:user:456")
+        self.assertEqual(dm_data["memories"][0]["scope"], "dm")
+        self.assertEqual(dm_data["memories"][0]["scope_label"], "DM (Nahida)")
 
     def test_auto_memory_bulk_delete_by_user_returns_counts(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea")
@@ -130,8 +161,83 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
 
         data = response.get_json()
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(len(self.manager.auto_memories[key]), 5)
+        self.assertEqual([entry["entry_type"] for entry in self.manager.auto_memories[key]], ["profile", "pending"])
         self.assertNotEqual(data["status"], "ok")
+
+    def test_auto_memory_api_exposes_pending_metadata(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice", server_name="Tea House")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice", server_name="Tea House")
+
+        response = self.client.get("/api/v2/memories/auto")
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["total"], 1)
+        memory = data["memories"][0]
+        self.assertEqual(memory["entry_type"], "profile")
+        self.assertTrue(memory["needs_merge"])
+        self.assertEqual(memory["entry_count"], 2)
+        self.assertEqual(memory["profile_index"], 0)
+        self.assertEqual(memory["pending_index"], 1)
+        self.assertIn("bookmarks", memory["pending_content"])
+
+    def test_auto_memory_consolidate_accepts_specific_key(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
+
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True)
+        thread.start()
+        fake_providers = types.ModuleType("providers")
+        fake_providers.provider_manager = DashboardEmbeddingProvider("Alice likes tea and collects bookmarks")
+
+        try:
+            with patch.dict(sys.modules, {"providers": fake_providers}), patch.object(
+                dashboard_module,
+                "_get_live_bot_loop",
+                return_value=loop,
+            ):
+                response = self.client.post(
+                    "/api/v2/memories/auto/consolidate",
+                    json={"keys": [key]},
+                    headers=self.csrf_headers()
+                )
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=2)
+            loop.close()
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["matched_keys"], 1)
+        self.assertEqual(data["consolidated"], 1)
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
+        self.assertIn("bookmarks", self.manager.auto_memories[key][0]["content"])
+
+    def test_auto_memory_edit_and_delete_target_pending_entry(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
+
+        edit_response = self.client.put(
+            "/api/v2/memories/auto/item",
+            json={"key": key, "index": 1, "content": "Alice keeps a bookmark journal"},
+            headers=self.csrf_headers()
+        )
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertEqual(self.manager.auto_memories[key][1]["entry_type"], "pending")
+        self.assertIn("bookmark journal", self.manager.auto_memories[key][1]["content"])
+
+        delete_response = self.client.delete(
+            "/api/v2/memories/auto/item",
+            json={"key": key, "index": 1},
+            headers=self.csrf_headers()
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
 
     def test_lore_filters_and_bulk_delete_user_targets_only(self):
         self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")

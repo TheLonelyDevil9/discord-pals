@@ -4,11 +4,11 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Memories</h1>
-    <p class="page-subtitle">Manage unified auto memories and manual lore.</p>
+    <p class="page-subtitle">Manage auto memory profiles and manual lore.</p>
 </div>
 
 <div class="tabs">
-    <button type="button" class="tab active" data-tab-button="files" onclick="switchTab('files')">Auto Memories</button>
+    <button type="button" class="tab active" data-tab-button="files" onclick="switchTab('files')">Auto Memory Profiles</button>
     <button type="button" class="tab" data-tab-button="add" onclick="switchTab('add')">Add Memory</button>
     <button type="button" class="tab" data-tab-button="lore" onclick="switchTab('lore')">Manual Lore</button>
 </div>
@@ -24,7 +24,7 @@
         </div>
         <div class="stat-card">
             <span class="stat-value" id="auto-memories">0</span>
-            <span class="stat-label">Auto-Generated</span>
+            <span class="stat-label">Auto Profiles</span>
         </div>
         <div class="stat-card">
             <span class="stat-value" id="manual-memories">0</span>
@@ -52,7 +52,7 @@
         </div>
         <div class="form-group flex-1">
             <label for="memory-search">Search</label>
-            <input type="text" id="memory-search" placeholder="Search auto memories..." oninput="loadAutoMemories()" title="Search memory content">
+            <input type="text" id="memory-search" placeholder="Search auto profiles..." oninput="loadAutoMemories()" title="Search memory content">
         </div>
         <div class="form-group">
             <label for="sort-by">Sort</label>
@@ -66,13 +66,13 @@
     <div class="card memory-section">
         <div class="card-header">
             <span class="card-title">
-                Auto Memories <span class="badge badge-muted" id="auto-memory-count">0</span>
+                Auto Memory Profiles <span class="badge badge-muted" id="auto-memory-count">0</span>
             </span>
             <a href="/memories/{{ auto_memory_file }}/edit" class="btn btn-ghost btn-sm">Raw JSON</a>
         </div>
         <div class="card-body">
             <p class="tab-description">
-                Auto memories are stored per server/user or DM/user key. Consolidation runs after 5 new auto memories for the same key.
+                Auto memories are stored as one editable profile per server/user or per-bot DM/user key. A single pending entry appears only while a merge is waiting to succeed.
             </p>
             <div class="callout-warning">
                 Live JSON edits are not a supported delete path while the bot is running. Use the dashboard actions below so in-memory state and dedup counters stay in sync.
@@ -109,13 +109,13 @@
                     </select>
                 </div>
                 <button type="button" class="btn btn-danger" onclick="bulkDeleteAutoByUser()">Delete Targeted Users</button>
-                <button type="button" class="btn btn-primary" onclick="bulkConsolidateAutoByUser()">Consolidate Targeted Users</button>
+                <button type="button" class="btn btn-primary" onclick="bulkConsolidateAutoByUser()">Merge Targeted Users</button>
             </div>
             <p class="tab-description toolbar-note">
                 Target users accepts cached names like Alice (123) or raw Discord IDs, separated by commas.
             </p>
             <div id="list-auto" class="memory-list">
-                <div class="memory-loading">Loading auto memories...</div>
+                <div class="memory-loading">Loading auto memory profiles...</div>
             </div>
         </div>
     </div>
@@ -433,6 +433,38 @@
 .badge-muted {
     background: var(--bg-tertiary);
     color: var(--text-muted);
+}
+
+.badge-pending {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 16%, var(--bg-secondary));
+    color: var(--warning, #f59e0b);
+}
+
+.badge-profile {
+    background: color-mix(in srgb, var(--success, #22c55e) 14%, var(--bg-secondary));
+    color: var(--success, #22c55e);
+}
+
+.memory-pending-block {
+    margin-top: 12px;
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px dashed color-mix(in srgb, var(--warning, #f59e0b) 35%, var(--border-subtle));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--warning, #f59e0b) 8%, var(--bg-secondary));
+}
+
+.memory-pending-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.memory-pending-actions {
+    display: flex;
+    gap: 8px;
 }
 
 .callout-warning {
@@ -908,6 +940,27 @@ function renderAutoMemoryCard(memory) {
     const keyLabel = memory.key_label || scopeLabel;
     const selectionKey = autoSelectionId(memory.key, memory.index);
     const checked = selectedAutoMemories.has(selectionKey) ? 'checked' : '';
+    const entryType = memory.entry_type || 'profile';
+    const typeLabel = entryType === 'pending'
+        ? 'Pending'
+        : (entryType === 'legacy' ? 'Legacy' : 'Profile');
+    const pendingBlock = memory.pending_index !== null && memory.pending_index !== undefined && memory.pending_index !== memory.index
+        ? `
+            <div class="memory-pending-block">
+                <div class="memory-pending-header">
+                    <div class="memory-card-meta">
+                        <span class="badge badge-pending">Pending Merge</span>
+                        <span style="color: var(--text-muted); font-size: 0.75rem;">${escapeHtml(formatTimestamp(memory.pending_timestamp))}</span>
+                    </div>
+                    <div class="memory-pending-actions">
+                        <button type="button" class="btn btn-ghost btn-sm" onclick='editAutoMemory(${JSON.stringify(memory.key)}, ${memory.pending_index})'>Edit Pending</button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick='deleteAutoMemory(${JSON.stringify(memory.key)}, ${memory.pending_index})'>Delete Pending</button>
+                    </div>
+                </div>
+                <div class="memory-card-content">${escapeHtml(memory.pending_content || '')}</div>
+            </div>
+        `
+        : '';
 
     return `
         <div class="memory-card memory-card-selectable">
@@ -924,20 +977,23 @@ function renderAutoMemoryCard(memory) {
             <div class="memory-card-body">
                 <div class="memory-card-header">
                     <div class="memory-card-meta">
-                        <span class="badge badge-auto">Auto</span>
+                        <span class="badge badge-profile">${escapeHtml(typeLabel)}</span>
                         <span class="badge badge-muted">${escapeHtml(scopeLabel)}</span>
+                        ${memory.needs_merge ? '<span class="badge badge-pending">Needs Merge</span>' : ''}
                         ${memory.character ? `<span class="badge badge-muted">${escapeHtml(memory.character)}</span>` : ''}
                         <span style="color: var(--text-muted); font-size: 0.75rem;">about ${escapeHtml(userLabel)}</span>
                     </div>
                     <div class="memory-card-actions">
+                        <button type="button" class="btn btn-primary btn-sm" onclick='mergeAutoMemoryKey(${JSON.stringify(memory.key)})'>Merge Now</button>
                         <button type="button" class="btn btn-ghost btn-sm" onclick='editAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Edit</button>
                         <button type="button" class="btn btn-danger btn-sm" onclick='deleteAutoMemory(${JSON.stringify(memory.key)}, ${memory.index})'>Delete</button>
                     </div>
                 </div>
                 <div class="memory-card-content">${escapeHtml(memory.content)}</div>
+                ${pendingBlock}
                 <div class="memory-card-footer">
                     <span>${escapeHtml(formatTimestamp(memory.timestamp))}</span>
-                    <span title="${escapeHtml(memory.key || '')}">${escapeHtml(keyLabel)}</span>
+                    <span title="${escapeHtml(memory.key || '')}">${escapeHtml(keyLabel)} &middot; ${memory.entry_count || 1} entr${(memory.entry_count || 1) === 1 ? 'y' : 'ies'}</span>
                 </div>
             </div>
         </div>
@@ -1033,7 +1089,7 @@ function renderAutoMemories() {
     document.getElementById('auto-memory-count').textContent = items.length;
 
     if (!items.length) {
-        list.innerHTML = '<p class="memory-list-empty">No auto memories match the current filters.</p>';
+        list.innerHTML = '<p class="memory-list-empty">No auto memory profiles match the current filters.</p>';
         updateAutoDeleteBtn();
         return;
     }
@@ -1065,7 +1121,7 @@ async function loadAutoMemories() {
 
     const list = document.getElementById('list-auto');
     if (list) {
-        list.innerHTML = '<div class="memory-loading">Loading auto memories...</div>';
+        list.innerHTML = '<div class="memory-loading">Loading auto memory profiles...</div>';
     }
 
     try {
@@ -1078,7 +1134,7 @@ async function loadAutoMemories() {
     } catch (error) {
         console.error('Failed to load auto memories:', error);
         if (list) {
-            list.innerHTML = '<p class="memory-list-empty" style="color: var(--danger)">Failed to load auto memories.</p>';
+            list.innerHTML = '<p class="memory-list-empty" style="color: var(--danger)">Failed to load auto memory profiles.</p>';
         }
     }
 
@@ -1156,7 +1212,7 @@ async function bulkConsolidateAutoByUser() {
     const payload = buildAutoUserActionPayload();
     if (!payload) return;
 
-    if (!confirm(`Consolidate auto memories for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
+    if (!confirm(`Merge auto memory profiles for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
         return;
     }
 
@@ -1172,7 +1228,7 @@ async function bulkConsolidateAutoByUser() {
         const data = await response.json();
 
         if (!response.ok || data.status !== 'ok') {
-            showToast(data.message || 'Failed to consolidate auto memories', 'error');
+            showToast(data.message || 'Failed to merge auto memory profiles', 'error');
             return;
         }
 
@@ -1180,13 +1236,42 @@ async function bulkConsolidateAutoByUser() {
             showToast('No matching auto-memory keys found for those users', 'success');
         } else {
             showToast(
-                `Consolidated ${data.consolidated}, skipped ${data.skipped}, already running ${data.already_running}, failed ${data.failed}`,
+                `Merged ${data.consolidated}, skipped ${data.skipped}, already running ${data.already_running}, failed ${data.failed}`,
                 data.failed ? 'error' : 'success'
             );
         }
         await Promise.all([loadAutoMemories(), loadMemoryTargets()]);
     } catch (error) {
-        showToast('Failed to consolidate auto memories', 'error');
+        showToast('Failed to merge auto memory profiles', 'error');
+    }
+}
+
+async function mergeAutoMemoryKey(key) {
+    if (!key) return;
+
+    try {
+        const response = await fetch('/api/v2/memories/auto/consolidate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN
+            },
+            body: JSON.stringify({ keys: [key] })
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== 'ok') {
+            showToast(data.message || 'Failed to merge profile', 'error');
+            return;
+        }
+
+        showToast(
+            `Merged ${data.consolidated}, skipped ${data.skipped}, already running ${data.already_running}, failed ${data.failed}`,
+            data.failed ? 'error' : 'success'
+        );
+        await Promise.all([loadAutoMemories(), loadMemoryTargets()]);
+    } catch (error) {
+        showToast('Failed to merge profile', 'error');
     }
 }
 

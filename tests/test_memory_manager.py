@@ -62,7 +62,23 @@ class MemoryManagerPersistenceTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(entry["server_name"], "Tea House")
         self.assertEqual(entry["character"], "firefly")
         self.assertEqual(entry["embedding"], [0.1, 0.2, 0.3])
+        self.assertEqual(entry["entry_type"], "profile")
         self.assertTrue(entry["fingerprint"])
+
+    def test_new_per_bot_dm_memory_uses_string_scope_and_profile_entry(self):
+        added = self.manager.add_auto_memory(
+            server_id="dm:bot:Nahida",
+            user_id=456,
+            content="Alice prefers gentle DM check-ins",
+            user_name="Alice",
+            server_name="DM (Nahida)",
+        )
+
+        self.assertTrue(added)
+        entries = self.manager.auto_memories["dm:bot:Nahida:user:456"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["entry_type"], "profile")
+        self.assertEqual(entries[0]["server_id"], "dm:bot:Nahida")
 
     def test_add_lore_persists_manual_flag(self):
         added = self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")
@@ -122,9 +138,22 @@ class MemoryManagerPersistenceTests(MemorySandboxMixin, unittest.TestCase):
 
         reloaded = self.make_manager()
 
-        self.assertEqual(reloaded._get_pending_auto_count("server:123:user:456"), 2)
+        key = "server:123:user:456"
+        self.assertEqual(reloaded._get_pending_auto_count(key), 1)
+        self.assertEqual([entry["entry_type"] for entry in reloaded.auto_memories[key]], ["profile", "pending"])
         state = self.read_json("memory_state.json")
-        self.assertEqual(state["pending_auto_since_dedup"]["server:123:user:456"], 2)
+        self.assertEqual(state["pending_auto_since_dedup"][key], 1)
+
+    def test_repeated_sync_add_updates_one_pending_entry(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks")
+        self.manager.add_auto_memory(123, 456, "Alice keeps a reading journal")
+
+        key = "server:123:user:456"
+        entries = self.manager.auto_memories[key]
+        self.assertEqual([entry["entry_type"] for entry in entries], ["profile", "pending"])
+        self.assertIn("Alice collects bookmarks", entries[1]["content"])
+        self.assertIn("Alice keeps a reading journal", entries[1]["content"])
 
     def test_bulk_delete_auto_memories_across_all_scopes_clears_matching_keys_and_state(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea")
@@ -144,7 +173,7 @@ class MemoryManagerPersistenceTests(MemorySandboxMixin, unittest.TestCase):
         state = self.read_json("memory_state.json")
         self.assertNotIn("server:123:user:456", state["pending_auto_since_dedup"])
         self.assertNotIn("dm:0:user:456", state["pending_auto_since_dedup"])
-        self.assertEqual(state["pending_auto_since_dedup"]["server:999:user:777"], 1)
+        self.assertNotIn("server:999:user:777", state["pending_auto_since_dedup"])
 
     def test_bulk_delete_auto_memories_for_one_server_preserves_other_scopes(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea")
@@ -197,7 +226,7 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         key = "server:123:user:456"
         provider = NoEmbeddingProvider("Alice likes tea", delay=0.01)
 
-        self.assertEqual(self.manager._get_pending_auto_count(key), 5)
+        self.assertEqual(self.manager._get_pending_auto_count(key), 1)
         self.assertTrue(self.manager.should_llm_deduplicate(key))
 
         await asyncio.gather(
@@ -209,6 +238,7 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         self.assertEqual(self.manager._get_pending_auto_count(key), 0)
         self.assertEqual(len(self.manager.auto_memories[key]), 1)
         self.assertTrue(self.manager.auto_memories[key][0]["auto"])
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
         self.assertNotIn(key, self.manager._dedup_in_flight)
 
     async def test_llm_dedup_keeps_auto_flag_and_refreshes_embeddings(self):
@@ -219,9 +249,12 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         await self.manager.llm_deduplicate(key, provider)
 
         entries = self.manager.auto_memories[key]
-        self.assertEqual(len(entries), 2)
-        self.assertTrue(all(entry["auto"] for entry in entries))
-        self.assertTrue(all(isinstance(entry.get("embedding"), list) for entry in entries))
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["auto"])
+        self.assertEqual(entries[0]["entry_type"], "profile")
+        self.assertIn("Alice likes tea", entries[0]["content"])
+        self.assertIn("Alice keeps tea at home", entries[0]["content"])
+        self.assertTrue(isinstance(entries[0].get("embedding"), list))
         self.assertEqual(self.manager._get_pending_auto_count(key), 0)
 
     async def test_llm_dedup_still_consolidates_without_embeddings(self):
@@ -231,9 +264,10 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
 
         await self.manager.llm_deduplicate(key, provider)
 
-        self.assertEqual(len(self.manager.auto_memories[key]), 2)
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
         self.assertEqual(self.manager._get_pending_auto_count(key), 0)
-        self.assertTrue(all(entry["auto"] for entry in self.manager.auto_memories[key]))
+        self.assertTrue(self.manager.auto_memories[key][0]["auto"])
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
         self.assertTrue(self.manager._embedding_unavailable_logged)
 
     async def test_manual_consolidate_rewrites_matching_keys_and_resets_counters(self):
@@ -248,15 +282,15 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         self.assertEqual(result["skipped"], 0)
         self.assertEqual(result["already_running"], 0)
         self.assertEqual(result["failed"], 0)
-        self.assertEqual(len(self.manager.auto_memories[key]), 2)
-        self.assertTrue(all(entry["auto"] for entry in self.manager.auto_memories[key]))
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
+        self.assertTrue(self.manager.auto_memories[key][0]["auto"])
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
         self.assertEqual(self.manager._get_pending_auto_count(key), 0)
 
     async def test_manual_consolidate_skips_small_and_inflight_keys(self):
         busy_key = "server:123:user:456"
         self.seed_user_memories(self.manager)
         self.manager.add_auto_memory(123, 999, "Bob likes games")
-        self.manager.add_auto_memory(123, 999, "Bob likes pizza")
         small_key = "server:123:user:999"
         self.manager._dedup_in_flight.add(busy_key)
         provider = NoEmbeddingProvider("Unused")
@@ -270,3 +304,71 @@ class MemoryManagerAsyncTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCa
         self.assertEqual(result["failed"], 0)
         self.assertEqual(provider.generate_calls, 0)
         self.manager._dedup_in_flight.discard(busy_key)
+
+    async def test_successful_immediate_upsert_rewrites_profile_and_new_fact(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        provider = EmbeddingProvider("Alice likes tea and keeps loose-leaf tea at home")
+
+        added = await self.manager.upsert_auto_memory_profile(
+            123,
+            456,
+            "Alice keeps loose-leaf tea at home",
+            provider,
+            user_name="Alice",
+        )
+
+        key = "server:123:user:456"
+        self.assertTrue(added)
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
+        self.assertIn("loose-leaf tea", self.manager.auto_memories[key][0]["content"])
+        self.assertEqual(self.manager._get_pending_auto_count(key), 0)
+
+    async def test_failed_immediate_upsert_creates_or_updates_one_pending_entry(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        provider = NoEmbeddingProvider("❌ provider unavailable")
+
+        await self.manager.upsert_auto_memory_profile(123, 456, "Alice collects bookmarks", provider, user_name="Alice")
+        await self.manager.upsert_auto_memory_profile(123, 456, "Alice keeps a reading journal", provider, user_name="Alice")
+
+        key = "server:123:user:456"
+        entries = self.manager.auto_memories[key]
+        self.assertEqual([entry["entry_type"] for entry in entries], ["profile", "pending"])
+        self.assertIn("Alice collects bookmarks", entries[1]["content"])
+        self.assertIn("Alice keeps a reading journal", entries[1]["content"])
+        self.assertEqual(self.manager._get_pending_auto_count(key), 1)
+
+    async def test_retry_pending_auto_profiles_clears_pending(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
+        provider = EmbeddingProvider("Alice likes tea and collects bookmarks")
+
+        result = await self.manager.retry_pending_auto_profiles(provider)
+
+        key = "server:123:user:456"
+        self.assertEqual(result["consolidated"], 1)
+        self.assertEqual(len(self.manager.auto_memories[key]), 1)
+        self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
+        self.assertEqual(self.manager._get_pending_auto_count(key), 0)
+
+    async def test_legacy_multi_entry_key_is_queued_and_consolidated_without_data_loss(self):
+        self.write_json("auto_memories.json", {
+            "server:123:user:456": [
+                {"content": "Alice likes tea", "timestamp": "2026-01-01T00:00:00"},
+                {"content": "Alice collects bookmarks", "timestamp": "2026-01-01T00:01:00"},
+            ]
+        })
+        manager = self.make_manager()
+        self.replace_manager(manager)
+
+        key = "server:123:user:456"
+        self.assertTrue(manager.auto_memory_key_needs_merge(key))
+        self.assertEqual([entry["entry_type"] for entry in manager.auto_memories[key]], ["legacy", "legacy"])
+
+        provider = EmbeddingProvider("Alice likes tea and collects bookmarks")
+        result = await manager.consolidate_auto_memory_keys([key], provider)
+
+        self.assertEqual(result["consolidated"], 1)
+        self.assertEqual(len(manager.auto_memories[key]), 1)
+        self.assertEqual(manager.auto_memories[key][0]["entry_type"], "profile")
+        self.assertIn("bookmarks", manager.auto_memories[key][0]["content"])

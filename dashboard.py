@@ -120,8 +120,8 @@ def get_unified_memory_stats() -> dict:
     from memory import memory_manager
 
     auto_total = sum(
-        len(entries) for entries in memory_manager.auto_memories.values()
-        if isinstance(entries, list)
+        1 for entries in memory_manager.auto_memories.values()
+        if isinstance(entries, list) and entries
     )
     manual_total = sum(
         len(entries) for entries in memory_manager.manual_lore.values()
@@ -1186,13 +1186,33 @@ def _resolved_guild_name_map() -> dict[int, str]:
     }
 
 
+def _is_dm_auto_scope_value(value) -> bool:
+    """Return whether an auto-memory server value represents a DM namespace."""
+    return value == 0 or (isinstance(value, str) and value.startswith("dm:"))
+
+
+def _dm_auto_scope_label(value, entry: dict) -> str:
+    """Build a readable label for shared and per-bot DM memory scopes."""
+    if isinstance(value, str) and value.startswith("dm:bot:"):
+        bot_label = value.removeprefix("dm:bot:").replace("-", " ").strip()
+        if bot_label:
+            return f"DM ({bot_label})"
+    server_name = entry.get("server_name")
+    if isinstance(server_name, str) and server_name.strip() and server_name.strip().lower() != "dm":
+        return server_name.strip()
+    return "DM"
+
+
 def _build_auto_memory_labels(*, key: str, entry: dict, guild_name_map: dict[int, str]) -> tuple[str, str]:
     """Return friendly scope and footer labels for an auto-memory entry."""
     server_id = entry.get("server_id")
     user_name = entry.get("user_name") or ""
     user_id = entry.get("user_id")
-    if server_id in (None, 0):
-        scope_label = "DM"
+    if _is_dm_auto_scope_value(server_id) or key.startswith("dm:"):
+        dm_value = server_id
+        if dm_value is None and key.startswith("dm:bot:"):
+            dm_value = key.rsplit(":user:", 1)[0]
+        scope_label = _dm_auto_scope_label(dm_value, entry)
     else:
         try:
             resolved_server_id = int(server_id)
@@ -2188,38 +2208,75 @@ def api_v2_auto_memories():
     for key, entries in memory_manager.auto_memories.items():
         if key not in matched_keys:
             continue
+        if not isinstance(entries, list) or not entries:
+            continue
+        if search and not any(search in str(entry.get('content', '')).lower() for entry in entries if isinstance(entry, dict)):
+            continue
 
+        profile_index = None
+        pending_index = None
+        legacy_indices = []
         for idx, entry in enumerate(entries):
-            if search and search not in entry.get('content', '').lower():
-                continue
-            scope_label, key_label = _build_auto_memory_labels(
-                key=key,
-                entry=entry,
-                guild_name_map=guild_name_map,
-            )
-            server_value = entry.get('server_id')
-            try:
-                resolved_server_id = int(server_value)
-            except (TypeError, ValueError):
-                resolved_server_id = None
-            results.append({
-                'key': key,
-                'index': idx,
-                'auto': True,
-                'content': entry.get('content', ''),
-                'timestamp': entry.get('timestamp', ''),
-                'user_name': entry.get('user_name', ''),
-                'server_name': entry.get('server_name', '') or (
-                    '' if server_value in (None, 0)
-                    else guild_name_map.get(resolved_server_id, '')
-                ),
-                'character': entry.get('character', ''),
-                'user_id': entry.get('user_id'),
-                'server_id': entry.get('server_id'),
-                'scope': 'dm' if entry.get('server_id') in (None, 0) else 'server',
-                'scope_label': scope_label,
-                'key_label': key_label,
-            })
+            entry_type = entry.get('entry_type') if isinstance(entry, dict) else None
+            if entry_type == 'profile' and profile_index is None:
+                profile_index = idx
+            elif entry_type == 'pending' and pending_index is None:
+                pending_index = idx
+            elif entry_type not in {'profile', 'pending'}:
+                legacy_indices.append(idx)
+
+        display_index = profile_index
+        if display_index is None and legacy_indices:
+            display_index = legacy_indices[0]
+        if display_index is None:
+            display_index = pending_index
+        if display_index is None:
+            continue
+
+        entry = entries[display_index]
+        pending_entry = entries[pending_index] if pending_index is not None else None
+        scope_label, key_label = _build_auto_memory_labels(
+            key=key,
+            entry=entry,
+            guild_name_map=guild_name_map,
+        )
+        server_value = entry.get('server_id')
+        try:
+            resolved_server_id = int(server_value)
+        except (TypeError, ValueError):
+            resolved_server_id = None
+        is_dm_scope = _is_dm_auto_scope_value(server_value) or key.startswith('dm:')
+        timestamp = max(
+            (str(item.get('timestamp', '')) for item in entries if isinstance(item, dict)),
+            default=''
+        )
+        entry_type = entry.get('entry_type') or ('profile' if len(entries) == 1 else 'legacy')
+        results.append({
+            'key': key,
+            'index': display_index,
+            'auto': True,
+            'content': entry.get('content', ''),
+            'timestamp': timestamp,
+            'entry_type': entry_type,
+            'needs_merge': memory_manager.auto_memory_key_needs_merge(key),
+            'entry_count': len(entries),
+            'profile_index': profile_index,
+            'pending_index': pending_index,
+            'legacy_count': len(legacy_indices),
+            'pending_content': pending_entry.get('content', '') if pending_entry else '',
+            'pending_timestamp': pending_entry.get('timestamp', '') if pending_entry else '',
+            'user_name': entry.get('user_name', ''),
+            'server_name': entry.get('server_name', '') or (
+                '' if is_dm_scope
+                else guild_name_map.get(resolved_server_id, '')
+            ),
+            'character': entry.get('character', ''),
+            'user_id': entry.get('user_id'),
+            'server_id': entry.get('server_id'),
+            'scope': 'dm' if is_dm_scope else 'server',
+            'scope_label': scope_label,
+            'key_label': key_label,
+        })
 
     # Sort by timestamp descending
     results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
@@ -2334,18 +2391,28 @@ def api_v2_auto_bulk_delete():
 @app.route('/api/v2/memories/auto/consolidate', methods=['POST'])
 @requires_csrf
 def api_v2_auto_consolidate():
-    """Manually consolidate auto memories for targeted users."""
+    """Manually consolidate auto-memory profiles for targeted users or keys."""
     from memory import memory_manager
     from providers import provider_manager
 
     data = request.json or {}
+    raw_keys = data.get('keys')
+    if raw_keys is None and data.get('key'):
+        raw_keys = [data.get('key')]
+    if isinstance(raw_keys, str):
+        raw_keys = [raw_keys]
+    keys = [
+        key for key in (raw_keys or [])
+        if isinstance(key, str) and key in memory_manager.auto_memories
+    ]
+
     user_ids = _parse_int_list_values(data.get('user_ids'), data.get('user_id'))
-    if not user_ids:
-        return jsonify({'status': 'error', 'message': 'At least one user ID is required'}), 400
+    if not keys and not user_ids:
+        return jsonify({'status': 'error', 'message': 'At least one user ID or memory key is required'}), 400
 
     scope_mode = _normalize_scope_mode(data.get('scope_mode'))
     server_id = data.get('server_id')
-    if scope_mode == 'server':
+    if not keys and scope_mode == 'server':
         try:
             server_id = int(server_id)
         except (TypeError, ValueError):
@@ -2360,13 +2427,18 @@ def api_v2_auto_consolidate():
     if not loop:
         return jsonify({'status': 'error', 'message': 'Manual consolidation requires a running bot event loop'}), 503
 
-    future = asyncio.run_coroutine_threadsafe(
-        memory_manager.consolidate_auto_memories(
+    if keys:
+        coroutine = memory_manager.consolidate_auto_memory_keys(keys, provider_manager)
+    else:
+        coroutine = memory_manager.consolidate_auto_memories(
             user_ids,
             scope_mode=scope_mode,
             server_id=server_id,
             provider_manager=provider_manager
-        ),
+        )
+
+    future = asyncio.run_coroutine_threadsafe(
+        coroutine,
         loop
     )
 

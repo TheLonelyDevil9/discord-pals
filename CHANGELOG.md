@@ -4,6 +4,26 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.13.0] - 2026-04-26
+
+### Added
+
+- **Auto-memory profiles** - auto memories now use one living `profile` entry per server/user or per-bot DM/user key, with a single `pending` entry only when provider merging fails
+- **Immediate profile merging** - newly learned facts merge into the existing profile through the provider path instead of accumulating long lists
+- **Manual Merge Now** - the dashboard/API can merge specific auto-memory keys as well as targeted users/scopes
+- Regression coverage for profile creation, per-bot DM scope labels, immediate merge success/failure, pending retry, legacy migration, targeted merge, and pending edit/delete
+
+### Changed
+
+- **Memories dashboard** - Auto Memories are reframed as Auto Memory Profiles, rendered one card per key with profile/pending metadata and merge status
+- **Memory context formatting** - model context now includes the consolidated profile cleanly and only includes pending facts while a merge is awaiting retry
+- **Docs** - README now documents profile/pending entry types and the per-bot DM memory key format
+
+### Fixed
+
+- **DM memory scope consistency** - slash commands, scheduled reminder context, mentioned-user DM checks, and dashboard labels now preserve per-bot DM memory namespaces
+- **Legacy auto-memory cleanup** - existing multi-entry keys are queued for background consolidation without destructive rewrites until an LLM merge succeeds
+
 ## [v1.12.0] - 2026-04-26
 
 ### Added
