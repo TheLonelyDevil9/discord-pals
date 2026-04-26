@@ -8,669 +8,795 @@
     <p class="page-subtitle">Runtime settings and bot configuration</p>
 </div>
 
-<!-- Core Settings -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Core Settings</span>
-    </div>
-    <div class="card-body">
-        <form id="config-form">
-            <div class="settings-grid">
-                <div class="form-group">
-                    <label for="history_limit">History Limit</label>
-                    <div class="slider-row">
-                        <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
-                            value="{{ config.history_limit }}"
-                            oninput="document.getElementById('history_val').textContent = this.value"
-                            title="Total history limit">
-                        <span class="slider-val" id="history_val">{{ config.history_limit }}</span>
+<div class="config-layout">
+    <aside class="config-nav" aria-label="Configuration sections">
+        <div class="config-nav-title">Sections</div>
+        <a href="#runtime">Runtime</a>
+        {% if bots %}
+        <a href="#characters">Characters</a>
+        <a href="#scheduling">Scheduling</a>
+        <a href="#conversation">Conversation</a>
+        {% endif %}
+        <a href="#providers">Providers</a>
+        <a href="#maintenance">Maintenance</a>
+        <a href="#advanced">Advanced</a>
+    </aside>
+
+    <div class="config-main">
+        <section id="runtime" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Runtime</h2>
+                    <p class="section-kicker">Context, provider selection, and request limits.</p>
+                </div>
+            </div>
+            <div class="section-grid">
+                <div class="card span-full">
+                    <div class="card-header">
+                        <span class="card-title">Core Settings</span>
                     </div>
-                    <p class="form-hint">Total messages sent to LLM (includes history + immediate)</p>
-                </div>
+                    <div class="card-body">
+                        <form id="config-form">
+                            <div class="settings-grid">
+                                <div class="form-group">
+                                    <label for="history_limit">History Limit</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
+                                            value="{{ config.history_limit }}"
+                                            oninput="document.getElementById('history_val').textContent = this.value"
+                                            title="Total history limit">
+                                        <span class="slider-val" id="history_val">{{ config.history_limit }}</span>
+                                    </div>
+                                    <p class="form-hint">Total messages sent to LLM (includes history + immediate)</p>
+                                </div>
 
-                <div class="form-group">
-                    <label for="immediate_message_count">Immediate Messages</label>
-                    <div class="slider-row">
-                        <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
-                            step="1" value="{{ config.immediate_message_count or 5 }}"
-                            oninput="document.getElementById('immediate_val').textContent = this.value"
-                            title="Immediate message count">
-                        <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
+                                <div class="form-group">
+                                    <label for="immediate_message_count">Immediate Messages</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
+                                            step="1" value="{{ config.immediate_message_count or 5 }}"
+                                            oninput="document.getElementById('immediate_val').textContent = this.value"
+                                            title="Immediate message count">
+                                        <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
+                                    </div>
+                                    <p class="form-hint">Priority messages placed after chatroom context (legacy mode)</p>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="user_only_context">User-Only Context</label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="user_only_context" name="user_only_context"
+                                            {% if config.user_only_context %}checked{% endif %}>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <p class="form-hint">Only send human user messages to the AI. Discards all bot/assistant responses from context to prevent impersonation.</p>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="user_only_context_count">Context Messages (User-Only Mode)</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
+                                            step="1" value="{{ config.user_only_context_count or 20 }}"
+                                            oninput="document.getElementById('context_count_val').textContent = this.value"
+                                            title="Number of recent user messages to include">
+                                        <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
+                                    </div>
+                                    <p class="form-hint">Last N human user messages sent when user-only context is enabled</p>
+                                </div>
+
+                                {% if providers %}
+                                <div class="form-group">
+                                    <label for="active_provider">Active Provider</label>
+                                    <select id="active_provider" name="active_provider" title="Select AI provider">
+                                        <option value="">Auto (first available)</option>
+                                        {% for provider in providers %}
+                                        <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <button type="submit" class="btn btn-primary">Save Settings</button>
+                        </form>
                     </div>
-                    <p class="form-hint">Priority messages placed after chatroom context (legacy mode)</p>
                 </div>
 
-                <div class="form-group">
-                    <label for="user_only_context">User-Only Context</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="user_only_context" name="user_only_context"
-                            {% if config.user_only_context %}checked{% endif %}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <p class="form-hint">Only send human user messages to the AI. Discards all bot/assistant responses from context to prevent impersonation.</p>
-                </div>
-
-                <div class="form-group">
-                    <label for="user_only_context_count">Context Messages (User-Only Mode)</label>
-                    <div class="slider-row">
-                        <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
-                            step="1" value="{{ config.user_only_context_count or 20 }}"
-                            oninput="document.getElementById('context_count_val').textContent = this.value"
-                            title="Number of recent user messages to include">
-                        <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
+                {% if bots %}
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Performance</span>
                     </div>
-                    <p class="form-hint">Last N human user messages sent when user-only context is enabled</p>
-                </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Global performance and rate limiting settings</p>
 
-                {% if providers %}
-                <div class="form-group">
-                    <label for="active_provider">Active Provider</label>
-                    <select id="active_provider" name="active_provider" title="Select AI provider">
-                        <option value="">Auto (first available)</option>
-                        {% for provider in providers %}
-                        <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider }}</option>
+                        <div class="form-group">
+                            <label for="concurrency_limit">Concurrency Limit</label>
+                            <div class="slider-row">
+                                <input type="range" id="concurrency_limit" min="1" max="10" step="1"
+                                    value="{{ config.concurrency_limit or 4 }}"
+                                    oninput="document.getElementById('concurrency_val').textContent = this.value"
+                                    title="Max concurrent AI requests">
+                                <span class="slider-val" id="concurrency_val">{{ config.concurrency_limit or 4 }}</span>
+                            </div>
+                            <p class="form-hint">Maximum concurrent AI requests across all bots</p>
+                        </div>
+
+                        <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        {% if bots %}
+        <section id="characters" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Characters</h2>
+                    <p class="section-kicker">Switch running bots and choose per-character provider tiers.</p>
+                </div>
+            </div>
+            <div class="section-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Character Switcher</span>
+                    </div>
+                    <div class="card-body">
+                        {% for bot in bots %}
+                        <div class="bot-row">
+                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                            <div class="bot-info">
+                                <span class="bot-name">{{ bot.name }}</span>
+                                <span class="bot-character">{{ bot.character }}</span>
+                            </div>
+                            <div class="bot-actions">
+                                <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
+                                    {% for char in characters %}
+                                    <option value="{{ char }}" {% if bot.character_key == char %}selected{% endif %}>{{ char }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="button" class="btn btn-ghost btn-sm"
+                                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value, this)">Switch</button>
+                            </div>
+                        </div>
                         {% endfor %}
-                    </select>
-                </div>
-                {% endif %}
-            </div>
-
-            <button type="submit" class="btn btn-primary">Save Settings</button>
-        </form>
-    </div>
-</div>
-
-<!-- DM Follow-ups -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">DM Follow-ups</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 12px;">When enabled, bots will send a follow-up message in DMs after a period of silence from the user.</p>
-        <form id="dm-followup-form">
-            <div class="settings-grid">
-                <div class="form-group">
-                    <label for="dm_followup_enabled">Enable DM Follow-ups</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="dm_followup_enabled" name="dm_followup_enabled"
-                            {% if config.dm_followup_enabled %}checked{% endif %}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="form-group">
-                    <label for="dm_followup_timeout_minutes">Timeout (minutes)</label>
-                    <div class="slider-row">
-                        <input type="range" id="dm_followup_timeout_minutes" name="dm_followup_timeout_minutes" min="15" max="1440"
-                            step="15" value="{{ config.dm_followup_timeout_minutes or 120 }}"
-                            oninput="document.getElementById('dm_timeout_val').textContent = this.value"
-                            title="Minutes of silence before sending follow-up">
-                        <span class="slider-val" id="dm_timeout_val">{{ config.dm_followup_timeout_minutes or 120 }}</span>
                     </div>
-                    <p class="form-hint">Minutes of silence before bot sends a follow-up</p>
                 </div>
 
-                <div class="form-group">
-                    <label for="dm_followup_max_count">Max Follow-ups</label>
-                    <div class="slider-row">
-                        <input type="range" id="dm_followup_max_count" name="dm_followup_max_count" min="1" max="5"
-                            step="1" value="{{ config.dm_followup_max_count or 1 }}"
-                            oninput="document.getElementById('dm_max_val').textContent = this.value"
-                            title="Maximum follow-up messages">
-                        <span class="slider-val" id="dm_max_val">{{ config.dm_followup_max_count or 1 }}</span>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Character Provider Preferences</span>
                     </div>
-                    <p class="form-hint">Max follow-ups before stopping (resets when user replies)</p>
-                </div>
-
-                <div class="form-group">
-                    <label for="dm_followup_cooldown_hours">Cooldown (hours)</label>
-                    <div class="slider-row">
-                        <input type="range" id="dm_followup_cooldown_hours" name="dm_followup_cooldown_hours" min="1" max="48"
-                            step="1" value="{{ config.dm_followup_cooldown_hours or 24 }}"
-                            oninput="document.getElementById('dm_cooldown_val').textContent = this.value"
-                            title="Hours between follow-up attempts">
-                        <span class="slider-val" id="dm_cooldown_val">{{ config.dm_followup_cooldown_hours or 24 }}</span>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">
+                            Assign preferred provider tiers to characters. Leave as "Default" to use the standard fallback order.
+                        </p>
+                        {% for char in characters %}
+                        <div class="bot-row compact">
+                            <span class="bot-name" style="min-width: 120px;">{{ char }}</span>
+                            <select id="char-provider-{{ char }}" title="Provider tier for {{ char }}">
+                                <option value="">Default (fallback order)</option>
+                                {% for tier in provider_tiers %}
+                                <option value="{{ tier }}" {% if character_providers.get(char) == tier %}selected{% endif %}>
+                                    {{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveCharacterProvider('{{ char }}')">Save</button>
+                        </div>
+                        {% endfor %}
                     </div>
-                    <p class="form-hint">Minimum hours between follow-up attempts for same user</p>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary">Save DM Settings</button>
-        </form>
-    </div>
-</div>
+        </section>
 
-{% if bots %}
-<!-- Character Switcher -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Character Switcher</span>
-    </div>
-    <div class="card-body">
-        {% for bot in bots %}
-        <div class="bot-row">
-            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-            <div class="bot-info">
-                <span class="bot-name">{{ bot.name }}</span>
-                <span class="bot-character">{{ bot.character }}</span>
+        <section id="scheduling" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Scheduling</h2>
+                    <p class="section-kicker">Timezones, DM follow-ups, and character availability windows.</p>
+                </div>
             </div>
-            <div class="bot-actions">
-                <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
-                    {% for char in characters %}
-                    <option value="{{ char }}" {% if bot.character_key == char %}selected{% endif %}>{{ char }}</option>
-                    {% endfor %}
-                </select>
-                <button type="button" class="btn btn-ghost btn-sm"
-                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value, this)">Switch</button>
+            <div class="section-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">DM Follow-ups</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 12px;">When enabled, bots will send a follow-up message in DMs after a period of silence from the user.</p>
+                        <form id="dm-followup-form">
+                            <div class="settings-grid compact-grid">
+                                <div class="form-group">
+                                    <label for="dm_followup_enabled">Enable DM Follow-ups</label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="dm_followup_enabled" name="dm_followup_enabled"
+                                            {% if config.dm_followup_enabled %}checked{% endif %}>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="dm_followup_timeout_minutes">Timeout (minutes)</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="dm_followup_timeout_minutes" name="dm_followup_timeout_minutes" min="15" max="1440"
+                                            step="15" value="{{ config.dm_followup_timeout_minutes or 120 }}"
+                                            oninput="document.getElementById('dm_timeout_val').textContent = this.value"
+                                            title="Minutes of silence before sending follow-up">
+                                        <span class="slider-val" id="dm_timeout_val">{{ config.dm_followup_timeout_minutes or 120 }}</span>
+                                    </div>
+                                    <p class="form-hint">Minutes of silence before bot sends a follow-up</p>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="dm_followup_max_count">Max Follow-ups</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="dm_followup_max_count" name="dm_followup_max_count" min="1" max="5"
+                                            step="1" value="{{ config.dm_followup_max_count or 1 }}"
+                                            oninput="document.getElementById('dm_max_val').textContent = this.value"
+                                            title="Maximum follow-up messages">
+                                        <span class="slider-val" id="dm_max_val">{{ config.dm_followup_max_count or 1 }}</span>
+                                    </div>
+                                    <p class="form-hint">Max follow-ups before stopping (resets when user replies)</p>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="dm_followup_cooldown_hours">Cooldown (hours)</label>
+                                    <div class="slider-row">
+                                        <input type="range" id="dm_followup_cooldown_hours" name="dm_followup_cooldown_hours" min="1" max="48"
+                                            step="1" value="{{ config.dm_followup_cooldown_hours or 24 }}"
+                                            oninput="document.getElementById('dm_cooldown_val').textContent = this.value"
+                                            title="Hours between follow-up attempts">
+                                        <span class="slider-val" id="dm_cooldown_val">{{ config.dm_followup_cooldown_hours or 24 }}</span>
+                                    </div>
+                                    <p class="form-hint">Minimum hours between follow-up attempts for same user</p>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Save DM Settings</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Bot Timezones</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 16px;">
+                            Bot timezone is the fallback clock for prompts and reminders when a user has not set their own timezone.
+                        </p>
+                        {% for bot in bots %}
+                        <div class="bot-row compact">
+                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                            <span class="bot-name">{{ bot.name }}</span>
+                            <select
+                                id="timezone-{{ bot.name }}"
+                                class="timezone-select"
+                                data-current="{{ bot.timezone or '' }}"
+                                title="Timezone for {{ bot.name }}"
+                            ></select>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="card span-full">
+                    <div class="card-header">
+                        <span class="card-title">Bot Availability Schedules</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 16px;">
+                            Mark when each character is unavailable. Autonomous responses, reminders, and DM follow-ups pause during these windows.
+                        </p>
+                        <div class="schedule-bot-list">
+                            {% for bot in bots %}
+                            {% set schedule = bot.schedule or {} %}
+                            {% set windows = schedule.unavailable if schedule.unavailable else [{}] %}
+                            <div class="schedule-bot-panel" data-bot-name="{{ bot.name }}">
+                                <div class="schedule-bot-header">
+                                    <label class="checkbox-label schedule-enabled">
+                                        <input type="checkbox" class="schedule-enabled-input" {% if schedule.enabled %}checked{% endif %}>
+                                        <span>{{ bot.name }}</span>
+                                    </label>
+                                    <div class="schedule-actions">
+                                        <button type="button" class="btn btn-ghost btn-sm" onclick="addScheduleWindow(this)">Add Window</button>
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveBotSchedule(this)">Save</button>
+                                    </div>
+                                </div>
+                                <div class="schedule-timezone-row">
+                                    <label>Schedule Timezone</label>
+                                    <select class="timezone-select schedule-timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
+                                </div>
+                                <div class="schedule-windows">
+                                    {% for window in windows %}
+                                    {% set selected_days = window.days if window.days else ['mon','tue','wed','thu','fri','sat','sun'] %}
+                                    <div class="schedule-window" data-schedule-window>
+                                        <select class="schedule-days" multiple title="Unavailable days for {{ bot.name }}">
+                                            {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
+                                            <option value="{{ value }}" {% if value in selected_days %}selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <input class="schedule-start" type="time" value="{{ window.start or '22:00' }}" title="Unavailable start time">
+                                        <span class="text-muted">to</span>
+                                        <input class="schedule-end" type="time" value="{{ window.end or '08:00' }}" title="Unavailable end time">
+                                        <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
             </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
+        </section>
 
-<!-- Character Provider Preferences -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Character Provider Preferences</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">
-            Assign preferred provider tiers to characters. Leave as "Default" to use the standard fallback order.
-        </p>
-        {% for char in characters %}
-        <div class="bot-row compact">
-            <span class="bot-name" style="min-width: 120px;">{{ char }}</span>
-            <select id="char-provider-{{ char }}" title="Provider tier for {{ char }}">
-                <option value="">Default (fallback order)</option>
-                {% for tier in provider_tiers %}
-                <option value="{{ tier }}" {% if character_providers.get(char) == tier %}selected{% endif %}>
-                    {{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})
-                </option>
-                {% endfor %}
-            </select>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="saveCharacterProvider('{{ char }}')">Save</button>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-
-<!-- Autonomous Channels -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Autonomous Channels</span>
-    </div>
-    <div class="card-body">
-        {% for bot in bots %}
-        <div class="auto-section">
-            <div class="auto-section-header">{{ bot.name }}</div>
-            {% if bot.auto_channels %}
-            <ul class="channel-list">
-                {% for ch in bot.auto_channels %}
-                <li><span class="channel-tag">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
-                {% endfor %}
-            </ul>
-            {% else %}
-            <p class="text-muted">No autonomous channels enabled</p>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
-</div>
-
-<!-- Name Trigger Settings -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Name Triggers</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
-
-        <div class="form-group">
-            <label for="name_trigger_chance">Response Chance</label>
-            <div class="slider-row">
-                <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
-                    value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
-                    oninput="document.getElementById('name_chance_val').textContent = this.value + '%'"
-                    title="Name trigger response chance">
-                <span class="slider-val" id="name_chance_val">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+        <section id="conversation" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Conversation</h2>
+                    <p class="section-kicker">Autonomous behavior, triggers, mentions, and loop controls.</p>
+                </div>
             </div>
-            <p class="form-hint">Chance to respond when bot name is mentioned</p>
-        </div>
+            <div class="section-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Autonomous Channels</span>
+                    </div>
+                    <div class="card-body">
+                        {% for bot in bots %}
+                        <div class="auto-section">
+                            <div class="auto-section-header">{{ bot.name }}</div>
+                            {% if bot.auto_channels %}
+                            <ul class="channel-list">
+                                {% for ch in bot.auto_channels %}
+                                <li><span class="channel-tag">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="text-muted">No autonomous channels enabled</p>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
 
-        <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Name Triggers</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
 
-        <div class="section-divider"></div>
+                        <div class="form-group">
+                            <label for="name_trigger_chance">Response Chance</label>
+                            <div class="slider-row">
+                                <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
+                                    value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
+                                    oninput="document.getElementById('name_chance_val').textContent = this.value + '%'"
+                                    title="Name trigger response chance">
+                                <span class="slider-val" id="name_chance_val">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+                            </div>
+                            <p class="form-hint">Chance to respond when bot name is mentioned</p>
+                        </div>
 
-        <h4 class="subsection-title">Per-Bot Nicknames</h4>
-        <p class="form-hint" style="margin-bottom: 16px;">Comma-separated list of additional names each bot responds to</p>
+                        <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
 
-        {% for bot in bots %}
-        <div class="bot-row compact">
-            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-            <span class="bot-name">{{ bot.name }}</span>
-            <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
-                placeholder="e.g., bestie, buddy" title="Nicknames for {{ bot.name }}">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="saveNicknames('{{ bot.name }}')">Save</button>
-        </div>
-        {% endfor %}
-    </div>
-</div>
+                        <div class="section-divider"></div>
 
-<!-- Bot Timezones -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Bot Timezones</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 16px;">
-            Bot timezone is the fallback clock for prompts and reminders when a user has not set their own timezone.
-        </p>
-        {% for bot in bots %}
-        <div class="bot-row compact">
-            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-            <span class="bot-name">{{ bot.name }}</span>
-            <select
-                id="timezone-{{ bot.name }}"
-                class="timezone-select"
-                data-current="{{ bot.timezone or '' }}"
-                title="Timezone for {{ bot.name }}"
-            ></select>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
-        </div>
-        {% endfor %}
-    </div>
-</div>
+                        <h4 class="subsection-title">Per-Bot Nicknames</h4>
+                        <p class="form-hint" style="margin-bottom: 16px;">Comma-separated list of additional names each bot responds to</p>
 
-<!-- Bot Availability Schedules -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Bot Availability Schedules</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 16px;">
-            Mark when each character is unavailable. Autonomous responses and DM follow-ups pause during these windows.
-        </p>
-        {% for bot in bots %}
-        {% set schedule = bot.schedule or {} %}
-        {% set window = (schedule.unavailable or [{}])[0] if schedule.unavailable else {} %}
-        <div class="schedule-row">
-            <label class="checkbox-label schedule-enabled">
-                <input type="checkbox" id="schedule-enabled-{{ bot.name }}" {% if schedule.enabled %}checked{% endif %}>
-                <span>{{ bot.name }}</span>
-            </label>
-            <select id="schedule-days-{{ bot.name }}" multiple title="Unavailable days for {{ bot.name }}">
-                {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
-                <option value="{{ value }}" {% if value in (window.days or []) %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-            <input type="time" id="schedule-start-{{ bot.name }}" value="{{ window.start or '22:00' }}" title="Unavailable start time">
-            <span class="text-muted">to</span>
-            <input type="time" id="schedule-end-{{ bot.name }}" value="{{ window.end or '08:00' }}" title="Unavailable end time">
-            <select id="schedule-timezone-{{ bot.name }}" class="timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotSchedule('{{ bot.name }}')">Save</button>
-        </div>
-        {% endfor %}
-    </div>
-</div>
+                        {% for bot in bots %}
+                        <div class="bot-row compact">
+                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                            <span class="bot-name">{{ bot.name }}</span>
+                            <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
+                                placeholder="e.g., bestie, buddy" title="Nicknames for {{ bot.name }}">
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveNicknames('{{ bot.name }}')">Save</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
 
-<!-- Slash Command Sync -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Slash Command Sync</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 16px;">
-            Commands are globally synced and then copied into connected guilds for faster visibility. Your bot invite still needs the
-            <code>applications.commands</code> scope.
-        </p>
-        {% for status in command_sync_statuses %}
-        <div class="auto-section">
-            <div class="auto-section-header">{{ status.bot_name }}</div>
-            <p class="form-hint">
-                Last attempt: {{ status.last_attempt_at or 'Never' }} |
-                Last success: {{ status.last_success_at or 'Never' }}
-            </p>
-            <p class="form-hint">
-                Global sync:
-                {% if status.global.ok %}
-                OK ({{ status.global.count }} entries)
-                {% else %}
-                Failed{% if status.global.error %} — {{ status.global.error }}{% endif %}
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Bot-on-Bot Fall-off</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Gradually reduce response probability in bot-to-bot conversations</p>
+
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
+                                    onchange="saveFalloffSettings()">
+                                <span>Enable Bot Fall-off</span>
+                            </label>
+                            <p class="form-hint">Bots gradually stop responding to each other after consecutive exchanges</p>
+                        </div>
+
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="bot_falloff_base_chance">Base Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="bot_falloff_base_chance" min="0" max="100" step="5"
+                                        value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
+                                        oninput="document.getElementById('base_chance_val').textContent = this.value + '%'"
+                                        title="Base response chance">
+                                    <span class="slider-val" id="base_chance_val">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
+                                </div>
+                                <p class="form-hint">Initial probability for first message</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="bot_falloff_decay_rate">Decay Rate</label>
+                                <div class="slider-row">
+                                    <input type="range" id="bot_falloff_decay_rate" min="0" max="50" step="5"
+                                        value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
+                                        oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'"
+                                        title="Decay rate per message">
+                                    <span class="slider-val" id="decay_rate_val">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
+                                </div>
+                                <p class="form-hint">Drop per consecutive bot message</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="bot_falloff_min_chance">Minimum Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="bot_falloff_min_chance" min="0" max="20" step="1"
+                                        value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
+                                        oninput="document.getElementById('min_chance_val').textContent = this.value + '%'"
+                                        title="Minimum response chance">
+                                    <span class="slider-val" id="min_chance_val">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
+                                </div>
+                                <p class="form-hint">Floor probability</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="bot_falloff_hard_limit">Hard Limit</label>
+                                <div class="slider-row">
+                                    <input type="range" id="bot_falloff_hard_limit" min="3" max="25" step="1"
+                                        value="{{ config.bot_falloff_hard_limit or 10 }}"
+                                        oninput="document.getElementById('hard_limit_val').textContent = this.value"
+                                        title="Hard message limit">
+                                    <span class="slider-val" id="hard_limit_val">{{ config.bot_falloff_hard_limit or 10 }}</span>
+                                </div>
+                                <p class="form-hint">Stop responding after this many bot messages</p>
+                            </div>
+                        </div>
+
+                        <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Mention Settings</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Control how bots use @mentions in their messages</p>
+
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="allow_bot_mentions" {% if config.allow_bot_mentions is not defined or config.allow_bot_mentions %}checked{% endif %}
+                                    onchange="saveMentionSettings()">
+                                <span>Allow Bot @Mentions</span>
+                            </label>
+                            <p class="form-hint">Allow bots to generate @mentions for users in their messages</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="allow_bot_to_bot_mentions" {% if config.allow_bot_to_bot_mentions %}checked{% endif %}
+                                    onchange="saveMentionSettings()">
+                                <span>Allow Bot-to-Bot @Mentions</span>
+                            </label>
+                            <p class="form-hint" style="color: var(--warning, #f59e0b);">Warning: Can cause conversation loops between bots.</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="mention_context_limit">Mention Context Limit</label>
+                            <div class="slider-row">
+                                <input type="range" id="mention_context_limit" min="1" max="50" step="1"
+                                    value="{{ config.mention_context_limit or 10 }}"
+                                    oninput="document.getElementById('mention_context_val').textContent = this.value"
+                                    title="Max users in mention context">
+                                <span class="slider-val" id="mention_context_val">{{ config.mention_context_limit or 10 }}</span>
+                            </div>
+                            <p class="form-hint">Maximum users to include in mention context for AI</p>
+                        </div>
+
+                        <button type="button" class="btn btn-primary" onclick="saveMentionSettings()">Save Mention Settings</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Split Replies</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Send separate replies to multiple mentioned users</p>
+
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="split_replies_enabled" {% if config.split_replies_enabled %}checked{% endif %}
+                                    onchange="saveSplitReplySettings()">
+                                <span>Enable Split Replies</span>
+                            </label>
+                            <p class="form-hint">When multiple users are mentioned, send individual replies to each</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="split_replies_max_targets">Max Split Targets</label>
+                            <div class="slider-row">
+                                <input type="range" id="split_replies_max_targets" min="1" max="10" step="1"
+                                    value="{{ config.split_replies_max_targets or 5 }}"
+                                    oninput="document.getElementById('split_targets_val').textContent = this.value"
+                                    title="Max users to split replies for">
+                                <span class="slider-val" id="split_targets_val">{{ config.split_replies_max_targets or 5 }}</span>
+                            </div>
+                            <p class="form-hint">Maximum users to split replies for (prevents spam)</p>
+                        </div>
+
+                        <button type="button" class="btn btn-primary" onclick="saveSplitReplySettings()">Save Split Reply Settings</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        <section id="providers" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Providers</h2>
+                    <p class="section-kicker">Model routing, fallback order, and provider credentials.</p>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Provider Management</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 20px;">Drag to reorder providers. First available provider is used as fallback.</p>
+
+                    <div id="provider-list" class="provider-list">
+                        <!-- Populated by JavaScript -->
+                    </div>
+
+                    <div class="section-divider"></div>
+
+                    <h4 class="subsection-title">Add New Provider</h4>
+                    <form id="add-provider-form" class="provider-form">
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label for="new-provider-type">Provider Type</label>
+                                <select id="new-provider-type" required onchange="updateProviderDefaults()">
+                                    <option value="">Select type...</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="google">Google (Gemini)</option>
+                                    <option value="openrouter">OpenRouter</option>
+                                    <option value="local">Local / Custom</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-name">Display Name</label>
+                                <input type="text" id="new-provider-name" placeholder="e.g., GPT-4o" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-endpoint">API Endpoint</label>
+                                <input type="text" id="new-provider-endpoint" placeholder="https://api.openai.com/v1">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-key">API Key</label>
+                                <input type="password" id="new-provider-key" placeholder="sk-...">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-model">Model</label>
+                                <input type="text" id="new-provider-model" placeholder="gpt-4o">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-temp">Temperature</label>
+                                <input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-timeout">Timeout (seconds, optional)</label>
+                                <input type="number" id="new-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
+                            </div>
+                            <div class="form-group" id="new-openrouter-group" style="display:none;">
+                                <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
+                                <textarea id="new-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
+                                    placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
+                                <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Provider</button>
+                    </form>
+
+                    <div class="section-divider"></div>
+
+                    <details class="config-editor">
+                        <summary>Advanced: Edit JSON directly</summary>
+                        <form action="/settings/providers/save" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <textarea name="content" id="providers-json-editor" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
+                            <div class="editor-actions">
+                                <button type="submit" class="btn btn-primary">Save JSON</button>
+                                <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                            </div>
+                        </form>
+                    </details>
+                </div>
+            </div>
+        </section>
+
+        <section id="maintenance" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Maintenance</h2>
+                    <p class="section-kicker">Sync status and portable configuration backups.</p>
+                </div>
+            </div>
+            <div class="section-grid">
+                {% if bots %}
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Slash Command Sync</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 16px;">
+                            Commands are globally synced and then copied into connected guilds for faster visibility. Your bot invite still needs the
+                            <code>applications.commands</code> scope.
+                        </p>
+                        {% for status in command_sync_statuses %}
+                        <div class="auto-section">
+                            <div class="auto-section-header">{{ status.bot_name }}</div>
+                            <p class="form-hint">
+                                Last attempt: {{ status.last_attempt_at or 'Never' }} |
+                                Last success: {{ status.last_success_at or 'Never' }}
+                            </p>
+                            <p class="form-hint">
+                                Global sync:
+                                {% if status.global.ok %}
+                                OK ({{ status.global.count }} entries)
+                                {% else %}
+                                Failed{% if status.global.error %}: {{ status.global.error }}{% endif %}
+                                {% endif %}
+                            </p>
+                            <p class="form-hint">
+                                User-facing:
+                                {% if status.audiences.user %}
+                                    {% for name in status.audiences.user %}
+                                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
+                                    {% endfor %}
+                                {% else %}
+                                none
+                                {% endif %}
+                            </p>
+                            <p class="form-hint">
+                                Maintenance:
+                                {% if status.audiences.maintenance %}
+                                    {% for name in status.audiences.maintenance %}
+                                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
+                                    {% endfor %}
+                                {% else %}
+                                none
+                                {% endif %}
+                            </p>
+                            {% if status.grouped_subcommands %}
+                            <ul class="channel-list">
+                                {% for group_name, subcommands in status.grouped_subcommands.items() %}
+                                <li>
+                                    <span class="channel-tag">/{{ group_name }}</span>
+                                    <span class="text-muted">{{ subcommands|join(', ') }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% endif %}
+                            {% if status.guilds %}
+                            <ul class="channel-list">
+                                {% for guild in status.guilds %}
+                                <li>
+                                    <span class="channel-tag">{{ guild.name }}</span>
+                                    <span class="text-muted">
+                                        {% if guild.ok %}
+                                        synced {{ guild.count }} entries
+                                        {% else %}
+                                        sync failed{% if guild.error %}: {{ guild.error }}{% endif %}
+                                        {% endif %}
+                                    </span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="text-muted">No guild sync results recorded yet.</p>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
                 {% endif %}
-            </p>
-            <p class="form-hint">
-                User-facing:
-                {% if status.audiences.user %}
-                    {% for name in status.audiences.user %}
-                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                {% else %}
-                none
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Export / Import</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="export-import-row">
+                            <a href="/settings/export" class="btn btn-primary">Export Config</a>
+                            <form action="/settings/import" method="post" enctype="multipart/form-data" class="import-form">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="file" name="config_zip" accept=".zip" title="Select config ZIP file">
+                                <button type="submit" class="btn btn-ghost">Import</button>
+                            </form>
+                        </div>
+                        <p class="form-hint">Export/import providers.json, bots.json, autonomous.json</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="advanced" class="config-section">
+            <div class="section-heading">
+                <div>
+                    <h2 class="section-title">Advanced</h2>
+                    <p class="section-kicker">Diagnostics and raw configuration files.</p>
+                </div>
+            </div>
+            <div class="section-grid">
+                {% if bots %}
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Debug Settings</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
+                                    onchange="toggleRawLogging(this.checked)">
+                                <span>Enable Raw Generation Logging</span>
+                            </label>
+                            <p class="form-hint">Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</p>
+                        </div>
+                    </div>
+                </div>
                 {% endif %}
-            </p>
-            <p class="form-hint">
-                Maintenance:
-                {% if status.audiences.maintenance %}
-                    {% for name in status.audiences.maintenance %}
-                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                {% else %}
-                none
-                {% endif %}
-            </p>
-            {% if status.grouped_subcommands %}
-            <ul class="channel-list">
-                {% for group_name, subcommands in status.grouped_subcommands.items() %}
-                <li>
-                    <span class="channel-tag">/{{ group_name }}</span>
-                    <span class="text-muted">{{ subcommands|join(', ') }}</span>
-                </li>
-                {% endfor %}
-            </ul>
-            {% endif %}
-            {% if status.guilds %}
-            <ul class="channel-list">
-                {% for guild in status.guilds %}
-                <li>
-                    <span class="channel-tag">{{ guild.name }}</span>
-                    <span class="text-muted">
-                        {% if guild.ok %}
-                        synced {{ guild.count }} entries
-                        {% else %}
-                        sync failed{% if guild.error %}: {{ guild.error }}{% endif %}
-                        {% endif %}
-                    </span>
-                </li>
-                {% endfor %}
-            </ul>
-            {% else %}
-            <p class="text-muted">No guild sync results recorded yet.</p>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
-</div>
 
-<!-- Bot-on-Bot Fall-off -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Bot-on-Bot Fall-off</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Gradually reduce response probability in bot-to-bot conversations</p>
+                <div class="card span-full">
+                    <div class="card-header">
+                        <span class="card-title">Configuration Files</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-hint" style="margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a restart.</p>
 
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
-                    onchange="saveFalloffSettings()">
-                <span>Enable Bot Fall-off</span>
-            </label>
-            <p class="form-hint">Bots gradually stop responding to each other after consecutive exchanges</p>
-        </div>
+                        <details class="config-editor">
+                            <summary>bots.json</summary>
+                            <form action="/settings/bots/save" method="POST">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <textarea name="content" class="json-editor" spellcheck="false" title="Bots JSON configuration">{{ bots_raw }}</textarea>
+                                <div class="editor-actions">
+                                    <button type="submit" class="btn btn-primary">Save</button>
+                                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                                </div>
+                            </form>
+                        </details>
 
-        <div class="settings-grid">
-            <div class="form-group">
-                <label for="bot_falloff_base_chance">Base Chance</label>
-                <div class="slider-row">
-                    <input type="range" id="bot_falloff_base_chance" min="0" max="100" step="5"
-                        value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
-                        oninput="document.getElementById('base_chance_val').textContent = this.value + '%'"
-                        title="Base response chance">
-                    <span class="slider-val" id="base_chance_val">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
-                </div>
-                <p class="form-hint">Initial probability for first message</p>
-            </div>
-
-            <div class="form-group">
-                <label for="bot_falloff_decay_rate">Decay Rate</label>
-                <div class="slider-row">
-                    <input type="range" id="bot_falloff_decay_rate" min="0" max="50" step="5"
-                        value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
-                        oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'"
-                        title="Decay rate per message">
-                    <span class="slider-val" id="decay_rate_val">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
-                </div>
-                <p class="form-hint">Drop per consecutive bot message</p>
-            </div>
-
-            <div class="form-group">
-                <label for="bot_falloff_min_chance">Minimum Chance</label>
-                <div class="slider-row">
-                    <input type="range" id="bot_falloff_min_chance" min="0" max="20" step="1"
-                        value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
-                        oninput="document.getElementById('min_chance_val').textContent = this.value + '%'"
-                        title="Minimum response chance">
-                    <span class="slider-val" id="min_chance_val">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
-                </div>
-                <p class="form-hint">Floor probability</p>
-            </div>
-
-            <div class="form-group">
-                <label for="bot_falloff_hard_limit">Hard Limit</label>
-                <div class="slider-row">
-                    <input type="range" id="bot_falloff_hard_limit" min="3" max="25" step="1"
-                        value="{{ config.bot_falloff_hard_limit or 10 }}"
-                        oninput="document.getElementById('hard_limit_val').textContent = this.value"
-                        title="Hard message limit">
-                    <span class="slider-val" id="hard_limit_val">{{ config.bot_falloff_hard_limit or 10 }}</span>
-                </div>
-                <p class="form-hint">Stop responding after this many bot messages</p>
-            </div>
-        </div>
-
-        <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
-    </div>
-</div>
-
-<!-- Mention Settings -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Mention Settings</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Control how bots use @mentions in their messages</p>
-
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="allow_bot_mentions" {% if config.allow_bot_mentions is not defined or config.allow_bot_mentions %}checked{% endif %}
-                    onchange="saveMentionSettings()">
-                <span>Allow Bot @Mentions</span>
-            </label>
-            <p class="form-hint">Allow bots to generate @mentions for users in their messages</p>
-        </div>
-
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="allow_bot_to_bot_mentions" {% if config.allow_bot_to_bot_mentions %}checked{% endif %}
-                    onchange="saveMentionSettings()">
-                <span>Allow Bot-to-Bot @Mentions</span>
-            </label>
-            <p class="form-hint" style="color: var(--warning, #f59e0b);">Warning: Can cause conversation loops between bots!</p>
-        </div>
-
-        <div class="form-group">
-            <label for="mention_context_limit">Mention Context Limit</label>
-            <div class="slider-row">
-                <input type="range" id="mention_context_limit" min="1" max="50" step="1"
-                    value="{{ config.mention_context_limit or 10 }}"
-                    oninput="document.getElementById('mention_context_val').textContent = this.value"
-                    title="Max users in mention context">
-                <span class="slider-val" id="mention_context_val">{{ config.mention_context_limit or 10 }}</span>
-            </div>
-            <p class="form-hint">Maximum users to include in mention context for AI</p>
-        </div>
-
-        <button type="button" class="btn btn-primary" onclick="saveMentionSettings()">Save Mention Settings</button>
-    </div>
-</div>
-
-<!-- Split Replies -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Split Replies</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Send separate replies to multiple mentioned users</p>
-
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="split_replies_enabled" {% if config.split_replies_enabled %}checked{% endif %}
-                    onchange="saveSplitReplySettings()">
-                <span>Enable Split Replies</span>
-            </label>
-            <p class="form-hint">When multiple users are mentioned, send individual replies to each</p>
-        </div>
-
-        <div class="form-group">
-            <label for="split_replies_max_targets">Max Split Targets</label>
-            <div class="slider-row">
-                <input type="range" id="split_replies_max_targets" min="1" max="10" step="1"
-                    value="{{ config.split_replies_max_targets or 5 }}"
-                    oninput="document.getElementById('split_targets_val').textContent = this.value"
-                    title="Max users to split replies for">
-                <span class="slider-val" id="split_targets_val">{{ config.split_replies_max_targets or 5 }}</span>
-            </div>
-            <p class="form-hint">Maximum users to split replies for (prevents spam)</p>
-        </div>
-
-        <button type="button" class="btn btn-primary" onclick="saveSplitReplySettings()">Save Split Reply Settings</button>
-    </div>
-</div>
-
-<!-- Performance Settings -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Performance</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Global performance and rate limiting settings</p>
-
-        <div class="form-group">
-            <label for="concurrency_limit">Concurrency Limit</label>
-            <div class="slider-row">
-                <input type="range" id="concurrency_limit" min="1" max="10" step="1"
-                    value="{{ config.concurrency_limit or 4 }}"
-                    oninput="document.getElementById('concurrency_val').textContent = this.value"
-                    title="Max concurrent AI requests">
-                <span class="slider-val" id="concurrency_val">{{ config.concurrency_limit or 4 }}</span>
-            </div>
-            <p class="form-hint">Maximum concurrent AI requests across all bots</p>
-        </div>
-
-        <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
-    </div>
-</div>
-
-<!-- Debug Settings -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Debug Settings</span>
-    </div>
-    <div class="card-body">
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
-                    onchange="toggleRawLogging(this.checked)">
-                <span>Enable Raw Generation Logging</span>
-            </label>
-            <p class="form-hint">Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</p>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<!-- Export/Import -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Export / Import</span>
-    </div>
-    <div class="card-body">
-        <div class="export-import-row">
-            <a href="/settings/export" class="btn btn-primary">Export Config</a>
-            <form action="/settings/import" method="post" enctype="multipart/form-data" class="import-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="file" name="config_zip" accept=".zip" title="Select config ZIP file">
-                <button type="submit" class="btn btn-ghost">Import</button>
-            </form>
-        </div>
-        <p class="form-hint">Export/import providers.json, bots.json, autonomous.json</p>
-    </div>
-</div>
-
-<!-- Provider Management -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Provider Management</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Drag to reorder providers. First available provider is used as fallback.</p>
-
-        <div id="provider-list" class="provider-list">
-            <!-- Populated by JavaScript -->
-        </div>
-
-        <div class="section-divider"></div>
-
-        <h4 class="subsection-title">Add New Provider</h4>
-        <form id="add-provider-form" class="provider-form">
-            <div class="settings-grid">
-                <div class="form-group">
-                    <label for="new-provider-type">Provider Type</label>
-                    <select id="new-provider-type" reqd onchange="updateProviderDefaults()">
-                        <option value="">Select type...</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="google">Google (Gemini)</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="local">Local / Custom</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-name">Display Name</label>
-                    <input type="text" id="new-provider-name" placeholder="e.g., GPT-4o" required>
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-endpoint">API Endpoint</label>
-                    <input type="text" id="new-provider-endpoint" placeholder="https://api.openai.com/v1">
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-key">API Key</label>
-                    <input type="password" id="new-provider-key" placeholder="sk-...">
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-model">Model</label>
-                    <input type="text" id="new-provider-model" placeholder="gpt-4o">
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-temp">Temperature</label>
-                    <input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7">
-                </div>
-                <div class="form-group">
-                    <label for="new-provider-timeout">Timeout (seconds, optional)</label>
-                    <input type="number" id="new-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
-                </div>
-                <div class="form-group" id="new-openrouter-group" style="display:none;">
-                    <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
-                    <textarea id="new-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
-                        placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
-                    <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
+                        <details class="config-editor">
+                            <summary>autonomous.json</summary>
+                            <form action="/settings/autonomous/save" method="POST">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <textarea name="content" class="json-editor" spellcheck="false" title="Autonomous JSON configuration">{{ autonomous_raw }}</textarea>
+                                <div class="editor-actions">
+                                    <button type="submit" class="btn btn-primary">Save</button>
+                                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                                </div>
+                            </form>
+                        </details>
+                    </div>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary">Add Provider</button>
-        </form>
-
-        <div class="section-divider"></div>
-
-        <details class="config-editor">
-            <summary>Advanced: Edit JSON directly</summary>
-            <form action="/settings/providers/save" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <textarea name="content" id="providers-json-editor" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
-                <div class="editor-actions">
-                    <button type="submit" class="btn btn-primary">Save JSON</button>
-                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                </div>
-            </form>
-        </details>
+        </section>
     </div>
 </div>
 
@@ -727,40 +853,6 @@
     </div>
 </div>
 
-<!-- JSON Configuration Editors -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Configuration Files</span>
-    </div>
-    <div class="card-body">
-        <p class="form-hint" style="margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a restart.</p>
-
-        <details class="config-editor">
-            <summary>bots.json</summary>
-            <form action="/settings/bots/save" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <textarea name="content" class="json-editor" spellcheck="false" title="Bots JSON configuration">{{ bots_raw }}</textarea>
-                <div class="editor-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                </div>
-            </form>
-        </details>
-
-        <details class="config-editor">
-            <summary>autonomous.json</summary>
-            <form action="/settings/autonomous/save" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <textarea name="content" class="json-editor" spellcheck="false" title="Autonomous JSON configuration">{{ autonomous_raw }}</textarea>
-                <div class="editor-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                </div>
-            </form>
-        </details>
-    </div>
-</div>
-
 {% if message %}
 <div class="toast success" style="position: static; margin-bottom: 20px;">{{ message }}</div>
 {% endif %}
@@ -786,12 +878,106 @@
     font-size: 0.875rem;
 }
 
+/* Config Layout */
+.config-layout {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.config-nav {
+    position: sticky;
+    top: 88px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+}
+
+.config-nav-title {
+    color: var(--text-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 6px 8px;
+}
+
+.config-nav a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 8px 10px;
+    border-radius: 6px;
+}
+
+.config-nav a:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.config-main {
+    min-width: 0;
+}
+
+.config-section {
+    scroll-margin-top: 88px;
+    margin-bottom: 36px;
+}
+
+.config-section:last-child {
+    margin-bottom: 0;
+}
+
+.config-section .card {
+    margin-bottom: 0;
+}
+
+.section-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.section-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.section-kicker {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    margin-top: 2px;
+}
+
+.section-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.span-full {
+    grid-column: 1 / -1;
+}
+
 /* Settings Grid */
 .settings-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 24px;
     margin-bottom: 24px;
+}
+
+.settings-grid.compact-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 /* Form Elements */
@@ -929,25 +1115,69 @@ select:focus {
     border-color: var(--accent);
 }
 
-.schedule-row {
-    display: grid;
-    grid-template-columns: minmax(130px, 1fr) minmax(120px, 1.1fr) 110px auto 110px minmax(180px, 1.4fr) auto;
-    gap: 10px;
-    align-items: center;
-    padding: 12px;
+.schedule-bot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.schedule-bot-panel {
+    padding: 14px;
     background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
     border-radius: 8px;
+}
+
+.schedule-bot-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
 }
 
-.schedule-row input[type="time"],
-.schedule-row select {
+.schedule-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.schedule-timezone-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 0.4fr) minmax(240px, 1fr);
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.schedule-timezone-row label,
+.schedule-enabled {
+    margin: 0;
+}
+
+.schedule-windows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.schedule-window {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) 120px auto 120px auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.schedule-window input[type="time"],
+.schedule-window select,
+.schedule-timezone-row select {
     min-width: 0;
     background: var(--bg-secondary);
 }
 
-.schedule-enabled {
-    margin: 0;
+.schedule-days {
+    min-height: 112px;
 }
 
 .status-dot {
@@ -1289,7 +1519,27 @@ select:focus {
 }
 
 /* Responsive */
+@media (max-width: 1024px) {
+    .config-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .config-nav {
+        position: static;
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .config-nav-title {
+        width: 100%;
+    }
+}
+
 @media (max-width: 768px) {
+    .section-grid {
+        grid-template-columns: 1fr;
+    }
+
     .settings-grid {
         grid-template-columns: 1fr;
     }
@@ -1311,6 +1561,21 @@ select:focus {
     .import-form {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .schedule-bot-header,
+    .schedule-timezone-row,
+    .schedule-window {
+        grid-template-columns: 1fr;
+    }
+
+    .schedule-bot-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .schedule-actions {
+        justify-content: flex-start;
     }
 }
 </style>
@@ -1629,14 +1894,75 @@ async function saveBotTimezone(botName) {
     }
 }
 
-async function saveBotSchedule(botName) {
-    const enabled = document.getElementById('schedule-enabled-' + botName).checked;
-    const daysSelect = document.getElementById('schedule-days-' + botName);
-    const days = Array.from(daysSelect.selectedOptions).map(option => option.value);
-    const start = document.getElementById('schedule-start-' + botName).value;
-    const end = document.getElementById('schedule-end-' + botName).value;
-    const timezoneSelect = document.getElementById('schedule-timezone-' + botName);
+const scheduleDays = [
+    ['mon', 'Mon'],
+    ['tue', 'Tue'],
+    ['wed', 'Wed'],
+    ['thu', 'Thu'],
+    ['fri', 'Fri'],
+    ['sat', 'Sat'],
+    ['sun', 'Sun']
+];
+
+function buildScheduleWindowHtml(days, start, end) {
+    const selected = new Set(days && days.length ? days : scheduleDays.map(day => day[0]));
+    const options = scheduleDays.map(([value, label]) => {
+        const isSelected = selected.has(value) ? ' selected' : '';
+        return `<option value="${value}"${isSelected}>${label}</option>`;
+    }).join('');
+
+    return `
+        <div class="schedule-window" data-schedule-window>
+            <select class="schedule-days" multiple title="Unavailable days">
+                ${options}
+            </select>
+            <input class="schedule-start" type="time" value="${start || '22:00'}" title="Unavailable start time">
+            <span class="text-muted">to</span>
+            <input class="schedule-end" type="time" value="${end || '08:00'}" title="Unavailable end time">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
+        </div>
+    `;
+}
+
+function addScheduleWindow(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    const container = panel?.querySelector('.schedule-windows');
+    if (!container) return;
+    container.insertAdjacentHTML('beforeend', buildScheduleWindowHtml());
+}
+
+function removeScheduleWindow(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    const windowRow = button.closest('[data-schedule-window]');
+    const windowCount = panel?.querySelectorAll('[data-schedule-window]').length || 0;
+    if (windowCount <= 1) {
+        const days = windowRow.querySelector('.schedule-days');
+        const start = windowRow.querySelector('.schedule-start');
+        const end = windowRow.querySelector('.schedule-end');
+        Array.from(days.options).forEach(option => { option.selected = true; });
+        start.value = '22:00';
+        end.value = '08:00';
+        return;
+    }
+    windowRow.remove();
+}
+
+async function saveBotSchedule(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    if (!panel) return;
+
+    const botName = panel.dataset.botName;
+    const enabled = panel.querySelector('.schedule-enabled-input').checked;
+    const timezoneSelect = panel.querySelector('.schedule-timezone-select');
     const timezone = timezoneSelect.value.trim();
+    const windows = Array.from(panel.querySelectorAll('[data-schedule-window]')).map(row => {
+        const daysSelect = row.querySelector('.schedule-days');
+        return {
+            days: Array.from(daysSelect.selectedOptions).map(option => option.value),
+            start: row.querySelector('.schedule-start').value,
+            end: row.querySelector('.schedule-end').value
+        };
+    });
 
     const response = await fetch('/api/bot-schedules', {
         method: 'POST',
@@ -1648,7 +1974,7 @@ async function saveBotSchedule(botName) {
             bot_name: botName,
             enabled,
             timezone,
-            window: { days, start, end }
+            windows
         })
     });
 

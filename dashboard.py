@@ -207,6 +207,73 @@ def _resolve_character_option(available_characters, *candidates):
     return None
 
 
+_SCHEDULE_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _normalize_schedule_days(days) -> list[str]:
+    """Normalize dashboard schedule day values while preserving display order."""
+    if isinstance(days, str):
+        days = [part.strip() for part in days.split(",")]
+    if not isinstance(days, list):
+        days = []
+
+    selected = []
+    for day in days:
+        token = str(day).strip().lower()[:3]
+        if token in _SCHEDULE_DAY_ORDER and token not in selected:
+            selected.append(token)
+
+    if not selected:
+        return list(_SCHEDULE_DAY_ORDER)
+
+    selected_set = set(selected)
+    return [day for day in _SCHEDULE_DAY_ORDER if day in selected_set]
+
+
+def _normalize_schedule_time(value) -> str | None:
+    """Return browser-time input as HH:MM, or None when invalid."""
+    parts = str(value or "").strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _normalize_schedule_windows(payload: dict) -> tuple[list[dict], list[str]]:
+    """Normalize one or more dashboard unavailable windows."""
+    raw_windows = payload.get("windows")
+    if not isinstance(raw_windows, list):
+        raw_window = payload.get("window")
+        raw_windows = [raw_window] if isinstance(raw_window, dict) else []
+
+    windows = []
+    errors = []
+    for index, raw_window in enumerate(raw_windows, start=1):
+        if not isinstance(raw_window, dict):
+            errors.append(f"Window {index} is invalid")
+            continue
+
+        start = _normalize_schedule_time(raw_window.get("start"))
+        end = _normalize_schedule_time(raw_window.get("end"))
+        if not start or not end:
+            errors.append(f"Window {index} needs a valid start and end time")
+            continue
+
+        windows.append({
+            "days": _normalize_schedule_days(raw_window.get("days")),
+            "start": start,
+            "end": end,
+        })
+
+    return windows, errors
+
+
 def _parse_int_list_values(*values):
     """Parse one or more comma-separated / repeated inputs into unique positive ints."""
     parsed = []
@@ -1083,19 +1150,17 @@ def api_bot_schedules():
     if raw_timezone and not timezone_name:
         return jsonify({'status': 'error', 'message': 'Invalid IANA timezone'}), 400
 
-    window = data.get('window') or {}
-    days = window.get('days') or []
-    if not isinstance(days, list):
-        days = []
-    days = [str(day).strip().lower()[:3] for day in days if str(day).strip()]
+    enabled = bool(data.get('enabled'))
+    windows, window_errors = _normalize_schedule_windows(data)
+    if enabled and window_errors:
+        return jsonify({'status': 'error', 'message': '; '.join(window_errors)}), 400
+    if enabled and not windows:
+        return jsonify({'status': 'error', 'message': 'Add at least one valid unavailable window'}), 400
+
     schedule = {
-        'enabled': bool(data.get('enabled')),
+        'enabled': enabled,
         'timezone': timezone_name or '',
-        'unavailable': [{
-            'days': days or ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
-            'start': str(window.get('start') or '').strip(),
-            'end': str(window.get('end') or '').strip(),
-        }]
+        'unavailable': windows
     }
     runtime_config.set_bot_schedule(bot_name, schedule)
     return jsonify({'status': 'ok', 'bot_name': bot_name, 'schedule': runtime_config.get_bot_schedule(bot_name)})

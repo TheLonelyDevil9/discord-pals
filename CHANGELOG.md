@@ -4,6 +4,23 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.12.0] - 2026-04-26
+
+### Added
+
+- **Flexible bot schedules** - dashboard availability controls now support multiple unavailable windows per bot
+- Regression coverage for multi-window schedule saves and overnight availability blocking
+
+### Changed
+
+- **Config dashboard organization** - the Config page is now grouped into Runtime, Characters, Scheduling, Conversation, Providers, Maintenance, and Advanced sections with a sticky section navigator
+- **Schedule editing** - per-bot schedule rows are now structured panels with timezone selection and add/remove window actions
+- **Docs** - README now documents bot availability schedules and the `bot_schedules` runtime setting
+
+### Fixed
+
+- **Overnight availability windows** - windows such as Friday 22:00 to 08:00 now correctly block the next morning
+
 ## [v1.11.5] - 2026-04-24
 
 ### Added

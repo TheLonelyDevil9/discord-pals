@@ -61,6 +61,7 @@ _BOT_FALLOFF_KEYS = (
     "bot_falloff_min_chance",
     "bot_falloff_hard_limit",
 )
+_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 def ensure_data_dir():
@@ -240,6 +241,8 @@ def is_bot_available(bot_name: str | None, now: datetime | None = None) -> bool:
         local_now = now.astimezone(tzinfo)
     current_minutes = local_now.hour * 60 + local_now.minute
     current_day = local_now.strftime("%a").lower()[:3]
+    current_day_index = _DAY_ORDER.index(current_day) if current_day in _DAY_ORDER else 0
+    previous_day = _DAY_ORDER[(current_day_index - 1) % len(_DAY_ORDER)]
 
     for window in schedule.get("unavailable", []):
         if not isinstance(window, dict):
@@ -247,8 +250,6 @@ def is_bot_available(bot_name: str | None, now: datetime | None = None) -> bool:
         days = window.get("days") or ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
         if isinstance(days, str):
             days = [part.strip().lower()[:3] for part in days.split(",") if part.strip()]
-        if current_day not in days:
-            continue
         try:
             start_hour, start_min = [int(part) for part in str(window.get("start", "")).split(":", 1)]
             end_hour, end_min = [int(part) for part in str(window.get("end", "")).split(":", 1)]
@@ -257,10 +258,17 @@ def is_bot_available(bot_name: str | None, now: datetime | None = None) -> bool:
         start_minutes = start_hour * 60 + start_min
         end_minutes = end_hour * 60 + end_min
         if start_minutes == end_minutes:
-            return False
-        if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes:
-            return False
-        if start_minutes > end_minutes and (current_minutes >= start_minutes or current_minutes < end_minutes):
+            if current_day in days:
+                return False
+            continue
+        if start_minutes < end_minutes:
+            if current_day in days and start_minutes <= current_minutes < end_minutes:
+                return False
+            continue
+        if (
+            (current_day in days and current_minutes >= start_minutes)
+            or (previous_day in days and current_minutes < end_minutes)
+        ):
             return False
     return True
 

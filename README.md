@@ -585,6 +585,7 @@ Adjust runtime settings without restarting:
 - **Single User Mode** — SillyTavern-style message formatting
 - **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
 - **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set, using a dashboard picker of valid IANA timezone values
+- **Bot Availability Schedules** — Add one or more unavailable windows per bot, including overnight windows such as Friday 22:00 to Saturday 08:00
 - **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
@@ -800,6 +801,12 @@ This is separate from the durable reminder system above. Follow-ups are silence-
 | `dm_followup_cooldown_hours` | 24 | Hours between follow-up attempts for same user |
 
 Configure via the dashboard Config page or `bot_data/runtime_config.json`.
+
+### Bot Availability Schedules
+
+Availability schedules pause a bot during configured unavailable windows. Each bot can have multiple windows, each with its own days, start time, and end time. Overnight windows carry into the next morning, so a Friday 22:00-08:00 window blocks late Friday and early Saturday.
+
+Schedules are stored in `bot_schedules` inside `bot_data/runtime_config.json`, but should normally be edited from the Config page.
 
 ### Interaction Command
 
@@ -1078,6 +1085,7 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `custom_nicknames` | "" | Comma-separated list of additional nicknames for name triggers |
 | `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
 | `bot_timezones` | {} | Per-bot timezone fallback map used when a user has not set a personal timezone |
+| `bot_schedules` | {} | Per-bot unavailable window schedules for autonomous activity, reminders, and DM follow-ups |
 | `bot_falloff_enabled` | true | Enable progressive response decay for bot-to-bot conversations |
 | `bot_falloff_base_chance` | 0.8 | Starting probability (80%) for first bot response |
 | `bot_falloff_decay_rate` | 0.15 | Probability reduction per consecutive bot message |

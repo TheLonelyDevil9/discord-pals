@@ -464,6 +464,18 @@ class NewRuntimeBehaviorTests(unittest.TestCase):
             self.assertFalse(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 24, 12, 30)))
             self.assertTrue(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 24, 13, 30)))
 
+    def test_bot_schedule_blocks_overnight_window_next_morning(self):
+        schedule = {
+            "enabled": True,
+            "timezone": "UTC",
+            "unavailable": [{"days": ["fri"], "start": "22:00", "end": "08:00"}],
+        }
+        with patch.object(runtime_config, "get_bot_schedule", return_value=schedule), \
+                patch.object(runtime_config, "get_bot_timezone", return_value=None):
+            self.assertFalse(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 24, 23, 0)))
+            self.assertFalse(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 25, 2, 0)))
+            self.assertTrue(runtime_config.is_bot_available("Nahida", datetime(2026, 4, 25, 9, 0)))
+
     def test_dm_invite_detection_requires_dm_and_request_terms(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         self.assertTrue(instance._detect_dm_invite("Hey, could you DM me real quick?"))
