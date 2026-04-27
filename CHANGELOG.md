@@ -4,6 +4,23 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.0.0] - 2026-04-27
+
+### Added
+
+- **Major checkpoint release** - marks the dashboard, memory-profile, scheduling, and documentation cleanup work as the v2 baseline
+
+### Changed
+
+- **Documentation alignment** - README, contributing notes, examples, and inline security/runtime comments now match the current dashboard, command, memory, provider, and scheduling behavior
+- **Local handoff cleanup** - removed the tracked Codex handoff artifact and ignored future `CODEX_HANDOFF.md` files
+- **Runtime comments** - clarified the legacy `custom_nicknames` runtime field in favor of per-bot dashboard-managed nicknames
+
+### Fixed
+
+- **Availability schedules** - DM follow-ups now respect per-bot unavailable schedule windows, matching reminder and autonomous-response behavior
+- Regression coverage for DM follow-ups being skipped during unavailable schedule windows
+
 ## [v1.14.0] - 2026-04-27
 
 ### Changed
@@ -74,22 +91,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Per-character availability schedules** ? dashboard controls now let each bot define unavailable time windows, with autonomous responses and DM follow-ups paused during those periods
-- **Server-to-DM shortcut** ? bots can now open a DM when a user asks them in server context to message them privately
-- **Emoji spam guard** ? bot responses now enforce a rolling emoji budget of one emoji per response and at most two emojis across five responses
+- **Per-character availability schedules** - dashboard controls now let each bot define unavailable time windows, with autonomous responses and DM follow-ups paused during those periods
+- **Server-to-DM shortcut** - bots can now open a DM when a user asks them in server context to message them privately
+- **Emoji spam guard** - bot responses now enforce a rolling emoji budget of one emoji per response and at most two emojis across five responses
 - Regression coverage for DM follow-up history isolation, schedule blocking, DM invite detection, and emoji budget enforcement
 
 ### Changed
 
-- **DM follow-up prompts** ? autonomous DM follow-ups now ask for a fresh topic or angle and require fuller 2?3 sentence messages with something concrete to answer
-- **History clearing command** ? conversation history clearing moved from `/clear` to grouped `/history clear` so it is easier to distinguish from `/timezone clear` in large multi-bot installs
+- **DM follow-up prompts** - autonomous DM follow-ups now ask for a fresh topic or angle and require fuller 2-3 sentence messages with something concrete to answer
+- **History clearing command** - conversation history clearing moved from `/clear` to grouped `/history clear` so it is easier to distinguish from `/timezone clear` in large multi-bot installs
 
 ### Fixed
 
-- **DM memory isolation** ? DM memories are now scoped by bot and user instead of sharing one DM memory bucket across all characters
-- **DM context isolation** ? local DM conversation history now uses bot/user-specific keys to prevent separate users' DMs from contaminating each other's context
-- **Timezone contamination** ? DM prompt context now resolves user timezones from the isolated target-user context instead of shared/stale DM history context
-- **Dashboard text saves** ? character and prompt textareas no longer inject extra leading/trailing whitespace on each save
+- **DM memory isolation** - DM memories are now scoped by bot and user instead of sharing one DM memory bucket across all characters
+- **DM context isolation** - local DM conversation history now uses bot/user-specific keys to prevent separate users' DMs from contaminating each other's context
+- **Timezone contamination** - DM prompt context now resolves user timezones from the isolated target-user context instead of shared/stale DM history context
+- **Dashboard text saves** - character and prompt textareas no longer inject extra leading/trailing whitespace on each save
 
 ## [v1.11.3] - 2026-04-02
 

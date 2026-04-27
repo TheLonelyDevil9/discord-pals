@@ -57,7 +57,7 @@ The system instructions were authored by legendary chef @Geechan.
   - Memories and lore editing (with user name resolution)
   - Character files and live preview
   - System prompts with placeholder reference
-  - Runtime config (history limit, provider switching)
+  - Runtime config, provider settings, and per-character provider routing
   - Context visualization with token estimates
   - Message stats (daily counts, response times, top users)
   - Live log streaming
@@ -109,7 +109,7 @@ The system instructions were authored by legendary chef @Geechan.
 
 ### Python Dependencies
 
-All dependencies are listed in `requirements.txt` with pinned versions:
+All dependencies are listed in `requirements.txt`; versions are pinned or ranged there:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
@@ -118,6 +118,7 @@ All dependencies are listed in `requirements.txt` with pinned versions:
 | python-dotenv | 1.0.1 | Environment variable loading |
 | aiohttp | >=3.10.0 | Async HTTP client |
 | flask | 3.1.2 | Web dashboard |
+| waitress | 3.0.0 | Production WSGI server for the dashboard |
 | pyyaml | 6.0.2 | YAML configuration parsing |
 | prometheus-client | 0.20.0 | Metrics and monitoring |
 | audioop-lts | >=0.2.1 | Python 3.13+ compatibility |
@@ -155,7 +156,7 @@ The setup wizard will:
 2. Install all dependencies
 3. Prompt you for AI providers (count, URLs, models)
 4. Prompt you for Discord bots (single or multi-bot)
-5. Generate `providers.json`, `bots.json`, and `.env`
+5. Generate `providers.json`, `.env`, and `bots.json` when using multi-bot mode
 6. Open `.env` for you to add API keys
 
 ### Step 3: Create Your Discord Bot
@@ -494,7 +495,7 @@ python main.py
 
 Open your browser to: **<http://localhost:5000>**
 
-> **Note:** The dashboard only accepts connections from localhost by default for security. See [Deployment & Production](#deployment--production) for remote access options.
+> **Note:** `main.py` starts the dashboard on `0.0.0.0:5000`, so it can be reachable from other devices if your firewall or host allows it. Set `DASHBOARD_PASS` before exposing the port outside a trusted local machine or private network.
 
 ### Dashboard Security
 
@@ -514,9 +515,9 @@ When `DASHBOARD_PASS` is set:
 
 When `DASHBOARD_PASS` is **not set**:
 
-- Authentication is disabled (local-only mode)
-- Dashboard is fully accessible without login
-- Recommended only for localhost access
+- Authentication is disabled
+- Dashboard is fully accessible without login to any client that can reach port `5000`
+- Recommended only for trusted localhost/private-network use
 
 **CSRF Protection:** All forms include CSRF tokens to prevent cross-site request forgery attacks.
 
@@ -551,7 +552,7 @@ Manage the bot's memory system:
 - **Manual Merge** — Run a targeted merge pass for one or more users or a specific memory key
 - **Filtering** — Filter auto memory profiles by scope, server, user, and search term
 - **User Resolution** — User IDs displayed as readable Discord names
-- **Safe Live Editing** — Raw JSON is still viewable, but live cleanup should go through dashboard actions so in-memory state and dedup counters stay in sync
+- **Safe Live Editing** — Unified memory raw JSON is view-only; edits, deletes, clears, and merges go through the dashboard actions/API so profile and pending-entry invariants stay in sync
 
 ### Reminders Page
 
@@ -570,6 +571,7 @@ Configure autonomous mode per channel:
 - **Response Chance** - Set probability (1-50%) of responding to messages
 - **Cooldown** - Minimum time between autonomous responses (1-10 minutes)
 - **Bot Triggers** - Allow/disallow other bots from triggering responses (quick toggle badge in table)
+- **Bot Nicknames** - Edit per-bot trigger aliases used by name-triggered responses
 - **Sortable Columns** - Click column headers to sort by Channel, Server, History, or Autonomous status
 - **Clear History** - Remove conversation history for specific channels
 
@@ -581,9 +583,10 @@ Adjust runtime settings without restarting:
 
 - **History & Context** — History limit, immediate message count, user-only context mode
 - **Name Trigger Chance** — Probability of responding to name mentions
-- **Provider Selection** — Switch between configured providers
+- **Provider Configuration** — Edit provider settings and per-character provider preferences
 - **Single User Mode** — SillyTavern-style message formatting
 - **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
+- **Per-Bot Nicknames** — Manage comma-separated trigger aliases for each bot
 - **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set, using a dashboard picker of valid IANA timezone values
 - **Bot Availability Schedules** — Add one or more unavailable windows per bot, including overnight windows such as Friday 22:00 to Saturday 08:00
 - **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
@@ -625,6 +628,8 @@ The dashboard also supports manual cleanup workflows for auto memory profiles:
 
 User IDs are resolved to readable Discord display names in the dashboard for easy management.
 
+Unified auto-memory and manual-lore raw JSON can be viewed for inspection, but manager-owned stores should be changed through the dashboard cards or v2 memory API. Older `/api/memories/*` routes are compatibility shims for unified stores; retired legacy raw-file mutations return HTTP 410.
+
 ### Manual Lore
 
 Lore entries are user-created context that the bot references during conversations. Each entry can be scoped to:
@@ -662,27 +667,27 @@ Regular users should primarily see and use:
 | `/status` | Check bot and provider status |
 | `/reload` | Reload character file (hot-reload) |
 | `/switch [character]` | Switch to a different character (or list available) |
-| `/clear` | Clear conversation history |
-| `/recall <count>` | Load last N messages (1-200) |
+| `/history clear` | Clear conversation history |
+| `/recall [count]` | Load recent messages into context (default 20, max 200) |
 
 ### Moderation Commands
 
 | Command | Description |
 | ------- | ----------- |
-| `/autonomous <on/off>` | Toggle random responses (5% default) |
-| `/nickname-trigger <on/off>` | Enable/disable nickname-based triggers for this channel |
+| `/autonomous <enabled> [chance] [cooldown]` | Toggle random responses for the current server channel |
+| `/nickname-trigger <enabled>` | Enable/disable nickname-based triggers for this channel |
 | `/stop [enable]` | Pause/resume bot-to-bot interactions (flag optional) |
 | `/pause [enable]` | KILLSWITCH: Pause/resume ALL bot activity (owner only) |
-| `/delete_messages <N>` | Delete bot's last N messages |
+| `/delete_messages [count]` | Delete the bot's recent messages (default 1, max 20) |
 
 ### Memory Commands
 
 | Command | Description |
 | ------- | ----------- |
-| `/memory <text>` | Save a memory about yourself or a user |
+| `/memory <content> [user_id]` | Save a memory about yourself or a user |
 | `/memories` | View saved memories |
-| `/clearmemories [scope]` | Clear memories (scope: auto, server lore, user lore, bot lore) |
-| `/lore <text> [type]` | Add lore (type: server, user, or bot) |
+| `/clearmemories <memory_type> [target_id]` | Clear auto memories or server/user/bot lore |
+| `/lore [content] [target_type] [target_id]` | Add or view lore for a server, user, or bot |
 
 ### User Commands
 
@@ -751,7 +756,7 @@ Autonomous mode allows bots to randomly join conversations without being explici
 
 Name triggers (responding when the bot's name/nickname is mentioned without @) are scoped per-channel:
 
-- Use `/nickname-trigger on` to enable name-based triggers for the current channel
+- Use `/nickname-trigger <enabled>` to enable or disable name-based triggers for the current channel
 - Default is OFF — bots only respond to @mentions and replies unless explicitly enabled
 - The `name_trigger_chance` runtime config controls the probability of responding to name mentions
 - If `allow_bot_triggers` is disabled for a channel, bots cannot trigger name-based responses
@@ -778,7 +783,8 @@ Click the ON/OFF badge in the Autonomous column to quickly enable/disable autono
 
 Add additional trigger words beyond the bot's Discord name:
 
-- Set via `custom_nicknames` in runtime config
+- Set per bot from the dashboard Config or Channels page
+- Multi-bot nicknames are saved to `bots.json`; single-bot nicknames are saved under `bot_nicknames` in runtime config
 - Format: comma-separated list (e.g., "Sam,Sammy,Samuel")
 - Works with name trigger system (requires autonomous mode enabled)
 
@@ -816,7 +822,7 @@ Schedules are stored in `bot_schedules` inside `bot_data/runtime_config.json`, b
 All fun interactions use a single unified command:
 
 ```text
-/interact <action> [target]
+/interact <action>
 ```
 
 **Examples:**
@@ -832,7 +838,7 @@ All fun interactions use a single unified command:
 The bot processes these through the normal message pipeline, so interactions:
 - Generate memories like regular conversations
 - Use the invoking user's recent conversation context with the current bot, without leaking an unrelated active reply thread from the same channel
-- Support free-form actions (not limited to preset commands)
+- Support free-form actions and mentioned targets inside the action text
 
 ---
 
@@ -888,7 +894,7 @@ In multi-bot setups, bots are automatically prevented from roleplaying as each o
 ### What Gets Blocked
 
 - Bot A pretending to speak as Bot B
-- Bots writing dialogue for other boots narrating other bots' actions
+- Bots writing dialogue for other bots or narrating other bots' actions
 
 ### No Configuration Needed
 
@@ -1081,11 +1087,13 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | ------- | ------- | ----------- |
 | `history_limit` | 200 | Maximum messages included in AI context. Higher = more memory, slower responses |
 | `immediate_message_count` | 5 | Recent messages placed after the chatroom context block |
+| `active_provider` | null | Reserved dashboard field; generation order is controlled by provider order and per-character provider preferences |
 | `bot_interactions_paused` | false | Pause all bot-to-bot conversations |
 | `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
 | `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
-| `custom_nicknames` | "" | Comma-separated list of additional nicknames for name triggers |
+| `custom_nicknames` | "" | Legacy global nickname field; prefer per-bot nicknames from the dashboard |
+| `bot_nicknames` | {} | Single-bot nickname map persisted by the dashboard; multi-bot nicknames live in `bots.json` |
 | `raw_generation_logging` | false | Log raw AI output before processing (for debugging) |
 | `bot_timezones` | {} | Per-bot timezone fallback map used when a user has not set a personal timezone |
 | `bot_schedules` | {} | Per-bot unavailable window schedules for autonomous activity, reminders, and DM follow-ups |
@@ -1248,9 +1256,9 @@ docker-compose logs -f  # View logs
 
 **Security considerations:**
 
-- Dashboard binds to `localhost:5000` by default - this is intentional
-- To access remotely, use SSH tunneling: `ssh -L 5000:localhost:5000 user@your-server`
-- Or set up a reverse proxy with authentication (nginx example below)
+- `main.py` starts the Waitress dashboard on `0.0.0.0:5000`, so it may be reachable remotely if the host firewall allows it
+- Set `DASHBOARD_PASS` before exposing the dashboard beyond a trusted local machine or private network
+- For private access, use firewall rules, SSH tunneling (`ssh -L 5000:localhost:5000 user@your-server`), or a reverse proxy with authentication
 
 **Nginx reverse proxy with basic auth:**
 
@@ -1290,6 +1298,9 @@ discord-pals/
 ├── providers.py             # AI provider abstraction, fallback chain
 ├── character.py             # Character file parsing from markdown
 ├── memory.py                # Unified 2-store memory system
+├── reminders.py             # Durable reminder scheduling and delivery state
+├── time_utils.py            # Timezone storage, lookup, and prompt time context
+├── scopes.py                # Shared history, memory, stats, and display-label scopes
 ├── discord_utils.py         # Discord helpers, history, emoji sanitization
 ├── response_sanitizer.py    # Output cleaning, impersonation prevention
 ├── request_queue.py         # Anti-spam queue system
@@ -1310,14 +1321,16 @@ discord-pals/
 ├── commands/                # Slash commands
 │   ├── core.py              # Core commands (reload, switch, status, etc.)
 │   ├── memory.py            # Memory/lore commands
-│   └── fun.py               # Interaction command
+│   ├── time.py              # Timezone and reminder commands
+│   ├── fun.py               # Interaction command
+│   └── registry.py          # Command metadata and visibility helpers
 ├── characters/              # Character definitions
 │   ├── template.md          # Example template
 │   └── your-character.md
 ├── prompts/                 # System prompt templates
 │   ├── system.md
 │   └── chatroom_context.md
-├── templates/               # Dashboard HTML (10 pages)
+├── templates/               # Dashboard HTML (11 pages)
 └── bot_data/                # Runtime data (memories, config, history)
 ```
 
@@ -1358,7 +1371,7 @@ discord-pals/
 
 ### Dashboard not accessible
 
-→ Dashboard only binds to localhost for security. Access via `http://localhost:5000` on the same machine. For remote access, use SSH tunneling or set up a reverse proxy (see [Deployment & Production](#deployment--production)).
+→ Open `http://localhost:5000` on the host running the bot. If accessing from another machine, check firewall/reverse-proxy settings and set `DASHBOARD_PASS` before exposing the dashboard.
 
 ### Memories not saving
 
@@ -1382,7 +1395,7 @@ discord-pals/
 
 ### History/context seems wrong
 
-→ Use `/clear` to reset conversation history. Check `history_limit` in runtime config - very high values can cause issues with some providers.
+→ Use `/history clear` to reset conversation history. Check `history_limit` in runtime config - very high values can cause issues with some providers.
 
 ### Bot crashes on startup
 

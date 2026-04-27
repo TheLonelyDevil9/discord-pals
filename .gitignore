@@ -10,6 +10,7 @@ venv/
 
 # Data
 bot_data/
+CODEX_HANDOFF.md
 
 # Characters (personal)
 characters/*.md

@@ -2870,6 +2870,8 @@ Your follow-up message:"""
             return 0
         if runtime_config.get("global_paused", False):
             return 0
+        if not runtime_config.is_bot_available(self.name):
+            return 0
 
         timeout_mins = runtime_config.get("dm_followup_timeout_minutes", 120)
         max_followups = runtime_config.get("dm_followup_max_count", 1)

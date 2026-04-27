@@ -94,6 +94,32 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
             "dm:Nahida:user:42", "assistant", "Checking in.", author_name="Nahida", timestamp=None
         )
 
+    async def test_followup_cycle_respects_unavailable_schedule(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = _FakeClient(_FakeUser(_FakeDMChannel(channel_id=555)))
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+        }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "is_bot_available", return_value=False), \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock()) as generate_mock:
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 0)
+        generate_mock.assert_not_awaited()
+        self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
+
     async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"

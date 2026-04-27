@@ -161,7 +161,7 @@ def check_dashboard_auth(username: str, password: str) -> bool:
     """
     Verify dashboard credentials against environment variables.
 
-    If DASHBOARD_PASS is not set, authentication is disabled (local-only mode).
+    If DASHBOARD_PASS is not set, authentication is disabled.
 
     Args:
         username: Provided username
@@ -172,7 +172,7 @@ def check_dashboard_auth(username: str, password: str) -> bool:
     """
     expected_pass = os.getenv('DASHBOARD_PASS')
 
-    # No password set = authentication disabled (local-only mode)
+    # No password set = authentication disabled.
     if not expected_pass:
         return True
 

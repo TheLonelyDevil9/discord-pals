@@ -79,8 +79,8 @@ Thank you for your interest in contributing to Discord Pals! This document provi
 
 ### Project Structure Notes
 
-- **Slash commands** live in `commands/` — `core.py` for core/moderation, `memory.py` for memory/lore, `fun.py` for interactions
-- **Memory system** is unified in `memory.py` — two stores: auto memories and manual lore. Don't create new memory files; use the existing API
+- **Slash commands** live in `commands/` — `core.py` for core/moderation, `memory.py` for memory/lore, `time.py` for timezone/reminder commands, `fun.py` for interactions, and `registry.py` for command metadata
+- **Memory system** is unified in `memory.py` — two stores: auto memory profiles and manual lore. Don't create new memory files; use the existing manager/API
 - **Dashboard pages** are Jinja2 templates in `templates/` — each page has a corresponding route in `dashboard.py`
 - **Runtime settings** go in `runtime_config.py` DEFAULTS dict — they're automatically exposed in the dashboard Config page
 
