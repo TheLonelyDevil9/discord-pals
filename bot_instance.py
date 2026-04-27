@@ -94,6 +94,40 @@ _NON_TERMINAL_ABBREVIATIONS = frozenset({
     "u.k.",
 })
 
+_SOFT_SENTENCE_BRIDGE_WORDS = frozenset({
+    "a",
+    "about",
+    "after",
+    "an",
+    "and",
+    "are",
+    "artist",
+    "as",
+    "band",
+    "by",
+    "called",
+    "earlier",
+    "for",
+    "from",
+    "in",
+    "is",
+    "like",
+    "mentioned",
+    "named",
+    "of",
+    "on",
+    "or",
+    "song",
+    "that",
+    "the",
+    "this",
+    "to",
+    "titled",
+    "was",
+    "were",
+    "with",
+})
+
 _FOLLOWUP_TOPIC_STOPWORDS = frozenset({
     "about",
     "after",
@@ -1557,6 +1591,35 @@ Return exactly one JSON object with this shape:
         return True
 
     @staticmethod
+    def _looks_like_missing_sentence_boundary(previous_text: str, next_text: str) -> bool:
+        """Detect long model text where punctuation was omitted before a new thought."""
+        previous_text = (previous_text or "").strip()
+        next_text = (next_text or "").strip()
+        if len(previous_text) < 45 or not next_text:
+            return False
+        if not BotInstance._starts_like_new_thought(next_text):
+            return False
+        if previous_text[-1] in ",:;/-–—([{":
+            return False
+        if BotInstance._ends_with_nonterminal_abbreviation(previous_text):
+            return False
+
+        previous_word_match = re.search(r"([A-Za-z][A-Za-z'-]*)\s*$", previous_text)
+        if not previous_word_match:
+            return False
+        if previous_word_match.group(1).lower().strip("'") in _SOFT_SENTENCE_BRIDGE_WORDS:
+            return False
+
+        next_word_match = re.match(r"([A-Z][A-Za-z'’-]+)\b", next_text)
+        if not next_word_match:
+            return False
+        # A lone capital "I" is grammatical mid-sentence too often to treat as a boundary.
+        if next_word_match.group(1) == "I":
+            return False
+
+        return True
+
+    @staticmethod
     def _split_plain_response_sentences(response: str) -> list[str]:
         """Split long single-paragraph responses into short natural bursts."""
         normalized = (response or "").strip()
@@ -1565,21 +1628,34 @@ Return exactly one JSON object with this shape:
 
         sentences = []
         start = 0
+        boundaries = []
         for match in re.finditer(r"[.!?…]+(?=\s+)", normalized):
-            candidate = normalized[start:match.end()].strip()
-            if not candidate:
-                continue
-
             next_start = match.end()
             while next_start < len(normalized) and normalized[next_start].isspace():
                 next_start += 1
+            boundaries.append((match.end(), next_start, "terminal"))
+
+        for match in re.finditer(r"(?<=[a-z0-9\)\]\"'])\s+(?=[A-Z][a-z][A-Za-z'’\-]*\b)", normalized):
+            boundaries.append((match.start(), match.end(), "soft"))
+
+        for boundary_end, next_start, boundary_type in sorted(boundaries, key=lambda item: item[1]):
+            if boundary_end <= start or next_start <= start:
+                continue
+
+            candidate = normalized[start:boundary_end].strip()
+            if not candidate:
+                continue
 
             next_segment = normalized[next_start:]
             if not next_segment:
                 continue
             if not BotInstance._starts_like_new_thought(next_segment):
                 continue
-            if match.group(0).endswith(".") and BotInstance._ends_with_nonterminal_abbreviation(candidate):
+            if boundary_type == "terminal":
+                boundary_text = normalized[boundary_end - 1:boundary_end]
+                if boundary_text == "." and BotInstance._ends_with_nonterminal_abbreviation(candidate):
+                    continue
+            elif not BotInstance._looks_like_missing_sentence_boundary(candidate, next_segment):
                 continue
 
             sentences.append(candidate)

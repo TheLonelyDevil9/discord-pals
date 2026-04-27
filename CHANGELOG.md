@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.14.0] - 2026-04-27
+
+### Changed
+
+- **Legacy memory endpoints** - old `/api/memories/*` compatibility routes now delegate unified auto-memory and manual-lore mutations through `MemoryManager`, while retired legacy file mutations return 410
+- **Raw memory editor** - unified memory JSON files are now read-only in the raw editor so dashboard users do not bypass profile/pending invariants
+
+### Fixed
+
+- **Auto-memory profile integrity** - legacy deduplication no longer rewrites auto-memory profile lists directly; auto profile cleanup is routed through the merge endpoint instead
+- **Organic response splitting** - long single-paragraph replies now split when the model omits punctuation before a capitalized fresh thought, including cases like `chest That's` and `dessert Self-destruct`
+- Regression coverage for read-only raw unified memory stores, manager-backed legacy entry edits/deletes, legacy bulk delete routing, retired legacy endpoint responses, safe deduplication behavior, and missing-punctuation response splitting
+
 ## [v1.13.0] - 2026-04-26
 
 ### Added

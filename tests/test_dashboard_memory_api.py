@@ -239,6 +239,117 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(len(self.manager.auto_memories[key]), 1)
         self.assertEqual(self.manager.auto_memories[key][0]["entry_type"], "profile")
 
+    def test_raw_unified_memory_editor_is_read_only_and_save_is_blocked(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.save_all()
+
+        page = self.client.get("/memories/auto_memories/edit").get_data(as_text=True)
+        self.assertIn("readonly", page)
+        self.assertIn("This unified memory store is read-only here.", page)
+        self.assertNotIn("Save Changes", page)
+
+        response = self.client.post(
+            "/memories/auto_memories/save",
+            data={"content": "{}"},
+            headers=self.csrf_headers()
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn(key, self.manager.auto_memories)
+        self.assertEqual(self.manager.auto_memories[key][0]["content"], "Alice likes tea")
+
+    def test_legacy_auto_memory_entry_api_uses_memory_manager(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
+
+        list_response = self.client.get("/api/memories/auto_memories/entries")
+        list_data = list_response.get_json()
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_data["total"], 2)
+        self.assertIn("entry_type", list_data["entries"][0])
+
+        update_response = self.client.put(
+            f"/api/memories/auto_memories/entry/{key}/1",
+            json={"content": "Alice keeps a bookmark journal"},
+            headers=self.csrf_headers()
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(self.manager.auto_memories[key][1]["entry_type"], "pending")
+        self.assertIn("bookmark journal", self.manager.auto_memories[key][1]["content"])
+
+        delete_response = self.client.delete(
+            f"/api/memories/auto_memories/entry/{key}/1",
+            headers=self.csrf_headers()
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual([entry["entry_type"] for entry in self.manager.auto_memories[key]], ["profile"])
+
+    def test_legacy_bulk_memory_api_deletes_unified_keys_through_manager(self):
+        self.manager.add_auto_memory(123, 456, "Alice likes tea")
+        self.manager.add_auto_memory(0, 456, "Alice prefers DMs")
+        self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")
+
+        auto_response = self.client.post(
+            "/api/memories/auto_memories/delete-selected",
+            json={"keys": ["server:123:user:456"]},
+            headers=self.csrf_headers()
+        )
+        lore_response = self.client.post(
+            "/api/memories/manual_lore/delete-selected",
+            json={"keys": ["user:456"]},
+            headers=self.csrf_headers()
+        )
+
+        self.assertEqual(auto_response.status_code, 200)
+        self.assertEqual(lore_response.status_code, 200)
+        self.assertNotIn("server:123:user:456", self.manager.auto_memories)
+        self.assertIn("dm:0:user:456", self.manager.auto_memories)
+        self.assertNotIn("user:456", self.manager.manual_lore)
+
+    def test_legacy_deduplicate_api_leaves_auto_profiles_to_merge_path(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks")
+        self.manager.manual_lore["user:456"] = [
+            self.manager._build_lore_entry("Alice is trusted", added_by="test"),
+            self.manager._build_lore_entry("Alice is trusted", added_by="test"),
+        ]
+
+        response = self.client.post(
+            "/api/memories/deduplicate",
+            json={},
+            headers=self.csrf_headers()
+        )
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["removed"], 1)
+        self.assertEqual(data["auto_profiles_needing_merge"], 1)
+        self.assertEqual([entry["entry_type"] for entry in self.manager.auto_memories[key]], ["profile", "pending"])
+        self.assertEqual(len(self.manager.manual_lore["user:456"]), 1)
+
+    def test_retired_legacy_memory_file_mutation_endpoints_return_410(self):
+        self.write_json("user_profiles.json", {"456": [{"content": "legacy"}]})
+
+        response = self.client.post(
+            "/api/memories/user_profiles/clear-all",
+            json={},
+            headers=self.csrf_headers()
+        )
+
+        self.assertEqual(response.status_code, 410)
+        self.assertIn("retired", response.get_json()["message"])
+
+        save_response = self.client.post(
+            "/memories/user_profiles/save",
+            data={"content": "{}"},
+            headers=self.csrf_headers()
+        )
+        self.assertEqual(save_response.status_code, 410)
+        self.assertIn("retired", save_response.get_json()["message"])
+
     def test_lore_filters_and_bulk_delete_user_targets_only(self):
         self.manager.add_lore("user", 456, "Alice is trusted", added_by="dashboard")
         self.manager.add_lore("user", 999, "Bob is playful", added_by="dashboard")

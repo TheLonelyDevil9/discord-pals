@@ -16,12 +16,21 @@
         <span class="card-title">{{ name }}</span>
     </div>
     <div class="card-body">
+        {% if error %}
+        <div class="editor-error">{{ error }}</div>
+        {% endif %}
+        {% if read_only %}
+        <p class="editor-warning">This unified memory store is read-only here. Use the Memories dashboard cards to edit, delete, merge, or clear entries safely.</p>
+        {% else %}
         <p class="editor-warning">Edit the raw JSON. Be careful with the structure!</p>
+        {% endif %}
         <form action="/memories/{{ name }}/save" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <textarea id="json-editor" name="content" class="editor-textarea" title="Memory JSON content">{{ content }}</textarea>
+            <textarea id="json-editor" name="content" class="editor-textarea" title="Memory JSON content" {% if read_only %}readonly{% endif %}>{{ content }}</textarea>
             <div class="editor-actions">
+                {% if not read_only %}
                 <button type="submit" class="btn btn-primary">Save Changes</button>
+                {% endif %}
                 <button type="button" class="btn btn-ghost" onclick="formatJson()">Format JSON</button>
                 <a href="/memories" class="btn btn-ghost">Cancel</a>
             </div>
@@ -69,6 +78,15 @@
     color: var(--text-muted);
     font-size: 0.875rem;
     margin-bottom: 16px;
+}
+
+.editor-error {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background: var(--danger-muted);
+    color: var(--danger);
+    border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border-subtle));
+    border-radius: 8px;
 }
 
 .editor-textarea {

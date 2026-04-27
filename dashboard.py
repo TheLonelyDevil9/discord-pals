@@ -39,6 +39,7 @@ _topology_cache = {"built_at": 0.0, "value": None}
 _VERSION_CACHE_TTL = 30 * 60.0
 _github_version_cache_lock = threading.Lock()
 _github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value": False}
+UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
 # Initialize secret key securely
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -113,6 +114,22 @@ def get_memory_files():
         "manual_lore": Path(MANUAL_LORE_FILE),
     }
     return {name: path for name, path in files.items() if path.exists()}
+
+
+def _is_unified_memory_file(file_name: str) -> bool:
+    """Return whether a memory filename is owned by the in-memory manager."""
+    return file_name in UNIFIED_MEMORY_FILES
+
+
+def _unsupported_legacy_memory_endpoint(file_name: str):
+    """Return a consistent response for retired legacy memory JSON endpoints."""
+    return jsonify({
+        'status': 'error',
+        'message': (
+            f"Legacy memory file endpoint '{file_name}' is retired. "
+            "Use the v2 memory dashboard/API endpoints instead."
+        ),
+    }), 410
 
 
 def get_unified_memory_stats() -> dict:
@@ -541,33 +558,27 @@ def memories():
 @requires_csrf
 def delete_memory(name):
     """Delete a specific memory entry."""
-    try:
-        file_path = safe_path(DATA_DIR, name, '.json')
-    except ValueError as e:
-        log.warn(f"Invalid memory path: {e}")
-        return redirect(url_for('memories'))
-
     memory_key = request.form.get('key')
 
-    if file_path.exists() and memory_key:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+    if _is_unified_memory_file(name):
+        from memory import memory_manager
 
-            if memory_key in data:
-                del data[memory_key]
+        if memory_key:
+            if name == 'auto_memories':
+                memory_manager.clear_auto_memories(memory_key)
+            else:
+                memory_manager.clear_lore(memory_key)
+            memory_manager.flush()
+        return redirect(url_for('memories'))
 
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2)
-        except Exception as e:
-            log.warn(f"Failed to delete memory '{memory_key}': {e}")
-
+    log.warn(f"Raw legacy memory delete route is retired for {name}")
     return redirect(url_for('memories'))
 
 
 @app.route('/memories/<name>/edit')
 def edit_memory(name):
     """Edit a memory file."""
+    read_only = _is_unified_memory_file(name)
     try:
         file_path = safe_path(DATA_DIR, name, '.json')
     except ValueError as e:
@@ -583,30 +594,31 @@ def edit_memory(name):
         except Exception as e:
             log.warn(f"Failed to read memory file: {e}")
 
-    return render_template('memory_edit.html', name=name, content=content)
+    return render_template(
+        'memory_edit.html',
+        name=name,
+        content=content,
+        read_only=read_only,
+        error=None,
+    )
 
 
 @app.route('/memories/<name>/save', methods=['POST'])
 @requires_csrf
 def save_memory(name):
     """Save memory file changes."""
-    try:
-        file_path = safe_path(DATA_DIR, name, '.json')
-    except ValueError as e:
-        log.warn(f"Invalid memory path: {e}")
-        return redirect(url_for('memories'))
-
     content = request.form.get('content', '{}')
 
-    try:
-        json.loads(content)  # Validate JSON
-        DATA_DIR.mkdir(exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-    except Exception as e:
-        log.warn(f"Failed to save memory: {e}")
+    if _is_unified_memory_file(name):
+        return render_template(
+            'memory_edit.html',
+            name=name,
+            content=content,
+            read_only=True,
+            error="Unified memory stores are manager-owned. Use the dashboard edit/delete actions instead of raw JSON saves.",
+        ), 409
 
-    return redirect(url_for('memories'))
+    return _unsupported_legacy_memory_endpoint(name)
 
 
 # --- Characters ---
@@ -1854,40 +1866,28 @@ def api_lore(guild_id):
 @requires_csrf
 def api_delete_selected_memories(file_name):
     """Delete multiple selected memory entries from a file."""
-    import json
-
     data = request.json or {}
     keys = data.get('keys', [])
 
     if not keys:
         return jsonify({'status': 'error', 'message': 'No keys provided'}), 400
 
-    try:
-        # Load the memory file
-        file_path = DATA_DIR / f"{file_name}.json"
-        if not file_path.exists():
-            return jsonify({'status': 'error', 'message': 'File not found'}), 404
+    if _is_unified_memory_file(file_name):
+        from memory import memory_manager
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            memories = json.load(f)
-
-        # Delete selected keys
         deleted_count = 0
         for key in keys:
-            if key in memories:
-                del memories[key]
-                deleted_count += 1
-
-        # Save back to file
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(memories, f, indent=2, ensure_ascii=False)
-
-        log.info(f"Deleted {deleted_count} memories from {file_name} via dashboard")
+            if not isinstance(key, str):
+                continue
+            if file_name == 'auto_memories':
+                deleted_count += memory_manager.clear_auto_memories(key)
+            else:
+                deleted_count += memory_manager.clear_lore(key)
+        memory_manager.flush()
+        log.info(f"Deleted {deleted_count} entries from unified store {file_name} via legacy endpoint")
         return jsonify({'status': 'ok', 'deleted': deleted_count})
 
-    except Exception as e:
-        log.error(f"Error deleting selected memories: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    return _unsupported_legacy_memory_endpoint(file_name)
 
 
 @app.route('/api/memories/<file_name>/clear-all', methods=['POST'])
@@ -1896,33 +1896,23 @@ def api_clear_all_memories(file_name):
     """Clear all memories from a specific file."""
     from memory import memory_manager
 
-    try:
-        if file_name == 'auto_memories':
-            memory_manager.auto_memories.clear()
-            memory_manager.memory_state['pending_auto_since_dedup'] = {}
-            memory_manager._mark_dirty('auto')
-            memory_manager._mark_dirty('state')
-            log.warn("Cleared all auto memories via dashboard")
-            return jsonify({'status': 'ok', 'message': 'All auto memories cleared'})
+    if file_name == 'auto_memories':
+        removed = sum(len(entries) for entries in memory_manager.auto_memories.values() if isinstance(entries, list))
+        for key in list(memory_manager.auto_memories.keys()):
+            memory_manager.clear_auto_memories(key)
+        memory_manager.flush()
+        log.warn("Cleared all auto memory profiles via dashboard")
+        return jsonify({'status': 'ok', 'deleted': removed, 'message': 'All auto memory profiles cleared'})
 
-        if file_name == 'manual_lore':
-            memory_manager.manual_lore.clear()
-            memory_manager._mark_dirty('lore')
-            log.warn("Cleared all manual lore via dashboard")
-            return jsonify({'status': 'ok', 'message': 'All manual lore cleared'})
+    if file_name == 'manual_lore':
+        removed = sum(len(entries) for entries in memory_manager.manual_lore.values() if isinstance(entries, list))
+        for key in list(memory_manager.manual_lore.keys()):
+            memory_manager.clear_lore(key)
+        memory_manager.flush()
+        log.warn("Cleared all manual lore via dashboard")
+        return jsonify({'status': 'ok', 'deleted': removed, 'message': 'All manual lore cleared'})
 
-        file_path = DATA_DIR / f"{file_name}.json"
-        if file_path.exists():
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({}, f)
-            log.warn(f"Cleared all memories from legacy file {file_name} via dashboard")
-            return jsonify({'status': 'ok', 'message': f'All memories cleared from {file_name}'})
-
-        return jsonify({'status': 'error', 'message': 'File not found'}), 404
-
-    except Exception as e:
-        log.error(f"Error clearing memories: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    return _unsupported_legacy_memory_endpoint(file_name)
 
 
 # --- Memory Deduplication API ---
@@ -1934,6 +1924,7 @@ def api_deduplicate_memories():
     from memory import memory_manager, _is_duplicate_memory
 
     removed_count = 0
+    auto_profiles_needing_merge = len(memory_manager.get_auto_memory_profile_keys_needing_merge())
 
     def dedupe_list(memories: list) -> tuple:
         """Deduplicate a list of memories, keeping oldest. Returns (deduped_list, removed_count)."""
@@ -1951,17 +1942,6 @@ def api_deduplicate_memories():
         return seen, removed
 
     try:
-        for key in list(memory_manager.auto_memories.keys()):
-            deduped, count = dedupe_list(memory_manager.auto_memories[key])
-            if count > 0:
-                memory_manager.auto_memories[key] = deduped
-                memory_manager._mark_dirty('auto')
-                memory_manager._set_pending_auto_count(
-                    key,
-                    min(memory_manager._get_pending_auto_count(key), len(deduped))
-                )
-                removed_count += count
-
         for key in list(memory_manager.manual_lore.keys()):
             deduped, count = dedupe_list(memory_manager.manual_lore[key])
             if count > 0:
@@ -1972,8 +1952,16 @@ def api_deduplicate_memories():
         # Force save
         memory_manager.flush()
 
-        log.info(f"Memory deduplication complete: removed {removed_count} duplicates")
-        return jsonify({'status': 'ok', 'removed': removed_count})
+        log.info(
+            f"Manual lore deduplication complete: removed {removed_count} duplicates; "
+            f"{auto_profiles_needing_merge} auto-memory profile key(s) need merge"
+        )
+        return jsonify({
+            'status': 'ok',
+            'removed': removed_count,
+            'auto_profiles_needing_merge': auto_profiles_needing_merge,
+            'message': 'Auto memory profiles are merged through /api/v2/memories/auto/consolidate',
+        })
 
     except Exception as e:
         log.error(f"Error during memory deduplication: {e}")
@@ -1985,83 +1973,56 @@ def api_deduplicate_memories():
 @app.route('/api/memories/<file_name>/entries')
 def api_get_memory_entries(file_name):
     """Get parsed memory entries for card-based UI display."""
-    from datetime import datetime
+    if not _is_unified_memory_file(file_name):
+        return _unsupported_legacy_memory_endpoint(file_name)
 
-    try:
-        file_path = safe_path(DATA_DIR, file_name, '.json')
-    except ValueError:
-        return jsonify({'status': 'error', 'message': 'Invalid file'}), 400
-
-    if not file_path.exists():
-        return jsonify({'entries': [], 'total': 0})
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    from memory import memory_manager
 
     # Get optional filters
     search = request.args.get('search', '').lower()
     auto_filter = request.args.get('auto')  # 'true', 'false', or None
 
-    # Flatten and parse entries
     entries = []
 
-    def process_memory_list(key, memories, parent_key=None):
-        """Process a list of memories and add to entries."""
+    def include_entry(entry: dict) -> bool:
+        if search and search not in entry.get('content', '').lower():
+            return False
+        if auto_filter == 'true' and not entry.get('auto'):
+            return False
+        if auto_filter == 'false' and entry.get('auto'):
+            return False
+        return True
+
+    def process_memory_list(key, memories, *, auto: bool):
+        """Process manager-owned memory entries without reading raw JSON."""
         if not isinstance(memories, list):
             return
         for idx, item in enumerate(memories):
-            if isinstance(item, dict):
-                entry = {
-                    'key': key,
-                    'parent_key': parent_key,
-                    'index': idx,
-                    'content': item.get('content', ''),
-                    'timestamp': item.get('timestamp', ''),
-                    'auto': item.get('auto', False),
-                    'user_name': item.get('user_name', ''),
-                    'character': item.get('character', ''),
-                    'learned_from': item.get('learned_from', '')
-                }
-
-                # Apply filters
-                if search and search not in entry['content'].lower():
-                    continue
-                if auto_filter == 'true' and not entry['auto']:
-                    continue
-                if auto_filter == 'false' and entry['auto']:
-                    continue
-
-                entries.append(entry)
-
-    # Handle different memory file structures
-    for key, value in data.items():
-        if isinstance(value, list):
-            # Simple list: {key: [memories]}
-            process_memory_list(key, value)
-        elif isinstance(value, dict):
-            # Nested dict: {guild_id: {user_id: [memories]}}
-            for sub_key, sub_value in value.items():
-                if isinstance(sub_value, list):
-                    process_memory_list(sub_key, sub_value, parent_key=key)
-        elif isinstance(value, str):
-            # Lore-style: {guild_id: "text"}
+            if not isinstance(item, dict):
+                continue
             entry = {
                 'key': key,
                 'parent_key': None,
-                'index': 0,
-                'content': value,
-                'timestamp': '',
-                'auto': False,
-                'user_name': '',
-                'character': '',
-                'learned_from': '',
-                'is_lore': True
+                'index': idx,
+                'content': item.get('content', ''),
+                'timestamp': item.get('timestamp', ''),
+                'auto': bool(auto),
+                'user_name': item.get('user_name', ''),
+                'character': item.get('character', ''),
+                'learned_from': item.get('learned_from', ''),
             }
-            if not search or search in value.lower():
+            if auto:
+                entry['entry_type'] = item.get('entry_type') or ('profile' if len(memories) == 1 else 'legacy')
+                entry['needs_merge'] = memory_manager.auto_memory_key_needs_merge(key)
+            if include_entry(entry):
                 entries.append(entry)
+
+    if file_name == 'auto_memories':
+        for key, value in memory_manager.auto_memories.items():
+            process_memory_list(key, value, auto=True)
+    else:
+        for key, value in memory_manager.manual_lore.items():
+            process_memory_list(key, value, auto=False)
 
     # Sort by timestamp (newest first)
     entries.sort(key=lambda x: x.get('timestamp', '') or '', reverse=True)
@@ -2076,83 +2037,69 @@ def api_get_memory_entries(file_name):
 @requires_csrf
 def api_memory_entry_item(file_name, key, index):
     """CRUD operations on individual memory items."""
+    if not _is_unified_memory_file(file_name):
+        return _unsupported_legacy_memory_endpoint(file_name)
+
     from datetime import datetime
+    from memory import memory_manager, _memory_fingerprint
 
-    try:
-        file_path = safe_path(DATA_DIR, file_name, '.json')
-    except ValueError:
-        return jsonify({'status': 'error', 'message': 'Invalid file'}), 400
+    if request.args.get('parent_key'):
+        return jsonify({'status': 'error', 'message': 'Nested legacy memory paths are retired'}), 410
 
-    if not file_path.exists():
-        return jsonify({'status': 'error', 'message': 'File not found'}), 404
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-    # Handle nested structure (check for parent_key in query params)
-    parent_key = request.args.get('parent_key')
-
-    if parent_key:
-        # Nested: data[parent_key][key][index]
-        if parent_key not in data or key not in data[parent_key]:
-            return jsonify({'status': 'error', 'message': 'Key not found'}), 404
-        target_list = data[parent_key][key]
+    if file_name == 'auto_memories':
+        target_list = memory_manager.auto_memories.get(key, [])
     else:
-        # Simple: data[key][index]
-        if key not in data:
-            return jsonify({'status': 'error', 'message': 'Key not found'}), 404
-        target_list = data[key]
+        target_list = memory_manager.manual_lore.get(key, [])
 
     if not isinstance(target_list, list):
-        return jsonify({'status': 'error', 'message': 'Not a list'}), 400
+        return jsonify({'status': 'error', 'message': 'Key not found'}), 404
+    if not (0 <= index < len(target_list)):
+        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
 
     if request.method == 'GET':
-        if 0 <= index < len(target_list):
-            return jsonify(target_list[index])
-        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
+        return jsonify(target_list[index])
 
-    elif request.method == 'PUT':
+    if request.method == 'PUT':
         payload = request.json or {}
-        if 0 <= index < len(target_list):
-            entry = target_list[index]
-            if 'content' in payload:
-                entry['content'] = payload['content']
-            if 'auto' in payload:
-                entry['auto'] = payload['auto']
-            if 'character' in payload:
-                if payload['character']:
-                    entry['character'] = payload['character']
-                elif 'character' in entry:
-                    del entry['character']
-            entry['timestamp'] = datetime.now().isoformat()
+        content = str(payload.get('content', '')).strip()
+        if not content:
+            return jsonify({'status': 'error', 'message': 'Content is required'}), 400
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+        if file_name == 'auto_memories':
+            updated = memory_manager.update_auto_memory(
+                key,
+                index,
+                content,
+                character_name=payload.get('character') or None,
+            )
+            if updated:
+                memory_manager.flush()
+                return jsonify({'status': 'ok'})
+            return jsonify({'status': 'error', 'message': 'Invalid or duplicate memory content'}), 409
 
-            return jsonify({'status': 'ok'})
+        entry = target_list[index]
+        entry['content'] = content
+        entry['auto'] = False
+        entry['timestamp'] = datetime.now().isoformat()
+        entry['fingerprint'] = _memory_fingerprint(content)
+        memory_manager._mark_dirty('lore')
+        memory_manager.flush()
+        return jsonify({'status': 'ok'})
+
+    if request.method == 'DELETE':
+        if file_name == 'auto_memories':
+            deleted = memory_manager.delete_auto_memories(key, [index])
+            memory_manager.flush()
+            if deleted:
+                return jsonify({'status': 'ok'})
+        else:
+            deleted = memory_manager.delete_lore(key, [index])
+            memory_manager.flush()
+            if deleted:
+                return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
 
-    elif request.method == 'DELETE':
-        if 0 <= index < len(target_list):
-            del target_list[index]
-
-            # Clean up empty structures
-            if not target_list:
-                if parent_key:
-                    del data[parent_key][key]
-                    if not data[parent_key]:
-                        del data[parent_key]
-                else:
-                    del data[key]
-
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-
-            return jsonify({'status': 'ok'})
-        return jsonify({'status': 'error', 'message': 'Index out of range'}), 404
+    return jsonify({'status': 'error', 'message': 'Unsupported method'}), 405
 
 
 @app.route('/api/memories/stats')

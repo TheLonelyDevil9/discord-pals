@@ -5,7 +5,7 @@ This handoff is for a fresh Codex conversation picking up after the auto-memory 
 ## Current Repo State
 
 - Branch: `main`
-- Remote state before this handoff commit: aligned with `origin/main`
+- Remote state at handoff commit: aligned with `origin/main`
 - Released commit: `7f4477e Implement auto-memory profiles (v1.13.0)`
 - Released tag: `v1.13.0`
 - Full regression at release: `PYTHONPATH=. pytest -q` -> `115 passed`
@@ -13,6 +13,12 @@ This handoff is for a fresh Codex conversation picking up after the auto-memory 
   - `/memories` returned 200
   - page contained `Auto Memory Profiles` and `Merge Now`
   - `/api/v2/memories/auto` returned one server profile with `pending_index: 1` and one `dm:bot:Nahida` profile
+- Follow-up local working changes after the handoff commit:
+  - Minor version staged locally as `v1.14.0`
+  - Backlog item 1 implemented: legacy `/api/memories/*` routes no longer raw-mutate unified stores
+  - Organic response splitting now catches missing punctuation before capitalized fresh thoughts such as `chest That's` and `dessert Self-destruct`
+  - Latest local regression before release commit: `PYTHONPATH=. pytest -q` -> `123 passed`
+  - Not committed/tagged/pushed unless the user explicitly requests it in the current conversation
 
 ## What Was Implemented
 
@@ -53,9 +59,9 @@ This handoff is for a fresh Codex conversation picking up after the auto-memory 
 
 Ranked backlog from the read-only crawl:
 
-1. Retire or redirect legacy memory JSON mutation endpoints.
+1. Done locally, not committed unless requested: retire or redirect legacy memory JSON mutation endpoints.
    Impact: High. Effort: Medium. Area: Memory/dashboard reliability.
-   Old `/api/memories/*` endpoints can still mutate JSON/list structures directly and bypass `MemoryManager` profile semantics.
+   Old `/api/memories/*` endpoints have been routed through `MemoryManager` for unified stores; retired legacy file mutations return 410.
 
 2. Unify dashboard JS rendering patterns.
    Impact: High. Effort: Medium. Area: Dashboard UX/maintainability.
@@ -87,5 +93,4 @@ Ranked backlog from the read-only crawl:
 
 ## Suggested Next Step
 
-If continuing immediately, start with backlog item 1: route legacy memory mutation endpoints through `MemoryManager` or hide/remove unsupported raw mutation actions for auto memories. That is the highest-value follow-up because it protects the new profile invariant.
-
+If continuing immediately after the local `v1.14.0` changes, start with backlog item 2: unify dashboard JS rendering patterns.
