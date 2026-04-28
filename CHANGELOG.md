@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.0.2] - 2026-04-28
+
+### Fixed
+
+- Multi-bot setup script re-runs on Windows and macOS/Linux now keep `bots.json` refreshed and can append newly configured bot token variables to an existing `.env`.
+- Startup validation now checks `bots.json` structure and reports missing multi-bot token environment variables before launch.
+- Multi-bot startup no longer requires the single-bot `DISCORD_TOKEN` when `bots.json` is present.
+
+### Changed
+
+- README setup, multi-bot, and troubleshooting docs now describe setup re-runs and multi-bot token validation.
+- Agent instructions now allow the documented release flow to commit, tag, and push after changes.
+
 ## [v2.0.1] - 2026-04-28
 
 ### Fixed

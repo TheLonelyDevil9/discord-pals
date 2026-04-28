@@ -192,7 +192,7 @@ if !BOT_COUNT! GTR 1 (
     echo } >> bots.json
     
     echo.
-    echo [OK] bots.json created for !BOT_COUNT! bots
+    echo [OK] bots.json created/updated for !BOT_COUNT! bots
 ) else (
     echo Single-bot mode selected.
     echo Using DISCORD_TOKEN and DEFAULT_CHARACTER from .env
@@ -206,6 +206,41 @@ echo.
 
 if exist ".env" (
     echo [OK] .env file already exists
+
+    if !BOT_COUNT! GTR 1 if defined BOT_TOKENS (
+        set "MISSING_BOT_TOKENS="
+        for %%t in (!BOT_TOKENS!) do (
+            findstr /b /l /c:"%%t=" ".env" >nul 2>&1
+            if errorlevel 1 (
+                set "MISSING_BOT_TOKENS=!MISSING_BOT_TOKENS! %%t"
+            )
+        )
+
+        if defined MISSING_BOT_TOKENS (
+            echo.
+            echo The following multi-bot token variables are missing from .env:
+            for %%t in (!MISSING_BOT_TOKENS!) do (
+                echo   %%t
+            )
+            set /p ADD_BOT_TOKENS="Add them to .env now? (Y/n): "
+            if /i not "!ADD_BOT_TOKENS!"=="n" (
+                echo. >> .env
+                echo # ============================================ >> .env
+                echo # MULTI-BOT MODE ^(with bots.json^) >> .env
+                echo # ============================================ >> .env
+                for %%t in (!MISSING_BOT_TOKENS!) do (
+                    echo %%t=your_token_here >> .env
+                )
+                echo. >> .env
+                echo [OK] Added missing multi-bot token variables to .env
+            ) else (
+                echo [WARN] Skipped adding multi-bot token variables to .env
+            )
+        ) else (
+            echo [OK] All multi-bot token variables are already in .env
+        )
+    )
+
     set /p EDIT_ENV="Do you want to edit .env now? (y/N): "
     if /i "!EDIT_ENV!"=="y" notepad .env
 ) else (

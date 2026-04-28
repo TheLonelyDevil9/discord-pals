@@ -63,6 +63,133 @@ def check_env_file() -> Tuple[bool, List[str]]:
     return len(issues) == 0, issues
 
 
+def _env_secret_missing(value: Optional[str]) -> bool:
+    """Return True when an env value is empty or still an obvious placeholder."""
+    if value is None:
+        return True
+
+    stripped = value.strip()
+    if not stripped:
+        return True
+
+    lowered = stripped.lower()
+    placeholders = {
+        "your_token_here",
+        "your_discord_token_here",
+        "your_discord_bot_token_here",
+        "token_for_firefly_bot",
+        "token_for_george_bot",
+    }
+    return lowered in placeholders or lowered.startswith("your_") or lowered.startswith("token_for_")
+
+
+def _load_env_values() -> dict:
+    """Read values exactly from .env so missing multi-bot vars can be reported."""
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return {}
+
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        dotenv_values = None
+
+    if dotenv_values:
+        return {
+            key: "" if value is None else str(value)
+            for key, value in dotenv_values(env_file).items()
+            if key
+        }
+
+    values = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = value.strip().strip('"').strip("'")
+    return values
+
+
+def check_bots_config() -> Tuple[bool, List[str]]:
+    """Validate bots.json and required multi-bot token env vars when present."""
+    bots_file = BASE_DIR / "bots.json"
+    issues = []
+
+    if not bots_file.exists():
+        ok("bots.json not found - single-bot mode")
+        return True, issues
+
+    ok("bots.json found")
+
+    try:
+        with open(bots_file, encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        fail(f"bots.json is invalid JSON: {e}")
+        return False, ["invalid bots.json"]
+    except OSError as e:
+        fail(f"Could not read bots.json: {e}")
+        return False, ["invalid bots.json"]
+
+    if not isinstance(data, dict):
+        fail('bots.json must contain an object with a "bots" array')
+        return False, ["invalid bots.json: root must be object"]
+
+    bots = data.get("bots")
+    if not isinstance(bots, list):
+        fail('bots.json must contain a "bots" array')
+        return False, ['invalid bots.json: missing "bots" array']
+
+    if not bots:
+        warn("bots.json has no bots configured")
+        return False, ["invalid bots.json: empty bots list"]
+
+    ok(f"  {len(bots)} bot(s) configured")
+
+    env_values = _load_env_values()
+    required_fields = ("name", "token_env", "character")
+
+    for index, bot_cfg in enumerate(bots, start=1):
+        if not isinstance(bot_cfg, dict):
+            warn(f"  [Bot {index}] Entry must be an object")
+            issues.append(f"invalid bots.json: bot {index} entry must be an object")
+            continue
+
+        missing_fields = [
+            field
+            for field in required_fields
+            if not isinstance(bot_cfg.get(field), str) or not bot_cfg.get(field).strip()
+        ]
+        if missing_fields:
+            fields = ", ".join(missing_fields)
+            warn(f"  [Bot {index}] Missing required field(s): {fields}")
+            issues.append(f"invalid bots.json: bot {index} missing {fields}")
+            continue
+
+        name = bot_cfg["name"].strip()
+        token_env = bot_cfg["token_env"].strip()
+        character = bot_cfg["character"].strip()
+        token_value = env_values.get(token_env)
+
+        if token_env not in env_values:
+            warn(f"  [{name}] {token_env} missing from .env")
+            issues.append(f"{name}: missing {token_env}")
+        elif _env_secret_missing(token_value):
+            warn(f"  [{name}] {token_env} is empty or still a placeholder in .env")
+            issues.append(f"{name}: missing {token_env}")
+        else:
+            ok(f"  [{name}] token env: {token_env}")
+
+        ok(f"  [{name}] character: {character}")
+
+    return len(issues) == 0, issues
+
+
 def check_providers_config() -> Tuple[bool, List[str]]:
     """Check providers.json, offer to create from example."""
     providers_file = BASE_DIR / "providers.json"
@@ -86,7 +213,7 @@ def check_providers_config() -> Tuple[bool, List[str]]:
 
                 # Check each provider
                 from dotenv import load_dotenv
-                load_dotenv()
+                load_dotenv(BASE_DIR / ".env")
 
                 for i, p in enumerate(providers):
                     name = p.get("name", f"Provider {i+1}")
@@ -199,8 +326,12 @@ def check_providers_config() -> Tuple[bool, List[str]]:
 
 def check_discord_token() -> Tuple[bool, List[str]]:
     """Check if DISCORD_TOKEN is set."""
+    if (BASE_DIR / "bots.json").exists():
+        ok("bots.json present - DISCORD_TOKEN not required in multi-bot mode")
+        return True, []
+
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(BASE_DIR / ".env")
     
     token = os.getenv("DISCORD_TOKEN")
     
@@ -256,22 +387,27 @@ def validate_startup(interactive: bool = True) -> bool:
     all_issues = []
     
     # 1. Check .env file
-    print(f"{Colors.BOLD}[1/4] Configuration Files{Colors.END}")
+    print(f"{Colors.BOLD}[1/5] Environment File{Colors.END}")
     passed, issues = check_env_file()
     all_issues.extend(issues)
     
-    # 2. Check providers.json
-    print(f"\n{Colors.BOLD}[2/4] Provider Configuration{Colors.END}")
+    # 2. Check bots.json
+    print(f"\n{Colors.BOLD}[2/5] Bot Configuration{Colors.END}")
+    passed, issues = check_bots_config()
+    all_issues.extend(issues)
+
+    # 3. Check providers.json
+    print(f"\n{Colors.BOLD}[3/5] Provider Configuration{Colors.END}")
     passed, issues = check_providers_config()
     all_issues.extend(issues)
     
-    # 3. Check Discord token
-    print(f"\n{Colors.BOLD}[3/4] Discord Token{Colors.END}")
+    # 4. Check Discord token
+    print(f"\n{Colors.BOLD}[4/5] Discord Token{Colors.END}")
     passed, issues = check_discord_token()
     all_issues.extend(issues)
     
-    # 4. Check characters
-    print(f"\n{Colors.BOLD}[4/4] Characters{Colors.END}")
+    # 5. Check characters
+    print(f"\n{Colors.BOLD}[5/5] Characters{Colors.END}")
     passed, issues = check_characters()
     all_issues.extend(issues)
     

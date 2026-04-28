@@ -159,6 +159,8 @@ The setup wizard will:
 5. Generate `providers.json`, `.env`, and `bots.json` when using multi-bot mode
 6. Open `.env` for you to add API keys
 
+When you re-run setup for multi-bot mode, the setup script updates `bots.json` from your latest answers and can append any newly configured bot token variables to an existing `.env`.
+
 ### Step 3: Create Your Discord Bot
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
@@ -999,6 +1001,8 @@ This is useful when different characters work better with different models. For 
 
 Run multiple characters from ONE process:
 
+The interactive setup script can create or update this configuration for you. Re-run setup, choose more than one bot, and let it append any missing token variables to `.env`. You can also configure it manually:
+
 ### Step 1: Create `bots.json`
 
 ```json
@@ -1018,6 +1022,8 @@ FIREFLY_TOKEN=your_firefly_bot_token
 NAHIDA_TOKEN=your_nahida_bot_token
 SAM_TOKEN=your_sam_bot_token
 ```
+
+The env var names in `.env` must match the `token_env` values in `bots.json`. Startup validation checks this before launch and reports any missing or placeholder token variables.
 
 ### Step 3: Run
 
@@ -1340,7 +1346,11 @@ discord-pals/
 
 ### "DISCORD_TOKEN not set!"
 
-→ Create `.env` file with your token (not `.env.example`)
+→ Single-bot mode needs `DISCORD_TOKEN` in `.env` (not `.env.example`). Multi-bot mode uses the token variables listed in `bots.json` instead.
+
+### Startup says a multi-bot token variable is missing
+
+→ Add that exact variable name to `.env`, or re-run setup in multi-bot mode and choose to append the missing token variables.
 
 ### "No characters available!"
 

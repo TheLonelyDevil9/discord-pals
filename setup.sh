@@ -175,7 +175,7 @@ if [ $BOT_COUNT -gt 1 ]; then
     echo "}" >> bots.json
     
     echo
-    echo "[OK] bots.json created for $BOT_COUNT bots"
+    echo "[OK] bots.json created/updated for $BOT_COUNT bots"
 else
     echo "Single-bot mode selected."
     echo "Using DISCORD_TOKEN and DEFAULT_CHARACTER from .env"
@@ -189,6 +189,40 @@ echo
 
 if [ -f ".env" ]; then
     echo "[OK] .env file already exists"
+
+    if [ "$BOT_COUNT" -gt 1 ] && [ ${#BOT_TOKENS[@]} -gt 0 ]; then
+        MISSING_BOT_TOKENS=()
+        for token in "${BOT_TOKENS[@]}"; do
+            if ! grep -q "^${token}=" .env; then
+                MISSING_BOT_TOKENS+=("$token")
+            fi
+        done
+
+        if [ ${#MISSING_BOT_TOKENS[@]} -gt 0 ]; then
+            echo
+            echo "The following multi-bot token variables are missing from .env:"
+            for token in "${MISSING_BOT_TOKENS[@]}"; do
+                echo "  $token"
+            done
+            read -p "Add them to .env now? (Y/n): " ADD_BOT_TOKENS
+            if [ "$ADD_BOT_TOKENS" != "n" ] && [ "$ADD_BOT_TOKENS" != "N" ]; then
+                echo "" >> .env
+                echo "# ============================================" >> .env
+                echo "# MULTI-BOT MODE (with bots.json)" >> .env
+                echo "# ============================================" >> .env
+                for token in "${MISSING_BOT_TOKENS[@]}"; do
+                    echo "$token=your_token_here" >> .env
+                done
+                echo "" >> .env
+                echo "[OK] Added missing multi-bot token variables to .env"
+            else
+                echo "[WARN] Skipped adding multi-bot token variables to .env"
+            fi
+        else
+            echo "[OK] All multi-bot token variables are already in .env"
+        fi
+    fi
+
     read -p "Do you want to edit .env now? (y/N): " EDIT_ENV
     if [ "$EDIT_ENV" = "y" ] || [ "$EDIT_ENV" = "Y" ]; then
         ${EDITOR:-nano} .env

@@ -2,8 +2,6 @@
 
 OpenCode compatibility entrypoint for `discord-pals`. Keep this file in parity with [CLAUDE.md](CLAUDE.md) when project instructions change.
 
-OpenCode's higher-priority git safety rules still apply: do not commit, tag, or push unless the user explicitly asks in the current conversation.
-
 ## Development Principles
 
 **Dashboard-first:** All features must be built with the web dashboard in mind. New configuration options, runtime settings, or data structures should be viewable and editable through the dashboard UI. Don't add backend-only config that requires manual JSON editing.
