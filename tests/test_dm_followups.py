@@ -120,6 +120,46 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         generate_mock.assert_not_awaited()
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
 
+    async def test_followup_cycle_splits_newline_response_parts(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        fake_user = _FakeUser(dm_channel)
+        instance.client = _FakeClient(fake_user)
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+                "user_name": "Alice",
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[{"role": "user", "author": "Alice", "content": "Hi"}]), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock(return_value="Good morning.\nDid you sleep well?")), \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.asyncio, "sleep", new=AsyncMock(return_value=None)), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(dm_channel.sent_messages, ["Good morning.", "Did you sleep well?"])
+        add_history_mock.assert_called_once_with(
+            "dm:Firefly:user:42", "assistant", "Good morning.\n\nDid you sleep well?", author_name="Firefly", timestamp=None
+        )
+
     async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
@@ -167,6 +207,9 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sent, 1)
         prompt = generate_mock.await_args.kwargs["messages"][0]["content"]
+        system_prompt = generate_mock.await_args.kwargs["system_prompt"]
         self.assertIn("do not continue the last thread directly", prompt.lower())
+        self.assertIn("normal punctuation", prompt.lower())
+        self.assertIn("normal punctuation", system_prompt.lower())
         self.assertIn("Loves stargazing on quiet nights.", prompt)
         self.assertIn("Recent topic:", prompt)

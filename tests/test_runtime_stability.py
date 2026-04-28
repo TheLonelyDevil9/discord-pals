@@ -155,7 +155,35 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [item["content"] for item in sent],
-            ["Don't you start, I'm still recovering", "You weren't even here for the worst of it."]
+            ["Don't you start, I'm still recovering.", "You weren't even here for the worst of it."]
+        )
+
+    async def test_send_organic_response_repairs_missing_punctuation_inside_split_part(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+
+        first = types.SimpleNamespace(id=1)
+        second = types.SimpleNamespace(id=2)
+        third = types.SimpleNamespace(id=3)
+        message = types.SimpleNamespace(
+            reply=AsyncMock(return_value=first),
+            channel=types.SimpleNamespace(send=AsyncMock(side_effect=[second, third])),
+        )
+
+        with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
+                patch.object(bot_instance_module.random, "uniform", return_value=0.0):
+            sent = await instance._send_organic_response(
+                message,
+                "I mean... they're cute? But I like mine.\n"
+                "The gradient and the butterfly motifs mean something to me Why, you thinking of getting me a pair or something"
+            )
+
+        self.assertEqual(
+            [item["content"] for item in sent],
+            [
+                "I mean... they're cute? But I like mine.",
+                "The gradient and the butterfly motifs mean something to me. Why, you thinking of getting me a pair or something",
+            ]
         )
 
     async def test_send_organic_response_keeps_salutation_newline_in_one_message(self):
@@ -220,7 +248,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(sent), 2)
-        self.assertEqual(sent[0]["content"], "The good kind, like when a song just hits you in the chest")
+        self.assertEqual(sent[0]["content"], "The good kind, like when a song just hits you in the chest.")
         self.assertTrue(sent[1]["content"].startswith("That's the best feeling"))
 
     async def test_send_organic_response_splits_missing_punctuation_before_hyphenated_capital_thought(self):
@@ -243,7 +271,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(sent), 2)
-        self.assertTrue(sent[0]["content"].endswith("sounds like a dessert"))
+        self.assertTrue(sent[0]["content"].endswith("sounds like a dessert."))
         self.assertTrue(sent[1]["content"].startswith("Self-destruct tendencies"))
 
     async def test_send_organic_response_does_not_soft_split_before_pronoun_i_or_titles(self):

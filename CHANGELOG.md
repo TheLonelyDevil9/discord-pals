@@ -4,6 +4,19 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.0.1] - 2026-04-28
+
+### Fixed
+
+- DM follow-ups now use the same organic response splitting as normal replies, so model line breaks become separate Discord messages when intended.
+- Response splitting now repairs missing terminal punctuation at inferred split boundaries to preserve character cadence.
+- Follow-up prompts now explicitly preserve normal punctuation instead of using line breaks as punctuation.
+
+### Changed
+
+- Refresh project banner image
+- Update project banner image
+
 ## [v2.0.0] - 2026-04-27
 
 ### Added

@@ -1123,7 +1123,7 @@ Return exactly one JSON object with this shape:
             sent_messages = []
             try:
                 rendered_response = convert_emojis_in_text(response, guild) if guild else response
-                lines = split_message(rendered_response)
+                lines = self._split_response_for_delivery(rendered_response)
                 for index, line in enumerate(lines):
                     line = line.strip()
                     if not line:
@@ -1591,6 +1591,20 @@ Return exactly one JSON object with this shape:
         return True
 
     @staticmethod
+    def _complete_split_boundary(text: str) -> str:
+        """Keep delivered split messages from training punctuationless sentence breaks."""
+        text = (text or "").strip()
+        if not text:
+            return text
+
+        body = text.rstrip(")]}'\"›»")
+        if not body or body[-1] in ".!?…":
+            return text
+        if body[-1].isalnum():
+            return f"{text}."
+        return text
+
+    @staticmethod
     def _looks_like_missing_sentence_boundary(previous_text: str, next_text: str) -> bool:
         """Detect long model text where punctuation was omitted before a new thought."""
         previous_text = (previous_text or "").strip()
@@ -1629,6 +1643,7 @@ Return exactly one JSON object with this shape:
         sentences = []
         start = 0
         boundaries = []
+        repaired_soft_boundary = False
         for match in re.finditer(r"[.!?…]+(?=\s+)", normalized):
             next_start = match.end()
             while next_start < len(normalized) and normalized[next_start].isspace():
@@ -1658,6 +1673,9 @@ Return exactly one JSON object with this shape:
             elif not BotInstance._looks_like_missing_sentence_boundary(candidate, next_segment):
                 continue
 
+            if boundary_type == "soft":
+                candidate = BotInstance._complete_split_boundary(candidate)
+                repaired_soft_boundary = True
             sentences.append(candidate)
             start = next_start
 
@@ -1679,7 +1697,7 @@ Return exactly one JSON object with this shape:
                 current_sentences.append(sentence)
         grouped.append(" ".join(current_sentences).strip())
 
-        return grouped if len(grouped) > 1 else []
+        return grouped if len(grouped) > 1 or repaired_soft_boundary else []
 
     def _split_response_for_delivery(self, response: str) -> list[str]:
         """Turn one model response into natural Discord-sized message parts."""
@@ -1700,7 +1718,7 @@ Return exactly one JSON object with this shape:
             current_part = lines[0]
             for next_line in lines[1:]:
                 if self._should_split_single_newline(current_part, next_line):
-                    logical_parts.append(current_part)
+                    logical_parts.append(self._complete_split_boundary(current_part))
                     current_part = next_line
                 else:
                     current_part = f"{current_part}\n{next_line}"
@@ -1709,10 +1727,14 @@ Return exactly one JSON object with this shape:
         if not logical_parts:
             logical_parts = [normalized]
 
-        if len(logical_parts) == 1:
-            sentence_parts = self._split_plain_response_sentences(logical_parts[0])
+        expanded_parts = []
+        for part in logical_parts:
+            sentence_parts = self._split_plain_response_sentences(part)
             if sentence_parts:
-                logical_parts = sentence_parts
+                expanded_parts.extend(sentence_parts)
+            else:
+                expanded_parts.append(part)
+        logical_parts = expanded_parts
 
         if len(logical_parts) > MAX_RESPONSE_MESSAGE_PARTS:
             overflow = "\n\n".join(logical_parts[MAX_RESPONSE_MESSAGE_PARTS - 1:])
@@ -2823,6 +2845,7 @@ Return exactly one JSON object with this shape:
             "- Write 2-3 substantial sentences, in character.",
             "- Give the user at least one concrete thing to respond to.",
             "- Be warm, casual, and low-pressure.",
+            "- Preserve normal punctuation, pauses, and character cadence; do not use line breaks as punctuation.",
             "- Do not output XML, HTML, tags, transcript labels, or speaker prefixes.",
             "- Do not quote the conversation transcript back verbatim.",
             "- Bring up a fresh topic or angle; do not directly continue the prior thread.",
@@ -2860,7 +2883,7 @@ Rules:
 Your follow-up message:"""
         system_prompt = (
             f"You are {char_name}. Write a natural DM follow-up message. "
-            "Never output XML, HTML, tags, speaker labels, or transcript formatting."
+            "Use normal punctuation and character cadence; never output XML, HTML, tags, speaker labels, or transcript formatting."
         )
         return prompt, system_prompt
 
@@ -2952,13 +2975,19 @@ Your follow-up message:"""
                 else:
                     await asyncio.sleep(min(len(response) * 0.03, 3))
 
-                sent_message = await channel.send(response)
+                sent_records = await self._send_organic_response_to_channel(channel, response)
+                if not sent_records:
+                    log.warn(f"DM follow-up send failed for user {user_id}", self.name)
+                    continue
+
+                delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
+                first_sent_message = sent_records[0]["message"]
 
                 # Add to history
                 add_to_history(
-                    delivery_target.history_id, "assistant", response,
+                    delivery_target.history_id, "assistant", delivered_response,
                     author_name=char_name,
-                    timestamp=getattr(sent_message, "created_at", None)
+                    timestamp=getattr(first_sent_message, "created_at", None)
                 )
 
                 # Update state
