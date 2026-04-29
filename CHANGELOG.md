@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.0.3] - 2026-04-29
+
+### Fixed
+
+- Dashboard character and system prompt saves now normalize browser textarea line endings before writing files, preventing extra blank lines from accumulating on Windows.
+- Regression coverage now verifies character and system prompt saves preserve intended blank lines without adding new ones.
+
+### Changed
+
+- Dashboard updates now use a fetch-based flow with single-update locking, stale Git lock recovery, dirty-worktree stashing/restoration, backup branches for diverged checkouts, and dependency-install fallbacks with warnings.
+
 ## [v2.0.2] - 2026-04-28
 
 ### Fixed

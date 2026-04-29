@@ -39,6 +39,10 @@ _topology_cache = {"built_at": 0.0, "value": None}
 _VERSION_CACHE_TTL = 30 * 60.0
 _github_version_cache_lock = threading.Lock()
 _github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value": False}
+_update_lock = threading.Lock()
+_UPDATE_GIT_TIMEOUT = 180
+_UPDATE_PIP_TIMEOUT = 300
+_STALE_GIT_LOCK_SECONDS = 15 * 60
 UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
 # Initialize secret key securely
@@ -222,6 +226,18 @@ def _resolve_character_option(available_characters, *candidates):
             return match
 
     return None
+
+
+def _normalize_textarea_content(content: str | None) -> str:
+    """Normalize browser textarea newlines before writing text files."""
+    return str(content or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _write_dashboard_text_file(path: Path, content: str | None) -> None:
+    """Write dashboard-edited text exactly once, using stable LF line endings."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(_normalize_textarea_content(content))
 
 
 _SCHEDULE_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -692,9 +708,7 @@ def save_character(name):
     content = request.form.get('content', '')
 
     try:
-        CHARACTERS_DIR.mkdir(exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(content)
+        _write_dashboard_text_file(path, content)
     except Exception as e:
         log.warn(f"Failed to save character: {e}")
 
@@ -730,18 +744,17 @@ def new_character():
         try:
             path = safe_path(CHARACTERS_DIR, name, '.md')
             if not path.exists():
-                CHARACTERS_DIR.mkdir(exist_ok=True)
-                with open(path, 'w', encoding='utf-8') as f:
-                    f.write(
-                        f"# {name}\n\n"
-                        "## System Persona\n\n"
-                        "Describe the character's personality, voice, values, and behavior here.\n\n"
-                        "## Example Dialogue\n\n"
-                        "Optional sample lines that show how they speak.\n\n"
-                        "## User Context\n\n"
-                        "### ExampleUser\n"
-                        "Optional gated context for this specific user only.\n"
-                    )
+                _write_dashboard_text_file(
+                    path,
+                    f"# {name}\n\n"
+                    "## System Persona\n\n"
+                    "Describe the character's personality, voice, values, and behavior here.\n\n"
+                    "## Example Dialogue\n\n"
+                    "Optional sample lines that show how they speak.\n\n"
+                    "## User Context\n\n"
+                    "### ExampleUser\n"
+                    "Optional gated context for this specific user only.\n"
+                )
             return redirect(url_for('edit_character', name=name))
         except ValueError as e:
             log.warn(f"Invalid character name: {e}")
@@ -848,9 +861,7 @@ def save_system_prompt():
     """Save system.md prompt."""
     content = request.form.get('content', '')
     try:
-        PROMPTS_DIR.mkdir(exist_ok=True)
-        with open(PROMPTS_DIR / 'system.md', 'w', encoding='utf-8') as f:
-            f.write(content)
+        _write_dashboard_text_file(PROMPTS_DIR / 'system.md', content)
         # Reload prompts in character manager
         from character import character_manager
         character_manager.reload_prompts()
@@ -2751,6 +2762,365 @@ def api_version():
 
 # --- Update API ---
 
+def _command_output(result) -> str:
+    """Return combined stdout/stderr for logging and dashboard responses."""
+    return "\n".join(
+        part.strip()
+        for part in (getattr(result, "stdout", ""), getattr(result, "stderr", ""))
+        if part and part.strip()
+    ).strip()
+
+
+def _run_command(args: list[str], cwd: str, timeout: int):
+    import subprocess
+
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _git_index_lock_path(repo_dir: str) -> Path | None:
+    """Resolve the Git index lock path for normal repos and worktrees."""
+    git_path = Path(repo_dir) / ".git"
+    if git_path.is_dir():
+        return git_path / "index.lock"
+    if git_path.is_file():
+        try:
+            text = git_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if text.startswith("gitdir:"):
+            git_dir = Path(text.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = (git_path.parent / git_dir).resolve()
+            return git_dir / "index.lock"
+    return None
+
+
+def _remove_stale_git_lock(repo_dir: str) -> str | None:
+    """Remove a stale Git index lock left behind by a crashed update."""
+    lock_path = _git_index_lock_path(repo_dir)
+    if not lock_path or not lock_path.exists():
+        return None
+
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return None
+    if age < _STALE_GIT_LOCK_SECONDS:
+        return None
+
+    try:
+        lock_path.unlink()
+        message = f"Removed stale Git index lock: {lock_path}"
+        log.warn(message)
+        return message
+    except OSError as e:
+        log.warn(f"Could not remove stale Git index lock {lock_path}: {e}")
+        return None
+
+
+def _run_git(args: list[str], cwd: str, timeout: int = _UPDATE_GIT_TIMEOUT):
+    """Run git with recovery for stale locks and safe-directory errors."""
+    result = _run_command(["git", *args], cwd=cwd, timeout=timeout)
+    output = _command_output(result).lower()
+
+    if result.returncode != 0 and "index.lock" in output and _remove_stale_git_lock(cwd):
+        result = _run_command(["git", *args], cwd=cwd, timeout=timeout)
+        output = _command_output(result).lower()
+
+    if result.returncode != 0 and "dubious ownership" in output:
+        safe_dir = str(Path(cwd).resolve())
+        safe_result = _run_command(
+            ["git", "config", "--global", "--add", "safe.directory", safe_dir],
+            cwd=cwd,
+            timeout=10,
+        )
+        if safe_result.returncode == 0:
+            log.warn(f"Marked repository as a Git safe.directory for update: {safe_dir}")
+            result = _run_command(["git", *args], cwd=cwd, timeout=timeout)
+
+    return result
+
+
+def _require_git_success(result, action: str) -> None:
+    if result.returncode != 0:
+        details = _command_output(result) or f"git exited with code {result.returncode}"
+        raise RuntimeError(f"{action} failed: {details}")
+
+
+def _repo_root(bot_dir: str) -> str:
+    result = _run_git(["rev-parse", "--show-toplevel"], bot_dir, timeout=30)
+    _require_git_success(result, "Locating Git repository")
+    return result.stdout.strip() or bot_dir
+
+
+def _current_git_branch(repo_dir: str) -> str | None:
+    result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_dir, timeout=30)
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
+def _list_git_remotes(repo_dir: str) -> list[str]:
+    result = _run_git(["remote"], repo_dir, timeout=30)
+    _require_git_success(result, "Reading Git remotes")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _select_git_remote(repo_dir: str) -> str:
+    remotes = _list_git_remotes(repo_dir)
+    if not remotes:
+        raise RuntimeError("No Git remotes are configured for this checkout")
+    return "origin" if "origin" in remotes else remotes[0]
+
+
+def _git_ref_exists(repo_dir: str, ref: str) -> bool:
+    result = _run_git(["rev-parse", "--verify", "--quiet", ref], repo_dir, timeout=30)
+    return result.returncode == 0
+
+
+def _git_ref_sha(repo_dir: str, ref: str) -> str:
+    result = _run_git(["rev-parse", "--verify", ref], repo_dir, timeout=30)
+    _require_git_success(result, f"Resolving Git ref {ref}")
+    return result.stdout.strip()
+
+
+def _git_is_ancestor(repo_dir: str, ancestor: str, descendant: str) -> bool:
+    result = _run_git(["merge-base", "--is-ancestor", ancestor, descendant], repo_dir, timeout=30)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    _require_git_success(result, "Checking Git ancestry")
+    return False
+
+
+def _update_upstream_ref(repo_dir: str, current_branch: str | None) -> str:
+    if current_branch:
+        result = _run_git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            repo_dir,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+
+    remote = _select_git_remote(repo_dir)
+    candidates = []
+    if current_branch:
+        candidates.append(f"{remote}/{current_branch}")
+
+    head_result = _run_git(["rev-parse", "--abbrev-ref", f"{remote}/HEAD"], repo_dir, timeout=30)
+    if head_result.returncode == 0 and head_result.stdout.strip():
+        candidates.append(head_result.stdout.strip())
+
+    candidates.extend([f"{remote}/main", f"{remote}/master"])
+
+    seen = set()
+    for ref in candidates:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        if _git_ref_exists(repo_dir, ref):
+            return ref
+
+    raise RuntimeError(f"No update branch found on remote '{remote}'")
+
+
+def _working_tree_status(repo_dir: str) -> str:
+    result = _run_git(["status", "--porcelain", "--untracked-files=all"], repo_dir, timeout=30)
+    _require_git_success(result, "Reading Git worktree status")
+    return result.stdout.strip()
+
+
+def _stash_local_changes(repo_dir: str) -> dict | None:
+    """Stash local tracked and untracked changes so updates are not blocked."""
+    if not _working_tree_status(repo_dir):
+        return None
+
+    message = f"discord-pals-dashboard-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    result = _run_git(
+        ["stash", "push", "--include-untracked", "-m", message],
+        repo_dir,
+        timeout=120,
+    )
+    _require_git_success(result, "Stashing local changes before update")
+
+    output = _command_output(result)
+    if "No local changes" in output:
+        return None
+
+    list_result = _run_git(["stash", "list", "--format=%gd%x00%s", "-n", "1"], repo_dir, timeout=30)
+    stash_ref = "stash@{0}"
+    if list_result.returncode == 0 and list_result.stdout.strip():
+        ref, _, subject = list_result.stdout.strip().partition("\x00")
+        if message in subject and ref:
+            stash_ref = ref
+
+    return {"ref": stash_ref, "message": message, "output": output}
+
+
+def _restore_local_changes(repo_dir: str, stash: dict | None) -> str | None:
+    if not stash:
+        return None
+
+    stash_ref = stash.get("ref") or "stash@{0}"
+    result = _run_git(["stash", "pop", "--index", stash_ref], repo_dir, timeout=120)
+    if result.returncode == 0:
+        log.info("Reapplied local changes after update")
+        return None
+
+    details = _command_output(result) or "Git could not reapply the stash automatically"
+    warning = (
+        f"Local changes were preserved in {stash_ref} ({stash.get('message')}) "
+        f"but need manual reapply: {details}"
+    )
+    log.warn(warning)
+    return warning
+
+
+def _create_update_backup_branch(repo_dir: str) -> str:
+    base = f"dashboard-update-backup-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    for suffix in ["", "-1", "-2", "-3", "-4"]:
+        branch = f"{base}{suffix}"
+        exists = _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], repo_dir, timeout=30)
+        if exists.returncode == 0:
+            continue
+        result = _run_git(["branch", branch, "HEAD"], repo_dir, timeout=30)
+        _require_git_success(result, "Creating backup branch before update reset")
+        return branch
+    raise RuntimeError("Could not create a unique backup branch before update reset")
+
+
+def _perform_git_update(repo_dir: str) -> dict:
+    """Fetch and update the checkout while preserving user changes where possible."""
+    warnings = []
+
+    fetch = _run_git(["fetch", "--all", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
+    _require_git_success(fetch, "Fetching updates")
+
+    current_branch = _current_git_branch(repo_dir)
+    upstream = _update_upstream_ref(repo_dir, current_branch)
+    before_head = _git_ref_sha(repo_dir, "HEAD")
+    upstream_head = _git_ref_sha(repo_dir, upstream)
+    stash = _stash_local_changes(repo_dir)
+    output = _command_output(fetch)
+    updated = False
+
+    try:
+        if before_head == upstream_head:
+            output = output or "Already up to date"
+        elif _git_is_ancestor(repo_dir, before_head, upstream_head):
+            merge = _run_git(["merge", "--ff-only", upstream], repo_dir, timeout=120)
+            if merge.returncode == 0:
+                output = _command_output(merge) or f"Fast-forwarded to {upstream}"
+                updated = True
+            else:
+                backup_branch = _create_update_backup_branch(repo_dir)
+                reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
+                _require_git_success(reset, "Resetting checkout after fast-forward failure")
+                output = _command_output(reset) or f"Reset to {upstream}"
+                warnings.append(
+                    f"Fast-forward failed, so the previous checkout was saved as {backup_branch} "
+                    f"and reset to {upstream}."
+                )
+                updated = True
+        elif _git_is_ancestor(repo_dir, upstream_head, before_head):
+            output = output or f"Local branch is ahead of {upstream}; no remote update required"
+        else:
+            backup_branch = _create_update_backup_branch(repo_dir)
+            reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
+            _require_git_success(reset, "Resetting diverged checkout to upstream")
+            output = _command_output(reset) or f"Reset to {upstream}"
+            warnings.append(
+                f"Local branch had diverged; the previous HEAD was saved as {backup_branch} "
+                f"before resetting to {upstream}."
+            )
+            updated = True
+    finally:
+        restore_warning = _restore_local_changes(repo_dir, stash)
+        if restore_warning:
+            warnings.append(restore_warning)
+
+    after_head = _git_ref_sha(repo_dir, "HEAD")
+    return {
+        "updated": updated or before_head != after_head,
+        "output": output,
+        "warnings": warnings,
+        "before_head": before_head,
+        "after_head": after_head,
+        "upstream": upstream,
+    }
+
+
+def _pip_command_candidates(repo_dir: str) -> list[list[str]]:
+    import sys
+
+    candidates = []
+    if sys.executable:
+        candidates.append([sys.executable, "-m", "pip"])
+
+    candidate_paths = [
+        Path(repo_dir) / "venv" / "Scripts" / "pip.exe",
+        Path(repo_dir) / "venv" / "bin" / "pip",
+    ]
+    for path in candidate_paths:
+        if path.exists():
+            candidates.append([str(path)])
+
+    candidates.extend([["python", "-m", "pip"], ["python3", "-m", "pip"], ["pip"]])
+
+    unique = []
+    seen = set()
+    for command in candidates:
+        key = tuple(command)
+        if key not in seen:
+            seen.add(key)
+            unique.append(command)
+    return unique
+
+
+def _install_update_dependencies(repo_dir: str) -> dict:
+    requirements_file = Path(repo_dir) / "requirements.txt"
+    if not requirements_file.exists():
+        return {"status": "skipped", "message": "", "warning": None}
+
+    errors = []
+    for pip_base in _pip_command_candidates(repo_dir):
+        command = pip_base + [
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(requirements_file),
+            "-q",
+        ]
+        try:
+            result = _run_command(command, cwd=repo_dir, timeout=_UPDATE_PIP_TIMEOUT)
+        except FileNotFoundError:
+            errors.append(f"{' '.join(pip_base)} was not found")
+            continue
+
+        if result.returncode == 0:
+            log.info(f"Dependencies installed with {' '.join(pip_base)}")
+            return {"status": "ok", "message": " Dependencies updated.", "warning": None}
+
+        errors.append(f"{' '.join(pip_base)}: {_command_output(result) or result.returncode}")
+
+    warning = "Dependency install failed after trying available pip commands: " + " | ".join(errors)
+    log.warn(warning)
+    return {
+        "status": "warning",
+        "message": " Dependencies could not be fully updated.",
+        "warning": warning,
+    }
+
+
 @app.route('/api/update', methods=['POST'])
 @requires_csrf
 @requires_auth
@@ -2760,91 +3130,65 @@ def api_update():
 
     log.info("Git update requested via dashboard")
 
+    if not _update_lock.acquire(blocking=False):
+        return jsonify({
+            'status': 'error',
+            'message': 'An update is already running'
+        }), 409
+
     try:
         # Get the directory where the bot is running
         bot_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_dir = _repo_root(bot_dir)
+        git_result = _perform_git_update(repo_dir)
+        dependency_result = _install_update_dependencies(repo_dir)
 
-        # Run git pull
-        result = subprocess.run(
-            ['git', 'pull'],
-            cwd=bot_dir,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        new_version = _get_file_version()
+        version_changed = new_version != VERSION
+        warnings = list(git_result["warnings"])
+        if dependency_result.get("warning"):
+            warnings.append(dependency_result["warning"])
 
-        output = result.stdout.strip()
-        error = result.stderr.strip()
+        _invalidate_github_version_cache()
 
-        if result.returncode == 0:
-            # Check if already up to date
-            if 'Already up to date' in output or 'Already up-to-date' in output:
-                _invalidate_github_version_cache()
-                log.info("Git pull: Already up to date")
-                return jsonify({
-                    'status': 'ok',
-                    'message': 'Already up to date',
-                    'output': output,
-                    'updated': False,
-                    'running_version': VERSION,
-                    'new_version': None
-                })
-            else:
-                # Install/update dependencies in venv
-                pip_output = ""
-                venv_pip = os.path.join(bot_dir, 'venv', 'bin', 'pip')
-                if not os.path.exists(venv_pip):
-                    # Windows path
-                    venv_pip = os.path.join(bot_dir, 'venv', 'Scripts', 'pip.exe')
-
-                if os.path.exists(venv_pip):
-                    requirements_file = os.path.join(bot_dir, 'requirements.txt')
-                    if os.path.exists(requirements_file):
-                        log.info("Installing dependencies from requirements.txt")
-                        pip_result = subprocess.run(
-                            [venv_pip, 'install', '-r', requirements_file, '-q'],
-                            cwd=bot_dir,
-                            capture_output=True,
-                            text=True,
-                            timeout=120
-                        )
-                        if pip_result.returncode == 0:
-                            log.info("Dependencies installed successfully")
-                            pip_output = " Dependencies updated."
-                        else:
-                            log.warn(f"pip install had issues: {pip_result.stderr}")
-                            pip_output = " (pip install had warnings)"
-
-                # Check if version changed
-                new_version = _get_file_version()
-                version_changed = new_version != VERSION
-
-                log.info(f"Git pull successful: {output}")
-                if version_changed:
-                    log.info(f"Version update available: {VERSION} -> {new_version}")
-                _invalidate_github_version_cache()
-
-                return jsonify({
-                    'status': 'ok',
-                    'message': (f'Update successful!{pip_output} Restart to apply v{new_version}.' if version_changed
-                                else f'Update successful!{pip_output} Restart to apply changes.'),
-                    'output': output,
-                    'updated': True,
-                    'running_version': VERSION,
-                    'new_version': new_version if version_changed else None
-                })
+        if git_result["updated"]:
+            log.info(f"Git update successful: {git_result['output']}")
         else:
-            log.error(f"Git pull failed: {error or output}")
-            return jsonify({
-                'status': 'error',
-                'message': error or output or 'Git pull failed'
-            }), 500
+            log.info("Git update: already current")
+        if version_changed:
+            log.info(f"Version update available: {VERSION} -> {new_version}")
+
+        if git_result["updated"]:
+            message = (
+                f"Update successful!{dependency_result['message']} Restart to apply v{new_version}."
+                if version_changed
+                else f"Update successful!{dependency_result['message']} Restart to apply changes."
+            )
+        else:
+            message = f"Already up to date.{dependency_result['message']}"
+
+        if warnings:
+            message += " Some local recovery steps need attention."
+
+        return jsonify({
+            'status': 'ok',
+            'message': message,
+            'output': git_result["output"],
+            'updated': git_result["updated"],
+            'running_version': VERSION,
+            'new_version': new_version if version_changed else None,
+            'warnings': warnings,
+            'upstream': git_result["upstream"],
+            'before_head': git_result["before_head"],
+            'after_head': git_result["after_head"],
+            'dependency_status': dependency_result["status"],
+        })
 
     except subprocess.TimeoutExpired:
-        log.error("Git pull timed out")
+        log.error("Update command timed out")
         return jsonify({
             'status': 'error',
-            'message': 'Update timed out after 60 seconds'
+            'message': 'Update timed out while fetching, applying, or installing dependencies'
         }), 500
     except FileNotFoundError:
         log.error("Git not found")
@@ -2858,6 +3202,8 @@ def api_update():
             'status': 'error',
             'message': str(e)
         }), 500
+    finally:
+        _update_lock.release()
 
 
 # --- Restart API ---

@@ -395,11 +395,21 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             self.assertEqual(value, config[key])
 
     def test_version_api_reuses_cached_value_and_refreshes_after_update(self):
-        completed = types.SimpleNamespace(returncode=0, stdout="Already up to date", stderr="")
+        git_update = {
+            "updated": False,
+            "output": "Already up to date",
+            "warnings": [],
+            "before_head": "abc123",
+            "after_head": "abc123",
+            "upstream": "origin/main",
+        }
+        dependencies = {"status": "skipped", "message": "", "warning": None}
 
         with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
                 patch.object(dashboard_module, "_fetch_github_latest_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
-                patch("subprocess.run", return_value=completed):
+                patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies):
             first = self.client.get("/api/version").get_json()
             second = self.client.get("/api/version").get_json()
             update = self.client.post("/api/update", headers=self.csrf_headers()).get_json()
@@ -410,6 +420,36 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(third["github_version"], "1.2.0")
         self.assertEqual(fetch_mock.call_count, 2)
         self.assertEqual(update["status"], "ok")
+
+    def test_update_endpoint_returns_warnings_without_failing_successful_update(self):
+        git_update = {
+            "updated": True,
+            "output": "Reset to origin/main",
+            "warnings": ["Local changes were preserved in stash@{0}."],
+            "before_head": "abc123",
+            "after_head": "def456",
+            "upstream": "origin/main",
+        }
+        dependencies = {
+            "status": "warning",
+            "message": " Dependencies could not be fully updated.",
+            "warning": "pip install failed",
+        }
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_get_file_version", return_value="9.9.9"):
+            response = self.client.post("/api/update", headers=self.csrf_headers())
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["updated"])
+        self.assertEqual(data["dependency_status"], "warning")
+        self.assertEqual(data["new_version"], "9.9.9")
+        self.assertEqual(len(data["warnings"]), 2)
 
 
 class HistoryPersistenceTests(unittest.TestCase):

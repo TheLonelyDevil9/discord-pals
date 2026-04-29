@@ -186,9 +186,12 @@ class CharacterDashboardTests(unittest.TestCase):
     def setUp(self):
         self._temp_dir = tempfile.TemporaryDirectory()
         self.characters_dir = Path(self._temp_dir.name)
+        self.prompts_dir = self.characters_dir / "prompts"
         self._orig_dashboard_characters_dir = dashboard_module.CHARACTERS_DIR
+        self._orig_dashboard_prompts_dir = dashboard_module.PROMPTS_DIR
         self._orig_character_characters_dir = character_module.CHARACTERS_DIR
         dashboard_module.CHARACTERS_DIR = self.characters_dir
+        dashboard_module.PROMPTS_DIR = self.prompts_dir
         character_module.CHARACTERS_DIR = str(self.characters_dir)
         character_module.character_manager.characters.clear()
         dashboard_module.app.config["TESTING"] = True
@@ -198,6 +201,7 @@ class CharacterDashboardTests(unittest.TestCase):
 
     def tearDown(self):
         dashboard_module.CHARACTERS_DIR = self._orig_dashboard_characters_dir
+        dashboard_module.PROMPTS_DIR = self._orig_dashboard_prompts_dir
         character_module.CHARACTERS_DIR = self._orig_character_characters_dir
         character_module.character_manager.characters.clear()
         self._temp_dir.cleanup()
@@ -240,3 +244,35 @@ class CharacterDashboardTests(unittest.TestCase):
         self.assertIn("## Example Dialogue", created)
         self.assertIn("## User Context", created)
         self.assertNotIn("## Persona", created)
+
+    def test_character_save_normalizes_textarea_crlf_without_extra_blank_lines(self):
+        response = self.client.post(
+            "/characters/Nahida/save",
+            data={
+                "content": "Line one\r\nLine two\r\n\r\nLine four",
+                "csrf_token": "test-csrf",
+            },
+            follow_redirects=False,
+        )
+
+        saved = (self.characters_dir / "Nahida.md").read_bytes()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(saved, b"Line one\nLine two\n\nLine four")
+
+    def test_system_prompt_save_normalizes_textarea_crlf_without_extra_blank_lines(self):
+        with patch.object(character_module.character_manager, "reload_prompts") as reload_prompts:
+            response = self.client.post(
+                "/prompts/system/save",
+                data={
+                    "content": "First rule\r\nSecond rule\r\n\r\nFourth rule",
+                    "csrf_token": "test-csrf",
+                },
+                follow_redirects=False,
+            )
+
+        saved = (self.prompts_dir / "system.md").read_bytes()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(saved, b"First rule\nSecond rule\n\nFourth rule")
+        reload_prompts.assert_called_once()
