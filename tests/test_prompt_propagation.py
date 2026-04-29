@@ -1,7 +1,9 @@
 import json
+import tempfile
 import types
 import unittest
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
@@ -127,8 +129,101 @@ class PromptPropagationTests(unittest.TestCase):
         self.assertIn("[Time gap: 1 day, 30 minutes later]", immediate[1]["content"])
         self.assertIn("Alice: Back again", immediate[1]["content"])
 
+    def test_time_passage_signal_uses_recent_large_gap(self):
+        history = [
+            {
+                "role": "assistant",
+                "content": "On my way now.",
+                "author": "Firefly",
+                "timestamp": "2026-04-01T10:00:00+00:00",
+            },
+            {
+                "role": "user",
+                "content": "How many hours ago was that?",
+                "author": "Alice",
+                "timestamp": "2026-04-01T15:30:00+00:00",
+            },
+        ]
+
+        signal = discord_utils_module.build_time_passage_signal(history)
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal["gap_label"], "5 hours, 30 minutes later")
+        self.assertEqual(signal["before_author"], "Firefly")
+        self.assertIn("On my way", signal["before_content"])
+        self.assertEqual(signal["after_author"], "Alice")
+
+    def test_time_passage_signal_ignores_short_gap(self):
+        history = [
+            {"role": "user", "content": "Hi", "author": "Alice", "timestamp": "2026-04-01T10:00:00+00:00"},
+            {"role": "assistant", "content": "Hello", "author": "Nahida", "timestamp": "2026-04-01T10:20:00+00:00"},
+        ]
+
+        self.assertIsNone(discord_utils_module.build_time_passage_signal(history))
+
 
 class TimePlaceholderTests(unittest.TestCase):
+    def test_other_prompts_file_drives_chatroom_context_without_system_prompt(self):
+        original_prompts_dir = character_module.PROMPTS_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            prompts_dir = Path(tmp)
+            (prompts_dir / "system.md").write_text("SYSTEM_SENTINEL", encoding="utf-8")
+            (prompts_dir / "other_prompts.md").write_text(
+                "# Other Prompts\n\n"
+                "## Chatroom Context\n\n"
+                "Other prompt for {{CHARACTER_NAME}}.\n"
+                "{{TIME_PASSAGE_CONTEXT}}\n",
+                encoding="utf-8",
+            )
+            character_module.PROMPTS_DIR = str(prompts_dir)
+            try:
+                manager = character_module.PromptManager()
+            finally:
+                character_module.PROMPTS_DIR = original_prompts_dir
+
+        context = manager.build_chatroom_context(
+            character_name="Nahida",
+            time_passage_context="Five hours later."
+        )
+
+        self.assertIn("Other prompt for Nahida.", context)
+        self.assertIn("Five hours later.", context)
+        self.assertNotIn("SYSTEM_SENTINEL", context)
+
+    def test_other_prompts_loader_falls_back_to_legacy_chatroom_context(self):
+        original_prompts_dir = character_module.PROMPTS_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            prompts_dir = Path(tmp)
+            (prompts_dir / "chatroom_context.md").write_text(
+                "Legacy context for {{CHARACTER_NAME}}.",
+                encoding="utf-8",
+            )
+            character_module.PROMPTS_DIR = str(prompts_dir)
+            try:
+                manager = character_module.PromptManager()
+            finally:
+                character_module.PROMPTS_DIR = original_prompts_dir
+
+        context = manager.build_chatroom_context(character_name="Nahida")
+
+        self.assertIn("Legacy context for Nahida.", context)
+
+    def test_time_passage_context_renders_as_post_system_context(self):
+        manager = character_module.PromptManager()
+        signal = {
+            "gap_label": "5 hours later",
+            "before_author": "Firefly",
+            "before_content": "On my way now.",
+            "after_author": "Alice",
+            "after_content": "How many hours ago was that?",
+        }
+
+        context = manager.build_time_passage_context(signal, is_dm=False)
+
+        self.assertIn("Elapsed time: 5 hours later.", context)
+        self.assertIn("Before the pause: Firefly: On my way now.", context)
+        self.assertIn("Infer lightly", context)
+
     def test_system_prompt_expands_time_placeholders_in_template_and_persona(self):
         manager = character_module.PromptManager()
         manager.system_template = "It is {{weekday}}, {{date}} at {{time}} for {{CHARACTER_NAME}}.\n{{PERSONA}}"
@@ -307,6 +402,17 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         page = self.client.get("/config").get_data(as_text=True)
         self.assertIn('id="user_only_context_count"', page)
         self.assertNotIn('id="context_message_count"', page)
+
+    def test_config_page_groups_context_prompting_and_provider_controls(self):
+        page = self.client.get("/config").get_data(as_text=True)
+
+        self.assertIn('data-config-tab="context"', page)
+        self.assertIn('data-config-tab="prompting"', page)
+        self.assertIn('data-config-tab="providers"', page)
+        self.assertIn('id="time_passage_context_enabled"', page)
+        self.assertIn("prompts/system.md (read only)", page)
+        self.assertIn("/prompts/other/save", page)
+        self.assertIn("moveProvider(", page)
 
         response = self.client.post(
             "/api/config",

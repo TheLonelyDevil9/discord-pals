@@ -26,7 +26,8 @@ from discord_utils import (
     update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     split_message,
-    was_recently_cleared, acknowledge_cleared
+    was_recently_cleared, acknowledge_cleared,
+    build_time_passage_signal, build_idle_time_passage_signal
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from request_queue import RequestQueue
@@ -856,12 +857,10 @@ Return exactly one JSON object with this shape:
             user_name=user_name,
             now=prompt_now
         )
-        prompt = (
-            "The user may want a reminder, but some details are missing.\n"
-            f"Current reminder summary: {event_summary or 'Unknown event'}\n"
-            f"Missing detail to clarify: {clarification_prompt or 'the timing'}\n"
-            "Ask exactly one short clarification question in character. "
-            "Do not answer anything else."
+        prompt = character_manager.build_reminder_clarification_prompt(
+            event_summary=event_summary,
+            clarification_prompt=clarification_prompt,
+            now=prompt_now,
         )
 
         result = await provider_manager.generate(
@@ -1182,6 +1181,13 @@ Return exactly one JSON object with this shape:
 
         active_users = get_active_users(source_channel_id) if not is_dm else []
         other_bot_names = get_other_bot_names(source_channel_id, self.character.name if self.character else "")
+        time_passage_context = ""
+        if runtime_config.get("time_passage_context_enabled", True):
+            time_passage_context = character_manager.build_time_passage_context(
+                build_time_passage_signal(get_history(source_channel_id)),
+                is_dm=is_dm,
+                now=prompt_now
+            )
         system_prompt = character_manager.build_system_prompt(
             character=self.character,
             user_name=target_user_name,
@@ -1196,6 +1202,7 @@ Return exactly one JSON object with this shape:
             user_name=target_user_name,
             active_users=active_users,
             other_bot_names=other_bot_names,
+            time_passage_context=time_passage_context,
             now=prompt_now
         )
 
@@ -1221,12 +1228,12 @@ Return exactly one JSON object with this shape:
             offset_minutes=reminder.get("timezone_offset_minutes"),
         )
         reminder_stage = "before the event" if stage == "pre" else "right when the event is due"
-        reminder_context = (
-            f"Scheduled reminder details:\n"
-            f"- Event: {reminder.get('event_summary')}\n"
-            f"- Delivery stage: {reminder_stage}\n"
-            f"- Reminder time: {reminder_local_display}\n"
-            f"- Current target user: {target_user_name}\n"
+        reminder_context = character_manager.build_reminder_delivery_context(
+            event_summary=reminder.get('event_summary') or "upcoming reminder",
+            reminder_stage=reminder_stage,
+            reminder_time=reminder_local_display,
+            user_name=target_user_name,
+            now=prompt_now
         )
         instruction = (
             "Write one brief in-character reminder message for the user. "
@@ -1238,7 +1245,7 @@ Return exactly one JSON object with this shape:
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
         messages_for_api.extend(immediate)
-        messages_for_api.append({"role": "system", "content": reminder_context})
+        messages_for_api.append({"role": "system", "content": reminder_context, "kind": "reminder_context"})
         messages_for_api.append({"role": "user", "content": instruction})
 
         response = await provider_manager.generate(
@@ -2106,6 +2113,13 @@ Return exactly one JSON object with this shape:
 
         timezone_context = get_timezone_context(user_id=target_user_id, bot_name=self.name)
         prompt_now = datetime.now(timezone_context["tzinfo"])
+        time_passage_context = ""
+        if runtime_config.get("time_passage_context_enabled", True):
+            time_passage_context = character_manager.build_time_passage_context(
+                build_time_passage_signal(get_history(channel_id)),
+                is_dm=is_dm,
+                now=prompt_now
+            )
 
         # Build system prompt (use target user for split replies)
         system_prompt = character_manager.build_system_prompt(
@@ -2170,6 +2184,7 @@ Return exactly one JSON object with this shape:
             other_bot_names=other_bot_names,
             mentionable_users=mentionable_users,
             mentionable_bots=mentionable_bots,
+            time_passage_context=time_passage_context,
             now=prompt_now
         )
 
@@ -2840,6 +2855,14 @@ Return exactly one JSON object with this shape:
         idle_hours = idle_seconds / 3600
         long_gap = self._is_long_gap_dm_followup(idle_seconds, timeout_mins)
         distinct_hook = self._choose_distinct_followup_memory_hook(memories, recent_topic) if long_gap else None
+        prompt_now = get_context_now(user_id=user_id, bot_name=self.name)
+        time_passage_context = ""
+        if runtime_config.get("time_passage_context_enabled", True):
+            time_passage_context = character_manager.build_time_passage_context(
+                build_idle_time_passage_signal(history, idle_seconds),
+                is_dm=True,
+                now=prompt_now
+            )
 
         rules = [
             "- Write 2-3 substantial sentences, in character.",
@@ -2864,27 +2887,28 @@ Return exactly one JSON object with this shape:
 
         rules_text = "\n".join(rules)
 
-        prompt = f"""You are {char_name}. {user_name or 'The user'} hasn't replied in a while.
-
-Silence gap: {idle_hours:.1f} hours
-
-Recent conversation:
-{context}
-
-Recent topic:
-{recent_topic}
-
-Relevant memories:
-{memories_excerpt}
-
-Rules:
-{rules_text}
-
-Your follow-up message:"""
-        system_prompt = (
-            f"You are {char_name}. Write a natural DM follow-up message. "
-            "Use normal punctuation and character cadence; never output XML, HTML, tags, speaker labels, or transcript formatting."
+        prompt = character_manager.build_dm_followup_prompt(
+            character_name=char_name,
+            user_name=user_name or "The user",
+            idle_hours=idle_hours,
+            recent_conversation=context,
+            recent_topic=recent_topic,
+            memories_excerpt=memories_excerpt,
+            rules=rules_text,
+            time_passage_context=time_passage_context,
+            now=prompt_now,
         )
+        if self.character and hasattr(self.character, "get_special_user_context"):
+            system_prompt = character_manager.build_system_prompt(
+                character=self.character,
+                user_name=user_name,
+                now=prompt_now
+            )
+        else:
+            system_prompt = (
+                f"You are {char_name}. Write a natural DM follow-up message. "
+                "Use normal punctuation and character cadence; never output XML, HTML, tags, speaker labels, or transcript formatting."
+            )
         return prompt, system_prompt
 
     async def _run_dm_followup_cycle(self, now: float | None = None) -> int:

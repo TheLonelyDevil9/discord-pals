@@ -94,6 +94,95 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             [call(5, 100, "Alice"), call(5, 101, "Bob")]
         )
 
+    async def test_build_request_context_passes_time_passage_context_when_enabled(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character_name = "firefly"
+        instance.character = types.SimpleNamespace(name="Firefly", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="parlor-car")
+        guild = types.SimpleNamespace(id=5, name="Astral Express")
+        message = types.SimpleNamespace(
+            id=1234,
+            content="How many hours ago was that?",
+            channel=channel,
+            guild=guild,
+            mentions=[],
+        )
+        history = [
+            {
+                "role": "assistant",
+                "content": "On my way now.",
+                "author": "Firefly",
+                "timestamp": "2026-04-01T10:00:00+00:00",
+            },
+            {
+                "role": "user",
+                "content": "How many hours ago was that?",
+                "author": "Invoker",
+                "user_id": 42,
+                "message_id": 1234,
+                "timestamp": "2026-04-01T15:30:00+00:00",
+            },
+        ]
+        request = {
+            "message": message,
+            "content": message.content,
+            "guild": guild,
+            "attachments": [],
+            "user_name": "Invoker",
+            "is_dm": False,
+            "user_id": 42,
+            "sticker_info": None,
+        }
+        build_chatroom_context_mock = Mock(return_value="CHATROOM")
+        runtime_values = {
+            "user_only_context": True,
+            "user_only_context_count": 20,
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": True,
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=history))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", build_chatroom_context_mock))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], [{"role": "user", "content": "Invoker: How many hours ago was that?"}]))
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+
+            context = await instance._build_request_context(request)
+
+        self.assertIsNotNone(context)
+        time_context = build_chatroom_context_mock.call_args.kwargs["time_passage_context"]
+        self.assertIn("Elapsed time: 5 hours, 30 minutes later.", time_context)
+        self.assertIn("On my way now.", time_context)
+
 
 class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_organic_response_keeps_single_newline_in_one_message_by_default(self):

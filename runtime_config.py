@@ -40,6 +40,7 @@ DEFAULTS = {
     # Context system
     "user_only_context": False,  # When True, only human user messages are sent to the AI (discards all bot/assistant messages)
     "user_only_context_count": 20,  # Last N user messages to include when user_only_context is True
+    "time_passage_context_enabled": True,  # Add elapsed-time world-state cues after long chat gaps
     # DM follow-up settings
     "dm_followup_enabled": False,  # Enable autonomous DM follow-ups after silence
     "dm_followup_timeout_minutes": 120,  # Minutes of silence before sending a follow-up

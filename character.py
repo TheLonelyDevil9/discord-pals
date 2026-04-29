@@ -11,6 +11,8 @@ from typing import Optional, Dict, List
 from config import CHARACTERS_DIR
 
 PROMPTS_DIR = "prompts"
+OTHER_PROMPTS_FILE = "other_prompts.md"
+LEGACY_CHATROOM_CONTEXT_FILE = "chatroom_context.md"
 
 # Pre-compiled regex patterns for character parsing
 RE_TITLE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
@@ -26,6 +28,87 @@ SECTION_ALIASES = {
     "special user": "special_users",
     "special users": "special_users",
 }
+
+OTHER_PROMPT_SECTION_ALIASES = {
+    "chatroom context": "chatroom_context",
+    "reminder delivery context": "reminder_delivery_context",
+    "reminder clarification": "reminder_clarification",
+    "dm follow-up": "dm_followup",
+    "dm follow up": "dm_followup",
+    "time passage context": "time_passage_context",
+}
+
+DEFAULT_OTHER_PROMPTS = """# Other Prompts
+
+## Chatroom Context
+
+Server: {{GUILD_NAME}}
+{{CURRENT_TIME_CONTEXT}}
+{{TIME_PASSAGE_CONTEXT}}
+
+{{LORE}}
+{{MEMORIES}}
+{{EMOJIS}}
+{{ACTIVE_USERS}}
+{{OTHER_BOTS}}
+
+{{MENTIONABLE_USERS}}
+{{MENTIONABLE_BOTS}}
+
+{{MENTIONED_CONTEXT}}
+
+--- CURRENT REPLY TARGET ---
+Respond exclusively to: {{USER_NAME}}
+Avoid confusing {{USER_NAME}} with other people in the chat history.
+If someone replies to another character's message, respond as {{CHARACTER_NAME}}. Only simulate one conversation at a time, and only speak as {{CHARACTER_NAME}}.
+
+## Time Passage Context
+
+<time_passage_context>
+Elapsed time: {{GAP_LABEL}}.
+This {{CONVERSATION_KIND}} has resumed after real time passed.
+Before the pause: {{BEFORE_AUTHOR}}: {{BEFORE_CONTENT}}
+After the pause: {{AFTER_AUTHOR}}: {{AFTER_CONTENT}}
+Let the world state breathe forward when it is natural. People may have arrived, settled, slept, changed tasks, changed clothes, eaten, or cooled off if the prior chat implied it.
+Infer lightly and phrase uncertainty naturally. Do not invent exact unseen events, quote this block, or present guesses as certain facts.
+</time_passage_context>
+
+## Reminder Delivery Context
+
+Scheduled reminder details:
+- Event: {{EVENT_SUMMARY}}
+- Delivery stage: {{REMINDER_STAGE}}
+- Reminder time: {{REMINDER_TIME}}
+- Current target user: {{USER_NAME}}
+
+## Reminder Clarification
+
+The user may want a reminder, but some details are missing.
+Current reminder summary: {{EVENT_SUMMARY}}
+Missing detail to clarify: {{CLARIFICATION_PROMPT}}
+Ask exactly one short clarification question in character. Do not answer anything else.
+
+## DM Follow-up
+
+You are {{CHARACTER_NAME}}. {{USER_NAME}} has not replied in a while.
+
+Silence gap: {{IDLE_HOURS}} hours
+{{TIME_PASSAGE_CONTEXT}}
+
+Recent conversation:
+{{RECENT_CONVERSATION}}
+
+Recent topic:
+{{RECENT_TOPIC}}
+
+Relevant memories:
+{{MEMORIES_EXCERPT}}
+
+Rules:
+{{RULES}}
+
+Your follow-up message:
+"""
 
 
 def _get_time_variables(now: Optional[datetime] = None) -> Dict[str, str]:
@@ -147,6 +230,17 @@ def _parse_special_user_blocks(section_body: str) -> tuple[dict[str, str], str]:
     return cleaned_users, orphan_content
 
 
+def _parse_other_prompt_sections(content: str) -> dict[str, str]:
+    """Parse named post-system prompt sections from other_prompts.md."""
+    sections = {}
+    for section_name, section_body in _extract_markdown_sections(content or ""):
+        normalized_name = _normalize_section_name(section_name)
+        canonical_name = OTHER_PROMPT_SECTION_ALIASES.get(normalized_name)
+        if canonical_name:
+            sections[canonical_name] = section_body.strip()
+    return sections
+
+
 def parse_character_content(name: str, content: str) -> "Character":
     """Parse a character markdown file into a Character object."""
     char_name = name.title()
@@ -213,6 +307,7 @@ class PromptManager:
     def __init__(self):
         self.system_template = ""
         self.chatroom_context_template = ""
+        self.other_prompt_templates: dict[str, str] = {}
         self._load_templates()
     
     def _load_templates(self):
@@ -224,12 +319,28 @@ class PromptManager:
         if os.path.exists(system_path):
             with open(system_path, 'r', encoding='utf-8') as f:
                 self.system_template = f.read()
-        
-        # Load chatroom context template (injected between history and immediate)
-        context_path = os.path.join(prompts_path, "chatroom_context.md")
+
+        # Load post-system conversation prompt templates.
+        default_sections = _parse_other_prompt_sections(DEFAULT_OTHER_PROMPTS)
+        other_prompts_path = os.path.join(prompts_path, OTHER_PROMPTS_FILE)
+        loaded_sections = {}
+        if os.path.exists(other_prompts_path):
+            with open(other_prompts_path, 'r', encoding='utf-8') as f:
+                loaded_sections = _parse_other_prompt_sections(f.read())
+
+        self.other_prompt_templates = {**default_sections, **loaded_sections}
+
+        # Compatibility fallback for older installs that only have chatroom_context.md.
+        context_path = os.path.join(prompts_path, LEGACY_CHATROOM_CONTEXT_FILE)
         if os.path.exists(context_path):
             with open(context_path, 'r', encoding='utf-8') as f:
                 self.chatroom_context_template = f.read()
+        else:
+            self.chatroom_context_template = self.other_prompt_templates.get("chatroom_context", "")
+        self._loaded_chatroom_context_template = self.chatroom_context_template
+
+        if "chatroom_context" not in loaded_sections and self.chatroom_context_template:
+            self.other_prompt_templates["chatroom_context"] = self.chatroom_context_template
     
     def reload(self):
         """Reload templates from disk."""
@@ -277,12 +388,18 @@ class PromptManager:
         other_bots: str = "",
         mentionable_users: str = "",
         mentionable_bots: str = "",
+        time_passage_context: str = "",
         now: Optional[datetime] = None
     ) -> str:
         """Build chatroom context (injected between history and immediate messages)."""
 
         # Start with template
-        context = self.chatroom_context_template
+        context = self.other_prompt_templates.get("chatroom_context") or self.chatroom_context_template
+        if (
+            self.chatroom_context_template
+            and self.chatroom_context_template != getattr(self, "_loaded_chatroom_context_template", "")
+        ):
+            context = self.chatroom_context_template
 
         # Make substitutions
         replacements = {
@@ -297,6 +414,7 @@ class PromptManager:
             "other_bots": other_bots,
             "mentionable_users": mentionable_users,
             "mentionable_bots": mentionable_bots,
+            "time_passage_context": time_passage_context,
             "current_time_context": _format_current_time_context(now),
         }
 
@@ -306,6 +424,106 @@ class PromptManager:
         context = RE_EMPTY_LINES.sub('\n\n', context)
 
         return context.strip()
+
+    def build_other_prompt(
+        self,
+        section_name: str,
+        replacements: Dict[str, str] | None = None,
+        now: Optional[datetime] = None
+    ) -> str:
+        """Render one named post-system prompt section."""
+        template = self.other_prompt_templates.get(section_name, "")
+        context = _render_template_variables(template, replacements or {}, now=now)
+        context = RE_EMPTY_LINES.sub('\n\n', context)
+        return context.strip()
+
+    def build_time_passage_context(
+        self,
+        signal: dict | None,
+        *,
+        is_dm: bool = False,
+        now: Optional[datetime] = None
+    ) -> str:
+        """Render a lightweight elapsed-time cue for post-system context."""
+        if not signal:
+            return ""
+
+        replacements = {
+            "gap_label": signal.get("gap_label", ""),
+            "conversation_kind": "DM" if is_dm else "channel conversation",
+            "before_author": signal.get("before_author", "Someone"),
+            "before_content": signal.get("before_content", ""),
+            "after_author": signal.get("after_author", "Someone"),
+            "after_content": signal.get("after_content", ""),
+        }
+        return self.build_other_prompt("time_passage_context", replacements, now=now)
+
+    def build_reminder_delivery_context(
+        self,
+        *,
+        event_summary: str,
+        reminder_stage: str,
+        reminder_time: str,
+        user_name: str,
+        now: Optional[datetime] = None
+    ) -> str:
+        """Render post-system context for in-character reminder delivery."""
+        return self.build_other_prompt(
+            "reminder_delivery_context",
+            {
+                "event_summary": event_summary,
+                "reminder_stage": reminder_stage,
+                "reminder_time": reminder_time,
+                "user_name": user_name,
+            },
+            now=now,
+        )
+
+    def build_reminder_clarification_prompt(
+        self,
+        *,
+        event_summary: str,
+        clarification_prompt: str,
+        now: Optional[datetime] = None
+    ) -> str:
+        """Render the user-visible reminder clarification instruction."""
+        return self.build_other_prompt(
+            "reminder_clarification",
+            {
+                "event_summary": event_summary or "Unknown event",
+                "clarification_prompt": clarification_prompt or "the timing",
+            },
+            now=now,
+        )
+
+    def build_dm_followup_prompt(
+        self,
+        *,
+        character_name: str,
+        user_name: str,
+        idle_hours: float,
+        recent_conversation: str,
+        recent_topic: str,
+        memories_excerpt: str,
+        rules: str,
+        time_passage_context: str = "",
+        now: Optional[datetime] = None
+    ) -> str:
+        """Render post-system prompt for autonomous DM follow-ups."""
+        return self.build_other_prompt(
+            "dm_followup",
+            {
+                "character_name": character_name,
+                "user_name": user_name or "The user",
+                "idle_hours": f"{idle_hours:.1f}",
+                "recent_conversation": recent_conversation,
+                "recent_topic": recent_topic,
+                "memories_excerpt": memories_excerpt,
+                "rules": rules,
+                "time_passage_context": time_passage_context,
+            },
+            now=now,
+        )
 
 
 class Character:
@@ -494,6 +712,7 @@ class CharacterManager:
         other_bot_names: list = None,
         mentionable_users: list = None,
         mentionable_bots: list = None,
+        time_passage_context: str = "",
         now: Optional[datetime] = None
     ) -> str:
         """Build chatroom context (injected between history and immediate).
@@ -549,8 +768,21 @@ class CharacterManager:
             other_bots=other_bots_context,
             mentionable_users=mentionable_users_context,
             mentionable_bots=mentionable_bots_context,
+            time_passage_context=time_passage_context,
             now=now
         )
+
+    def build_time_passage_context(self, signal: dict | None, *, is_dm: bool = False, now: Optional[datetime] = None) -> str:
+        return self.prompt_manager.build_time_passage_context(signal, is_dm=is_dm, now=now)
+
+    def build_reminder_delivery_context(self, **kwargs) -> str:
+        return self.prompt_manager.build_reminder_delivery_context(**kwargs)
+
+    def build_reminder_clarification_prompt(self, **kwargs) -> str:
+        return self.prompt_manager.build_reminder_clarification_prompt(**kwargs)
+
+    def build_dm_followup_prompt(self, **kwargs) -> str:
+        return self.prompt_manager.build_dm_followup_prompt(**kwargs)
 
 
 # Global instance

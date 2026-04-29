@@ -209,6 +209,8 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         prompt = generate_mock.await_args.kwargs["messages"][0]["content"]
         system_prompt = generate_mock.await_args.kwargs["system_prompt"]
         self.assertIn("do not continue the last thread directly", prompt.lower())
+        self.assertIn("Elapsed time:", prompt)
+        self.assertIn("Infer lightly", prompt)
         self.assertIn("normal punctuation", prompt.lower())
         self.assertIn("normal punctuation", system_prompt.lower())
         self.assertIn("Loves stargazing on quiet nights.", prompt)

@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.1.0] - 2026-04-29
+
+### Added
+
+- **Post-system prompt templates** - new `prompts/other_prompts.md` consolidates character-facing chatroom, reminder, DM follow-up, and time-passage prompt sections that are sent after `prompts/system.md`.
+- **Time-passage context** - channel replies, reminders, and DM follow-ups can now receive lightweight elapsed-time cues after long gaps so in-character world state can move forward without persisting guessed memories.
+- Regression coverage for post-system prompt loading/fallbacks, time-passage context, Config tab grouping, read-only system prompt handling, and DM follow-up elapsed-time prompts.
+
+### Changed
+
+- **Config dashboard** - reorganized runtime settings into Context, Prompting, Time, Automation, Providers, Performance, Maintenance, and Advanced tabs with clearer user-facing impact hints.
+- **Provider ordering** - provider fallback order can now be adjusted with reliable Up/Down controls while keeping drag reorder as a convenience loaded only on the Providers tab.
+- **Prompt editing safety** - `prompts/system.md` is read-only from the dashboard; editable character-facing prompt changes go through `prompts/other_prompts.md`.
+- **Dashboard performance** - Sortable.js is no longer loaded globally, and raw JSON editors are filled lazily when opened.
+
 ## [v2.0.4] - 2026-04-29
 
 ### Added

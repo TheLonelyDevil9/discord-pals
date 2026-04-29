@@ -189,6 +189,7 @@ RE_WORD = re.compile(r'\w+')
 RE_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
 
 _TIME_GAP_THRESHOLD_SECONDS = 30 * 60
+_TIME_PASSAGE_CONTEXT_THRESHOLD_SECONDS = 2 * 60 * 60
 
 
 def _local_timezone():
@@ -278,6 +279,78 @@ def _get_time_gap_prefix(previous_msg: Optional[dict], current_msg: Optional[dic
         return ""
 
     return f"[Time gap: {_format_time_gap(gap_seconds)}]\n"
+
+
+def _compact_history_content(value, limit: int = 180) -> str:
+    """Squash a stored message to a short single-line prompt excerpt."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "..."
+
+
+def build_time_passage_signal(
+    history: list[dict],
+    *,
+    now: datetime | None = None,
+    min_gap_seconds: float = _TIME_PASSAGE_CONTEXT_THRESHOLD_SECONDS,
+    max_scan: int = 12,
+) -> Optional[dict]:
+    """Return lightweight elapsed-time context for the most recent large history gap."""
+    if not history or len(history) < 2:
+        return None
+
+    recent = history[-max(max_scan + 1, 2):]
+    best_gap = None
+    for idx in range(1, len(recent)):
+        before = recent[idx - 1]
+        after = recent[idx]
+        before_dt = _parse_history_timestamp(before.get("timestamp"))
+        after_dt = _parse_history_timestamp(after.get("timestamp"))
+        if not before_dt or not after_dt:
+            continue
+
+        gap_seconds = (after_dt - before_dt).total_seconds()
+        if gap_seconds >= min_gap_seconds:
+            best_gap = (gap_seconds, before, after)
+
+    if not best_gap:
+        return None
+
+    gap_seconds, before, after = best_gap
+    return {
+        "gap_seconds": gap_seconds,
+        "gap_label": _format_time_gap(gap_seconds),
+        "before_author": before.get("author") or ("Assistant" if before.get("role") == "assistant" else "User"),
+        "before_content": _compact_history_content(before.get("content", "")),
+        "before_timestamp": before.get("timestamp"),
+        "after_author": after.get("author") or ("Assistant" if after.get("role") == "assistant" else "User"),
+        "after_content": _compact_history_content(after.get("content", "")),
+        "after_timestamp": after.get("timestamp"),
+    }
+
+
+def build_idle_time_passage_signal(
+    history: list[dict],
+    idle_seconds: float,
+    *,
+    min_gap_seconds: float = _TIME_PASSAGE_CONTEXT_THRESHOLD_SECONDS,
+) -> Optional[dict]:
+    """Return elapsed-time context for follow-ups where no new user message arrived."""
+    if idle_seconds < min_gap_seconds or not history:
+        return None
+
+    before = history[-1]
+    return {
+        "gap_seconds": idle_seconds,
+        "gap_label": _format_time_gap(idle_seconds),
+        "before_author": before.get("author") or ("Assistant" if before.get("role") == "assistant" else "User"),
+        "before_content": _compact_history_content(before.get("content", "")),
+        "before_timestamp": before.get("timestamp"),
+        "after_author": "No new reply",
+        "after_content": "The conversation has been quiet since then.",
+        "after_timestamp": (now := datetime.now().astimezone()).isoformat(timespec="seconds"),
+    }
 
 
 def _history_channel_path(channel_id: int) -> str:

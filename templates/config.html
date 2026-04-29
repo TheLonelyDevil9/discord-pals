@@ -5,568 +5,617 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Configuration</h1>
-    <p class="page-subtitle">Runtime settings and bot configuration</p>
+    <p class="page-subtitle">Runtime settings grouped by what they affect.</p>
 </div>
 
-<div class="config-layout">
-    <aside class="config-nav" aria-label="Configuration sections">
-        <div class="config-nav-title">Sections</div>
-        <a href="#runtime">Runtime</a>
-        {% if bots %}
-        <a href="#characters">Characters</a>
-        <a href="#scheduling">Scheduling</a>
-        <a href="#conversation">Conversation</a>
-        {% endif %}
-        <a href="#providers">Providers</a>
-        <a href="#maintenance">Maintenance</a>
-        <a href="#advanced">Advanced</a>
-    </aside>
+{% if message %}
+<div class="toast success inline-toast">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="toast error inline-toast">{{ error }}</div>
+{% endif %}
 
-    <div class="config-main">
-        <section id="runtime" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Runtime</h2>
-                    <p class="section-kicker">Context, provider selection, and request limits.</p>
-                </div>
+<div class="config-tabs" role="tablist" aria-label="Configuration sections">
+    <button type="button" class="tab active" data-config-tab="context" onclick="switchConfigTab('context')">Context</button>
+    <button type="button" class="tab" data-config-tab="prompting" onclick="switchConfigTab('prompting')">Prompting</button>
+    <button type="button" class="tab" data-config-tab="time" onclick="switchConfigTab('time')">Time</button>
+    {% if bots %}
+    <button type="button" class="tab" data-config-tab="automation" onclick="switchConfigTab('automation')">Automation</button>
+    {% endif %}
+    <button type="button" class="tab" data-config-tab="providers" onclick="switchConfigTab('providers')">Providers</button>
+    <button type="button" class="tab" data-config-tab="performance" onclick="switchConfigTab('performance')">Performance</button>
+    <button type="button" class="tab" data-config-tab="maintenance" onclick="switchConfigTab('maintenance')">Maintenance</button>
+    <button type="button" class="tab" data-config-tab="advanced" onclick="switchConfigTab('advanced')">Advanced</button>
+</div>
+
+<div class="config-main">
+    <section id="tab-context" class="config-panel active" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Context</h2>
+                <p class="section-kicker">Settings here change what the model sees before it replies.</p>
             </div>
-            <div class="section-grid">
-                <div class="card span-full">
-                    <div class="card-header">
-                        <span class="card-title">Core Settings</span>
-                    </div>
-                    <div class="card-body">
-                        <form id="config-form">
-                            <div class="settings-grid">
-                                <div class="form-group">
-                                    <label for="history_limit">History Limit</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
-                                            value="{{ config.history_limit }}"
-                                            oninput="document.getElementById('history_val').textContent = this.value"
-                                            title="Total history limit">
-                                        <span class="slider-val" id="history_val">{{ config.history_limit }}</span>
-                                    </div>
-                                    <p class="form-hint">Total messages sent to LLM (includes history + immediate)</p>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="immediate_message_count">Immediate Messages</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
-                                            step="1" value="{{ config.immediate_message_count or 5 }}"
-                                            oninput="document.getElementById('immediate_val').textContent = this.value"
-                                            title="Immediate message count">
-                                        <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
-                                    </div>
-                                    <p class="form-hint">Priority messages placed after chatroom context (legacy mode)</p>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="user_only_context">User-Only Context</label>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="user_only_context" name="user_only_context"
-                                            {% if config.user_only_context %}checked{% endif %}>
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                    <p class="form-hint">Only send human user messages to the AI. Discards all bot/assistant responses from context to prevent impersonation.</p>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="user_only_context_count">Context Messages (User-Only Mode)</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
-                                            step="1" value="{{ config.user_only_context_count or 20 }}"
-                                            oninput="document.getElementById('context_count_val').textContent = this.value"
-                                            title="Number of recent user messages to include">
-                                        <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
-                                    </div>
-                                    <p class="form-hint">Last N human user messages sent when user-only context is enabled</p>
-                                </div>
-
-                                {% if providers %}
-                                <div class="form-group">
-                                    <label for="active_provider">Active Provider</label>
-                                    <select id="active_provider" name="active_provider" title="Select AI provider">
-                                        <option value="">Auto (first available)</option>
-                                        {% for provider in providers %}
-                                        <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                {% endif %}
-                            </div>
-
-                            <button type="submit" class="btn btn-primary">Save Settings</button>
-                        </form>
-                    </div>
-                </div>
-
-                {% if bots %}
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Performance</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Global performance and rate limiting settings</p>
-
-                        <div class="form-group">
-                            <label for="concurrency_limit">Concurrency Limit</label>
-                            <div class="slider-row">
-                                <input type="range" id="concurrency_limit" min="1" max="10" step="1"
-                                    value="{{ config.concurrency_limit or 4 }}"
-                                    oninput="document.getElementById('concurrency_val').textContent = this.value"
-                                    title="Max concurrent AI requests">
-                                <span class="slider-val" id="concurrency_val">{{ config.concurrency_limit or 4 }}</span>
-                            </div>
-                            <p class="form-hint">Maximum concurrent AI requests across all bots</p>
-                        </div>
-
-                        <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
-                    </div>
-                </div>
-                {% endif %}
-            </div>
-        </section>
-
-        {% if bots %}
-        <section id="characters" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Characters</h2>
-                    <p class="section-kicker">Switch running bots and choose per-character provider tiers.</p>
-                </div>
-            </div>
-            <div class="section-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Character Switcher</span>
-                    </div>
-                    <div class="card-body">
-                        {% for bot in bots %}
-                        <div class="bot-row">
-                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-                            <div class="bot-info">
-                                <span class="bot-name">{{ bot.name }}</span>
-                                <span class="bot-character">{{ bot.character }}</span>
-                            </div>
-                            <div class="bot-actions">
-                                <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
-                                    {% for char in characters %}
-                                    <option value="{{ char }}" {% if bot.character_key == char %}selected{% endif %}>{{ char }}</option>
-                                    {% endfor %}
-                                </select>
-                                <button type="button" class="btn btn-ghost btn-sm"
-                                    onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value, this)">Switch</button>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Character Provider Preferences</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">
-                            Assign preferred provider tiers to characters. Leave as "Default" to use the standard fallback order.
-                        </p>
-                        {% for char in characters %}
-                        <div class="bot-row compact">
-                            <span class="bot-name" style="min-width: 120px;">{{ char }}</span>
-                            <select id="char-provider-{{ char }}" title="Provider tier for {{ char }}">
-                                <option value="">Default (fallback order)</option>
-                                {% for tier in provider_tiers %}
-                                <option value="{{ tier }}" {% if character_providers.get(char) == tier %}selected{% endif %}>
-                                    {{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})
-                                </option>
-                                {% endfor %}
-                            </select>
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveCharacterProvider('{{ char }}')">Save</button>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="scheduling" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Scheduling</h2>
-                    <p class="section-kicker">Timezones, DM follow-ups, and character availability windows.</p>
-                </div>
-            </div>
-            <div class="section-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">DM Follow-ups</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 12px;">When enabled, bots will send a follow-up message in DMs after a period of silence from the user.</p>
-                        <form id="dm-followup-form">
-                            <div class="settings-grid compact-grid">
-                                <div class="form-group">
-                                    <label for="dm_followup_enabled">Enable DM Follow-ups</label>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="dm_followup_enabled" name="dm_followup_enabled"
-                                            {% if config.dm_followup_enabled %}checked{% endif %}>
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="dm_followup_timeout_minutes">Timeout (minutes)</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="dm_followup_timeout_minutes" name="dm_followup_timeout_minutes" min="15" max="1440"
-                                            step="15" value="{{ config.dm_followup_timeout_minutes or 120 }}"
-                                            oninput="document.getElementById('dm_timeout_val').textContent = this.value"
-                                            title="Minutes of silence before sending follow-up">
-                                        <span class="slider-val" id="dm_timeout_val">{{ config.dm_followup_timeout_minutes or 120 }}</span>
-                                    </div>
-                                    <p class="form-hint">Minutes of silence before bot sends a follow-up</p>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="dm_followup_max_count">Max Follow-ups</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="dm_followup_max_count" name="dm_followup_max_count" min="1" max="5"
-                                            step="1" value="{{ config.dm_followup_max_count or 1 }}"
-                                            oninput="document.getElementById('dm_max_val').textContent = this.value"
-                                            title="Maximum follow-up messages">
-                                        <span class="slider-val" id="dm_max_val">{{ config.dm_followup_max_count or 1 }}</span>
-                                    </div>
-                                    <p class="form-hint">Max follow-ups before stopping (resets when user replies)</p>
-                                </div>
-
-                                <div class="form-group">
-                                    <label for="dm_followup_cooldown_hours">Cooldown (hours)</label>
-                                    <div class="slider-row">
-                                        <input type="range" id="dm_followup_cooldown_hours" name="dm_followup_cooldown_hours" min="1" max="48"
-                                            step="1" value="{{ config.dm_followup_cooldown_hours or 24 }}"
-                                            oninput="document.getElementById('dm_cooldown_val').textContent = this.value"
-                                            title="Hours between follow-up attempts">
-                                        <span class="slider-val" id="dm_cooldown_val">{{ config.dm_followup_cooldown_hours or 24 }}</span>
-                                    </div>
-                                    <p class="form-hint">Minimum hours between follow-up attempts for same user</p>
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn-primary">Save DM Settings</button>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Bot Timezones</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 16px;">
-                            Bot timezone is the fallback clock for prompts and reminders when a user has not set their own timezone.
-                        </p>
-                        {% for bot in bots %}
-                        <div class="bot-row compact">
-                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-                            <span class="bot-name">{{ bot.name }}</span>
-                            <select
-                                id="timezone-{{ bot.name }}"
-                                class="timezone-select"
-                                data-current="{{ bot.timezone or '' }}"
-                                title="Timezone for {{ bot.name }}"
-                            ></select>
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <div class="card span-full">
-                    <div class="card-header">
-                        <span class="card-title">Bot Availability Schedules</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 16px;">
-                            Mark when each character is unavailable. Autonomous responses, reminders, and DM follow-ups pause during these windows.
-                        </p>
-                        <div class="schedule-bot-list">
-                            {% for bot in bots %}
-                            {% set schedule = bot.schedule or {} %}
-                            {% set windows = schedule.unavailable if schedule.unavailable else [{}] %}
-                            <div class="schedule-bot-panel" data-bot-name="{{ bot.name }}">
-                                <div class="schedule-bot-header">
-                                    <label class="checkbox-label schedule-enabled">
-                                        <input type="checkbox" class="schedule-enabled-input" {% if schedule.enabled %}checked{% endif %}>
-                                        <span>{{ bot.name }}</span>
-                                    </label>
-                                    <div class="schedule-actions">
-                                        <button type="button" class="btn btn-ghost btn-sm" onclick="addScheduleWindow(this)">Add Window</button>
-                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveBotSchedule(this)">Save</button>
-                                    </div>
-                                </div>
-                                <div class="schedule-timezone-row">
-                                    <label>Schedule Timezone</label>
-                                    <select class="timezone-select schedule-timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
-                                </div>
-                                <div class="schedule-windows">
-                                    {% for window in windows %}
-                                    {% set selected_days = window.days if window.days else ['mon','tue','wed','thu','fri','sat','sun'] %}
-                                    <div class="schedule-window" data-schedule-window>
-                                        <select class="schedule-days" multiple title="Unavailable days for {{ bot.name }}">
-                                            {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
-                                            <option value="{{ value }}" {% if value in selected_days %}selected{% endif %}>{{ label }}</option>
-                                            {% endfor %}
-                                        </select>
-                                        <input class="schedule-start" type="time" value="{{ window.start or '22:00' }}" title="Unavailable start time">
-                                        <span class="text-muted">to</span>
-                                        <input class="schedule-end" type="time" value="{{ window.end or '08:00' }}" title="Unavailable end time">
-                                        <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
-                                    </div>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="conversation" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Conversation</h2>
-                    <p class="section-kicker">Autonomous behavior, triggers, mentions, and loop controls.</p>
-                </div>
-            </div>
-            <div class="section-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Autonomous Channels</span>
-                    </div>
-                    <div class="card-body">
-                        {% for bot in bots %}
-                        <div class="auto-section">
-                            <div class="auto-section-header">{{ bot.name }}</div>
-                            {% if bot.auto_channels %}
-                            <ul class="channel-list">
-                                {% for ch in bot.auto_channels %}
-                                <li><span class="channel-tag">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
-                                {% endfor %}
-                            </ul>
-                            {% else %}
-                            <p class="text-muted">No autonomous channels enabled</p>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Name Triggers</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Bot responds when its name/nickname is mentioned (without @mention)</p>
-
-                        <div class="form-group">
-                            <label for="name_trigger_chance">Response Chance</label>
-                            <div class="slider-row">
-                                <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
-                                    value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
-                                    oninput="document.getElementById('name_chance_val').textContent = this.value + '%'"
-                                    title="Name trigger response chance">
-                                <span class="slider-val" id="name_chance_val">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
-                            </div>
-                            <p class="form-hint">Chance to respond when bot name is mentioned</p>
-                        </div>
-
-                        <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
-
-                        <div class="section-divider"></div>
-
-                        <h4 class="subsection-title">Per-Bot Nicknames</h4>
-                        <p class="form-hint" style="margin-bottom: 16px;">Comma-separated list of additional names each bot responds to</p>
-
-                        {% for bot in bots %}
-                        <div class="bot-row compact">
-                            <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
-                            <span class="bot-name">{{ bot.name }}</span>
-                            <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
-                                placeholder="e.g., bestie, buddy" title="Nicknames for {{ bot.name }}">
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="saveNicknames('{{ bot.name }}')">Save</button>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Bot-on-Bot Fall-off</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Gradually reduce response probability in bot-to-bot conversations</p>
-
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}
-                                    onchange="saveFalloffSettings()">
-                                <span>Enable Bot Fall-off</span>
-                            </label>
-                            <p class="form-hint">Bots gradually stop responding to each other after consecutive exchanges</p>
-                        </div>
-
-                        <div class="settings-grid compact-grid">
-                            <div class="form-group">
-                                <label for="bot_falloff_base_chance">Base Chance</label>
-                                <div class="slider-row">
-                                    <input type="range" id="bot_falloff_base_chance" min="0" max="100" step="5"
-                                        value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
-                                        oninput="document.getElementById('base_chance_val').textContent = this.value + '%'"
-                                        title="Base response chance">
-                                    <span class="slider-val" id="base_chance_val">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
-                                </div>
-                                <p class="form-hint">Initial probability for first message</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="bot_falloff_decay_rate">Decay Rate</label>
-                                <div class="slider-row">
-                                    <input type="range" id="bot_falloff_decay_rate" min="0" max="50" step="5"
-                                        value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
-                                        oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'"
-                                        title="Decay rate per message">
-                                    <span class="slider-val" id="decay_rate_val">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
-                                </div>
-                                <p class="form-hint">Drop per consecutive bot message</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="bot_falloff_min_chance">Minimum Chance</label>
-                                <div class="slider-row">
-                                    <input type="range" id="bot_falloff_min_chance" min="0" max="20" step="1"
-                                        value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
-                                        oninput="document.getElementById('min_chance_val').textContent = this.value + '%'"
-                                        title="Minimum response chance">
-                                    <span class="slider-val" id="min_chance_val">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
-                                </div>
-                                <p class="form-hint">Floor probability</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="bot_falloff_hard_limit">Hard Limit</label>
-                                <div class="slider-row">
-                                    <input type="range" id="bot_falloff_hard_limit" min="3" max="25" step="1"
-                                        value="{{ config.bot_falloff_hard_limit or 10 }}"
-                                        oninput="document.getElementById('hard_limit_val').textContent = this.value"
-                                        title="Hard message limit">
-                                    <span class="slider-val" id="hard_limit_val">{{ config.bot_falloff_hard_limit or 10 }}</span>
-                                </div>
-                                <p class="form-hint">Stop responding after this many bot messages</p>
-                            </div>
-                        </div>
-
-                        <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Mention Settings</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Control how bots use @mentions in their messages</p>
-
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="allow_bot_mentions" {% if config.allow_bot_mentions is not defined or config.allow_bot_mentions %}checked{% endif %}
-                                    onchange="saveMentionSettings()">
-                                <span>Allow Bot @Mentions</span>
-                            </label>
-                            <p class="form-hint">Allow bots to generate @mentions for users in their messages</p>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="allow_bot_to_bot_mentions" {% if config.allow_bot_to_bot_mentions %}checked{% endif %}
-                                    onchange="saveMentionSettings()">
-                                <span>Allow Bot-to-Bot @Mentions</span>
-                            </label>
-                            <p class="form-hint" style="color: var(--warning, #f59e0b);">Warning: Can cause conversation loops between bots.</p>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="mention_context_limit">Mention Context Limit</label>
-                            <div class="slider-row">
-                                <input type="range" id="mention_context_limit" min="1" max="50" step="1"
-                                    value="{{ config.mention_context_limit or 10 }}"
-                                    oninput="document.getElementById('mention_context_val').textContent = this.value"
-                                    title="Max users in mention context">
-                                <span class="slider-val" id="mention_context_val">{{ config.mention_context_limit or 10 }}</span>
-                            </div>
-                            <p class="form-hint">Maximum users to include in mention context for AI</p>
-                        </div>
-
-                        <button type="button" class="btn btn-primary" onclick="saveMentionSettings()">Save Mention Settings</button>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Split Replies</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Send separate replies to multiple mentioned users</p>
-
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="split_replies_enabled" {% if config.split_replies_enabled %}checked{% endif %}
-                                    onchange="saveSplitReplySettings()">
-                                <span>Enable Split Replies</span>
-                            </label>
-                            <p class="form-hint">When multiple users are mentioned, send individual replies to each</p>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="split_replies_max_targets">Max Split Targets</label>
-                            <div class="slider-row">
-                                <input type="range" id="split_replies_max_targets" min="1" max="10" step="1"
-                                    value="{{ config.split_replies_max_targets or 5 }}"
-                                    oninput="document.getElementById('split_targets_val').textContent = this.value"
-                                    title="Max users to split replies for">
-                                <span class="slider-val" id="split_targets_val">{{ config.split_replies_max_targets or 5 }}</span>
-                            </div>
-                            <p class="form-hint">Maximum users to split replies for (prevents spam)</p>
-                        </div>
-
-                        <button type="button" class="btn btn-primary" onclick="saveSplitReplySettings()">Save Split Reply Settings</button>
-                    </div>
-                </div>
-            </div>
-        </section>
-        {% endif %}
-
-        <section id="providers" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Providers</h2>
-                    <p class="section-kicker">Model routing, fallback order, and provider credentials.</p>
-                </div>
-            </div>
-            <div class="card">
+        </div>
+        <div class="section-grid">
+            <div class="card span-full">
                 <div class="card-header">
-                    <span class="card-title">Provider Management</span>
+                    <span class="card-title">Conversation Memory Window</span>
+                    <span class="impact-pill">Changes what the bot sees</span>
                 </div>
                 <div class="card-body">
-                    <p class="form-hint" style="margin-bottom: 20px;">Drag to reorder providers. First available provider is used as fallback.</p>
+                    <form id="context-settings-form">
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label for="history_limit">History Limit</label>
+                                <div class="slider-row">
+                                    <input type="range" id="history_limit" name="history_limit" min="10" max="200" step="10"
+                                        value="{{ config.history_limit }}"
+                                        oninput="document.getElementById('history_val').textContent = this.value"
+                                        title="Total history limit">
+                                    <span class="slider-val" id="history_val">{{ config.history_limit }}</span>
+                                </div>
+                                <p class="form-hint">Normal mode only. Higher values give broader recall but increase prompt size and response latency.</p>
+                            </div>
 
-                    <div id="provider-list" class="provider-list">
-                        <!-- Populated by JavaScript -->
+                            <div class="form-group">
+                                <label for="immediate_message_count">Immediate Messages</label>
+                                <div class="slider-row">
+                                    <input type="range" id="immediate_message_count" name="immediate_message_count" min="1" max="20"
+                                        step="1" value="{{ config.immediate_message_count or 5 }}"
+                                        oninput="document.getElementById('immediate_val').textContent = this.value"
+                                        title="Immediate message count">
+                                    <span class="slider-val" id="immediate_val">{{ config.immediate_message_count or 5 }}</span>
+                                </div>
+                                <p class="form-hint">Normal mode only. These newest messages are placed after post-system context, giving them extra recency weight.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="user_only_context">User-Only Context</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="user_only_context" name="user_only_context"
+                                        {% if config.user_only_context %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">Mostly sends human messages, with small bot anchoring, to reduce personality bleed between bots.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="user_only_context_count">User-Only Message Count</label>
+                                <div class="slider-row">
+                                    <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
+                                        step="1" value="{{ config.user_only_context_count or 20 }}"
+                                        oninput="document.getElementById('context_count_val').textContent = this.value"
+                                        title="Number of recent user messages to include">
+                                    <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
+                                </div>
+                                <p class="form-hint">User-only mode only. This is the practical history size when User-Only Context is enabled.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="time_passage_context_enabled">Time-Passage Context</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="time_passage_context_enabled" name="time_passage_context_enabled"
+                                        {% if config.time_passage_context_enabled is not defined or config.time_passage_context_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">Adds a post-system cue after long gaps so scenes can move forward without saving guesses as memory.</p>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Context Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Mention Context</span>
+                    <span class="impact-pill">Changes what the bot can target</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="allow_bot_mentions" {% if config.allow_bot_mentions is not defined or config.allow_bot_mentions %}checked{% endif %}>
+                            <span>Allow Bot @Mentions</span>
+                        </label>
+                        <p class="form-hint">Lets bots see and use recent mention candidates, then converts safe @Name text to Discord mentions.</p>
                     </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="allow_bot_to_bot_mentions" {% if config.allow_bot_to_bot_mentions %}checked{% endif %}>
+                            <span>Allow Bot-to-Bot @Mentions</span>
+                        </label>
+                        <p class="form-hint">Lets bots summon other bots by mention. Keep off if bot chains get noisy.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="mention_context_limit">Mention Context Limit</label>
+                        <div class="slider-row">
+                            <input type="range" id="mention_context_limit" min="1" max="50" step="1"
+                                value="{{ config.mention_context_limit or 10 }}"
+                                oninput="document.getElementById('mention_context_val').textContent = this.value"
+                                title="Max users in mention context">
+                            <span class="slider-val" id="mention_context_val">{{ config.mention_context_limit or 10 }}</span>
+                        </div>
+                        <p class="form-hint">Higher values help name resolution in crowded channels, but add prompt clutter.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveMentionSettings()">Save Mention Settings</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Split Replies</span>
+                    <span class="impact-pill">Changes reply targeting</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="split_replies_enabled" {% if config.split_replies_enabled %}checked{% endif %}>
+                            <span>Enable Split Replies</span>
+                        </label>
+                        <p class="form-hint">When multiple people are mentioned, each target gets a separate focused context and reply.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="split_replies_max_targets">Max Split Targets</label>
+                        <div class="slider-row">
+                            <input type="range" id="split_replies_max_targets" min="1" max="10" step="1"
+                                value="{{ config.split_replies_max_targets or 5 }}"
+                                oninput="document.getElementById('split_targets_val').textContent = this.value"
+                                title="Max users to split replies for">
+                            <span class="slider-val" id="split_targets_val">{{ config.split_replies_max_targets or 5 }}</span>
+                        </div>
+                        <p class="form-hint">Higher values can multiply model calls for one Discord message.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveSplitReplySettings()">Save Split Reply Settings</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tab-prompting" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Prompting</h2>
+                <p class="section-kicker">System prompt is read-only here; editable guidance goes into post-system prompts.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            {% if bots %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Character Switcher</span>
+                    <span class="impact-pill">Changes active persona</span>
+                </div>
+                <div class="card-body">
+                    {% for bot in bots %}
+                    <div class="bot-row">
+                        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                        <div class="bot-info">
+                            <span class="bot-name">{{ bot.name }}</span>
+                            <span class="text-muted">{{ bot.character }}</span>
+                        </div>
+                        <div class="bot-actions">
+                            <select id="char-{{ bot.name }}" title="Select character for {{ bot.name }}">
+                                {% for char in characters %}
+                                <option value="{{ char }}" {% if bot.character_key == char %}selected{% endif %}>{{ char }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="button" class="btn btn-ghost btn-sm"
+                                onclick="switchCharacter('{{ bot.name }}', document.getElementById('char-{{ bot.name }}').value, this)">Switch</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Message Formatting</span>
+                    <span class="impact-pill">Changes provider payload shape</span>
+                </div>
+                <div class="card-body">
+                    <form id="prompt-settings-form">
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="use_single_user" {% if config.use_single_user %}checked{% endif %}>
+                                <span>Single User Mode</span>
+                            </label>
+                            <p class="form-hint">Folds system, post-system context, and chat into one user-style message for providers that behave better that way.</p>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Prompting Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">prompts/system.md (read only)</span>
+                    <span class="impact-pill">Read only</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 12px;">This is `prompts/system.md`. The dashboard does not edit it.</p>
+                    <textarea class="prompt-textarea prompt-readonly" readonly spellcheck="false" title="Read-only system prompt">{{- system_content -}}</textarea>
+                </div>
+            </div>
+
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Other Prompts</span>
+                    <span class="impact-pill">Sent after system.md</span>
+                </div>
+                <div class="card-body">
+                    <form action="/prompts/other/save" method="post">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <textarea name="content" class="prompt-textarea" spellcheck="false" title="Post-system prompt templates">{{- other_prompts_content -}}</textarea>
+                        <div class="editor-actions">
+                            <button type="submit" class="btn btn-primary">Save Other Prompts</button>
+                            <a href="/characters" class="btn btn-ghost">Open Character Preview</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tab-time" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Time</h2>
+                <p class="section-kicker">Timezones, availability windows, and silence-based DM follow-ups.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            {% if bots %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Bot Timezones</span>
+                    <span class="impact-pill">Changes time context</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Used as the fallback clock for prompts and reminders when a user has no personal timezone.</p>
+                    {% for bot in bots %}
+                    <div class="bot-row compact">
+                        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                        <span class="bot-name">{{ bot.name }}</span>
+                        <select id="timezone-{{ bot.name }}" class="timezone-select" data-current="{{ bot.timezone or '' }}" title="Timezone for {{ bot.name }}"></select>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">DM Follow-ups</span>
+                    <span class="impact-pill">Creates extra DM calls</span>
+                </div>
+                <div class="card-body">
+                    <form id="dm-followup-form">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="dm_followup_enabled">Enable DM Follow-ups</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="dm_followup_enabled" name="dm_followup_enabled"
+                                        {% if config.dm_followup_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">After a user goes quiet in DMs, the bot can send a low-pressure follow-up.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_followup_timeout_minutes">Timeout (minutes)</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_followup_timeout_minutes" name="dm_followup_timeout_minutes" min="15" max="1440"
+                                        step="15" value="{{ config.dm_followup_timeout_minutes or 120 }}"
+                                        oninput="document.getElementById('dm_timeout_val').textContent = this.value"
+                                        title="Minutes of silence before sending follow-up">
+                                    <span class="slider-val" id="dm_timeout_val">{{ config.dm_followup_timeout_minutes or 120 }}</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_followup_max_count">Max Follow-ups</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_followup_max_count" name="dm_followup_max_count" min="1" max="5"
+                                        step="1" value="{{ config.dm_followup_max_count or 1 }}"
+                                        oninput="document.getElementById('dm_max_val').textContent = this.value"
+                                        title="Maximum follow-up messages">
+                                    <span class="slider-val" id="dm_max_val">{{ config.dm_followup_max_count or 1 }}</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_followup_cooldown_hours">Cooldown (hours)</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_followup_cooldown_hours" name="dm_followup_cooldown_hours" min="1" max="48"
+                                        step="1" value="{{ config.dm_followup_cooldown_hours or 24 }}"
+                                        oninput="document.getElementById('dm_cooldown_val').textContent = this.value"
+                                        title="Hours between follow-up attempts">
+                                    <span class="slider-val" id="dm_cooldown_val">{{ config.dm_followup_cooldown_hours or 24 }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save DM Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Bot Availability Schedules</span>
+                    <span class="impact-pill">Changes when bots act</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Unavailable windows pause autonomous responses, reminders, and DM follow-ups.</p>
+                    <div class="schedule-bot-list">
+                        {% for bot in bots %}
+                        {% set schedule = bot.schedule or {} %}
+                        {% set windows = schedule.unavailable if schedule.unavailable else [{}] %}
+                        <div class="schedule-bot-panel" data-bot-name="{{ bot.name }}">
+                            <div class="schedule-bot-header">
+                                <label class="checkbox-label schedule-enabled">
+                                    <input type="checkbox" class="schedule-enabled-input" {% if schedule.enabled %}checked{% endif %}>
+                                    <span>{{ bot.name }}</span>
+                                </label>
+                                <div class="schedule-actions">
+                                    <button type="button" class="btn btn-ghost btn-sm" onclick="addScheduleWindow(this)">Add Window</button>
+                                    <button type="button" class="btn btn-primary btn-sm" onclick="saveBotSchedule(this)">Save</button>
+                                </div>
+                            </div>
+                            <div class="schedule-timezone-row">
+                                <label>Schedule Timezone</label>
+                                <select class="timezone-select schedule-timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
+                            </div>
+                            <div class="schedule-windows">
+                                {% for window in windows %}
+                                {% set selected_days = window.days if window.days else ['mon','tue','wed','thu','fri','sat','sun'] %}
+                                <div class="schedule-window" data-schedule-window>
+                                    <select class="schedule-days" multiple title="Unavailable days for {{ bot.name }}">
+                                        {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
+                                        <option value="{{ value }}" {% if value in selected_days %}selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <input class="schedule-start" type="time" value="{{ window.start or '22:00' }}" title="Unavailable start time">
+                                    <span class="text-muted">to</span>
+                                    <input class="schedule-end" type="time" value="{{ window.end or '08:00' }}" title="Unavailable end time">
+                                    <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="card span-full"><div class="empty">No bots are loaded.</div></div>
+            {% endif %}
+        </div>
+    </section>
+
+    {% if bots %}
+    <section id="tab-automation" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Automation</h2>
+                <p class="section-kicker">Settings here change when bots decide to respond.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Autonomous Channels</span>
+                    <span class="impact-pill">Channel-level</span>
+                </div>
+                <div class="card-body">
+                    {% for bot in bots %}
+                    <div class="auto-section">
+                        <div class="auto-section-header">{{ bot.name }}</div>
+                        {% if bot.auto_channels %}
+                        <ul class="channel-list">
+                            {% for ch in bot.auto_channels %}
+                            <li><span class="channel-tag">#{{ ch.name }}</span> <span class="text-muted">in {{ ch.guild }}</span></li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="text-muted">No autonomous channels enabled</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Name Triggers</span>
+                    <span class="impact-pill">Changes response chance</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="name_trigger_chance">Response Chance</label>
+                        <div class="slider-row">
+                            <input type="range" id="name_trigger_chance" name="name_trigger_chance" min="0" max="100" step="5"
+                                value="{{ (config.name_trigger_chance or 1.0) * 100 | int }}"
+                                oninput="document.getElementById('name_chance_val').textContent = this.value + '%'"
+                                title="Name trigger response chance">
+                            <span class="slider-val" id="name_chance_val">{{ ((config.name_trigger_chance or 1.0) * 100) | int }}%</span>
+                        </div>
+                        <p class="form-hint">Lower this if bots respond too eagerly to nicknames.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveNameTriggerSettings()">Save Chance</button>
 
                     <div class="section-divider"></div>
+                    <h4 class="subsection-title">Per-Bot Nicknames</h4>
+                    {% for bot in bots %}
+                    <div class="bot-row compact">
+                        <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
+                        <span class="bot-name">{{ bot.name }}</span>
+                        <input type="text" id="nicknames-{{ bot.name }}" value="{{ bot.nicknames or '' }}"
+                            placeholder="e.g., bestie, buddy" title="Nicknames for {{ bot.name }}">
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveNicknames('{{ bot.name }}')">Save</button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
 
-                    <h4 class="subsection-title">Add New Provider</h4>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Bot-on-Bot Fall-off</span>
+                    <span class="impact-pill">Loop control</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="bot_falloff_enabled" {% if config.bot_falloff_enabled is not defined or config.bot_falloff_enabled %}checked{% endif %}>
+                            <span>Enable Bot Fall-off</span>
+                        </label>
+                        <p class="form-hint">Gradually lowers bot-to-bot response probability across consecutive bot messages.</p>
+                    </div>
+                    <div class="settings-grid compact-grid">
+                        <div class="form-group">
+                            <label for="bot_falloff_base_chance">Base Chance</label>
+                            <div class="slider-row">
+                                <input type="range" id="bot_falloff_base_chance" min="0" max="100" step="5"
+                                    value="{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}"
+                                    oninput="document.getElementById('base_chance_val').textContent = this.value + '%'"
+                                    title="Base response chance">
+                                <span class="slider-val" id="base_chance_val">{{ ((config.bot_falloff_base_chance or 0.8) * 100) | int }}%</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="bot_falloff_decay_rate">Decay Rate</label>
+                            <div class="slider-row">
+                                <input type="range" id="bot_falloff_decay_rate" min="0" max="50" step="5"
+                                    value="{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}"
+                                    oninput="document.getElementById('decay_rate_val').textContent = this.value + '%'"
+                                    title="Decay rate per message">
+                                <span class="slider-val" id="decay_rate_val">{{ ((config.bot_falloff_decay_rate or 0.15) * 100) | int }}%</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="bot_falloff_min_chance">Minimum Chance</label>
+                            <div class="slider-row">
+                                <input type="range" id="bot_falloff_min_chance" min="0" max="20" step="1"
+                                    value="{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}"
+                                    oninput="document.getElementById('min_chance_val').textContent = this.value + '%'"
+                                    title="Minimum response chance">
+                                <span class="slider-val" id="min_chance_val">{{ ((config.bot_falloff_min_chance or 0.05) * 100) | int }}%</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="bot_falloff_hard_limit">Hard Limit</label>
+                            <div class="slider-row">
+                                <input type="range" id="bot_falloff_hard_limit" min="3" max="25" step="1"
+                                    value="{{ config.bot_falloff_hard_limit or 10 }}"
+                                    oninput="document.getElementById('hard_limit_val').textContent = this.value"
+                                    title="Hard message limit">
+                                <span class="slider-val" id="hard_limit_val">{{ config.bot_falloff_hard_limit or 10 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveFalloffSettings()">Save Fall-off Settings</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Global Bot Interactions</span>
+                    <span class="impact-pill">Changes when bots act</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="bot_interactions_paused" {% if config.bot_interactions_paused %}checked{% endif %}>
+                            <span>Pause Bot-to-Bot Conversations</span>
+                        </label>
+                        <p class="form-hint">Stops bots from replying to other bots while keeping human-triggered responses available.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveAutomationSettings()">Save Automation Settings</button>
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section id="tab-providers" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Providers</h2>
+                <p class="section-kicker">Model routing, fallback order, and per-character preferences.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Provider Order</span>
+                    <span class="impact-pill">Changes model fallback</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Use Up/Down for reliable ordering on desktop and mobile. Drag is available when supported.</p>
+                    <div id="provider-list" class="provider-list" data-deferred="true">
+                        <p class="text-muted">Open this tab to load providers.</p>
+                    </div>
+                    <details class="config-editor provider-json-details">
+                        <summary>Advanced: Edit providers.json directly</summary>
+                        <form action="/settings/providers/save" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <textarea name="content" id="providers-json-editor" class="json-editor lazy-json" data-raw="{{ providers_raw|e }}" spellcheck="false" title="Providers JSON configuration"></textarea>
+                            <div class="editor-actions">
+                                <button type="submit" class="btn btn-primary">Save JSON</button>
+                                <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                            </div>
+                        </form>
+                    </details>
+                </div>
+            </div>
+
+            {% if providers %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Active Provider Field</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">This dashboard field is reserved. Actual generation order follows provider order and character preferences.</p>
+                    <div class="form-group">
+                        <label for="active_provider">Active Provider</label>
+                        <select id="active_provider" name="active_provider" title="Select AI provider">
+                            <option value="">Auto (first available)</option>
+                            {% for provider in providers %}
+                            <option value="{{ provider }}" {% if config.active_provider==provider %}selected{% endif %}>{{ provider }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveProviderRuntimeSettings()">Save Provider Field</button>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if bots %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Character Provider Preferences</span>
+                </div>
+                <div class="card-body">
+                    {% for char in characters %}
+                    <div class="bot-row compact">
+                        <span class="bot-name" style="min-width: 120px;">{{ char }}</span>
+                        <select id="char-provider-{{ char }}" title="Provider tier for {{ char }}">
+                            <option value="">Default (fallback order)</option>
+                            {% for tier in provider_tiers %}
+                            <option value="{{ tier }}" {% if character_providers.get(char) == tier %}selected{% endif %}>
+                                {{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveCharacterProvider('{{ char }}')">Save</button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Add Provider</span>
+                </div>
+                <div class="card-body">
                     <form id="add-provider-form" class="provider-form">
                         <div class="settings-grid">
                             <div class="form-group">
@@ -580,227 +629,177 @@
                                     <option value="local">Local / Custom</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="new-provider-name">Display Name</label>
-                                <input type="text" id="new-provider-name" placeholder="e.g., GPT-4o" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-endpoint">API Endpoint</label>
-                                <input type="text" id="new-provider-endpoint" placeholder="https://api.openai.com/v1">
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-key">API Key</label>
-                                <input type="password" id="new-provider-key" placeholder="sk-...">
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-model">Model</label>
-                                <input type="text" id="new-provider-model" placeholder="gpt-4o">
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-temp">Temperature</label>
-                                <input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7">
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-timeout">Timeout (seconds, optional)</label>
-                                <input type="number" id="new-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
-                            </div>
+                            <div class="form-group"><label for="new-provider-name">Display Name</label><input type="text" id="new-provider-name" required></div>
+                            <div class="form-group"><label for="new-provider-endpoint">API Endpoint</label><input type="text" id="new-provider-endpoint"></div>
+                            <div class="form-group"><label for="new-provider-key">API Key</label><input type="password" id="new-provider-key"></div>
+                            <div class="form-group"><label for="new-provider-model">Model</label><input type="text" id="new-provider-model"></div>
+                            <div class="form-group"><label for="new-provider-temp">Temperature</label><input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7"></div>
+                            <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
                             <div class="form-group" id="new-openrouter-group" style="display:none;">
                                 <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
-                                <textarea id="new-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
-                                    placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
-                                <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
+                                <textarea id="new-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
                             </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Add Provider</button>
                     </form>
+                </div>
+            </div>
+        </div>
+    </section>
 
-                    <div class="section-divider"></div>
+    <section id="tab-performance" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Performance</h2>
+                <p class="section-kicker">Throughput controls and dashboard cost notes.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Request Throughput</span>
+                    <span class="impact-pill">Changes concurrency</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="concurrency_limit">Concurrency Limit</label>
+                        <div class="slider-row">
+                            <input type="range" id="concurrency_limit" min="1" max="10" step="1"
+                                value="{{ config.concurrency_limit or 4 }}"
+                                oninput="document.getElementById('concurrency_val').textContent = this.value"
+                                title="Max concurrent AI requests">
+                            <span class="slider-val" id="concurrency_val">{{ config.concurrency_limit or 4 }}</span>
+                        </div>
+                        <p class="form-hint">Higher values can answer bursts faster but may hit provider rate limits.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveConcurrencySettings()">Save Performance Settings</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Dashboard Footprint</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint">Provider drag support loads only on the Providers tab. Raw JSON editors fill only when opened. Logs and context polling stay paused outside their active views.</p>
+                </div>
+            </div>
+        </div>
+    </section>
 
-                    <details class="config-editor">
-                        <summary>Advanced: Edit JSON directly</summary>
-                        <form action="/settings/providers/save" method="POST">
+    <section id="tab-maintenance" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Maintenance</h2>
+                <p class="section-kicker">Sync status and portable backups.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            {% if bots %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Slash Command Sync</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Bot invites still need the <code>applications.commands</code> scope.</p>
+                    {% for status in command_sync_statuses %}
+                    <div class="auto-section">
+                        <div class="auto-section-header">{{ status.bot_name }}</div>
+                        <p class="form-hint">Last attempt: {{ status.last_attempt_at or 'Never' }} | Last success: {{ status.last_success_at or 'Never' }}</p>
+                        <p class="form-hint">Global sync: {% if status.global.ok %}OK ({{ status.global.count }} entries){% else %}Failed{% if status.global.error %}: {{ status.global.error }}{% endif %}{% endif %}</p>
+                        <p class="form-hint">
+                            User-facing:
+                            {% if status.audiences.user %}
+                                {% for name in status.audiences.user %}<code>/{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+                            {% else %}none{% endif %}
+                        </p>
+                        {% if status.guilds %}
+                        <ul class="channel-list">
+                            {% for guild in status.guilds %}
+                            <li><span class="channel-tag">{{ guild.name }}</span> <span class="text-muted">{% if guild.ok %}synced {{ guild.count }} entries{% else %}sync failed{% if guild.error %}: {{ guild.error }}{% endif %}{% endif %}</span></li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Export / Import</span>
+                </div>
+                <div class="card-body">
+                    <div class="export-import-row">
+                        <a href="/settings/export" class="btn btn-primary">Export Config</a>
+                        <form action="/settings/import" method="post" enctype="multipart/form-data" class="import-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <textarea name="content" id="providers-json-editor" class="json-editor" spellcheck="false" title="Providers JSON configuration">{{ providers_raw }}</textarea>
+                            <input type="file" name="config_zip" accept=".zip" title="Select config ZIP file">
+                            <button type="submit" class="btn btn-ghost">Import</button>
+                        </form>
+                    </div>
+                    <p class="form-hint">Exports providers.json, bots.json, and autonomous.json.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tab-advanced" class="config-panel" data-config-panel>
+        <div class="section-heading">
+            <div>
+                <h2 class="section-title">Advanced</h2>
+                <p class="section-kicker">Raw files and diagnostics.</p>
+            </div>
+        </div>
+        <div class="section-grid">
+            {% if bots %}
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Debug Settings</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %} onchange="toggleRawLogging(this.checked)">
+                            <span>Enable Raw Generation Logging</span>
+                        </label>
+                        <p class="form-hint">Shows raw provider text in Logs. Leave off unless diagnosing response cleanup.</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Configuration Files</span>
+                </div>
+                <div class="card-body">
+                    <details class="config-editor">
+                        <summary>bots.json</summary>
+                        <form action="/settings/bots/save" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <textarea name="content" class="json-editor lazy-json" data-raw="{{ bots_raw|e }}" spellcheck="false" title="Bots JSON configuration"></textarea>
                             <div class="editor-actions">
-                                <button type="submit" class="btn btn-primary">Save JSON</button>
+                                <button type="submit" class="btn btn-primary">Save</button>
+                                <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
+                            </div>
+                        </form>
+                    </details>
+                    <details class="config-editor">
+                        <summary>autonomous.json</summary>
+                        <form action="/settings/autonomous/save" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <textarea name="content" class="json-editor lazy-json" data-raw="{{ autonomous_raw|e }}" spellcheck="false" title="Autonomous JSON configuration"></textarea>
+                            <div class="editor-actions">
+                                <button type="submit" class="btn btn-primary">Save</button>
                                 <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
                             </div>
                         </form>
                     </details>
                 </div>
             </div>
-        </section>
-
-        <section id="maintenance" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Maintenance</h2>
-                    <p class="section-kicker">Sync status and portable configuration backups.</p>
-                </div>
-            </div>
-            <div class="section-grid">
-                {% if bots %}
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Slash Command Sync</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 16px;">
-                            Commands are globally synced and then copied into connected guilds for faster visibility. Your bot invite still needs the
-                            <code>applications.commands</code> scope.
-                        </p>
-                        {% for status in command_sync_statuses %}
-                        <div class="auto-section">
-                            <div class="auto-section-header">{{ status.bot_name }}</div>
-                            <p class="form-hint">
-                                Last attempt: {{ status.last_attempt_at or 'Never' }} |
-                                Last success: {{ status.last_success_at or 'Never' }}
-                            </p>
-                            <p class="form-hint">
-                                Global sync:
-                                {% if status.global.ok %}
-                                OK ({{ status.global.count }} entries)
-                                {% else %}
-                                Failed{% if status.global.error %}: {{ status.global.error }}{% endif %}
-                                {% endif %}
-                            </p>
-                            <p class="form-hint">
-                                User-facing:
-                                {% if status.audiences.user %}
-                                    {% for name in status.audiences.user %}
-                                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
-                                    {% endfor %}
-                                {% else %}
-                                none
-                                {% endif %}
-                            </p>
-                            <p class="form-hint">
-                                Maintenance:
-                                {% if status.audiences.maintenance %}
-                                    {% for name in status.audiences.maintenance %}
-                                    <code>/{{ name }}</code>{% if not loop.last %}, {% endif %}
-                                    {% endfor %}
-                                {% else %}
-                                none
-                                {% endif %}
-                            </p>
-                            {% if status.grouped_subcommands %}
-                            <ul class="channel-list">
-                                {% for group_name, subcommands in status.grouped_subcommands.items() %}
-                                <li>
-                                    <span class="channel-tag">/{{ group_name }}</span>
-                                    <span class="text-muted">{{ subcommands|join(', ') }}</span>
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            {% endif %}
-                            {% if status.guilds %}
-                            <ul class="channel-list">
-                                {% for guild in status.guilds %}
-                                <li>
-                                    <span class="channel-tag">{{ guild.name }}</span>
-                                    <span class="text-muted">
-                                        {% if guild.ok %}
-                                        synced {{ guild.count }} entries
-                                        {% else %}
-                                        sync failed{% if guild.error %}: {{ guild.error }}{% endif %}
-                                        {% endif %}
-                                    </span>
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            {% else %}
-                            <p class="text-muted">No guild sync results recorded yet.</p>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
-
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Export / Import</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="export-import-row">
-                            <a href="/settings/export" class="btn btn-primary">Export Config</a>
-                            <form action="/settings/import" method="post" enctype="multipart/form-data" class="import-form">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <input type="file" name="config_zip" accept=".zip" title="Select config ZIP file">
-                                <button type="submit" class="btn btn-ghost">Import</button>
-                            </form>
-                        </div>
-                        <p class="form-hint">Export/import providers.json, bots.json, autonomous.json</p>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="advanced" class="config-section">
-            <div class="section-heading">
-                <div>
-                    <h2 class="section-title">Advanced</h2>
-                    <p class="section-kicker">Diagnostics and raw configuration files.</p>
-                </div>
-            </div>
-            <div class="section-grid">
-                {% if bots %}
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Debug Settings</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="raw_generation_logging" {% if config.raw_generation_logging %}checked{% endif %}
-                                    onchange="toggleRawLogging(this.checked)">
-                                <span>Enable Raw Generation Logging</span>
-                            </label>
-                            <p class="form-hint">Log raw LLM output to live logs page (shows as [RAW-GEN] entries)</p>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-
-                <div class="card span-full">
-                    <div class="card-header">
-                        <span class="card-title">Configuration Files</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="form-hint" style="margin-bottom: 20px;">Edit JSON configuration files directly. Changes require a restart.</p>
-
-                        <details class="config-editor">
-                            <summary>bots.json</summary>
-                            <form action="/settings/bots/save" method="POST">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <textarea name="content" class="json-editor" spellcheck="false" title="Bots JSON configuration">{{ bots_raw }}</textarea>
-                                <div class="editor-actions">
-                                    <button type="submit" class="btn btn-primary">Save</button>
-                                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                                </div>
-                            </form>
-                        </details>
-
-                        <details class="config-editor">
-                            <summary>autonomous.json</summary>
-                            <form action="/settings/autonomous/save" method="POST">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <textarea name="content" class="json-editor" spellcheck="false" title="Autonomous JSON configuration">{{ autonomous_raw }}</textarea>
-                                <div class="editor-actions">
-                                    <button type="submit" class="btn btn-primary">Save</button>
-                                    <button type="button" class="btn btn-ghost" onclick="formatJSON(this.form.content)">Format</button>
-                                </div>
-                            </form>
-                        </details>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </div>
+        </div>
+    </section>
 </div>
 
-<!-- Edit Provider Modal -->
 <div id="edit-provider-modal" class="modal-overlay">
     <div class="modal-content">
         <div class="modal-header">
@@ -810,42 +809,19 @@
         <form id="edit-provider-form" class="provider-form">
             <input type="hidden" id="edit-provider-index">
             <div class="settings-grid">
-                <div class="form-group">
-                    <label for="edit-provider-name">Display Name</label>
-                    <input type="text" id="edit-provider-name" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-endpoint">API Endpoint</label>
-                    <input type="text" id="edit-provider-endpoint" placeholder="https://api.openai.com/v1">
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-key">API Key</label>
-                    <input type="password" id="edit-provider-key" placeholder="Leave blank to keep current">
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-model">Model</label>
-                    <input type="text" id="edit-provider-model">
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-temp">Temperature</label>
-                    <input type="number" id="edit-provider-temp" min="0" max="2" step="0.1">
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-max-tokens">Max Tokens (optional)</label>
-                    <input type="number" id="edit-provider-max-tokens" min="1" placeholder="Leave blank for default">
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-timeout">Timeout (seconds, optional)</label>
-                    <input type="number" id="edit-provider-timeout" min="5" max="3600" placeholder="Leave blank for global default">
-                </div>
+                <div class="form-group"><label for="edit-provider-name">Display Name</label><input type="text" id="edit-provider-name" required></div>
+                <div class="form-group"><label for="edit-provider-endpoint">API Endpoint</label><input type="text" id="edit-provider-endpoint"></div>
+                <div class="form-group"><label for="edit-provider-key">API Key</label><input type="password" id="edit-provider-key" placeholder="Leave blank to keep current"></div>
+                <div class="form-group"><label for="edit-provider-model">Model</label><input type="text" id="edit-provider-model"></div>
+                <div class="form-group"><label for="edit-provider-temp">Temperature</label><input type="number" id="edit-provider-temp" min="0" max="2" step="0.1"></div>
+                <div class="form-group"><label for="edit-provider-max-tokens">Max Tokens (optional)</label><input type="number" id="edit-provider-max-tokens" min="1"></div>
+                <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
                 <div class="form-group" id="edit-openrouter-group" style="display:none;">
                     <label for="edit-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
-                    <textarea id="edit-provider-openrouter" rows="4" style="font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 0.8125rem; resize: vertical;"
-                        placeholder='{"provider": {"order": ["anthropic"]}, "transforms": ["middle-out"]}'></textarea>
-                    <p class="form-hint">Provider routing, model fallbacks, transforms. Merged into request body for OpenRouter providers.</p>
+                    <textarea id="edit-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
                 </div>
             </div>
-            <div style="display: flex; gap: 12px; margin-top: 16px;">
+            <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
                 <button type="button" class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
             </div>
@@ -853,486 +829,89 @@
     </div>
 </div>
 
-{% if message %}
-<div class="toast success" style="position: static; margin-bottom: 20px;">{{ message }}</div>
-{% endif %}
-{% if error %}
-<div class="toast error" style="position: static; margin-bottom: 20px;">{{ error }}</div>
-{% endif %}
-
 <style>
-/* Page Header */
-.page-header {
-    margin-bottom: 32px;
-}
-
-.page-title {
-    font-size: 1.875rem;
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    margin-bottom: 4px;
-}
-
-.page-subtitle {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-}
-
-/* Config Layout */
-.config-layout {
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    gap: 24px;
-    align-items: start;
-}
-
-.config-nav {
-    position: sticky;
-    top: 88px;
+.page-header { margin-bottom: 24px; }
+.page-title { font-size: 1.875rem; font-weight: 600; margin-bottom: 4px; }
+.page-subtitle { color: var(--text-muted); font-size: 0.875rem; }
+.inline-toast { position: static; margin-bottom: 16px; display: inline-block; }
+.config-tabs {
     display: flex;
-    flex-direction: column;
     gap: 4px;
-    padding: 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-}
-
-.config-nav-title {
-    color: var(--text-muted);
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 6px 8px;
-}
-
-.config-nav a {
-    color: var(--text-secondary);
-    text-decoration: none;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    padding: 8px 10px;
-    border-radius: 6px;
-}
-
-.config-nav a:hover {
-    color: var(--text-primary);
-    background: var(--bg-tertiary);
-}
-
-.config-main {
-    min-width: 0;
-}
-
-.config-section {
-    scroll-margin-top: 88px;
-    margin-bottom: 36px;
-}
-
-.config-section:last-child {
-    margin-bottom: 0;
-}
-
-.config-section .card {
-    margin-bottom: 0;
-}
-
-.section-heading {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 14px;
-}
-
-.section-title {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.section-kicker {
-    color: var(--text-muted);
-    font-size: 0.8125rem;
-    margin-top: 2px;
-}
-
-.section-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-}
-
-.span-full {
-    grid-column: 1 / -1;
-}
-
-/* Settings Grid */
-.settings-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 24px;
+    overflow-x: auto;
+    padding-bottom: 1px;
     margin-bottom: 24px;
-}
-
-.settings-grid.compact-grid {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-/* Form Elements */
-.form-group {
-    margin-bottom: 20px;
-}
-
-.form-group:last-child {
-    margin-bottom: 0;
-}
-
-.form-group label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
-}
-
-.form-hint {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    margin-top: 6px;
-}
-
-.slider-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.slider-val {
-    min-width: 48px;
-    text-align: right;
-    font-weight: 500;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-}
-
-input[type="range"] {
-    flex: 1;
-    height: 6px;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-    outline: none;
-    -webkit-appearance: none;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-}
-
-input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    border: none;
-}
-
-select {
-    padding: 8px 12px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-family: inherit;
-    font-size: 0.875rem;
-}
-
-select:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
-/* Checkbox */
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
-}
-
-.checkbox-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent);
-}
-
-.checkbox-label span {
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-/* Bot Row */
-.bot-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: var(--bg-primary);
-    border-radius: 8px;
-    margin-bottom: 12px;
-}
-
-.bot-row:last-child {
-    margin-bottom: 0;
-}
-
-.bot-row.compact {
-    padding: 10px 12px;
-}
-
-.bot-row.compact input[type="text"],
-.bot-row.compact select {
-    flex: 1;
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-family: inherit;
-    font-size: 0.875rem;
-}
-
-.bot-row.compact input[type="text"]:focus,
-.bot-row.compact select:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
-.schedule-bot-list {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.schedule-bot-panel {
-    padding: 14px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-}
-
-.schedule-bot-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-}
-
-.schedule-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-}
-
-.schedule-timezone-row {
-    display: grid;
-    grid-template-columns: minmax(130px, 0.4fr) minmax(240px, 1fr);
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 12px;
-}
-
-.schedule-timezone-row label,
-.schedule-enabled {
-    margin: 0;
-}
-
-.schedule-windows {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.schedule-window {
-    display: grid;
-    grid-template-columns: minmax(140px, 1fr) 120px auto 120px auto;
-    gap: 10px;
-    align-items: center;
-}
-
-.schedule-window input[type="time"],
-.schedule-window select,
-.schedule-timezone-row select {
-    min-width: 0;
-    background: var(--bg-secondary);
-}
-
-.schedule-days {
-    min-height: 112px;
-}
-
-.status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.status-dot.online {
-    background: var(--success);
-}
-
-.status-dot.offline {
-    background: var(--text-muted);
-}
-
-.bot-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.bot-name {
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.bot-character {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.bot-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-/* Auto Section */
-.auto-section {
-    padding: 16px;
-    background: var(--bg-primary);
-    border-radius: 8px;
-    margin-bottom: 12px;
-}
-
-.auto-section:last-child {
-    margin-bottom: 0;
-}
-
-.auto-section-header {
-    font-weight: 600;
-    color: var(--accent);
-    margin-bottom: 12px;
-    font-size: 0.875rem;
-}
-
-.channel-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.channel-list li {
-    padding: 6px 0;
-    font-size: 0.875rem;
-}
-
-.channel-tag {
-    color: var(--accent);
-    font-weight: 500;
-}
-
-.text-muted {
-    color: var(--text-muted);
-}
-
-/* Section Divider */
-.section-divider {
-    height: 1px;
-    background: var(--border-subtle);
-    margin: 24px 0;
-}
-
-.subsection-title {
-    font-size: 0.875rem;
-    font-weight: 600;
-    margin-bottom: 8px;
-    color: var(--text-primary);
-}
-
-/* Export/Import */
-.export-import-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
-}
-
-.import-form {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.import-form input[type="file"] {
-    padding: 8px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-size: 0.875rem;
-}
-
-/* JSON Editor */
-.config-editor {
-    margin-bottom: 12px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.config-editor:last-child {
-    margin-bottom: 0;
-}
-
-.config-editor summary {
-    cursor: pointer;
-    padding: 12px 16px;
-    background: var(--bg-primary);
-    font-weight: 500;
-    font-size: 0.875rem;
-    user-select: none;
-    transition: background 0.15s ease;
-}
-
-.config-editor summary:hover {
-    background: var(--bg-tertiary);
-}
-
-.config-editor[open] summary {
     border-bottom: 1px solid var(--border-subtle);
+    -webkit-overflow-scrolling: touch;
 }
-
-.config-editor form {
-    padding: 16px;
+.config-tabs .tab { flex: 0 0 auto; white-space: nowrap; }
+.config-panel { display: none; }
+.config-panel.active { display: block; }
+.section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.section-title { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); }
+.section-kicker { color: var(--text-muted); font-size: 0.8125rem; margin-top: 2px; }
+.section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.span-full { grid-column: 1 / -1; }
+.section-grid .card { margin-bottom: 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; margin-bottom: 24px; }
+.settings-grid.compact-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.form-group { margin-bottom: 20px; }
+.form-group:last-child { margin-bottom: 0; }
+.form-group label { display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-secondary); font-size: 0.875rem; }
+.form-hint { color: var(--text-muted); font-size: 0.75rem; margin-top: 6px; }
+.impact-pill { color: var(--accent); background: var(--accent-muted); border-radius: 999px; padding: 3px 8px; font-size: 0.6875rem; font-weight: 600; }
+.slider-row { display: flex; align-items: center; gap: 12px; }
+.slider-val { min-width: 48px; text-align: right; font-weight: 500; color: var(--text-primary); }
+input[type="range"] { flex: 1; height: 6px; background: var(--bg-tertiary); border-radius: 3px; outline: none; -webkit-appearance: none; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--accent); border-radius: 50%; cursor: pointer; }
+input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: var(--accent); border-radius: 50%; cursor: pointer; border: none; }
+select, input[type="text"], input[type="password"], input[type="number"], input[type="time"] {
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
 }
-
-.json-editor {
+select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+.checkbox-label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.checkbox-label span { font-weight: 500; color: var(--text-primary); }
+.bot-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; }
+.bot-row:last-child { margin-bottom: 0; }
+.bot-row.compact { padding: 10px 12px; }
+.bot-row.compact input[type="text"], .bot-row.compact select { flex: 1; min-width: 0; background: var(--bg-secondary); }
+.bot-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 160px; }
+.bot-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.online { background: var(--success); }
+.status-dot.offline { background: var(--text-muted); }
+.bot-name { font-weight: 500; color: var(--text-primary); }
+.schedule-bot-list { display: flex; flex-direction: column; gap: 14px; }
+.schedule-bot-panel { padding: 14px; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 8px; }
+.schedule-bot-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.schedule-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.schedule-timezone-row { display: grid; grid-template-columns: minmax(130px, 0.4fr) minmax(240px, 1fr); gap: 12px; align-items: center; margin-bottom: 12px; }
+.schedule-timezone-row label, .schedule-enabled { margin: 0; }
+.schedule-windows { display: flex; flex-direction: column; gap: 10px; }
+.schedule-window { display: grid; grid-template-columns: minmax(140px, 1fr) 120px auto 120px auto; gap: 10px; align-items: center; }
+.schedule-days { min-height: 112px; }
+.auto-section { padding: 16px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; }
+.auto-section:last-child { margin-bottom: 0; }
+.auto-section-header { font-weight: 600; color: var(--accent); margin-bottom: 12px; font-size: 0.875rem; }
+.channel-list { list-style: none; padding: 0; margin: 0; }
+.channel-list li { padding: 6px 0; font-size: 0.875rem; }
+.channel-tag { color: var(--accent); font-weight: 500; }
+.text-muted { color: var(--text-muted); }
+.section-divider { height: 1px; background: var(--border-subtle); margin: 24px 0; }
+.subsection-title { font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
+.export-import-row, .import-form, .editor-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.config-editor { margin-top: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+.config-editor summary { cursor: pointer; padding: 12px 16px; background: var(--bg-primary); font-weight: 500; user-select: none; }
+.config-editor[open] summary { border-bottom: 1px solid var(--border-subtle); }
+.config-editor form { padding: 16px; }
+.json-editor, .prompt-textarea, .small-code-textarea {
     width: 100%;
-    min-height: 250px;
-    max-height: 400px;
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     font-size: 0.8125rem;
     line-height: 1.5;
@@ -1342,249 +921,85 @@ select:focus {
     border-radius: 6px;
     padding: 12px;
     resize: vertical;
-    tab-size: 2;
-    white-space: pre;
-    overflow-x: auto;
 }
-
-.json-editor:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
-.editor-actions {
-    margin-top: 12px;
-    display: flex;
-    gap: 8px;
-}
-
-/* Button sizes */
-.btn-sm {
-    padding: 6px 12px;
-    font-size: 0.8125rem;
-}
-
-/* Provider List */
-.provider-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.provider-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    cursor: grab;
-    transition: all 0.15s ease;
-}
-
-.provider-item:hover {
-    border-color: var(--accent);
-}
-
-.provider-item.dragging {
-    opacity: 0.5;
-    cursor: grabbing;
-}
-
-.provider-item .drag-handle {
-    color: var(--text-muted);
-    cursor: grab;
-}
-
-.provider-item .provider-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.provider-item .provider-name {
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.provider-item .provider-tier {
-    font-weight: normal;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-left: 4px;
-}
-
-.provider-item .provider-model {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.provider-item .provider-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.provider-item .btn-icon {
-    padding: 6px;
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    border-radius: 4px;
-}
-
-.provider-item .btn-icon:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.provider-item .btn-icon.delete:hover {
-    color: var(--error, #ef4444);
-}
-
-.provider-item .btn-icon.edit:hover {
-    color: var(--accent);
-}
-
-/* Edit Provider Modal */
-.modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
-    z-index: 1000;
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-overlay.active {
-    display: flex;
-}
-
-.modal-content {
-    background: var(--bg-secondary);
-    border-radius: 8px;
-    padding: 24px;
-    max-width: 500px;
-    width: 90%;
-    max-height: 90vh;
-    overflow-y: auto;
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-}
-
-.modal-header h3 {
-    margin: 0;
-    color: var(--text-primary);
-}
-
-.modal-close {
-    background: none;
-    border: none;
-    font-size: 24px;
-    color: var(--text-muted);
-    cursor: pointer;
-}
-
-.modal-close:hover {
-    color: var(--text-primary);
-}
-
-.provider-form input[type="text"],
-.provider-form input[type="password"],
-.provider-form input[type="number"] {
-    width: 100%;
-    padding: 8px 12px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-family: inherit;
-    font-size: 0.875rem;
-}
-
-.provider-form input:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
-/* Responsive */
-@media (max-width: 1024px) {
-    .config-layout {
-        grid-template-columns: 1fr;
-    }
-
-    .config-nav {
-        position: static;
-        flex-direction: row;
-        flex-wrap: wrap;
-    }
-
-    .config-nav-title {
-        width: 100%;
-    }
-}
-
+.json-editor { min-height: 250px; max-height: 420px; white-space: pre; overflow-x: auto; margin-bottom: 12px; }
+.prompt-textarea { min-height: 420px; margin-bottom: 12px; }
+.prompt-readonly { color: var(--text-muted); }
+.provider-list { display: flex; flex-direction: column; gap: 8px; }
+.provider-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 8px; }
+.provider-item:hover { border-color: var(--accent); }
+.provider-item.dragging { opacity: 0.5; }
+.provider-item .drag-handle { color: var(--text-muted); cursor: grab; font-size: 1rem; }
+.provider-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.provider-name { font-weight: 500; color: var(--text-primary); }
+.provider-tier, .provider-model { font-size: 0.75rem; color: var(--text-muted); }
+.provider-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.btn-icon { padding: 6px 8px; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 4px; }
+.btn-icon:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.modal-header h3 { margin: 0; }
+.modal-close { background: none; border: none; font-size: 24px; color: var(--text-muted); cursor: pointer; }
 @media (max-width: 768px) {
-    .section-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .settings-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .bot-row {
-        flex-wrap: wrap;
-    }
-
-    .bot-actions {
-        width: 100%;
-        margin-top: 8px;
-    }
-
-    .export-import-row {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .import-form {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .schedule-bot-header,
-    .schedule-timezone-row,
-    .schedule-window {
-        grid-template-columns: 1fr;
-    }
-
-    .schedule-bot-header {
-        align-items: stretch;
-        flex-direction: column;
-    }
-
-    .schedule-actions {
-        justify-content: flex-start;
-    }
+    .section-grid, .settings-grid { grid-template-columns: 1fr; }
+    .bot-row, .schedule-bot-header { flex-wrap: wrap; }
+    .schedule-timezone-row, .schedule-window { grid-template-columns: 1fr; }
+    .provider-item { align-items: flex-start; flex-wrap: wrap; }
+    .provider-actions { width: 100%; justify-content: flex-start; }
 }
 </style>
 
 <script>
-// Format JSON in textarea
+const timezoneOptions = {{ timezone_options|tojson }};
+let providersData = [];
+let providersLoaded = false;
+let sortableLoaded = false;
+
+function csrfHeaders() {
+    return {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': '{{ csrf_token() }}'
+    };
+}
+
+function switchConfigTab(tabName) {
+    document.querySelectorAll('[data-config-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.configTab === tabName));
+    document.querySelectorAll('[data-config-panel]').forEach(panel => panel.classList.toggle('active', panel.id === 'tab-' + tabName));
+    localStorage.setItem('config.activeTab', tabName);
+    if (tabName === 'providers') {
+        ensureProvidersLoaded();
+    }
+}
+
+function initializeConfigTabs() {
+    const saved = localStorage.getItem('config.activeTab');
+    const target = saved && document.querySelector(`[data-config-tab="${saved}"]`) ? saved : 'context';
+    switchConfigTab(target);
+}
+
+function fillLazyTextarea(textarea) {
+    if (!textarea || textarea.dataset.loaded === 'true') return;
+    textarea.value = textarea.dataset.raw || '';
+    textarea.dataset.loaded = 'true';
+}
+
+function initializeLazyEditors() {
+    document.querySelectorAll('details.config-editor').forEach(details => {
+        details.addEventListener('toggle', () => {
+            if (details.open) {
+                details.querySelectorAll('textarea.lazy-json').forEach(fillLazyTextarea);
+            }
+        });
+    });
+}
+
 function formatJSON(textarea) {
+    fillLazyTextarea(textarea);
     try {
-        const obj = JSON.parse(textarea.value);
+        const obj = JSON.parse(textarea.value || '{}');
         textarea.value = JSON.stringify(obj, null, 2);
         showToast('JSON formatted', 'success');
     } catch (e) {
@@ -1592,73 +1007,98 @@ function formatJSON(textarea) {
     }
 }
 
-// Tab key in JSON editors
-document.querySelectorAll('.json-editor').forEach(textarea => {
-    textarea.addEventListener('keydown', (e) => {
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            const start = textarea.selectionStart;
-            const end = textarea.selectionEnd;
-            textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
-            textarea.selectionStart = textarea.selectionEnd = start + 2;
-        }
-    });
-});
-
-// Save core settings
-document.getElementById('config-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const data = {
-        history_limit: parseInt(document.getElementById('history_limit').value),
-        immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-        active_provider: document.getElementById('active_provider')?.value || null,
-        user_only_context: document.getElementById('user_only_context').checked,
-        user_only_context_count: parseInt(document.getElementById('user_only_context_count').value)
-    };
-
+async function postConfig(data, successMessage) {
     const response = await fetch('/api/config', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
+        headers: csrfHeaders(),
         body: JSON.stringify(data)
     });
+    showToast(response.ok ? successMessage : 'Failed to save settings', response.ok ? 'success' : 'error');
+    return response.ok;
+}
 
-    if (response.ok) {
-        showToast('Settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
+document.getElementById('context-settings-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postConfig({
+        history_limit: parseInt(document.getElementById('history_limit').value),
+        immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
+        user_only_context: document.getElementById('user_only_context').checked,
+        user_only_context_count: parseInt(document.getElementById('user_only_context_count').value),
+        time_passage_context_enabled: document.getElementById('time_passage_context_enabled').checked
+    }, 'Context settings saved');
 });
 
-// Save DM follow-up settings
+document.getElementById('prompt-settings-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postConfig({ use_single_user: document.getElementById('use_single_user').checked }, 'Prompting settings saved');
+});
+
 document.getElementById('dm-followup-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const data = {
+    await postConfig({
         dm_followup_enabled: document.getElementById('dm_followup_enabled').checked,
         dm_followup_timeout_minutes: parseInt(document.getElementById('dm_followup_timeout_minutes').value),
         dm_followup_max_count: parseInt(document.getElementById('dm_followup_max_count').value),
         dm_followup_cooldown_hours: parseInt(document.getElementById('dm_followup_cooldown_hours').value)
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('DM follow-up settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
+    }, 'DM follow-up settings saved');
 });
 
-// Switch character
+async function saveProviderRuntimeSettings() {
+    await postConfig({ active_provider: document.getElementById('active_provider')?.value || null }, 'Provider field saved');
+}
+
+async function saveNameTriggerSettings() {
+    await postConfig({ name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100 }, 'Name trigger chance saved');
+}
+
+async function saveFalloffSettings() {
+    await postConfig({
+        bot_falloff_enabled: document.getElementById('bot_falloff_enabled').checked,
+        bot_falloff_base_chance: parseInt(document.getElementById('bot_falloff_base_chance').value) / 100,
+        bot_falloff_decay_rate: parseInt(document.getElementById('bot_falloff_decay_rate').value) / 100,
+        bot_falloff_min_chance: parseInt(document.getElementById('bot_falloff_min_chance').value) / 100,
+        bot_falloff_hard_limit: parseInt(document.getElementById('bot_falloff_hard_limit').value)
+    }, 'Fall-off settings saved');
+}
+
+async function saveMentionSettings() {
+    await postConfig({
+        allow_bot_mentions: document.getElementById('allow_bot_mentions').checked,
+        allow_bot_to_bot_mentions: document.getElementById('allow_bot_to_bot_mentions').checked,
+        mention_context_limit: parseInt(document.getElementById('mention_context_limit').value)
+    }, 'Mention settings saved');
+}
+
+async function saveSplitReplySettings() {
+    await postConfig({
+        split_replies_enabled: document.getElementById('split_replies_enabled').checked,
+        split_replies_max_targets: parseInt(document.getElementById('split_replies_max_targets').value)
+    }, 'Split reply settings saved');
+}
+
+async function saveAutomationSettings() {
+    await postConfig({ bot_interactions_paused: document.getElementById('bot_interactions_paused').checked }, 'Automation settings saved');
+}
+
+async function saveConcurrencySettings() {
+    await postConfig({ concurrency_limit: parseInt(document.getElementById('concurrency_limit').value) }, 'Performance settings saved');
+}
+
+async function toggleRawLogging(enabled) {
+    await postConfig({ raw_generation_logging: enabled }, enabled ? 'Raw logging enabled' : 'Raw logging disabled');
+}
+
+async function saveCharacterProvider(charName) {
+    const select = document.getElementById('char-provider-' + charName);
+    const response = await fetch('/api/character-provider', {
+        method: 'POST',
+        headers: csrfHeaders(),
+        body: JSON.stringify({ character: charName, tier: select.value })
+    });
+    const result = await response.json();
+    showToast(result.status === 'ok' ? `Provider preference saved for ${charName}` : 'Failed to save provider preference', result.status === 'ok' ? 'success' : 'error');
+}
+
 async function switchCharacter(botName, character, btn) {
     if (btn) {
         btn.disabled = true;
@@ -1667,19 +1107,15 @@ async function switchCharacter(botName, character, btn) {
     try {
         const response = await fetch('/api/switch_character', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': '{{ csrf_token() }}'
-            },
+            headers: csrfHeaders(),
             body: JSON.stringify({ bot_name: botName, character: character })
         });
-
         const result = await response.json();
         if (result.status === 'ok') {
             showToast(`Switched to ${result.character}`, 'success');
             location.reload();
         } else {
-            showToast('Error: ' + (result.message || 'Unknown error'), 'error');
+            showToast(result.message || 'Failed to switch character', 'error');
         }
     } catch (e) {
         showToast('Failed to switch character', 'error');
@@ -1691,335 +1127,37 @@ async function switchCharacter(botName, character, btn) {
     }
 }
 
-// Save character provider preference
-async function saveCharacterProvider(charName) {
-    const select = document.getElementById('char-provider-' + charName);
-    const tier = select.value;
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
-
-    const response = await fetch('/api/character-provider', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken
-        },
-        body: JSON.stringify({ character: charName, tier: tier })
-    });
-
-    const result = await response.json();
-    if (result.status === 'ok') {
-        showToast(`Provider preference saved for ${charName}`, 'success');
-    } else {
-        showToast('Error: ' + (result.message || 'Unknown error'), 'error');
-    }
-}
-
-// Save name trigger settings
-async function saveNameTriggerSettings() {
-    const data = {
-        name_trigger_chance: parseInt(document.getElementById('name_trigger_chance').value) / 100
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('Name trigger chance saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
-}
-
-// Save fall-off settings
-async function saveFalloffSettings() {
-    const data = {
-        bot_falloff_enabled: document.getElementById('bot_falloff_enabled').checked,
-        bot_falloff_base_chance: parseInt(document.getElementById('bot_falloff_base_chance').value) / 100,
-        bot_falloff_decay_rate: parseInt(document.getElementById('bot_falloff_decay_rate').value) / 100,
-        bot_falloff_min_chance: parseInt(document.getElementById('bot_falloff_min_chance').value) / 100,
-        bot_falloff_hard_limit: parseInt(document.getElementById('bot_falloff_hard_limit').value)
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('Fall-off settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
-}
-
-// Save mention settings
-async function saveMentionSettings() {
-    const data = {
-        allow_bot_mentions: document.getElementById('allow_bot_mentions').checked,
-        allow_bot_to_bot_mentions: document.getElementById('allow_bot_to_bot_mentions').checked,
-        mention_context_limit: parseInt(document.getElementById('mention_context_limit').value)
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('Mention settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
-}
-
-// Save split reply settings
-async function saveSplitReplySettings() {
-    const data = {
-        split_replies_enabled: document.getElementById('split_replies_enabled').checked,
-        split_replies_max_targets: parseInt(document.getElementById('split_replies_max_targets').value)
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('Split reply settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
-}
-
-// Save concurrency settings
-async function saveConcurrencySettings() {
-    const data = {
-        concurrency_limit: parseInt(document.getElementById('concurrency_limit').value)
-    };
-
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify(data)
-    });
-
-    if (response.ok) {
-        showToast('Performance settings saved', 'success');
-    } else {
-        showToast('Failed to save settings', 'error');
-    }
-}
-
-// Toggle raw logging
-async function toggleRawLogging(enabled) {
-    const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify({ raw_generation_logging: enabled })
-    });
-
-    if (response.ok) {
-        showToast(enabled ? 'Raw logging enabled' : 'Raw logging disabled', 'success');
-    } else {
-        showToast('Failed to toggle setting', 'error');
-    }
-}
-
-// Save nicknames
 async function saveNicknames(botName) {
-    const nicknames = document.getElementById('nicknames-' + botName).value.trim();
-
+    const input = document.getElementById('nicknames-' + botName);
     const response = await fetch('/api/nicknames', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify({ bot_name: botName, nicknames: nicknames })
+        headers: csrfHeaders(),
+        body: JSON.stringify({ bot_name: botName, nicknames: input.value })
     });
-
-    if (response.ok) {
-        showToast('Nicknames saved for ' + botName, 'success');
-    } else {
-        showToast('Failed to save nicknames', 'error');
-    }
+    showToast(response.ok ? `Nicknames saved for ${botName}` : 'Failed to save nicknames', response.ok ? 'success' : 'error');
 }
-
-// Save bot timezone fallback
-async function saveBotTimezone(botName) {
-    const select = document.getElementById('timezone-' + botName);
-    const timezone = select.value.trim();
-
-    const response = await fetch('/api/bot-timezones', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify({ bot_name: botName, timezone: timezone })
-    });
-
-    const result = await response.json();
-    if (result.status === 'ok') {
-        const savedValue = result.timezone || '';
-        select.dataset.current = savedValue;
-        populateTimezoneSelect(select);
-        showToast(savedValue ? `Timezone saved for ${botName}` : `Timezone cleared for ${botName}`, 'success');
-    } else {
-        showToast(result.message || 'Failed to save timezone', 'error');
-    }
-}
-
-const scheduleDays = [
-    ['mon', 'Mon'],
-    ['tue', 'Tue'],
-    ['wed', 'Wed'],
-    ['thu', 'Thu'],
-    ['fri', 'Fri'],
-    ['sat', 'Sat'],
-    ['sun', 'Sun']
-];
-
-function buildScheduleWindowHtml(days, start, end) {
-    const selected = new Set(days && days.length ? days : scheduleDays.map(day => day[0]));
-    const options = scheduleDays.map(([value, label]) => {
-        const isSelected = selected.has(value) ? ' selected' : '';
-        return `<option value="${value}"${isSelected}>${label}</option>`;
-    }).join('');
-
-    return `
-        <div class="schedule-window" data-schedule-window>
-            <select class="schedule-days" multiple title="Unavailable days">
-                ${options}
-            </select>
-            <input class="schedule-start" type="time" value="${start || '22:00'}" title="Unavailable start time">
-            <span class="text-muted">to</span>
-            <input class="schedule-end" type="time" value="${end || '08:00'}" title="Unavailable end time">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
-        </div>
-    `;
-}
-
-function addScheduleWindow(button) {
-    const panel = button.closest('.schedule-bot-panel');
-    const container = panel?.querySelector('.schedule-windows');
-    if (!container) return;
-    container.insertAdjacentHTML('beforeend', buildScheduleWindowHtml());
-}
-
-function removeScheduleWindow(button) {
-    const panel = button.closest('.schedule-bot-panel');
-    const windowRow = button.closest('[data-schedule-window]');
-    const windowCount = panel?.querySelectorAll('[data-schedule-window]').length || 0;
-    if (windowCount <= 1) {
-        const days = windowRow.querySelector('.schedule-days');
-        const start = windowRow.querySelector('.schedule-start');
-        const end = windowRow.querySelector('.schedule-end');
-        Array.from(days.options).forEach(option => { option.selected = true; });
-        start.value = '22:00';
-        end.value = '08:00';
-        return;
-    }
-    windowRow.remove();
-}
-
-async function saveBotSchedule(button) {
-    const panel = button.closest('.schedule-bot-panel');
-    if (!panel) return;
-
-    const botName = panel.dataset.botName;
-    const enabled = panel.querySelector('.schedule-enabled-input').checked;
-    const timezoneSelect = panel.querySelector('.schedule-timezone-select');
-    const timezone = timezoneSelect.value.trim();
-    const windows = Array.from(panel.querySelectorAll('[data-schedule-window]')).map(row => {
-        const daysSelect = row.querySelector('.schedule-days');
-        return {
-            days: Array.from(daysSelect.selectedOptions).map(option => option.value),
-            start: row.querySelector('.schedule-start').value,
-            end: row.querySelector('.schedule-end').value
-        };
-    });
-
-    const response = await fetch('/api/bot-schedules', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
-        body: JSON.stringify({
-            bot_name: botName,
-            enabled,
-            timezone,
-            windows
-        })
-    });
-
-    const result = await response.json();
-    if (result.status === 'ok') {
-        timezoneSelect.dataset.current = result.schedule?.timezone || timezone || '';
-        populateTimezoneSelect(timezoneSelect);
-        showToast(enabled ? `Schedule saved for ${botName}` : `Schedule cleared for ${botName}`, 'success');
-    } else {
-        showToast(result.message || 'Failed to save schedule', 'error');
-    }
-}
-
-// ============ Provider Management ============
-
-let providersData = [];
-const timezoneOptions = {{ timezone_options|tojson }};
 
 function populateTimezoneSelect(select) {
     const currentValue = (select.dataset.current || '').trim();
     select.innerHTML = '';
-
     const defaultOption = document.createElement('option');
     defaultOption.value = '';
     defaultOption.textContent = 'Use process/server timezone';
     select.appendChild(defaultOption);
-
     let hasCurrentValue = !currentValue;
     for (const optionData of timezoneOptions) {
         const option = document.createElement('option');
         option.value = optionData.value;
         option.textContent = optionData.label;
-        if (optionData.value === currentValue) {
-            hasCurrentValue = true;
-        }
+        if (optionData.value === currentValue) hasCurrentValue = true;
         select.appendChild(option);
     }
-
     if (currentValue && !hasCurrentValue) {
         const fallbackOption = document.createElement('option');
         fallbackOption.value = currentValue;
         fallbackOption.textContent = `${currentValue} (saved)`;
         select.appendChild(fallbackOption);
     }
-
     select.value = currentValue;
 }
 
@@ -2027,23 +1165,97 @@ function populateTimezoneSelects() {
     document.querySelectorAll('.timezone-select').forEach(populateTimezoneSelect);
 }
 
-// Load providers on page load
-document.addEventListener('DOMContentLoaded', () => {
-    populateTimezoneSelects();
-    loadProviders();
-});
-
-function loadProviders() {
-    try {
-        const jsonEditor = document.getElementById('providers-json-editor');
-        if (jsonEditor) {
-            const data = JSON.parse(jsonEditor.value);
-            providersData = data.providers || [];
-            renderProviderList();
-        }
-    } catch (e) {
-        console.error('Failed to parse providers:', e);
+async function saveBotTimezone(botName) {
+    const select = document.getElementById('timezone-' + botName);
+    const response = await fetch('/api/bot-timezones', {
+        method: 'POST',
+        headers: csrfHeaders(),
+        body: JSON.stringify({ bot_name: botName, timezone: select.value })
+    });
+    const result = await response.json();
+    if (result.status === 'ok') {
+        select.dataset.current = result.timezone || '';
+        populateTimezoneSelect(select);
+        showToast(`Timezone saved for ${botName}`, 'success');
+    } else {
+        showToast(result.message || 'Failed to save timezone', 'error');
     }
+}
+
+function addScheduleWindow(button, start = '', end = '', days = ['mon','tue','wed','thu','fri','sat','sun']) {
+    const panel = button.closest('.schedule-bot-panel');
+    const container = panel.querySelector('.schedule-windows');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'schedule-window';
+    wrapper.dataset.scheduleWindow = '';
+    wrapper.innerHTML = `
+        <select class="schedule-days" multiple title="Unavailable days">
+            ${['mon','tue','wed','thu','fri','sat','sun'].map(day => `<option value="${day}" ${days.includes(day) ? 'selected' : ''}>${day.charAt(0).toUpperCase() + day.slice(1)}</option>`).join('')}
+        </select>
+        <input class="schedule-start" type="time" value="${start || '22:00'}" title="Unavailable start time">
+        <span class="text-muted">to</span>
+        <input class="schedule-end" type="time" value="${end || '08:00'}" title="Unavailable end time">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
+    `;
+    container.appendChild(wrapper);
+}
+
+function removeScheduleWindow(button) {
+    const windowEl = button.closest('[data-schedule-window]');
+    const container = windowEl.closest('.schedule-windows');
+    if (container.querySelectorAll('[data-schedule-window]').length > 1) {
+        windowEl.remove();
+    } else {
+        windowEl.querySelector('.schedule-start').value = '22:00';
+        windowEl.querySelector('.schedule-end').value = '08:00';
+    }
+}
+
+async function saveBotSchedule(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    const botName = panel.dataset.botName;
+    const enabled = panel.querySelector('.schedule-enabled-input').checked;
+    const timezone = panel.querySelector('.schedule-timezone-select').value;
+    const unavailable = Array.from(panel.querySelectorAll('[data-schedule-window]')).map(row => ({
+        days: Array.from(row.querySelector('.schedule-days').selectedOptions).map(option => option.value),
+        start: row.querySelector('.schedule-start').value,
+        end: row.querySelector('.schedule-end').value
+    })).filter(item => item.days.length && item.start && item.end);
+    const response = await fetch('/api/bot-schedules', {
+        method: 'POST',
+        headers: csrfHeaders(),
+        body: JSON.stringify({ bot_name: botName, enabled, timezone, unavailable })
+    });
+    const result = await response.json();
+    showToast(result.status === 'ok' ? (enabled ? `Schedule saved for ${botName}` : `Schedule cleared for ${botName}`) : (result.message || 'Failed to save schedule'), result.status === 'ok' ? 'success' : 'error');
+}
+
+function ensureProvidersLoaded() {
+    if (providersLoaded) return;
+    providersLoaded = true;
+    const editor = document.getElementById('providers-json-editor');
+    fillLazyTextarea(editor);
+    try {
+        const data = JSON.parse(editor?.value || '{}');
+        providersData = data.providers || [];
+    } catch (e) {
+        providersData = [];
+        showToast('Could not parse providers.json', 'error');
+    }
+    renderProviderList();
+    loadSortableScript().then(setupDragAndDrop);
+}
+
+function loadSortableScript() {
+    if (window.Sortable || sortableLoaded) return Promise.resolve();
+    sortableLoaded = true;
+    return new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js';
+        script.onload = resolve;
+        script.onerror = resolve;
+        document.head.appendChild(script);
+    });
 }
 
 function getTierName(index) {
@@ -2051,59 +1263,52 @@ function getTierName(index) {
     return index < 3 ? names[index] : `tier_${index}`;
 }
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text ?? '';
+    return div.innerHTML;
+}
+
 function renderProviderList() {
     const list = document.getElementById('provider-list');
     if (!list) return;
-
-    if (providersData.length === 0) {
-        list.innerHTML = '<p class="text-muted">No providers configured. Add one below or edit the JSON directly.</p>';
+    if (!providersData.length) {
+        list.innerHTML = '<p class="text-muted">No providers configured. Add one below or edit providers.json directly.</p>';
         return;
     }
-
     list.innerHTML = providersData.map((p, i) => `
-        <div class="provider-item" draggable="true" data-index="${i}">
-            <span class="drag-handle">&#9776;</span>
+        <div class="provider-item" data-index="${i}">
+            <span class="drag-handle" title="Drag to reorder">&#9776;</span>
             <div class="provider-info">
                 <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${getTierName(i)})</span></span>
                 <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.url || 'Default endpoint')}</span>
             </div>
             <div class="provider-actions">
-                <button type="button" class="btn-icon edit" onclick="editProvider(${i})" title="Edit">&#9998;</button>
-                <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection">&#9889;</button>
-                <button type="button" class="btn-icon delete" onclick="deleteProvider(${i})" title="Delete">&times;</button>
+                <button type="button" class="btn-icon" onclick="moveProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">Up</button>
+                <button type="button" class="btn-icon" onclick="moveProvider(${i}, 1)" ${i === providersData.length - 1 ? 'disabled' : ''} title="Move down">Down</button>
+                <button type="button" class="btn-icon" onclick="editProvider(${i})" title="Edit">Edit</button>
+                <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection">Test</button>
+                <button type="button" class="btn-icon" onclick="deleteProvider(${i})" title="Delete">Delete</button>
             </div>
         </div>
     `).join('');
-
-    // Add drag-and-drop handlers
     setupDragAndDrop();
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
 
 function setupDragAndDrop() {
     const list = document.getElementById('provider-list');
-    if (!list) return;
-
-    // Destroy existing instance if any
-    if (list.sortableInstance) {
-        list.sortableInstance.destroy();
-    }
-
-    // Use Sortable.js for cross-platform drag-and-drop (works on mobile)
+    if (!list || !window.Sortable) return;
+    if (list.sortableInstance) list.sortableInstance.destroy();
     list.sortableInstance = new Sortable(list, {
         animation: 150,
         handle: '.drag-handle',
         ghostClass: 'dragging',
-        forceFallback: true,
-        touchStartThreshold: 5,
+        fallbackOnBody: true,
+        forceFallback: false,
         delayOnTouchOnly: true,
-        delay: 100,
-        onEnd: function(evt) {
+        delay: 120,
+        touchStartThreshold: 8,
+        onEnd(evt) {
             if (evt.oldIndex !== evt.newIndex) {
                 reorderProviders(evt.oldIndex, evt.newIndex);
             }
@@ -2111,19 +1316,21 @@ function setupDragAndDrop() {
     });
 }
 
+async function moveProvider(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= providersData.length) return;
+    await reorderProviders(index, target);
+}
+
 async function reorderProviders(fromIndex, toIndex) {
-    // Reorder in local array
     const [moved] = providersData.splice(fromIndex, 1);
     providersData.splice(toIndex, 0, moved);
-
-    // Save to server
     await saveProvidersToServer();
     renderProviderList();
 }
 
 async function deleteProvider(index) {
     if (!confirm('Delete this provider?')) return;
-
     providersData.splice(index, 1);
     await saveProvidersToServer();
     renderProviderList();
@@ -2132,41 +1339,26 @@ async function deleteProvider(index) {
 
 async function testProvider(index) {
     showToast('Testing provider...', 'success');
-    const response = await fetch(`/api/test-provider/${index}`, {
-        headers: { 'X-CSRF-Token': '{{ csrf_token() }}' }
-    });
+    const response = await fetch(`/api/test-provider/${index}`, { headers: { 'X-CSRF-Token': '{{ csrf_token() }}' } });
     const result = await response.json();
-    if (result.success) {
-        showToast('Provider is working!', 'success');
-    } else {
-        showToast('Provider test failed: ' + (result.error || 'Unknown error'), 'error');
-    }
+    showToast(result.success ? 'Provider is working' : 'Provider test failed: ' + (result.error || 'Unknown error'), result.success ? 'success' : 'error');
 }
 
 function editProvider(index) {
     const provider = providersData[index];
     if (!provider) return;
-
     document.getElementById('edit-provider-index').value = index;
     document.getElementById('edit-provider-name').value = provider.name || '';
-    document.getElementById('edit-provider-endpoint').value = provider.url || '';  // Use 'url' not 'base_url'
-    document.getElementById('edit-provider-key').value = '';  // Don't show existing key
+    document.getElementById('edit-provider-endpoint').value = provider.url || '';
+    document.getElementById('edit-provider-key').value = '';
     document.getElementById('edit-provider-model').value = provider.model || '';
     document.getElementById('edit-provider-temp').value = provider.temperature ?? 0.7;
     document.getElementById('edit-provider-max-tokens').value = provider.max_tokens || '';
     document.getElementById('edit-provider-timeout').value = provider.timeout || '';
-
-    // OpenRouter settings - show/hide based on URL
     const editUrl = provider.url || '';
     const orGroup = document.getElementById('edit-openrouter-group');
-    if (editUrl.includes('openrouter.ai')) {
-        orGroup.style.display = '';
-        document.getElementById('edit-provider-openrouter').value = provider.openrouter ? JSON.stringify(provider.openrouter, null, 2) : '';
-    } else {
-        orGroup.style.display = 'none';
-        document.getElementById('edit-provider-openrouter').value = '';
-    }
-
+    orGroup.style.display = editUrl.includes('openrouter.ai') ? '' : 'none';
+    document.getElementById('edit-provider-openrouter').value = provider.openrouter ? JSON.stringify(provider.openrouter, null, 2) : '';
     document.getElementById('edit-provider-modal').classList.add('active');
 }
 
@@ -2174,107 +1366,64 @@ function closeEditModal() {
     document.getElementById('edit-provider-modal').classList.remove('active');
 }
 
-// Show/hide OpenRouter settings when endpoint URL changes in edit modal
 document.getElementById('edit-provider-endpoint')?.addEventListener('input', (e) => {
-    const orGroup = document.getElementById('edit-openrouter-group');
-    orGroup.style.display = e.target.value.includes('openrouter.ai') ? '' : 'none';
+    document.getElementById('edit-openrouter-group').style.display = e.target.value.includes('openrouter.ai') ? '' : 'none';
 });
 
 document.getElementById('edit-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-
     const index = parseInt(document.getElementById('edit-provider-index').value);
     const provider = providersData[index];
     if (!provider) return;
-
     provider.name = document.getElementById('edit-provider-name').value.trim();
-    provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;  // Use 'url' not 'base_url'
+    provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;
     provider.model = document.getElementById('edit-provider-model').value.trim();
     provider.temperature = parseFloat(document.getElementById('edit-provider-temp').value) || 0.7;
-
     const newKey = document.getElementById('edit-provider-key').value.trim();
-    if (newKey) {
-        provider.api_key = newKey;
-    }
-
+    if (newKey) provider.api_key = newKey;
     const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
-    if (maxTokens) {
-        provider.max_tokens = parseInt(maxTokens);
-    } else {
-        delete provider.max_tokens;
-    }
-
+    if (maxTokens) provider.max_tokens = parseInt(maxTokens); else delete provider.max_tokens;
     const timeout = document.getElementById('edit-provider-timeout').value.trim();
-    if (timeout) {
-        provider.timeout = parseInt(timeout);
-    } else {
-        delete provider.timeout;
-    }
-
-    // OpenRouter settings
+    if (timeout) provider.timeout = parseInt(timeout); else delete provider.timeout;
     const orText = document.getElementById('edit-provider-openrouter').value.trim();
     if (orText) {
-        try {
-            provider.openrouter = JSON.parse(orText);
-        } catch (err) {
-            showToast('Invalid OpenRouter JSON: ' + err.message, 'error');
-            return;
-        }
+        try { provider.openrouter = JSON.parse(orText); }
+        catch (err) { showToast('Invalid OpenRouter JSON: ' + err.message, 'error'); return; }
     } else {
         delete provider.openrouter;
     }
-
-    // Clean up undefined values
     if (!provider.url) delete provider.url;
-
     await saveProvidersToServer();
     renderProviderList();
     closeEditModal();
     showToast('Provider updated', 'success');
 });
 
-// Close modal on outside click
 document.getElementById('edit-provider-modal')?.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) {
-        closeEditModal();
-    }
+    if (e.target.classList.contains('modal-overlay')) closeEditModal();
 });
 
 async function saveProvidersToServer() {
-    // Preserve global fields (timeout, character_providers) from existing config
-    let globalFields = {};
     const jsonEditor = document.getElementById('providers-json-editor');
-    if (jsonEditor) {
-        try {
-            const existing = JSON.parse(jsonEditor.value);
-            if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
-            if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
-        } catch (e) { /* ignore parse errors */ }
-    }
-
+    fillLazyTextarea(jsonEditor);
+    let globalFields = {};
+    try {
+        const existing = JSON.parse(jsonEditor.value || '{}');
+        if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
+        if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
+    } catch (e) { /* ignore */ }
     const data = { providers: providersData, ...globalFields };
     const jsonStr = JSON.stringify(data, null, 2);
-
-    // Update the JSON editor too
-    if (jsonEditor) {
-        jsonEditor.value = jsonStr;
-    }
-
+    jsonEditor.value = jsonStr;
+    jsonEditor.dataset.raw = jsonStr;
     const response = await fetch('/api/providers/save', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': '{{ csrf_token() }}'
-        },
+        headers: csrfHeaders(),
         body: JSON.stringify({ content: jsonStr })
     });
-
-    if (!response.ok) {
-        showToast('Failed to save providers', 'error');
-    }
+    if (!response.ok) showToast('Failed to save providers', 'error');
 }
 
-// Provider type defaults
 const providerDefaults = {
     openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
     anthropic: { url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
@@ -2289,49 +1438,51 @@ function updateProviderDefaults() {
         document.getElementById('new-provider-endpoint').value = providerDefaults[type].url;
         document.getElementById('new-provider-model').value = providerDefaults[type].model;
     }
-    // Show/hide OpenRouter settings
     document.getElementById('new-openrouter-group').style.display = type === 'openrouter' ? '' : 'none';
 }
 
-// Add provider form
 document.getElementById('add-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-
+    ensureProvidersLoaded();
     const name = document.getElementById('new-provider-name').value.trim();
     const url = document.getElementById('new-provider-endpoint').value.trim();
     const api_key = document.getElementById('new-provider-key').value.trim();
     const model = document.getElementById('new-provider-model').value.trim();
     const temperature = parseFloat(document.getElementById('new-provider-temp').value) || 0.7;
-
-    if (!name) {
-        showToast('Provider name is required', 'error');
-        return;
-    }
-
+    if (!name) { showToast('Provider name is required', 'error'); return; }
     const newProvider = { name, model, temperature };
     if (url) newProvider.url = url;
     if (api_key) newProvider.api_key = api_key;
     const newTimeout = document.getElementById('new-provider-timeout').value.trim();
     if (newTimeout) newProvider.timeout = parseInt(newTimeout);
-
-    // OpenRouter settings
     const newOrText = document.getElementById('new-provider-openrouter').value.trim();
     if (newOrText) {
-        try {
-            newProvider.openrouter = JSON.parse(newOrText);
-        } catch (err) {
-            showToast('Invalid OpenRouter JSON: ' + err.message, 'error');
-            return;
-        }
+        try { newProvider.openrouter = JSON.parse(newOrText); }
+        catch (err) { showToast('Invalid OpenRouter JSON: ' + err.message, 'error'); return; }
     }
-
     providersData.push(newProvider);
     await saveProvidersToServer();
     renderProviderList();
-
-    // Reset form
     e.target.reset();
     showToast('Provider added', 'success');
+});
+
+document.querySelectorAll('.json-editor').forEach(textarea => {
+    textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
+            textarea.selectionStart = textarea.selectionEnd = start + 2;
+        }
+    });
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    initializeConfigTabs();
+    initializeLazyEditors();
+    populateTimezoneSelects();
 });
 </script>
 {% endblock %}

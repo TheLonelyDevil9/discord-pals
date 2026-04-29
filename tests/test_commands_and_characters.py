@@ -260,7 +260,7 @@ class CharacterDashboardTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(saved, b"Line one\nLine two\n\nLine four")
 
-    def test_system_prompt_save_normalizes_textarea_crlf_without_extra_blank_lines(self):
+    def test_system_prompt_save_is_read_only(self):
         with patch.object(character_module.character_manager, "reload_prompts") as reload_prompts:
             response = self.client.post(
                 "/prompts/system/save",
@@ -271,8 +271,23 @@ class CharacterDashboardTests(unittest.TestCase):
                 follow_redirects=False,
             )
 
-        saved = (self.prompts_dir / "system.md").read_bytes()
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse((self.prompts_dir / "system.md").exists())
+        reload_prompts.assert_not_called()
+
+    def test_other_prompts_save_normalizes_textarea_crlf_without_extra_blank_lines(self):
+        with patch.object(character_module.character_manager, "reload_prompts") as reload_prompts:
+            response = self.client.post(
+                "/prompts/other/save",
+                data={
+                    "content": "## Chatroom Context\r\nOne\r\n\r\nTwo",
+                    "csrf_token": "test-csrf",
+                },
+                follow_redirects=False,
+            )
+
+        saved = (self.prompts_dir / "other_prompts.md").read_bytes()
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(saved, b"First rule\nSecond rule\n\nFourth rule")
+        self.assertEqual(saved, b"## Chatroom Context\nOne\n\nTwo")
         reload_prompts.assert_called_once()

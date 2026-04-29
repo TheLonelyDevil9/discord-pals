@@ -673,7 +673,7 @@ function updateContextCard(card, botName, ctx) {
                 <div class="messages-list">
                     ${lastMessages.map(msg => `
                         <div class="message ${msg.role === 'assistant' ? 'assistant' : ''}">
-                            <span class="message-role">${escapeHtml(msg.role || '')}</span>
+                            <span class="message-role">${escapeHtml(msg.kind || msg.role || '')}</span>
                             <span class="message-content">${escapeHtml((msg.content || '').substring(0, 400))}${(msg.content || '').length > 400 ? '...' : ''}</span>
                         </div>
                     `).join('')}

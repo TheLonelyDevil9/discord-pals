@@ -88,18 +88,18 @@
 
 <!-- Prompts Tab -->
 <div id="tab-prompts" class="tab-content">
-    <p class="tab-description">This prompt controls how the AI behaves. Changes take effect on next message (no restart needed).</p>
+    <p class="tab-description">System prompt is read-only here. Character-facing guidance that should be sent after it lives in Other Prompts.</p>
     <div class="prompts-layout">
         <div class="card prompt-editor-card">
             <div class="card-header">
-                <span class="card-title">prompts/system.md</span>
+                <span class="card-title">prompts/system.md (read only)</span>
             </div>
             <div class="card-body">
-                <form action="/prompts/system/save" method="post">
+                <form>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <textarea name="content" class="prompt-textarea" title="System prompt content">{{- system_content -}}</textarea>
+                    <textarea name="content" class="prompt-textarea" title="System prompt content" readonly>{{- system_content -}}</textarea>
                     <div class="prompt-actions">
-                        <button type="submit" class="btn btn-primary">Save Prompt</button>
+                        <a href="/config" class="btn btn-primary">Edit Other Prompts In Config</a>
                     </div>
                 </form>
             </div>

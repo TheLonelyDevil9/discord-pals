@@ -240,6 +240,18 @@ def _write_dashboard_text_file(path: Path, content: str | None) -> None:
         f.write(_normalize_textarea_content(content))
 
 
+def _read_prompt_file(filename: str, default: str = "") -> str:
+    """Read a prompt file for dashboard display."""
+    path = PROMPTS_DIR / filename
+    if not path.exists():
+        return default
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as e:
+        log.warn(f"Failed to read {filename}: {e}")
+        return default
+
+
 _SCHEDULE_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
@@ -642,6 +654,8 @@ def save_memory(name):
 @app.route('/characters')
 def characters():
     """Characters viewer page (merged with Preview and Prompts)."""
+    from character import DEFAULT_OTHER_PROMPTS
+
     char_files = get_character_files()
     chars_data = {}
     
@@ -659,19 +673,14 @@ def characters():
             chars_data[name] = {'error': str(e)}
     
     # Load system prompt for Prompts tab
-    system_content = ""
-    system_path = PROMPTS_DIR / "system.md"
-    if system_path.exists():
-        try:
-            with open(system_path, 'r', encoding='utf-8') as f:
-                system_content = f.read()
-        except Exception:
-            pass
+    system_content = _read_prompt_file("system.md")
+    other_prompts_content = _read_prompt_file("other_prompts.md", DEFAULT_OTHER_PROMPTS)
     
     return render_template('characters.html', 
                            characters=chars_data, 
                            character_list=char_files,
-                           system_content=system_content)
+                           system_content=system_content,
+                           other_prompts_content=other_prompts_content)
 
 
 @app.route('/characters/<name>/edit')
@@ -858,16 +867,28 @@ def prompts():
 @app.route('/prompts/system/save', methods=['POST'])
 @requires_csrf
 def save_system_prompt():
-    """Save system.md prompt."""
+    """Block dashboard edits to system.md; it is intentionally read-only."""
+    log.warn("Rejected dashboard attempt to edit prompts/system.md")
+    return redirect(url_for(
+        'config_page',
+        error='prompts/system.md is read-only. Edit prompts/other_prompts.md for post-system prompt changes.'
+    ))
+
+
+@app.route('/prompts/other/save', methods=['POST'])
+@requires_csrf
+def save_other_prompts():
+    """Save post-system prompt templates."""
     content = request.form.get('content', '')
     try:
-        _write_dashboard_text_file(PROMPTS_DIR / 'system.md', content)
+        _write_dashboard_text_file(PROMPTS_DIR / 'other_prompts.md', content)
         # Reload prompts in character manager
         from character import character_manager
         character_manager.reload_prompts()
     except Exception as e:
-        log.warn(f"Failed to save system.md: {e}")
-    return redirect(url_for('characters'))
+        log.warn(f"Failed to save other_prompts.md: {e}")
+        return redirect(url_for('config_page', error=f'Failed to save other prompts: {e}'))
+    return redirect(url_for('config_page', message='Other prompts saved successfully'))
 
 
 @app.route('/api/status')
@@ -993,11 +1014,14 @@ def config_page():
     """Runtime configuration page (merged with Settings)."""
     import runtime_config
     from time_utils import get_timezone_options
+    from character import DEFAULT_OTHER_PROMPTS
     
     config = runtime_config.get_all()
     characters = get_character_files()
     topology = _get_visible_topology()
     channel_map = topology["channels_by_id"]
+    system_content = _read_prompt_file("system.md")
+    other_prompts_content = _read_prompt_file("other_prompts.md", DEFAULT_OTHER_PROMPTS)
     
     # Get providers
     providers = []
@@ -1078,6 +1102,8 @@ def config_page():
         providers_raw=providers_raw,
         bots_raw=bots_raw,
         autonomous_raw=autonomous_raw,
+        system_content=system_content,
+        other_prompts_content=other_prompts_content,
         timezone_options=get_timezone_options(),
         message=request.args.get('message'),
         error=request.args.get('error')

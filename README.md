@@ -583,15 +583,15 @@ Click the channel name to expand settings, or use the quick toggle to enable/dis
 
 Adjust runtime settings without restarting:
 
-- **History & Context** — History limit, immediate message count, user-only context mode
-- **Name Trigger Chance** — Probability of responding to name mentions
-- **Provider Configuration** — Edit provider settings and per-character provider preferences
-- **Single User Mode** — SillyTavern-style message formatting
-- **DM Follow-ups** — Enable/configure autonomous DM follow-up messages
-- **Per-Bot Nicknames** — Manage comma-separated trigger aliases for each bot
-- **Bot Timezones** — Set per-bot fallback timezones used for prompts and reminders when a user has no personal timezone set, using a dashboard picker of valid IANA timezone values
-- **Bot Availability Schedules** — Add one or more unavailable windows per bot, including overnight windows such as Friday 22:00 to Saturday 08:00
-- **Bot Fall-off** — Tune bot-to-bot conversation decay parameters
+- **Context** — History windows, user-only mode, mention context, split replies, and time-passage context. These settings change what the bot sees.
+- **Prompting** — Single-user formatting, a read-only `prompts/system.md` preview, and editable `prompts/other_prompts.md` post-system prompt templates.
+- **Time** — Bot timezones, availability schedules, and DM follow-up timing. These settings change time awareness or when time-based work can happen.
+- **Automation** — Autonomous channel summary, name trigger chance, nicknames, bot-to-bot fall-off, and bot interaction pause controls.
+- **Providers** — Provider order, provider definitions, per-character provider preferences, and the reserved active provider field. Provider order can be changed with Up/Down buttons or drag.
+- **Performance** — Global concurrency and dashboard performance notes.
+- **Maintenance / Advanced** — Slash command sync status, import/export, debug logging, and raw JSON editors.
+
+Prompt editing is split intentionally: `prompts/system.md` is the fixed system prompt surface, while `prompts/other_prompts.md` contains character-facing context that is sent after the system prompt.
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
 
@@ -1089,14 +1089,19 @@ Bots can generate Discord @mentions in their responses:
 
 These settings can be adjusted via the web dashboard or by editing `bot_data/runtime_config.json`. Changes take effect immediately without restarting.
 
+Conversation prompting is split into two files:
+
+- `prompts/system.md` is the system prompt. The dashboard shows it as read-only.
+- `prompts/other_prompts.md` contains post-system prompt sections such as chatroom context, reminder delivery context, DM follow-up framing, and time-passage context. These sections are sent after the system prompt in the normal message list.
+
 | Setting | Default | Description |
 | ------- | ------- | ----------- |
-| `history_limit` | 200 | Maximum messages included in AI context. Higher = more memory, slower responses |
-| `immediate_message_count` | 5 | Recent messages placed after the chatroom context block |
+| `history_limit` | 200 | Normal context mode: maximum messages included in AI context. Higher = broader recall but slower responses |
+| `immediate_message_count` | 5 | Normal context mode: newest messages placed after post-system context so they receive extra recency weight |
 | `active_provider` | null | Reserved dashboard field; generation order is controlled by provider order and per-character provider preferences |
 | `bot_interactions_paused` | false | Pause all bot-to-bot conversations |
 | `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
-| `use_single_user` | false | SillyTavern-style formatting (all messages from one "user") |
+| `use_single_user` | false | SillyTavern-style formatting that folds the payload into one user-style message for compatible providers |
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
 | `custom_nicknames` | "" | Legacy global nickname field; prefer per-bot nicknames from the dashboard |
 | `bot_nicknames` | {} | Single-bot nickname map persisted by the dashboard; multi-bot nicknames live in `bots.json` |
@@ -1111,11 +1116,12 @@ These settings can be adjusted via the web dashboard or by editing `bot_data/run
 | `split_replies_enabled` | false | Enable split replies to multiple mentioned users |
 | `split_replies_max_targets` | 5 | Max users to split replies for (prevents spam) |
 | `concurrency_limit` | 4 | Max concurrent AI requests across all bots |
-| `allow_bot_mentions` | true | Allow bots to generate @mentions for users |
-| `allow_bot_to_bot_mentions` | false | Allow bots to @mention other bots (can cause loops!) |
+| `allow_bot_mentions` | true | Add mention candidates to context and allow safe @Name conversion in bot replies |
+| `allow_bot_to_bot_mentions` | false | Add other bots as mention candidates (can cause loops!) |
 | `mention_context_limit` | 10 | Max users to show in mention context for AI |
-| `user_only_context` | false | Send only human user messages to the AI (discards bot/assistant messages) |
-| `user_only_context_count` | 20 | Last N user messages to include when user_only_context is enabled |
+| `user_only_context` | false | Mostly send human user messages, with small bot anchoring, to reduce personality bleed |
+| `user_only_context_count` | 20 | User-only mode: last N human messages to include |
+| `time_passage_context_enabled` | true | Add post-system cues after long gaps so channel/DM world state can move forward without saving guesses as memory |
 | `dm_followup_enabled` | false | Enable autonomous DM follow-ups after silence |
 | `dm_followup_timeout_minutes` | 120 | Minutes of silence before sending a follow-up |
 | `dm_followup_max_count` | 1 | Max follow-up messages before stopping |
