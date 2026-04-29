@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.0.4] - 2026-04-29
+
+### Added
+
+- Browser favicon package for the dashboard, including SVG/ICO/PNG icons, Apple touch icon, and web app manifest assets served from the existing static folder.
+- Regression coverage for dashboard favicon markup and manifest icon paths.
+
+### Changed
+
+- Dashboard pages now reference the generated favicon package instead of using the full banner image as the tab icon.
+
 ## [v2.0.3] - 2026-04-29
 
 ### Fixed
