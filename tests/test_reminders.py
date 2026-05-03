@@ -217,7 +217,7 @@ class ReminderTimezoneAndDashboardTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertIn('class="timezone-select"', page)
         self.assertIn("Use process/server timezone", page)
-        self.assertIn("Asia/Calcutta", page)
+        self.assertIn("/api/timezones", page)
         self.assertIn("Bot Availability Schedules", page)
         self.assertIn("schedule-bot-panel", page)
 

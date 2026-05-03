@@ -621,6 +621,8 @@ tr.hidden {
 let currentChannelId = null;
 let botNicknames = {};
 let currentSort = { column: null, direction: 'asc' };
+let channelRowsCache = null;
+let filterFrame = null;
 
 // Load bot nicknames on page load
 async function loadBotNicknames() {
@@ -640,7 +642,7 @@ document.addEventListener('DOMContentLoaded', loadBotNicknames);
 function sortTable(column) {
     const table = document.getElementById('channels-table');
     const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const rows = getChannelRows();
 
     // Toggle direction if same column
     if (currentSort.column === column) {
@@ -695,16 +697,30 @@ function sortTable(column) {
     });
 
     // Re-append sorted rows
-    rows.forEach(row => tbody.appendChild(row));
+    const fragment = document.createDocumentFragment();
+    rows.forEach(row => fragment.appendChild(row));
+    tbody.appendChild(fragment);
 }
 
 // Filter channels
 function filterChannels() {
+    if (filterFrame) cancelAnimationFrame(filterFrame);
+    filterFrame = requestAnimationFrame(applyChannelFilters);
+}
+
+function getChannelRows() {
+    if (!channelRowsCache) {
+        channelRowsCache = Array.from(document.querySelectorAll('#channels-table tbody tr'));
+    }
+    return channelRowsCache;
+}
+
+function applyChannelFilters() {
     const guildFilter = document.getElementById('guild-filter').value;
     const autoFilter = document.getElementById('auto-filter').value;
     const historyFilter = document.getElementById('history-filter').value;
 
-    const rows = document.querySelectorAll('#channels-table tbody tr');
+    const rows = getChannelRows();
     let visibleCount = 0;
 
     rows.forEach(row => {

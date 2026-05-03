@@ -257,7 +257,7 @@
         </div>
     </section>
 
-    <section id="tab-time" class="config-panel" data-config-panel>
+    <section id="tab-time" class="config-panel" data-config-panel data-needs-timezones>
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Time</h2>
@@ -277,7 +277,9 @@
                     <div class="bot-row compact">
                         <span class="status-dot {% if bot.online %}online{% else %}offline{% endif %}"></span>
                         <span class="bot-name">{{ bot.name }}</span>
-                        <select id="timezone-{{ bot.name }}" class="timezone-select" data-current="{{ bot.timezone or '' }}" title="Timezone for {{ bot.name }}"></select>
+                        <select id="timezone-{{ bot.name }}" class="timezone-select" data-current="{{ bot.timezone or '' }}" title="Timezone for {{ bot.name }}">
+                            <option value="">{{ bot.timezone or 'Use process/server timezone' }}</option>
+                        </select>
                         <button type="button" class="btn btn-ghost btn-sm" onclick="saveBotTimezone('{{ bot.name }}')">Save</button>
                     </div>
                     {% endfor %}
@@ -361,7 +363,9 @@
                             </div>
                             <div class="schedule-timezone-row">
                                 <label>Schedule Timezone</label>
-                                <select class="timezone-select schedule-timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}"></select>
+                                <select class="timezone-select schedule-timezone-select" data-current="{{ schedule.timezone or bot.timezone or '' }}" title="Schedule timezone for {{ bot.name }}">
+                                    <option value="">{{ schedule.timezone or bot.timezone or 'Use process/server timezone' }}</option>
+                                </select>
                             </div>
                             <div class="schedule-windows">
                                 {% for window in windows %}
@@ -953,7 +957,8 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 </style>
 
 <script>
-const timezoneOptions = {{ timezone_options|tojson }};
+let timezoneOptions = null;
+let timezoneOptionsPromise = null;
 let providersData = [];
 let providersLoaded = false;
 let sortableLoaded = false;
@@ -971,6 +976,9 @@ function switchConfigTab(tabName) {
     localStorage.setItem('config.activeTab', tabName);
     if (tabName === 'providers') {
         ensureProvidersLoaded();
+    }
+    if (tabName === 'time') {
+        populateTimezoneSelects();
     }
 }
 
@@ -1137,7 +1145,24 @@ async function saveNicknames(botName) {
     showToast(response.ok ? `Nicknames saved for ${botName}` : 'Failed to save nicknames', response.ok ? 'success' : 'error');
 }
 
-function populateTimezoneSelect(select) {
+async function loadTimezoneOptions() {
+    if (timezoneOptions) return timezoneOptions;
+    if (!timezoneOptionsPromise) {
+        timezoneOptionsPromise = fetch('/api/timezones')
+            .then(response => response.ok ? response.json() : Promise.reject(new Error('Failed to load timezones')))
+            .then(data => {
+                timezoneOptions = data.timezones || [];
+                return timezoneOptions;
+            })
+            .catch(error => {
+                timezoneOptionsPromise = null;
+                throw error;
+            });
+    }
+    return timezoneOptionsPromise;
+}
+
+function populateTimezoneSelect(select, options) {
     const currentValue = (select.dataset.current || '').trim();
     select.innerHTML = '';
     const defaultOption = document.createElement('option');
@@ -1145,7 +1170,7 @@ function populateTimezoneSelect(select) {
     defaultOption.textContent = 'Use process/server timezone';
     select.appendChild(defaultOption);
     let hasCurrentValue = !currentValue;
-    for (const optionData of timezoneOptions) {
+    for (const optionData of options) {
         const option = document.createElement('option');
         option.value = optionData.value;
         option.textContent = optionData.label;
@@ -1159,10 +1184,18 @@ function populateTimezoneSelect(select) {
         select.appendChild(fallbackOption);
     }
     select.value = currentValue;
+    select.dataset.loaded = 'true';
 }
 
-function populateTimezoneSelects() {
-    document.querySelectorAll('.timezone-select').forEach(populateTimezoneSelect);
+async function populateTimezoneSelects(root = document) {
+    const selects = Array.from(root.querySelectorAll('.timezone-select')).filter(select => select.dataset.loaded !== 'true');
+    if (!selects.length) return;
+    try {
+        const options = await loadTimezoneOptions();
+        selects.forEach(select => populateTimezoneSelect(select, options));
+    } catch (error) {
+        showToast('Failed to load timezone list', 'error');
+    }
 }
 
 async function saveBotTimezone(botName) {
@@ -1175,7 +1208,8 @@ async function saveBotTimezone(botName) {
     const result = await response.json();
     if (result.status === 'ok') {
         select.dataset.current = result.timezone || '';
-        populateTimezoneSelect(select);
+        select.dataset.loaded = 'false';
+        populateTimezoneSelects(select.parentElement || document);
         showToast(`Timezone saved for ${botName}`, 'success');
     } else {
         showToast(result.message || 'Failed to save timezone', 'error');
@@ -1198,6 +1232,7 @@ function addScheduleWindow(button, start = '', end = '', days = ['mon','tue','we
         <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
     `;
     container.appendChild(wrapper);
+    populateTimezoneSelects(wrapper);
 }
 
 function removeScheduleWindow(button) {
@@ -1482,7 +1517,6 @@ document.querySelectorAll('.json-editor').forEach(textarea => {
 document.addEventListener('DOMContentLoaded', () => {
     initializeConfigTabs();
     initializeLazyEditors();
-    populateTimezoneSelects();
 });
 </script>
 {% endblock %}

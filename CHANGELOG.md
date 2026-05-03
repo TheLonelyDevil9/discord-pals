@@ -4,6 +4,27 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.1.1] - 2026-05-04
+
+### Added
+
+- Impeccable product/design context for dashboard-first UI work, covering the fast, intuitive, obvious dashboard direction and performance rules.
+
+### Changed
+
+- Dashboard navigation now uses tiny WebP brand assets instead of loading the full multi-megabyte banner image in the top bar and hover preview.
+- Removed the multi-megabyte generated SVG favicon from the critical page head while keeping the PNG, ICO, Apple touch icon, and manifest favicon package.
+- Config page timezones now load on demand from `/api/timezones` only when the Time tab is opened instead of embedding and populating the full timezone list during initial render.
+- Memory search/filter requests are debounced and abort stale in-flight auto-memory requests while tab switches avoid unnecessary target reloads.
+- Channel table filtering and sorting now reuse cached row references and batch DOM moves to reduce reflow work.
+- Logs polling now pauses when leaving the Live Logs tab, while context polling only runs on the Context tab.
+- Dashboard auth-only APIs now accept an existing dashboard login session and no longer require extra Basic Auth prompts when session auth is already satisfied.
+- Added reduced-motion handling and content visibility containment for heavy dashboard cards/lists to keep scrolling and tab changes snappier.
+
+### Fixed
+
+- Updated dashboard asset and timezone tests for lazy-loaded performance behavior.
+
 ## [v2.1.0] - 2026-04-29
 
 ### Added

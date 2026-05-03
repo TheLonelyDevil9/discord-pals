@@ -16,7 +16,8 @@ class DashboardAssetTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('href="/static/favicon-96x96.png"', page)
-        self.assertIn('href="/static/favicon.svg"', page)
+        self.assertNotIn('href="/static/favicon.svg"', page)
+        self.assertIn('/static/dashboard-brand.webp', page)
         self.assertIn('href="/static/favicon.ico"', page)
         self.assertIn('href="/static/apple-touch-icon.png"', page)
         self.assertIn('content="Discord Pals"', page)

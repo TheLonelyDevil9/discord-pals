@@ -6,14 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Discord Pals{% endblock %}</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-96x96.png') }}" sizes="96x96">
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <!-- The generated SVG favicon embeds a multi-megabyte raster payload; keep it off the critical path. -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
     <meta name="apple-mobile-web-app-title" content="Discord Pals">
     <link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         /* ===== Design System: Clean Minimal ===== */
 
@@ -69,7 +66,7 @@
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.5;
@@ -178,7 +175,7 @@
             opacity: 0;
             visibility: hidden;
             transform: translateY(-8px);
-            transition: all 0.2s ease;
+            transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
             z-index: 200;
             pointer-events: none;
         }
@@ -201,7 +198,7 @@
             text-decoration: none;
             font-weight: 500;
             font-size: 0.875rem;
-            transition: all 0.15s ease;
+            transition: color 0.12s ease, background-color 0.12s ease;
         }
 
         .nav-link:hover {
@@ -236,7 +233,7 @@
             border: 1px solid var(--border-subtle);
             color: var(--text-muted);
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: color 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
             font-size: 1rem;
         }
 
@@ -415,7 +412,7 @@
             font-size: 0.8125rem;
             border: none;
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: opacity 0.12s ease, color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
             text-decoration: none;
         }
 
@@ -527,7 +524,7 @@
             background: none;
             border-bottom: 2px solid transparent;
             margin-bottom: -1px;
-            transition: all 0.15s ease;
+            transition: color 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
         }
 
         .tab:hover {
@@ -545,6 +542,14 @@
 
         .tab-content.active {
             display: block;
+        }
+
+        .card,
+        .memory-card,
+        .lore-entry,
+        .provider-item {
+            content-visibility: auto;
+            contain-intrinsic-size: auto 180px;
         }
 
         /* ===== Empty State ===== */
@@ -749,6 +754,17 @@
                 font-size: 1.5rem;
             }
         }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                scroll-behavior: auto !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
     </style>
     <script>
         // Theme initialization (runs before page renders to prevent flash)
@@ -766,10 +782,10 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <nav>
         <div class="nav-brand">
-            <img src="/static/banner.jpg" alt="Discord Pals" class="nav-brand-icon">
+            <img src="/static/dashboard-brand.webp" alt="Discord Pals" class="nav-brand-icon" width="32" height="32" decoding="async">
             <a href="https://github.com/TheLonelyDevil9/discord-pals" target="_blank" rel="noopener" class="nav-brand-text">Discord Pals</a>
             <span class="nav-version">v{{ version }}</span>
-            <img src="/static/banner.jpg" alt="Discord Pals Banner" class="nav-brand-preview">
+            <img alt="Discord Pals Banner" class="nav-brand-preview" data-src="/static/dashboard-banner-preview.webp" width="400" height="400" decoding="async">
         </div>
         <div class="nav-links">
             <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}">Dashboard</a>
@@ -907,6 +923,21 @@
 
         // Update icon on load
         updateThemeIcon(document.documentElement.getAttribute('data-theme'));
+
+        (function initBrandPreview() {
+            var brand = document.querySelector('.nav-brand');
+            var preview = document.querySelector('.nav-brand-preview');
+            if (!brand || !preview) return;
+
+            function loadPreview() {
+                if (!preview.getAttribute('src')) {
+                    preview.setAttribute('src', preview.getAttribute('data-src'));
+                }
+            }
+
+            brand.addEventListener('pointerenter', loadPreview, { once: true });
+            brand.addEventListener('focusin', loadPreview, { once: true });
+        })();
     </script>
 </body>
 

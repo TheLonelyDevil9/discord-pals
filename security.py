@@ -193,6 +193,11 @@ def requires_auth(f):
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        if not is_auth_enabled():
+            return f(*args, **kwargs)
+        if is_logged_in():
+            return f(*args, **kwargs)
+
         auth = request.authorization
         username = auth.username if auth else ''
         password = auth.password if auth else ''

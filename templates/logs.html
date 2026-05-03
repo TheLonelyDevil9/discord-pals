@@ -603,6 +603,20 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
     document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
     document.getElementById('tab-' + tabName).classList.add('active');
+
+    if (tabName === 'live') {
+        fetchLogs();
+        startLogsPolling();
+    } else {
+        stopLogsPolling();
+    }
+
+    if (tabName === 'context') {
+        fetchContexts();
+        startContextPolling();
+    } else {
+        stopContextPolling();
+    }
 }
 
 let autoScroll = true;
@@ -854,8 +868,10 @@ document.addEventListener('visibilitychange', () => {
         stopLogsPolling();
         stopContextPolling();
     } else {
-        fetchLogs();
-        startLogsPolling();
+        if (document.getElementById('tab-live').classList.contains('active')) {
+            fetchLogs();
+            startLogsPolling();
+        }
         if (document.getElementById('tab-context').classList.contains('active')) {
             fetchContexts();
             startContextPolling();
@@ -928,18 +944,6 @@ function renderContexts(contexts) {
         }
     }
 }
-
-// Override switchTab to manage context polling
-const originalSwitchTab = switchTab;
-switchTab = function(tabName) {
-    originalSwitchTab(tabName);
-    if (tabName === 'context') {
-        fetchContexts();
-        startContextPolling();
-    } else {
-        stopContextPolling();
-    }
-};
 
 // Initial context fetch if context tab is active
 if (document.getElementById('tab-context').classList.contains('active')) {

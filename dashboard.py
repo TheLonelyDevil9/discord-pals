@@ -1013,7 +1013,6 @@ def api_message_format():
 def config_page():
     """Runtime configuration page (merged with Settings)."""
     import runtime_config
-    from time_utils import get_timezone_options
     from character import DEFAULT_OTHER_PROMPTS
     
     config = runtime_config.get_all()
@@ -1104,7 +1103,6 @@ def config_page():
         autonomous_raw=autonomous_raw,
         system_content=system_content,
         other_prompts_content=other_prompts_content,
-        timezone_options=get_timezone_options(),
         message=request.args.get('message'),
         error=request.args.get('error')
     )
@@ -1148,15 +1146,14 @@ def api_config():
 def api_bot_timezones():
     """Get or update per-bot timezone overrides."""
     import runtime_config
-    from time_utils import get_timezone_options, normalize_timezone_name
+    from time_utils import normalize_timezone_name
 
     if request.method == 'GET':
         return jsonify({
             'bot_timezones': {
                 bot.name: runtime_config.get_bot_timezone(bot.name) or ''
                 for bot in bot_instances
-            },
-            'timezone_options': get_timezone_options(),
+            }
         })
 
     data = request.json or {}
@@ -1178,6 +1175,14 @@ def api_bot_timezones():
         'bot_name': bot_name,
         'timezone': timezone_name or ''
     })
+
+
+@app.route('/api/timezones')
+def api_timezones():
+    """Return timezone picker options on demand instead of embedding them in page HTML."""
+    from time_utils import get_timezone_options
+
+    return jsonify({'timezones': get_timezone_options()})
 
 
 @app.route('/api/bot-schedules', methods=['POST'])

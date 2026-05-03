@@ -35,7 +35,7 @@
     <div class="filter-row">
         <div class="form-group">
             <label for="type-filter">Scope</label>
-            <select id="type-filter" onchange="loadAutoMemories()" title="Filter by scope">
+            <select id="type-filter" onchange="scheduleAutoMemoryLoad()" title="Filter by scope">
                 <option value="">All</option>
                 <option value="server">Server</option>
                 <option value="dm">DM</option>
@@ -43,7 +43,7 @@
         </div>
         <div class="form-group" id="server-filter-group">
             <label for="server-filter">Server</label>
-            <select id="server-filter" onchange="loadAutoMemories()" title="Filter by server">
+            <select id="server-filter" onchange="scheduleAutoMemoryLoad()" title="Filter by server">
                 <option value="">All Servers</option>
                 {% for guild in guilds %}
                 <option value="{{ guild.id }}">{{ guild.name }}</option>
@@ -52,7 +52,7 @@
         </div>
         <div class="form-group flex-1">
             <label for="memory-search">Search</label>
-            <input type="text" id="memory-search" placeholder="Search auto profiles..." oninput="loadAutoMemories()" title="Search memory content">
+            <input type="text" id="memory-search" placeholder="Search auto profiles..." oninput="scheduleAutoMemoryLoad()" title="Search memory content">
         </div>
         <div class="form-group">
             <label for="sort-by">Sort</label>
@@ -673,6 +673,12 @@ let autoTargetUsers = [];
 let loreTargetUsers = [];
 let autoUserNameLookup = {};
 let loreUserNameLookup = {};
+let activeMemoryTab = 'files';
+let autoMemoriesLoaded = false;
+let loreLoaded = false;
+let memoryTargetsLoaded = false;
+let autoLoadTimer = null;
+let autoLoadAbortController = null;
 
 function escapeHtml(text) {
     if (!text) return '';
@@ -682,6 +688,7 @@ function escapeHtml(text) {
 }
 
 function switchTab(tabName) {
+    activeMemoryTab = tabName;
     document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
 
@@ -693,12 +700,18 @@ function switchTab(tabName) {
 
     if (tabName === 'files') {
         loadAutoMemories();
-        loadMemoryTargets();
+        loadMemoryTargetsOnce();
     }
     if (tabName === 'lore') {
         loadLoreV2();
-        loadMemoryTargets();
+        loadMemoryTargetsOnce();
     }
+}
+
+function scheduleAutoMemoryLoad() {
+    updateAutoFilterControls();
+    clearTimeout(autoLoadTimer);
+    autoLoadTimer = setTimeout(loadAutoMemories, 250);
 }
 
 function updateMemoryForm() {
@@ -807,6 +820,7 @@ function populateUserDatalist(listId, users) {
 }
 
 async function loadMemoryTargets() {
+    memoryTargetsLoaded = false;
     try {
         const response = await fetch('/api/v2/memories/targets');
         const data = await response.json();
@@ -818,9 +832,15 @@ async function loadMemoryTargets() {
 
         populateUserDatalist('known-auto-users', autoTargetUsers);
         populateUserDatalist('known-lore-users', loreTargetUsers);
+        memoryTargetsLoaded = true;
     } catch (error) {
         console.error('Failed to load memory target users:', error);
     }
+}
+
+async function loadMemoryTargetsOnce() {
+    if (memoryTargetsLoaded) return;
+    await loadMemoryTargets();
 }
 
 function parseUserIdsInput(rawValue, userNameLookup) {
@@ -1116,8 +1136,13 @@ async function loadMemoryStats() {
 }
 
 async function loadAutoMemories() {
+    if (activeMemoryTab !== 'files') return;
     updateAutoFilterControls();
     resetAutoSelection();
+    if (autoLoadAbortController) {
+        autoLoadAbortController.abort();
+    }
+    autoLoadAbortController = new AbortController();
 
     const list = document.getElementById('list-auto');
     if (list) {
@@ -1127,11 +1152,15 @@ async function loadAutoMemories() {
     try {
         const params = getAutoQueryParams();
         const query = params.toString();
-        const response = await fetch(`/api/v2/memories/auto${query ? `?${query}` : ''}`);
+        const response = await fetch(`/api/v2/memories/auto${query ? `?${query}` : ''}`, {
+            signal: autoLoadAbortController.signal
+        });
         const data = await response.json();
         autoMemoryData = data.memories || [];
+        autoMemoriesLoaded = true;
         renderAutoMemories();
     } catch (error) {
+        if (error.name === 'AbortError') return;
         console.error('Failed to load auto memories:', error);
         if (list) {
             list.innerHTML = '<p class="memory-list-empty" style="color: var(--danger)">Failed to load auto memory profiles.</p>';
@@ -1446,6 +1475,7 @@ function updateLoreDeleteBtn() {
 }
 
 async function loadLoreV2() {
+    if (activeMemoryTab !== 'lore') return;
     const typeFilter = document.getElementById('lore-type-filter').value;
     const params = new URLSearchParams();
     if (typeFilter) params.set('type', typeFilter);
@@ -1454,6 +1484,7 @@ async function loadLoreV2() {
         const response = await fetch(`/api/v2/memories/lore?${params.toString()}`);
         const data = await response.json();
         loreData = data.lore || [];
+        loreLoaded = true;
         renderLoreList();
         updateLoreDeleteBtn();
         document.getElementById('lore-select-all').checked = false;
