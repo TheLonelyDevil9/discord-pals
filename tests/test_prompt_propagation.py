@@ -427,6 +427,41 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["user_only_context_count"], 9)
         self.assertNotIn("context_message_count", config)
 
+    def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
+        response = self.client.post(
+            "/api/config",
+            json={
+                "history_limit": "5000",
+                "name_trigger_chance": "2.5",
+                "bot_falloff_decay_rate": "nan",
+                "bot_interactions_paused": "true",
+                "bot_falloff_hard_limit": "-10",
+                "bot_timezones": "not-a-dict",
+                "unknown_extension": "ignored",
+            },
+            headers=self.csrf_headers()
+        )
+        config = self.client.get("/api/config").get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(config["history_limit"], 1000)
+        self.assertEqual(config["name_trigger_chance"], 1.0)
+        self.assertEqual(config["bot_falloff_decay_rate"], 0.15)
+        self.assertIs(config["bot_interactions_paused"], True)
+        self.assertEqual(config["bot_falloff_hard_limit"], 1)
+        self.assertEqual(config["bot_timezones"], {})
+        self.assertNotIn("unknown_extension", config)
+
+    def test_runtime_config_rejects_non_object_payload(self):
+        response = self.client.post(
+            "/api/config",
+            json=["history_limit", 50],
+            headers=self.csrf_headers()
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["message"], "JSON object required")
+
 
 class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
     async def test_text_only_provider_keeps_single_user_format_after_image_stripping(self):

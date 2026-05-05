@@ -1128,6 +1128,8 @@ def api_config():
 
     if request.method == 'POST':
         data = request.json
+        if not isinstance(data, dict):
+            return jsonify({'status': 'error', 'message': 'JSON object required'}), 400
         # Validate keys against allowed config keys
         allowed_keys = set(runtime_config.DEFAULTS.keys())
         for key, value in data.items():

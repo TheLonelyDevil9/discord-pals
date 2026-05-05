@@ -4,11 +4,24 @@ Live-adjustable settings via the web dashboard.
 """
 
 import json
+import math
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from config import RUNTIME_CONFIG_FILE, DATA_DIR
+
+
+@dataclass(frozen=True)
+class ConfigField:
+    """Runtime config boundary rule for one dashboard-editable setting."""
+
+    value_type: type
+    default: object
+    min_value: float | None = None
+    max_value: float | None = None
+
 
 # Default values
 DEFAULTS = {
@@ -46,9 +59,42 @@ DEFAULTS = {
     "dm_followup_timeout_minutes": 120,  # Minutes of silence before sending a follow-up
     "dm_followup_max_count": 1,  # Max follow-up messages before stopping
     "dm_followup_cooldown_hours": 24,  # Hours between follow-up attempts for same user
+    "bot_nicknames": {},  # Single-bot nickname fallback, edited through dashboard nickname controls
 }
 LEGACY_KEY_ALIASES = {
     "context_message_count": "user_only_context_count",
+}
+CONFIG_FIELDS = {
+    "history_limit": ConfigField(int, DEFAULTS["history_limit"], 10, 1000),
+    "immediate_message_count": ConfigField(int, DEFAULTS["immediate_message_count"], 1, 50),
+    "active_provider": ConfigField(str, DEFAULTS["active_provider"]),
+    "bot_interactions_paused": ConfigField(bool, DEFAULTS["bot_interactions_paused"]),
+    "global_paused": ConfigField(bool, DEFAULTS["global_paused"]),
+    "use_single_user": ConfigField(bool, DEFAULTS["use_single_user"]),
+    "name_trigger_chance": ConfigField(float, DEFAULTS["name_trigger_chance"], 0.0, 1.0),
+    "custom_nicknames": ConfigField(str, DEFAULTS["custom_nicknames"]),
+    "raw_generation_logging": ConfigField(bool, DEFAULTS["raw_generation_logging"]),
+    "bot_timezones": ConfigField(dict, DEFAULTS["bot_timezones"]),
+    "bot_schedules": ConfigField(dict, DEFAULTS["bot_schedules"]),
+    "bot_falloff_enabled": ConfigField(bool, DEFAULTS["bot_falloff_enabled"]),
+    "bot_falloff_base_chance": ConfigField(float, DEFAULTS["bot_falloff_base_chance"], 0.0, 1.0),
+    "bot_falloff_decay_rate": ConfigField(float, DEFAULTS["bot_falloff_decay_rate"], 0.0, 1.0),
+    "bot_falloff_min_chance": ConfigField(float, DEFAULTS["bot_falloff_min_chance"], 0.0, 1.0),
+    "bot_falloff_hard_limit": ConfigField(int, DEFAULTS["bot_falloff_hard_limit"], 1, 100),
+    "split_replies_enabled": ConfigField(bool, DEFAULTS["split_replies_enabled"]),
+    "split_replies_max_targets": ConfigField(int, DEFAULTS["split_replies_max_targets"], 1, 25),
+    "concurrency_limit": ConfigField(int, DEFAULTS["concurrency_limit"], 1, 20),
+    "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
+    "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
+    "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),
+    "user_only_context": ConfigField(bool, DEFAULTS["user_only_context"]),
+    "user_only_context_count": ConfigField(int, DEFAULTS["user_only_context_count"], 1, 100),
+    "time_passage_context_enabled": ConfigField(bool, DEFAULTS["time_passage_context_enabled"]),
+    "dm_followup_enabled": ConfigField(bool, DEFAULTS["dm_followup_enabled"]),
+    "dm_followup_timeout_minutes": ConfigField(int, DEFAULTS["dm_followup_timeout_minutes"], 1, 10080),
+    "dm_followup_max_count": ConfigField(int, DEFAULTS["dm_followup_max_count"], 1, 20),
+    "dm_followup_cooldown_hours": ConfigField(int, DEFAULTS["dm_followup_cooldown_hours"], 1, 168),
+    "bot_nicknames": ConfigField(dict, DEFAULTS["bot_nicknames"]),
 }
 
 # Config cache to avoid repeated file reads
@@ -76,8 +122,72 @@ def _normalize_key(key: str) -> str:
     return LEGACY_KEY_ALIASES.get(key, key)
 
 
+def _coerce_bool(value, default: bool) -> bool:
+    """Coerce dashboard JSON and file values into a strict boolean."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_config_value(key: str, value):
+    """Parse a known runtime config value at the storage/API boundary."""
+    field = CONFIG_FIELDS.get(key)
+    if field is None:
+        return value
+
+    if value is None and field.default is None:
+        return None
+
+    if field.value_type is bool:
+        return _coerce_bool(value, field.default)
+
+    if field.value_type is dict:
+        return value if isinstance(value, dict) else dict(field.default)
+
+    try:
+        if field.value_type is int:
+            coerced = int(value)
+        elif field.value_type is float:
+            coerced = float(value)
+        elif field.value_type is str:
+            if value is None:
+                return None if field.default is None else str(field.default)
+            coerced = str(value)
+        else:
+            coerced = value
+    except (TypeError, ValueError):
+        return field.default
+
+    if isinstance(coerced, float) and not math.isfinite(coerced):
+        return field.default
+
+    if isinstance(coerced, (int, float)):
+        if field.min_value is not None and coerced < field.min_value:
+            coerced = field.min_value
+        if field.max_value is not None and coerced > field.max_value:
+            coerced = field.max_value
+        if field.value_type is int:
+            coerced = int(coerced)
+
+    return coerced
+
+
+def _default_value(key: str):
+    """Return a fresh default value for mutable runtime settings."""
+    value = DEFAULTS[key]
+    return dict(value) if isinstance(value, dict) else value
+
+
 def _normalize_config(config: dict | None) -> dict:
-    """Backfill renamed keys and merge missing defaults."""
+    """Backfill renamed keys, parse known fields, and merge missing defaults."""
     normalized = dict(config or {})
 
     for legacy_key, current_key in LEGACY_KEY_ALIASES.items():
@@ -85,9 +195,14 @@ def _normalize_config(config: dict | None) -> dict:
             normalized[current_key] = normalized[legacy_key]
         normalized.pop(legacy_key, None)
 
+    for key, value in list(normalized.items()):
+        normalized[key] = _coerce_config_value(key, value)
+
     for key, value in DEFAULTS.items():
         if key not in normalized:
-            normalized[key] = value
+            normalized[key] = _default_value(key)
+        else:
+            normalized[key] = _coerce_config_value(key, normalized[key])
 
     return normalized
 
@@ -101,7 +216,7 @@ def _load_config_from_disk() -> dict:
                 return _normalize_config(json.load(f))
         except (json.JSONDecodeError, IOError):
             pass
-    return DEFAULTS.copy()
+    return _normalize_config({})
 
 
 def load_config() -> dict:
@@ -147,7 +262,7 @@ def set(key: str, value):
     """Set a config value."""
     key = _normalize_key(key)
     config = load_config().copy()  # Copy only when modifying
-    config[key] = value
+    config[key] = _coerce_config_value(key, value)
     save_config(config)
 
 

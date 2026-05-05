@@ -4,6 +4,23 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.1.2] - 2026-05-05
+
+### Added
+
+- Repo-local engineering map under `docs/`, covering architecture ownership, quality guardrails, agent workflow, and execution plan conventions.
+- `tools/quality_check.py` to enforce agent instruction parity, required docs, runtime config schema alignment, and tracked large-module growth.
+- Regression coverage for the new quality check and runtime config boundary parsing.
+
+### Changed
+
+- `AGENTS.md` and `CLAUDE.md` now act as short maps into deeper repo docs instead of standalone manuals.
+- Runtime config loading and dashboard updates now coerce known setting types, clamp numeric ranges, reject non-finite floats, and keep mutable defaults isolated.
+
+### Fixed
+
+- `/api/config` now rejects non-object JSON payloads instead of iterating over malformed request bodies.
+
 ## [v2.1.1] - 2026-05-04
 
 ### Added
