@@ -209,6 +209,57 @@ class TimePlaceholderTests(unittest.TestCase):
 
         self.assertIn("Legacy context for Nahida.", context)
 
+    def test_default_prose_polisher_keeps_expanded_sections_and_text_corpus(self):
+        original_prompts_dir = character_module.PROMPTS_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            character_module.PROMPTS_DIR = str(Path(tmp))
+            try:
+                manager = character_module.PromptManager()
+            finally:
+                character_module.PROMPTS_DIR = original_prompts_dir
+
+        prompt = manager.build_other_prompt(
+            "prose_polisher",
+            {
+                "character_name": "Nahida",
+                "assistant_response": "Original text",
+            },
+        )
+
+        self.assertIn("# Banned Tropes", prompt)
+        self.assertIn("## Sentence Structure", prompt)
+        self.assertIn("<text_corpus>\nOriginal text\n</text_corpus>", prompt)
+
+    def test_other_prompts_loader_preserves_internal_markdown_headings_in_known_sections(self):
+        original_prompts_dir = character_module.PROMPTS_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            prompts_dir = Path(tmp)
+            (prompts_dir / "other_prompts.md").write_text(
+                "# Other Prompts\n\n"
+                "## Prose Polisher\n\n"
+                "Opening instruction.\n\n"
+                "## Internal Category\n\n"
+                "This heading belongs to the prose polisher body.\n\n"
+                "### Internal Detail\n\n"
+                "Still prose polisher body.\n\n"
+                "## Chatroom Context\n\n"
+                "Context for {{CHARACTER_NAME}}.\n",
+                encoding="utf-8",
+            )
+            character_module.PROMPTS_DIR = str(prompts_dir)
+            try:
+                manager = character_module.PromptManager()
+            finally:
+                character_module.PROMPTS_DIR = original_prompts_dir
+
+        prose_prompt = manager.build_other_prompt("prose_polisher")
+        chatroom_context = manager.build_chatroom_context(character_name="Nahida")
+
+        self.assertIn("## Internal Category", prose_prompt)
+        self.assertIn("### Internal Detail", prose_prompt)
+        self.assertNotIn("## Chatroom Context", prose_prompt)
+        self.assertEqual(chatroom_context, "Context for Nahida.")
+
     def test_time_passage_context_renders_as_post_system_context(self):
         manager = character_module.PromptManager()
         signal = {
@@ -512,6 +563,71 @@ class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generate_mock.await_args.kwargs["max_tokens"], 4096)
         self.assertEqual(generate_mock.await_args.kwargs["preferred_tier"], "secondary")
         self.assertIs(generate_mock.await_args.kwargs["use_single_user"], False)
+
+    async def test_prose_polisher_appends_text_corpus_when_template_omits_response(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        runtime_values = {
+            "prose_polisher_enabled": True,
+            "prose_polisher_max_tokens": 4096,
+            "prose_polisher_preferred_tier": "",
+        }
+        generate_mock = AsyncMock(return_value="Polished text")
+
+        with patch.object(
+            bot_instance_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: runtime_values.get(key, default),
+        ), patch.object(
+            bot_instance_module.character_manager,
+            "build_other_prompt",
+            return_value="Polish the supplied corpus.",
+        ), patch.object(
+            bot_instance_module.provider_manager,
+            "generate",
+            new=generate_mock,
+        ), patch.object(bot_instance_module.log, "warn"), patch.object(bot_instance_module.log, "debug"):
+            result = await instance._polish_response("Original text")
+
+        prompt = generate_mock.await_args.kwargs["messages"][0]["content"]
+        self.assertEqual(result, "Polished text")
+        self.assertIn("Text corpus:", prompt)
+        self.assertIn("<text_corpus>\nOriginal text\n</text_corpus>", prompt)
+
+    async def test_prose_polisher_appends_text_corpus_for_short_substring_response(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        runtime_values = {
+            "prose_polisher_enabled": True,
+            "prose_polisher_max_tokens": 4096,
+            "prose_polisher_preferred_tier": "",
+        }
+        generate_mock = AsyncMock(return_value="Polished text")
+
+        with patch.object(
+            bot_instance_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: runtime_values.get(key, default),
+        ), patch.object(
+            bot_instance_module.character_manager,
+            "build_other_prompt",
+            return_value="Review the text and return only the rewritten text.",
+        ), patch.object(
+            bot_instance_module.provider_manager,
+            "generate",
+            new=generate_mock,
+        ), patch.object(bot_instance_module.log, "warn"), patch.object(bot_instance_module.log, "debug"):
+            result = await instance._polish_response("text")
+
+        prompt = generate_mock.await_args.kwargs["messages"][0]["content"]
+        self.assertEqual(result, "Polished text")
+        self.assertIn("<text_corpus>\ntext\n</text_corpus>", prompt)
 
     async def test_prose_polisher_keeps_original_when_disabled_or_empty(self):
         instance = object.__new__(bot_instance_module.BotInstance)

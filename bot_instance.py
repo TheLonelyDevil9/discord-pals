@@ -732,6 +732,24 @@ class BotInstance:
             passes += 1
         return cleaned
 
+    @staticmethod
+    def _polish_prompt_includes_response(prompt: str, response: str) -> bool:
+        """Return True when the polish prompt clearly includes the response body."""
+        response = (response or "").strip()
+        if not response:
+            return True
+
+        for tag in ("text_corpus", "assistant_response"):
+            wrapper_pattern = re.compile(
+                rf"<{tag}\b[^>]*>\s*([\s\S]*?)\s*</{tag}>",
+                re.IGNORECASE,
+            )
+            for match in wrapper_pattern.finditer(prompt or ""):
+                if match.group(1).strip() == response:
+                    return True
+
+        return len(response) >= 32 and response in (prompt or "")
+
     async def _polish_response(self, response: str) -> str:
         """Run the optional post-generation Prose Polisher pass."""
         if not runtime_config.get("prose_polisher_enabled", False):
@@ -748,6 +766,14 @@ class BotInstance:
                     "assistant_response": response,
                 },
             )
+            if not self._polish_prompt_includes_response(polish_prompt, response):
+                polish_prompt = (
+                    f"{polish_prompt}\n\n"
+                    "Text corpus:\n"
+                    "<text_corpus>\n"
+                    f"{response}\n"
+                    "</text_corpus>"
+                )
         except Exception as e:
             log.warn(f"Failed to build prose polisher prompt: {e}", self.name)
             return response
