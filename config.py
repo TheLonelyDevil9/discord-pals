@@ -21,6 +21,10 @@ DEFAULT_MAX_TOKENS = 2048
 # --- Provider Configuration ---
 
 
+class CharacterProviderMap(dict):
+    """Patch-friendly mapping for per-character provider preferences."""
+
+
 def _validate_provider_value(value, expected_type, default, min_val=None, max_val=None, name="value"):
     """Validate and coerce a provider config value.
 
@@ -118,6 +122,11 @@ def load_providers() -> tuple[dict, int, dict]:
                 "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
                 "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
                 "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
+                "reasoning_effort": _validate_provider_value(p.get("reasoning_effort") or p.get("effort"), str, "", name="reasoning_effort"),
+                "reasoning_format": _validate_provider_value(p.get("reasoning_format"), str, "auto", name="reasoning_format"),
+                "reasoning": _validate_provider_value(p.get("reasoning"), dict, {}, name="reasoning"),
+                "output_config": _validate_provider_value(p.get("output_config"), dict, {}, name="output_config"),
+                "thinking": _validate_provider_value(p.get("thinking"), dict, {}, name="thinking"),
                 # SillyTavern-style YAML parameters (preferred)
                 "include_body": _validate_provider_value(p.get("include_body"), str, "", name="include_body"),
                 "exclude_body": _validate_provider_value(p.get("exclude_body"), str, "", name="exclude_body"),
@@ -139,7 +148,7 @@ def load_providers() -> tuple[dict, int, dict]:
             else:
                 log.warn(f"Invalid tier '{tier}' for character '{char_name}', ignoring")
 
-        return providers, timeout, validated_char_providers
+        return providers, timeout, CharacterProviderMap(validated_char_providers)
     
     # Default fallback (original hardcoded config)
     return {
@@ -155,7 +164,7 @@ def load_providers() -> tuple[dict, int, dict]:
             "key": os.getenv('DEEPSEEK_API_KEY'),
             "model": "deepseek-chat"
         }
-    }, timeout, {}
+    }, timeout, CharacterProviderMap()
 
 
 PROVIDERS, API_TIMEOUT, CHARACTER_PROVIDERS = load_providers()
@@ -173,7 +182,7 @@ def reload_character_providers() -> dict:
             char_providers = data.get("character_providers", {})
             # Validate against current provider tiers
             valid_tiers = set(PROVIDERS.keys())
-            validated = {k: v for k, v in char_providers.items() if v in valid_tiers}
+            validated = CharacterProviderMap({k: v for k, v in char_providers.items() if v in valid_tiers})
             # Update in-place so all modules that imported CHARACTER_PROVIDERS see the change
             CHARACTER_PROVIDERS.clear()
             CHARACTER_PROVIDERS.update(validated)

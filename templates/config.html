@@ -222,6 +222,28 @@
                             </label>
                             <p class="form-hint">Folds system, post-system context, and chat into one user-style message for providers that behave better that way.</p>
                         </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="prose_polisher_enabled" {% if config.prose_polisher_enabled %}checked{% endif %}>
+                                <span>Prose Polisher</span>
+                            </label>
+                            <p class="form-hint">Runs a post-generation editing pass that rewrites repetitive tropes, cliches, and overused wording before the reply is sent.</p>
+                        </div>
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="prose_polisher_max_tokens">Polisher Max Tokens</label>
+                                <input type="number" id="prose_polisher_max_tokens" min="16" max="16000" step="1" value="{{ config.prose_polisher_max_tokens or 8192 }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="prose_polisher_preferred_tier">Polisher Provider</label>
+                                <select id="prose_polisher_preferred_tier" title="Provider tier for Prose Polisher">
+                                    <option value="">Character/default order</option>
+                                    {% for tier in provider_tiers %}
+                                    <option value="{{ tier }}" {% if config.prose_polisher_preferred_tier==tier %}selected{% endif %}>{{ tier|capitalize }} ({{ providers_dict.get(tier, {}).get('name', tier) }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
                         <button type="submit" class="btn btn-primary">Save Prompting Settings</button>
                     </form>
                 </div>
@@ -638,6 +660,30 @@
                             <div class="form-group"><label for="new-provider-key">API Key</label><input type="password" id="new-provider-key"></div>
                             <div class="form-group"><label for="new-provider-model">Model</label><input type="text" id="new-provider-model"></div>
                             <div class="form-group"><label for="new-provider-temp">Temperature</label><input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7"></div>
+                            <div class="form-group">
+                                <label for="new-provider-reasoning-effort">Reasoning Effort (optional)</label>
+                                <select id="new-provider-reasoning-effort">
+                                    <option value="">Default</option>
+                                    <option value="none">None</option>
+                                    <option value="minimal">Minimal</option>
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="xhigh">XHigh</option>
+                                    <option value="max">Max</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-reasoning-format">Reasoning Format</label>
+                                <select id="new-provider-reasoning-format">
+                                    <option value="auto">Auto</option>
+                                    <option value="openai_chat">OpenAI Chat Completions</option>
+                                    <option value="openai_responses">OpenAI Responses</option>
+                                    <option value="claude">Claude Output Config</option>
+                                    <option value="effort">Top-Level Effort</option>
+                                    <option value="thinking">Thinking Object</option>
+                                </select>
+                            </div>
                             <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
                             <div class="form-group" id="new-openrouter-group" style="display:none;">
                                 <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
@@ -819,6 +865,30 @@
                 <div class="form-group"><label for="edit-provider-model">Model</label><input type="text" id="edit-provider-model"></div>
                 <div class="form-group"><label for="edit-provider-temp">Temperature</label><input type="number" id="edit-provider-temp" min="0" max="2" step="0.1"></div>
                 <div class="form-group"><label for="edit-provider-max-tokens">Max Tokens (optional)</label><input type="number" id="edit-provider-max-tokens" min="1"></div>
+                <div class="form-group">
+                    <label for="edit-provider-reasoning-effort">Reasoning Effort (optional)</label>
+                    <select id="edit-provider-reasoning-effort">
+                        <option value="">Default</option>
+                        <option value="none">None</option>
+                        <option value="minimal">Minimal</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">XHigh</option>
+                        <option value="max">Max</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-reasoning-format">Reasoning Format</label>
+                    <select id="edit-provider-reasoning-format">
+                        <option value="auto">Auto</option>
+                        <option value="openai_chat">OpenAI Chat Completions</option>
+                        <option value="openai_responses">OpenAI Responses</option>
+                        <option value="claude">Claude Output Config</option>
+                        <option value="effort">Top-Level Effort</option>
+                        <option value="thinking">Thinking Object</option>
+                    </select>
+                </div>
                 <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
                 <div class="form-group" id="edit-openrouter-group" style="display:none;">
                     <label for="edit-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
@@ -1098,7 +1168,12 @@ document.getElementById('context-settings-form')?.addEventListener('submit', asy
 
 document.getElementById('prompt-settings-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    await postConfig({ use_single_user: document.getElementById('use_single_user').checked }, 'Prompting settings saved');
+    await postConfig({
+        use_single_user: document.getElementById('use_single_user').checked,
+        prose_polisher_enabled: document.getElementById('prose_polisher_enabled').checked,
+        prose_polisher_max_tokens: parseInt(document.getElementById('prose_polisher_max_tokens').value),
+        prose_polisher_preferred_tier: document.getElementById('prose_polisher_preferred_tier').value
+    }, 'Prompting settings saved');
 });
 
 document.getElementById('dm-followup-form')?.addEventListener('submit', async (e) => {
@@ -1454,6 +1529,8 @@ function editProvider(index) {
     document.getElementById('edit-provider-model').value = provider.model || '';
     document.getElementById('edit-provider-temp').value = provider.temperature ?? 0.7;
     document.getElementById('edit-provider-max-tokens').value = provider.max_tokens || '';
+    document.getElementById('edit-provider-reasoning-effort').value = provider.reasoning_effort || provider.effort || '';
+    document.getElementById('edit-provider-reasoning-format').value = provider.reasoning_format || 'auto';
     document.getElementById('edit-provider-timeout').value = provider.timeout || '';
     const editUrl = provider.url || '';
     const orGroup = document.getElementById('edit-openrouter-group');
@@ -1483,6 +1560,11 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
     if (newKey) provider.api_key = newKey;
     const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
     if (maxTokens) provider.max_tokens = parseInt(maxTokens); else delete provider.max_tokens;
+    const reasoningEffort = document.getElementById('edit-provider-reasoning-effort').value;
+    if (reasoningEffort) provider.reasoning_effort = reasoningEffort; else delete provider.reasoning_effort;
+    delete provider.effort;
+    const reasoningFormat = document.getElementById('edit-provider-reasoning-format').value;
+    if (reasoningFormat && reasoningFormat !== 'auto') provider.reasoning_format = reasoningFormat; else delete provider.reasoning_format;
     const timeout = document.getElementById('edit-provider-timeout').value.trim();
     if (timeout) provider.timeout = parseInt(timeout); else delete provider.timeout;
     const orText = document.getElementById('edit-provider-openrouter').value.trim();
@@ -1553,6 +1635,10 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     const newProvider = { name, model, temperature };
     if (url) newProvider.url = url;
     if (api_key) newProvider.api_key = api_key;
+    const newReasoningEffort = document.getElementById('new-provider-reasoning-effort').value;
+    if (newReasoningEffort) newProvider.reasoning_effort = newReasoningEffort;
+    const newReasoningFormat = document.getElementById('new-provider-reasoning-format').value;
+    if (newReasoningFormat && newReasoningFormat !== 'auto') newProvider.reasoning_format = newReasoningFormat;
     const newTimeout = document.getElementById('new-provider-timeout').value.trim();
     if (newTimeout) newProvider.timeout = parseInt(newTimeout);
     const newOrText = document.getElementById('new-provider-openrouter').value.trim();

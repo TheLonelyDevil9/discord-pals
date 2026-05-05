@@ -48,6 +48,12 @@ from scopes import (
 from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
 
 
+RE_ASSISTANT_RESPONSE_WRAPPER = re.compile(
+    r"^\s*<assistant_response>\s*([\s\S]*?)\s*</assistant_response>\s*$",
+    re.IGNORECASE,
+)
+
+
 def _is_same_character(bot_author_name: str, character_name: str) -> bool:
     """Check if a bot's name matches a character name (case-insensitive, partial match).
 
@@ -710,6 +716,77 @@ class BotInstance:
     def _preferred_provider_tier(self) -> str:
         """Resolve the preferred provider tier for this bot's current character."""
         return CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
+
+    @staticmethod
+    def _unwrap_assistant_response_wrapper(text: str) -> str:
+        """Remove SillyBunny-style assistant response wrappers from polish output."""
+        cleaned = (text or "").strip()
+        previous = None
+        passes = 0
+        while cleaned != previous and passes < 8:
+            previous = cleaned
+            match = RE_ASSISTANT_RESPONSE_WRAPPER.match(cleaned)
+            if not match:
+                break
+            cleaned = match.group(1).strip()
+            passes += 1
+        return cleaned
+
+    async def _polish_response(self, response: str) -> str:
+        """Run the optional post-generation Prose Polisher pass."""
+        if not runtime_config.get("prose_polisher_enabled", False):
+            return response
+
+        if not response or not response.strip() or not self.character:
+            return response
+
+        try:
+            polish_prompt = character_manager.build_other_prompt(
+                "prose_polisher",
+                {
+                    "character_name": self.character.name,
+                    "assistant_response": response,
+                },
+            )
+        except Exception as e:
+            log.warn(f"Failed to build prose polisher prompt: {e}", self.name)
+            return response
+
+        if not polish_prompt.strip():
+            return response
+
+        preferred_tier = (runtime_config.get("prose_polisher_preferred_tier", "") or "").strip()
+        if not preferred_tier:
+            preferred_tier = self._preferred_provider_tier()
+
+        try:
+            polished = await provider_manager.generate(
+                messages=[{
+                    "role": "user",
+                    "content": polish_prompt,
+                    "author": "Prose Polisher",
+                }],
+                system_prompt="Return only the polished assistant response.",
+                temperature=None,
+                max_tokens=runtime_config.get("prose_polisher_max_tokens", 8192),
+                use_single_user=False,
+                preferred_tier=preferred_tier,
+            )
+        except Exception as e:
+            log.warn(f"Prose Polisher failed: {str(e)[:120]}", self.name)
+            return response
+
+        polished = self._unwrap_assistant_response_wrapper(remove_thinking_tags(polished or "")).strip()
+        if not polished:
+            log.warn("Prose Polisher returned empty output; keeping original response", self.name)
+            return response
+
+        if polished != response:
+            log.debug(
+                f"Prose Polisher changed response length {len(response)} -> {len(polished)}",
+                self.name,
+            )
+        return polished
 
     @staticmethod
     def _extract_json_payload(text: str) -> dict | None:
@@ -2318,6 +2395,8 @@ Return exactly one JSON object with this shape:
             return None
 
         # Sanitize response (pass character name for third-person self-reference detection)
+        response = sanitize_response(response, self.character.name)
+        response = await self._polish_response(response)
         response = sanitize_response(response, self.character.name)
         response = self._strip_other_bot_prefixes(response, other_bot_names)
 

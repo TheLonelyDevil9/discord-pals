@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 from config import PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 import asyncio
+import copy
 import logger as log
 
 try:
@@ -20,6 +21,46 @@ except ImportError:
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
+
+
+REASONING_EFFORT_ALIASES = {
+    "off": "none",
+    "disabled": "none",
+    "disable": "none",
+    "extra-high": "xhigh",
+    "extra_high": "xhigh",
+    "extra high": "xhigh",
+    "x-high": "xhigh",
+    "x_high": "xhigh",
+    "max-effort": "max",
+    "max_effort": "max",
+}
+
+REASONING_FORMAT_ALIASES = {
+    "openai": "openai_responses",
+    "openai_responses": "openai_responses",
+    "responses": "openai_responses",
+    "reasoning": "openai_responses",
+    "reasoning_object": "openai_responses",
+    "reasoning-object": "openai_responses",
+    "openai_chat": "openai_chat",
+    "openai-chat": "openai_chat",
+    "chat": "openai_chat",
+    "chat_completions": "openai_chat",
+    "chat-completions": "openai_chat",
+    "oai_compatible": "openai_chat",
+    "oai-compatible": "openai_chat",
+    "reasoning_effort": "openai_chat",
+    "reasoning-effort": "openai_chat",
+    "claude": "claude",
+    "anthropic": "claude",
+    "output_config": "claude",
+    "output-config": "claude",
+    "effort": "effort",
+    "top_level_effort": "effort",
+    "top-level-effort": "effort",
+    "thinking": "thinking",
+}
 
 
 def deep_merge_dict(base: dict, override: dict) -> None:
@@ -91,6 +132,82 @@ def exclude_keys_by_yaml(target: dict, yaml_string: str) -> None:
             target.pop(parsed, None)
     except Exception as e:
         log.debug(f"Failed to parse exclude_body YAML: {e}")
+
+
+def normalize_reasoning_effort(value) -> str:
+    """Normalize common provider effort spellings while preserving unknown values."""
+    if value is None:
+        return ""
+
+    effort = str(value).strip()
+    if not effort:
+        return ""
+
+    normalized = effort.lower()
+    return REASONING_EFFORT_ALIASES.get(normalized, normalized)
+
+
+def resolve_reasoning_format(provider_cfg: dict) -> str:
+    """Resolve the configured reasoning payload shape for one provider."""
+    configured = str(provider_cfg.get("reasoning_format") or "auto").strip().lower()
+    configured = configured.replace(" ", "_")
+    if configured and configured != "auto":
+        return REASONING_FORMAT_ALIASES.get(configured, configured)
+
+    model_and_url = " ".join([
+        str(provider_cfg.get("model", "")),
+        str(provider_cfg.get("url", "")),
+        str(provider_cfg.get("name", "")),
+    ]).lower()
+    if "claude" in model_and_url or "anthropic" in model_and_url:
+        return "claude"
+    return "openai_chat"
+
+
+def build_reasoning_extra_body(provider_cfg: dict) -> dict:
+    """Build provider-specific reasoning controls for the Chat Completions body."""
+    extra_body = {}
+
+    for key in ("reasoning", "output_config", "thinking"):
+        value = provider_cfg.get(key)
+        if isinstance(value, dict) and value:
+            extra_body[key] = copy.deepcopy(value)
+
+    effort = normalize_reasoning_effort(
+        provider_cfg.get("reasoning_effort") or provider_cfg.get("effort")
+    )
+    if effort:
+        reasoning_format = resolve_reasoning_format(provider_cfg)
+        if reasoning_format == "openai_responses":
+            reasoning = extra_body.get("reasoning")
+            if not isinstance(reasoning, dict):
+                reasoning = {}
+            reasoning["effort"] = effort
+            extra_body["reasoning"] = reasoning
+        elif reasoning_format == "claude":
+            output_config = extra_body.get("output_config")
+            if not isinstance(output_config, dict):
+                output_config = {}
+            output_config["effort"] = effort
+            extra_body["output_config"] = output_config
+        elif reasoning_format == "effort":
+            extra_body["effort"] = effort
+        elif reasoning_format == "thinking":
+            thinking = extra_body.get("thinking")
+            if not isinstance(thinking, dict):
+                thinking = {}
+            thinking.setdefault("type", "adaptive")
+            thinking["effort"] = effort
+            extra_body["thinking"] = thinking
+        else:
+            extra_body["reasoning_effort"] = effort
+
+    provider_extra_body = provider_cfg.get("extra_body", {})
+    if isinstance(provider_extra_body, dict) and provider_extra_body:
+        provider_extra_body = copy.deepcopy(provider_extra_body)
+        deep_merge_dict(extra_body, provider_extra_body)
+
+    return extra_body
 
 
 def is_multimodal_content(content) -> bool:
@@ -356,7 +473,10 @@ class AIProviderManager:
 
                 # Move SDK-passthrough keys from request_kwargs to extra_body
                 # These are provider-specific params that OpenAI SDK doesn't recognize
-                SDK_PASSTHROUGH_KEYS = {'thinking', 'tools', 'tool_choice', 'response_format', 'chat_template_kwargs'}
+                SDK_PASSTHROUGH_KEYS = {
+                    'thinking', 'tools', 'tool_choice', 'response_format', 'chat_template_kwargs',
+                    'reasoning', 'reasoning_effort', 'output_config', 'effort'
+                }
                 passthrough_params = {}
                 for key in list(request_kwargs.keys()):
                     if key in SDK_PASSTHROUGH_KEYS:
@@ -528,7 +648,8 @@ class AIProviderManager:
                     continue
 
                 model = PROVIDERS[tier]["model"]
-                extra_body = PROVIDERS[tier].get("extra_body", {})
+                provider_cfg = PROVIDERS[tier]
+                extra_body = build_reasoning_extra_body(provider_cfg)
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
                 include_headers = PROVIDERS[tier].get("include_headers", "")

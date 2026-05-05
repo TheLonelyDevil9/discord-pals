@@ -359,6 +359,36 @@ Some providers support extra request body parameters. Add `extra_body` to your p
 
 The `extra_body` object is merged into the API request, useful for provider-specific parameters.
 
+### Reasoning Effort
+
+Providers expose reasoning effort with different request shapes. Discord Pals normalizes the common dashboard fields and passes them through the OpenAI-compatible Chat Completions call body:
+
+```json
+{
+  "providers": [
+    {
+      "name": "GPT 5.5",
+      "url": "https://api.linkapi.ai/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-5.5",
+      "temperature": 1,
+      "reasoning_effort": "xhigh",
+      "reasoning_format": "openai_chat"
+    }
+  ]
+}
+```
+
+`reasoning_format` controls the payload shape:
+
+- `openai_chat` sends `reasoning_effort` at the compatible endpoint body level.
+- `openai_responses` sends `reasoning: {"effort": "..."}`.
+- `claude` sends `output_config: {"effort": "..."}`.
+- `effort` sends top-level `effort`.
+- `thinking` sends `thinking: {"type": "adaptive", "effort": "..."}`.
+
+You can also put provider-specific objects in `extra_body`; explicit `extra_body` values override the normalized fields.
+
 ### Vision Support (`supports_vision`)
 
 By default, all providers are assumed to support vision/image recognition. For text-only models (like DeepSeek Reasoner), add `"supports_vision": false`:
@@ -584,14 +614,14 @@ Click the channel name to expand settings, or use the quick toggle to enable/dis
 Adjust runtime settings without restarting:
 
 - **Context** — History windows, user-only mode, mention context, split replies, and time-passage context. These settings change what the bot sees.
-- **Prompting** — Single-user formatting, a read-only `prompts/system.md` preview, and editable `prompts/other_prompts.md` post-system prompt templates.
+- **Prompting** — Single-user formatting, Prose Polisher, a read-only `prompts/system.md` preview, and editable `prompts/other_prompts.md` post-system prompt templates.
 - **Time** — Bot timezones, availability schedules, and DM follow-up timing. These settings change time awareness or when time-based work can happen.
 - **Automation** — Autonomous channel summary, name trigger chance, nicknames, bot-to-bot fall-off, and bot interaction pause controls.
 - **Providers** — Provider order, provider definitions, per-character provider preferences, and the reserved active provider field. Provider order can be changed with Up/Down buttons or drag.
 - **Performance** — Global concurrency and dashboard performance notes.
 - **Maintenance / Advanced** — Slash command sync status, import/export, debug logging, and raw JSON editors.
 
-Prompt editing is split intentionally: `prompts/system.md` is the fixed system prompt surface, while `prompts/other_prompts.md` contains character-facing context that is sent after the system prompt.
+Prompt editing is split intentionally: `prompts/system.md` is the fixed system prompt surface, while `prompts/other_prompts.md` contains character-facing context that is sent after the system prompt. The Prose Polisher section in `other_prompts.md` powers the optional post-generation editing pass before a Discord reply is sent.
 
 See [Runtime Configuration](#runtime-configuration) for details on each setting.
 

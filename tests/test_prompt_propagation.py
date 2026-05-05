@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
+import bot_instance as bot_instance_module
 import character as character_module
 import dashboard as dashboard_module
 import discord_utils as discord_utils_module
@@ -413,10 +414,16 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("prompts/system.md (read only)", page)
         self.assertIn("/prompts/other/save", page)
         self.assertIn("moveProvider(", page)
+        self.assertIn('id="prose_polisher_enabled"', page)
+        self.assertIn('id="new-provider-reasoning-effort"', page)
 
         response = self.client.post(
             "/api/config",
-            json={"context_message_count": 9},
+            json={
+                "context_message_count": 9,
+                "prose_polisher_enabled": "true",
+                "prose_polisher_max_tokens": "9000",
+            },
             headers=self.csrf_headers()
         )
         config_response = self.client.get("/api/config")
@@ -425,6 +432,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(config_response.status_code, 200)
         self.assertEqual(config["user_only_context_count"], 9)
+        self.assertIs(config["prose_polisher_enabled"], True)
+        self.assertEqual(config["prose_polisher_max_tokens"], 9000)
         self.assertNotIn("context_message_count", config)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
@@ -464,6 +473,139 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
 
 class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prose_polisher_rewrites_enabled_response(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        runtime_values = {
+            "prose_polisher_enabled": True,
+            "prose_polisher_max_tokens": 4096,
+            "prose_polisher_preferred_tier": "secondary",
+        }
+        generate_mock = AsyncMock(return_value="<assistant_response>Polished text</assistant_response>")
+
+        with patch.object(
+            bot_instance_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: runtime_values.get(key, default),
+        ), patch.object(
+            bot_instance_module.character_manager,
+            "build_other_prompt",
+            return_value="Polish this:\nOriginal text",
+        ) as prompt_mock, patch.object(
+            bot_instance_module.provider_manager,
+            "generate",
+            new=generate_mock,
+        ), patch.object(bot_instance_module.log, "warn"), patch.object(bot_instance_module.log, "debug"):
+            result = await instance._polish_response("Original text")
+
+        self.assertEqual(result, "Polished text")
+        prompt_mock.assert_called_once_with(
+            "prose_polisher",
+            {
+                "character_name": "Nahida",
+                "assistant_response": "Original text",
+            },
+        )
+        self.assertEqual(generate_mock.await_args.kwargs["max_tokens"], 4096)
+        self.assertEqual(generate_mock.await_args.kwargs["preferred_tier"], "secondary")
+        self.assertIs(generate_mock.await_args.kwargs["use_single_user"], False)
+
+    async def test_prose_polisher_keeps_original_when_disabled_or_empty(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock()) as generate_mock:
+            result = await instance._polish_response("Original text")
+
+        self.assertEqual(result, "Original text")
+        generate_mock.assert_not_awaited()
+
+        runtime_values = {
+            "prose_polisher_enabled": True,
+            "prose_polisher_max_tokens": 4096,
+            "prose_polisher_preferred_tier": "",
+        }
+        empty_generate = AsyncMock(return_value="<assistant_response>   </assistant_response>")
+
+        with patch.object(
+            bot_instance_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: runtime_values.get(key, default),
+        ), patch.object(
+            bot_instance_module.character_manager,
+            "build_other_prompt",
+            return_value="Polish this:\nOriginal text",
+        ), patch.object(
+            bot_instance_module.provider_manager,
+            "generate",
+            new=empty_generate,
+        ), patch.dict(
+            bot_instance_module.CHARACTER_PROVIDERS,
+            {"nahida": "primary"},
+            clear=True,
+        ), patch.object(bot_instance_module.log, "warn"), patch.object(bot_instance_module.log, "debug"):
+            result = await instance._polish_response("Original text")
+
+        self.assertEqual(result, "Original text")
+        self.assertEqual(empty_generate.await_args.kwargs["preferred_tier"], "primary")
+
+    async def test_openai_chat_reasoning_effort_goes_to_extra_body(self):
+        captured_kwargs = {}
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                message = types.SimpleNamespace(content="ok")
+                choice = types.SimpleNamespace(message=message, finish_reason="stop")
+                return types.SimpleNamespace(choices=[choice])
+
+        client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=FakeCompletions())
+        )
+        manager = object.__new__(providers_module.AIProviderManager)
+
+        with patch.object(providers_module.log, "debug"), \
+                patch.object(providers_module.log, "ok"):
+            result = await manager._try_generate(
+                client,
+                "gpt-5.5",
+                [{"role": "user", "content": "Hello"}],
+                1.0,
+                256,
+                "primary",
+                timeout=30,
+                extra_body=providers_module.build_reasoning_extra_body({
+                    "model": "gpt-5.5",
+                    "url": "https://api.linkapi.ai/v1",
+                    "reasoning_effort": "xhigh",
+                    "reasoning_format": "openai_chat",
+                }),
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured_kwargs["extra_body"], {"reasoning_effort": "xhigh"})
+
+    def test_reasoning_effort_can_use_openai_responses_or_claude_shapes(self):
+        openai_body = providers_module.build_reasoning_extra_body({
+            "model": "gpt-5.5",
+            "reasoning_effort": "extra high",
+            "reasoning_format": "openai_responses",
+        })
+        claude_body = providers_module.build_reasoning_extra_body({
+            "model": "claude-opus-4-6-thinking",
+            "reasoning_effort": "high",
+            "reasoning_format": "claude",
+        })
+
+        self.assertEqual(openai_body, {"reasoning": {"effort": "xhigh"}})
+        self.assertEqual(claude_body, {"output_config": {"effort": "high"}})
+
     async def test_text_only_provider_keeps_single_user_format_after_image_stripping(self):
         manager = object.__new__(providers_module.AIProviderManager)
         manager.providers = {"primary": object()}

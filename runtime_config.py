@@ -31,6 +31,9 @@ DEFAULTS = {
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
+    "prose_polisher_enabled": False,  # Run a post-generation provider pass to clean repetitive prose patterns
+    "prose_polisher_max_tokens": 8192,  # Max tokens for the post-generation polish pass
+    "prose_polisher_preferred_tier": "",  # Optional provider tier for the polish pass
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
     "custom_nicknames": "",  # Legacy global nickname field; current UI persists per-bot nicknames
     "raw_generation_logging": False,  # Log raw LLM output to live logs
@@ -71,6 +74,9 @@ CONFIG_FIELDS = {
     "bot_interactions_paused": ConfigField(bool, DEFAULTS["bot_interactions_paused"]),
     "global_paused": ConfigField(bool, DEFAULTS["global_paused"]),
     "use_single_user": ConfigField(bool, DEFAULTS["use_single_user"]),
+    "prose_polisher_enabled": ConfigField(bool, DEFAULTS["prose_polisher_enabled"]),
+    "prose_polisher_max_tokens": ConfigField(int, DEFAULTS["prose_polisher_max_tokens"], 16, 16000),
+    "prose_polisher_preferred_tier": ConfigField(str, DEFAULTS["prose_polisher_preferred_tier"]),
     "name_trigger_chance": ConfigField(float, DEFAULTS["name_trigger_chance"], 0.0, 1.0),
     "custom_nicknames": ConfigField(str, DEFAULTS["custom_nicknames"]),
     "raw_generation_logging": ConfigField(bool, DEFAULTS["raw_generation_logging"]),
