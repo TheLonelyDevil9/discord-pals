@@ -113,7 +113,9 @@ Your follow-up message:
 
 def _get_time_variables(now: Optional[datetime] = None) -> Dict[str, str]:
     """Build placeholder variables for current local date/time awareness."""
-    now = now.astimezone() if now else datetime.now().astimezone()
+    now = now if now else datetime.now().astimezone()
+    if now.tzinfo is None:
+        now = now.astimezone()
     timezone_name = now.strftime("%Z") or now.strftime("UTC%z")
     utc_offset = now.strftime("%z")
     if utc_offset and len(utc_offset) == 5:

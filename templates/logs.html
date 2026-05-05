@@ -4,14 +4,14 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Logs & Stats</h1>
-    <p class="page-subtitle">Live activity logs and usage statistics</p>
+    <p class="page-subtitle">Watch bot activity, usage, and the last context sent to the model.</p>
 </div>
 
 <!-- Tab Navigation -->
 <div class="tabs" role="tablist" aria-label="Log sections">
     <button type="button" id="tab-button-live" class="tab active" data-tab-button="live" role="tab" aria-controls="tab-live" aria-selected="true" onclick="switchTab('live')">Live Logs</button>
     <button type="button" id="tab-button-stats" class="tab" data-tab-button="stats" role="tab" aria-controls="tab-stats" aria-selected="false" onclick="switchTab('stats')">Stats</button>
-    <button type="button" id="tab-button-context" class="tab" data-tab-button="context" role="tab" aria-controls="tab-context" aria-selected="false" onclick="switchTab('context')">Context</button>
+    <button type="button" id="tab-button-context" class="tab" data-tab-button="context" role="tab" aria-controls="tab-context" aria-selected="false" onclick="switchTab('context')">Last Model Context</button>
 </div>
 
 <!-- Live Logs Tab -->
@@ -152,7 +152,7 @@
 
 <!-- Context Tab -->
 <div id="tab-context" class="tab-content" role="tabpanel" aria-labelledby="tab-button-context">
-    <p class="context-intro">See what was sent to the LLM on the last API call for each bot.</p>
+    <p class="context-intro">See what each bot sent to the model on its last API call.</p>
     <div id="context-container">
         <div class="card"><div class="card-body"><div class="empty">Loading contexts...</div></div></div>
     </div>

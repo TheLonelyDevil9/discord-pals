@@ -127,6 +127,23 @@
             padding: 32px;
         }
 
+        .page-header {
+            margin-bottom: 32px;
+        }
+
+        .page-title {
+            font-size: 1.875rem;
+            font-weight: 600;
+            letter-spacing: 0;
+            margin-bottom: 4px;
+        }
+
+        .page-subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            max-width: 72ch;
+        }
+
         /* ===== Navigation ===== */
         nav {
             display: flex;
@@ -317,6 +334,34 @@
             padding: 24px;
         }
 
+        .form-hint {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            margin-top: 6px;
+            line-height: 1.5;
+        }
+
+        .advanced-panel {
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-primary);
+        }
+
+        .advanced-panel > summary {
+            cursor: pointer;
+            padding: 12px 14px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .advanced-panel[open] > summary {
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .advanced-panel-body {
+            padding: 14px;
+        }
+
         /* Legacy card support */
         .card:not(:has(.card-header)):not(:has(.card-body)) {
             padding: 24px;
@@ -360,8 +405,7 @@
             border-radius: 4px;
             font-size: 0.6875rem;
             font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.025em;
+            letter-spacing: 0;
         }
 
         .badge-success {
@@ -516,6 +560,12 @@
         .btn-ghost:hover {
             background: var(--bg-secondary);
             color: var(--text-primary);
+        }
+
+        .btn-sm {
+            min-height: 34px;
+            padding: 6px 12px;
+            font-size: 0.75rem;
         }
 
         /* ===== Forms ===== */

@@ -2379,14 +2379,12 @@ def api_v2_auto_bulk_delete():
     return jsonify({'status': 'ok', **result})
 
 
-@app.route('/api/v2/memories/auto/consolidate', methods=['POST'])
-@requires_csrf
-def api_v2_auto_consolidate():
-    """Manually consolidate auto-memory profiles for targeted users or keys."""
+def _run_auto_memory_consolidation(data: dict, *, action_label: str = 'Manual consolidation'):
+    """Run auto-memory consolidation for an already-validated dashboard payload."""
     from memory import memory_manager
     from providers import provider_manager
 
-    data = request.json or {}
+    data = data or {}
     raw_keys = data.get('keys')
     if raw_keys is None and data.get('key'):
         raw_keys = [data.get('key')]
@@ -2412,11 +2410,11 @@ def api_v2_auto_consolidate():
         server_id = None
 
     if not getattr(provider_manager, 'providers', None):
-        return jsonify({'status': 'error', 'message': 'No usable provider is configured for manual consolidation'}), 503
+        return jsonify({'status': 'error', 'message': f'No usable provider is configured for {action_label.lower()}'}), 503
 
     loop = _get_live_bot_loop()
     if not loop:
-        return jsonify({'status': 'error', 'message': 'Manual consolidation requires a running bot event loop'}), 503
+        return jsonify({'status': 'error', 'message': f'{action_label} requires a running bot event loop'}), 503
 
     if keys:
         coroutine = memory_manager.consolidate_auto_memory_keys(keys, provider_manager)
@@ -2437,12 +2435,76 @@ def api_v2_auto_consolidate():
         result = future.result(timeout=120)
     except concurrent.futures.TimeoutError:
         future.cancel()
-        return jsonify({'status': 'error', 'message': 'Manual consolidation timed out'}), 504
+        return jsonify({'status': 'error', 'message': f'{action_label} timed out'}), 504
     except Exception as e:
         log.error(f"Manual auto-memory consolidation failed: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     return jsonify({'status': 'ok', **result})
+
+
+@app.route('/api/v2/memories/auto/consolidate', methods=['POST'])
+@requires_csrf
+def api_v2_auto_consolidate():
+    """Manually consolidate auto-memory profiles for targeted users or keys."""
+    return _run_auto_memory_consolidation(request.json or {})
+
+
+@app.route('/api/v2/memories/auto/cleanup-waiting', methods=['POST'])
+@requires_csrf
+def api_v2_auto_cleanup_waiting():
+    """Clean up auto-memory profiles that are waiting for consolidation."""
+    from memory import memory_manager
+
+    data = request.json or {}
+    user_ids = _parse_int_list_values(data.get('user_ids'), data.get('user_id'))
+    scope_mode = _normalize_scope_mode(data.get('scope_mode'))
+    server_id = data.get('server_id')
+
+    if scope_mode == 'server':
+        try:
+            server_id = int(server_id)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Server scope requires an explicit server_id'}), 400
+    else:
+        server_id = None
+
+    waiting_keys = set(memory_manager.get_auto_memory_profile_keys_needing_merge())
+    if user_ids:
+        keys = [
+            key for key in memory_manager.resolve_auto_memory_keys(
+                user_ids,
+                scope_mode=scope_mode,
+                server_id=server_id if scope_mode == 'server' else None,
+            )
+            if key in waiting_keys
+        ]
+    else:
+        keys = [
+            key for key in memory_manager.resolve_auto_memory_keys(
+                None,
+                scope_mode=scope_mode,
+                server_id=server_id if scope_mode == 'server' else None,
+            )
+            if key in waiting_keys
+        ]
+
+    if not keys:
+        return jsonify({
+            'status': 'ok',
+            'matched_keys': 0,
+            'consolidated': 0,
+            'skipped': 0,
+            'already_running': 0,
+            'failed': 0,
+        })
+
+    cleanup_payload = dict(data)
+    cleanup_payload.pop('user_ids', None)
+    cleanup_payload.pop('user_id', None)
+    cleanup_payload['keys'] = keys
+
+    return _run_auto_memory_consolidation(cleanup_payload, action_label='Memory cleanup')
 
 
 @app.route('/api/v2/memories/auto/clear', methods=['POST'])

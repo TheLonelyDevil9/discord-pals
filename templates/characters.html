@@ -4,12 +4,12 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Characters</h1>
-    <p class="page-subtitle">Manage your bot personalities and system prompts</p>
+    <p class="page-subtitle">Edit bot personalities, preview prompts, and keep shared prompt text understandable.</p>
 </div>
 
 <!-- Tab Navigation -->
 <div class="tabs" role="tablist" aria-label="Character sections">
-    <button type="button" id="tab-button-files" class="tab active" data-tab-button="files" role="tab" aria-controls="tab-files" aria-selected="true" onclick="switchTab('files')">Files</button>
+    <button type="button" id="tab-button-files" class="tab active" data-tab-button="files" role="tab" aria-controls="tab-files" aria-selected="true" onclick="switchTab('files')">Characters</button>
     <button type="button" id="tab-button-preview" class="tab" data-tab-button="preview" role="tab" aria-controls="tab-preview" aria-selected="false" onclick="switchTab('preview')">Preview</button>
     <button type="button" id="tab-button-prompts" class="tab" data-tab-button="prompts" role="tab" aria-controls="tab-prompts" aria-selected="false" onclick="switchTab('prompts')">Prompts</button>
 </div>
@@ -63,7 +63,7 @@
 
 <!-- Preview Tab -->
 <div id="tab-preview" class="tab-content" role="tabpanel" aria-labelledby="tab-button-preview">
-    <p class="tab-description">See the complete prompt plus which character-file blocks always inject, only inject for matching users, or are ignored by the parser.</p>
+    <p class="tab-description">Preview exactly what a character sends to the model before you test it in Discord.</p>
     <div class="preview-controls">
         <select id="character-select" onchange="loadPreview()" title="Select a character to preview">
             <option value="">Select a character...</option>

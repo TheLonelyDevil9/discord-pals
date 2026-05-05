@@ -85,14 +85,16 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertTrue(item["auto"])
 
         page = self.client.get("/memories").get_data(as_text=True)
-        self.assertIn("Auto Memory Profiles", page)
-        self.assertIn("A single pending entry appears only while a merge is waiting to succeed.", page)
-        self.assertIn("Select All Visible", page)
-        self.assertIn("Delete Targeted Users", page)
-        self.assertIn("Merge Targeted Users", page)
-        self.assertIn("Merge Now", page)
-        self.assertIn("Delete Targeted User Lore", page)
-        self.assertIn("Live JSON edits are not a supported delete path", page)
+        self.assertIn("Bot Memory", page)
+        self.assertIn("Learned Memories", page)
+        self.assertIn("Search people, servers, DMs, or memory text", page)
+        self.assertIn("Forget User Memories", page)
+        self.assertIn("Memory Cleanup", page)
+        self.assertIn("Clean Up Waiting Memories", page)
+        self.assertIn("Forget User Lore", page)
+        self.assertIn("Developer JSON", page)
+        self.assertNotIn("Merge Targeted Users", page)
+        self.assertNotIn("Merge Now", page)
         self.assertIn("/api/v2/memories/auto", page)
         self.assertIn("/api/v2/memories/targets", page)
         self.assertNotIn("memories.json", page)
@@ -163,6 +165,26 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual([entry["entry_type"] for entry in self.manager.auto_memories[key]], ["profile", "pending"])
         self.assertNotEqual(data["status"], "ok")
+
+    def test_auto_memory_cleanup_waiting_defaults_to_waiting_keys(self):
+        key = "server:123:user:456"
+        self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice")
+        self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
+        self.manager.add_auto_memory(123, 999, "Bob likes coffee", user_name="Bob")
+
+        fake_providers = types.ModuleType("providers")
+        fake_providers.provider_manager = types.SimpleNamespace(providers={})
+        with patch.dict(sys.modules, {"providers": fake_providers}):
+            response = self.client.post(
+                "/api/v2/memories/auto/cleanup-waiting",
+                json={"scope_mode": "all"},
+                headers=self.csrf_headers()
+            )
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("provider", data["message"].lower())
+        self.assertEqual([entry["entry_type"] for entry in self.manager.auto_memories[key]], ["profile", "pending"])
 
     def test_auto_memory_api_exposes_pending_metadata(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea", user_name="Alice", server_name="Tea House")

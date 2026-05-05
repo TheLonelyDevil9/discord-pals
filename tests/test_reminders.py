@@ -210,7 +210,7 @@ class ReminderTimezoneAndDashboardTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(cancel_response.get_json()["cancelled"], 1)
         self.assertEqual(timezone_response.status_code, 200)
         self.assertEqual(runtime_config_module.get_bot_timezone("Nahida"), "Asia/Calcutta")
-        self.assertIn("Cancel Selected", page)
+        self.assertIn("Cancel Pending Selected", page)
 
     def test_config_page_renders_timezone_picker(self):
         page = self.client.get("/config").get_data(as_text=True)

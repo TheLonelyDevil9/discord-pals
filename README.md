@@ -26,7 +26,7 @@ The system instructions were authored by legendary chef @Geechan.
 - [Memory Architecture](#memory-architecture)
 - [Commands](#commands)
 - [Reminders & Timezones](#reminders--timezones)
-- [Autonomous Mode](#autonomous-mode)
+- [Auto Replies](#auto-replies)
 - [Bot-on-Bot Fall-off](#bot-on-bot-fall-off)
 - [Impersonation Prevention](#impersonation-prevention)
 - [Creating Characters](#creating-characters)
@@ -544,17 +544,17 @@ Manage your character files directly from the browser:
 
 Changes are saved immediately. Use `/reload` in Discord or click the reload button to apply changes.
 
-### Memories & Lore Page
+### Bot Memory Page
 
 Manage the bot's memory system:
 
-- **Auto Memory Profiles** — View, edit, delete, and manually merge automatically created profiles per server/user or per-bot DM/user
-- **Manual Lore** — Add, edit, and delete lore entries scoped to users, bots, or servers
-- **Bulk Cleanup** — Delete selected profile or pending entries, delete auto profiles by one or more users, or delete user lore in bulk
-- **Manual Merge** — Run a targeted merge pass for one or more users or a specific memory key
-- **Filtering** — Filter auto memory profiles by scope, server, user, and search term
+- **Learned Memories** — Search, edit, and forget facts the bot learned from conversations
+- **Add Memory** — Add a learned memory or lore note without editing JSON
+- **Manual Lore** — Add, edit, and forget pinned context scoped to users, bots, or servers
+- **Advanced Cleanup** — Ask the bot to clean up waiting memories only when automatic cleanup has not caught up
+- **Filtering** — Filter learned memories by server, DM, user, and search term
 - **User Resolution** — User IDs displayed as readable Discord names
-- **Safe Live Editing** — Unified memory raw JSON is view-only; edits, deletes, clears, and merges go through the dashboard actions/API so profile and pending-entry invariants stay in sync
+- **Safe Live Editing** — Unified memory raw JSON is view-only under Developer JSON; edits, forgets, and cleanup go through dashboard actions/API so in-memory state stays in sync
 
 ### Reminders Page
 
@@ -567,14 +567,14 @@ Review durable reminders that have been scheduled by conversations:
 
 ### Channels Page
 
-Configure autonomous mode per channel:
+Configure auto replies per channel:
 
-- **Enable/Disable** - Toggle autonomous responses for each channel
+- **Enable/Disable** - Toggle auto replies for each channel
 - **Response Chance** - Set probability (1-50%) of responding to messages
-- **Cooldown** - Minimum time between autonomous responses (1-10 minutes)
+- **Cooldown** - Minimum time between auto replies (1-10 minutes)
 - **Bot Triggers** - Allow/disallow other bots from triggering responses (quick toggle badge in table)
 - **Bot Nicknames** - Edit per-bot trigger aliases used by name-triggered responses
-- **Sortable Columns** - Click column headers to sort by Channel, Server, History, or Autonomous status
+- **Sortable Columns** - Click column headers to sort by Channel, Server, History, or Auto Replies status
 - **Clear History** - Remove conversation history for specific channels
 
 Click the channel name to expand settings, or use the quick toggle to enable/disable.
@@ -612,21 +612,20 @@ The bot uses a unified 2-store memory system:
 
 | Store | Scope | File Location |
 | ----- | ----- | ------------- |
-| **Auto Memory Profiles** | One profile per `server:{server_id}:user:{user_id}` or `dm:bot:{bot}:user:{user_id}` scope | `bot_data/auto_memories.json` |
+| **Learned Memories** | One internal auto-memory profile per `server:{server_id}:user:{user_id}` or `dm:bot:{bot}:user:{user_id}` scope | `bot_data/auto_memories.json` |
 | **Manual Lore** | Attachable to users, bots, or servers | `bot_data/manual_lore.json` |
 
-### Auto Memory Profiles
+### Learned Memories
 
 The bot automatically detects and stores important facts from conversations (preferences, relationships, events). Each server/user or per-bot DM/user scope keeps one living `profile` entry in `auto_memories.json`; new facts are merged into that profile immediately when a provider is available.
 
-If the provider merge fails, the bot keeps one temporary `pending` entry for that same key instead of appending more cards. Later automatic retries or the dashboard's **Merge Now** action fold that pending content into the profile after a successful LLM merge. Existing multi-entry legacy keys are queued for this same consolidation path and are not rewritten until the LLM returns a valid merged profile.
+If the provider merge fails, the bot keeps one temporary `pending` entry for that same key instead of appending more cards. Later automatic retries fold that pending content into the profile after a successful LLM cleanup. Existing multi-entry legacy keys are queued for this same cleanup path and are not rewritten until the LLM returns a valid cleaned profile.
 
-The dashboard also supports manual cleanup workflows for auto memory profiles:
+The dashboard keeps cleanup out of the normal flow, but Advanced controls still support maintenance:
 
-- Edit or delete the profile entry for a key
-- Edit or delete the single pending entry when one exists
-- Delete all auto memory profiles for one or more users in DMs, one server, or all scopes
-- Manually merge one specific key or targeted users/scopes in place
+- Edit or forget the visible learned memory for a key
+- Forget all learned memories for one or more users in DMs, one server, or all scopes
+- Ask the bot to clean up waiting learned memories when automatic cleanup has not caught up
 
 User IDs are resolved to readable Discord display names in the dashboard for easy management.
 
@@ -743,13 +742,13 @@ This same precedence is used for prompt time placeholders like `{{time}}`, `{{da
 
 ---
 
-## Autonomous Mode
+## Auto Replies
 
-Autonomous mode allows bots to randomly join conversations without being explicitly mentioned. This feature is highly configurable per-channel via the web dashboard.
+Auto replies allow bots to randomly join conversations without being explicitly mentioned. This feature is highly configurable per-channel via the web dashboard.
 
 ### How It Works
 
-1. **Per-Channel Configuration**: Enable/disable autonomous mode for specific channels
+1. **Per-Channel Configuration**: Enable/disable auto replies for specific channels
 2. **Response Chance**: Set the probability (1-50%) that the bot will respond to any message
 3. **Cooldown**: Set minimum time between autonomous responses (1-10 minutes)
 4. **Bot Triggers**: Control whether other bots/apps can trigger autonomous responses
@@ -769,17 +768,17 @@ Name triggers (responding when the bot's name/nickname is mentioned without @) a
 
 Access the Channels page in the web dashboard to configure:
 
-1. Click **⚙️ Configure** on any channel
-2. Toggle **Enable Autonomous Responses**
+1. Click **Configure** on any channel
+2. Toggle **Enable Auto Replies**
 3. Adjust **Response Chance** slider (1-50%)
 4. Adjust **Cooldown** slider (1-10 minutes)
-5. Toggle **🤖 Allow Bot Triggers** to control whether other bots can trigger responses
+5. Toggle **Allow Bot/App Triggers** to control whether other bots can trigger responses
 
-Channels with bot triggers enabled show a 🤖 icon in the status column.
+Channels with bot triggers enabled show `Bot triggers on` in the status column.
 
 ### Quick Toggle
 
-Click the ON/OFF badge in the Autonomous column to quickly enable/disable autonomous mode while preserving other settings.
+Click the ON/OFF badge in the Auto Replies column to quickly enable/disable auto replies while preserving other settings.
 
 ### Custom Nicknames
 

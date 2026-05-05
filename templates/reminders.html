@@ -5,12 +5,12 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Reminders</h1>
-    <p class="page-subtitle">Browse and cancel durable in-character reminders.</p>
+    <p class="page-subtitle">Find scheduled reminders and cancel pending ones before they send.</p>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <span class="card-title">Filters</span>
+        <span class="card-title">Find Reminders</span>
     </div>
     <div class="card-body">
         <div class="settings-grid">
@@ -42,14 +42,14 @@
         <div class="button-row">
             <button type="button" class="btn btn-primary" onclick="loadReminders()">Refresh</button>
             <button type="button" class="btn btn-ghost" onclick="toggleSelectAll()">Select All Visible</button>
-            <button type="button" class="btn btn-danger" onclick="cancelSelectedReminders()">Cancel Selected</button>
+            <button type="button" class="btn btn-danger" onclick="cancelSelectedReminders()">Cancel Pending Selected</button>
         </div>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        <span class="card-title">Reminder Queue</span>
+        <span class="card-title">Scheduled Reminders</span>
         <span class="text-muted" id="reminder-count" aria-live="polite">Loading</span>
     </div>
     <div class="card-body">
@@ -263,6 +263,13 @@ async function cancelSelectedReminders() {
         showToast('Select at least one reminder first', 'warning');
         return;
     }
+
+    const confirmed = await confirmAction(
+        'Cancel Pending Reminders',
+        `Cancel ${ids.length} selected reminder${ids.length === 1 ? '' : 's'}? Only pending reminders can be cancelled.`,
+        { confirmText: 'Cancel reminders' }
+    );
+    if (!confirmed) return;
 
     const response = await fetch('/api/reminders/cancel', {
         method: 'POST',

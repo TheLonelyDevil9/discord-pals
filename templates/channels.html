@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Channels</h1>
-    <p class="page-subtitle">Manage channel settings and autonomous responses</p>
+    <p class="page-subtitle">Choose where bots can reply on their own and how noisy they should be.</p>
 </div>
 
 <!-- Filter Controls -->
@@ -20,8 +20,8 @@
             </select>
         </div>
         <div class="filter-group">
-            <label for="auto-filter">Autonomous</label>
-            <select id="auto-filter" onchange="filterChannels()" title="Filter by autonomous status">
+            <label for="auto-filter">Auto Replies</label>
+            <select id="auto-filter" onchange="filterChannels()" title="Filter by auto reply status">
                 <option value="">All</option>
                 <option value="enabled">Enabled</option>
                 <option value="disabled">Disabled</option>
@@ -55,7 +55,7 @@
                     <th class="sortable" data-sort="channel" onclick="sortTable('channel')">Channel <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="server" onclick="sortTable('server')">Server <span class="sort-icon"></span></th>
                     <th class="sortable" data-sort="history" onclick="sortTable('history')">History <span class="sort-icon"></span></th>
-                    <th class="sortable" data-sort="autonomous" onclick="sortTable('autonomous')">Autonomous <span class="sort-icon"></span></th>
+                    <th class="sortable" data-sort="autonomous" onclick="sortTable('autonomous')">Auto Replies <span class="sort-icon"></span></th>
                     <th>Nickname Trigger</th>
                     <th>Actions</th>
                 </tr>
@@ -87,7 +87,7 @@
                             <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', false)" title="Click to disable">ON</button>
                             <span class="auto-details">{{ channel.auto_chance }}% / {{ channel.auto_cooldown }}min</span>
                             <button type="button" class="badge badge-sm bot-trigger-toggle {% if channel.allow_bot_triggers %}badge-info{% else %}badge-muted{% endif %}" onclick="quickToggleBotTriggers('{{ channel.id }}', {{ 'false' if channel.allow_bot_triggers else 'true' }})" title="{% if channel.allow_bot_triggers %}Bot triggers enabled - click to disable{% else %}Bot triggers disabled - click to enable{% endif %}">
-                                bots: {% if channel.allow_bot_triggers %}✓{% else %}✗{% endif %}
+                                Bot triggers {% if channel.allow_bot_triggers %}on{% else %}off{% endif %}
                             </button>
                             {% else %}
                             <button type="button" class="badge badge-muted auto-toggle" onclick="quickToggleAuto('{{ channel.id }}', true)" title="Click to enable">OFF</button>
@@ -125,7 +125,7 @@
     {% endif %}
 </div>
 
-<!-- Autonomous Configuration Modal -->
+<!-- Auto reply configuration modal -->
 <div id="auto-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="auto-modal-title">
     <div class="modal-content">
         <div class="modal-header">
@@ -133,15 +133,15 @@
             <p id="auto-modal-channel" class="modal-subtitle"></p>
         </div>
 
-        <!-- Autonomous Mode Section -->
+        <!-- Auto replies section -->
         <div class="config-section">
-            <div class="config-section-header">Autonomous Mode</div>
+            <div class="config-section-header">Auto Replies</div>
             <div class="form-group">
                 <label class="checkbox-label">
                     <input type="checkbox" id="auto-enabled">
-                    <span>Enable Autonomous Responses</span>
+                    <span>Enable Auto Replies</span>
                 </label>
-                <p class="form-hint">Bot will occasionally respond without being mentioned</p>
+                <p class="form-hint">The bot may occasionally respond without being mentioned.</p>
             </div>
 
             <div id="auto-settings">
@@ -162,14 +162,14 @@
         <!-- Name Trigger Section -->
         <div class="config-section">
             <div class="config-section-header">Name Triggers</div>
-            <p class="form-hint" style="margin-bottom: 16px;">Bot responds when its name/nickname is mentioned (requires autonomous mode)</p>
+            <p class="form-hint" style="margin-bottom: 16px;">Bot responds when its name or nickname is mentioned. Auto Replies must be on.</p>
 
             <div class="form-group">
                 <label class="checkbox-label">
                     <input type="checkbox" id="auto-allow-bots">
                     <span>Allow Bot/App Triggers</span>
                 </label>
-                <p class="form-hint">Other Discord bots can trigger name-based responses</p>
+                <p class="form-hint">Other Discord bots can trigger name-based responses.</p>
             </div>
 
             <div class="form-group" id="nickname-settings">
@@ -758,7 +758,7 @@ function applyChannelFilters() {
     document.getElementById('channel-count').textContent = `${visibleCount} channels`;
 }
 
-// Open autonomous configuration modal
+// Open auto reply configuration modal
 function openAutoModal(channelId, channelName, enabled, chance, cooldown, allowBots) {
     currentChannelId = channelId;
     document.getElementById('auto-modal-channel').textContent = `#${channelName}`;
@@ -823,7 +823,7 @@ function toggleAutoSettings() {
 
 document.getElementById('auto-enabled').addEventListener('change', toggleAutoSettings);
 
-// Save autonomous configuration and nicknames
+// Save auto reply configuration and nicknames
 async function saveAutoConfig() {
     const saveBtn = document.querySelector('#auto-modal .btn-primary');
     if (saveBtn) {
@@ -869,7 +869,7 @@ async function saveAutoConfig() {
             }
         }
 
-        // Save autonomous settings
+        // Save auto reply settings
         const response = await fetch(`/api/channels/${channelId}/autonomous`, {
             method: 'POST',
             headers: {
@@ -999,7 +999,7 @@ async function quickToggleAuto(channelId, enable) {
                         <button type="button" class="badge badge-success auto-toggle" onclick="quickToggleAuto('${channelId}', false)" title="Click to disable">ON</button>
                         <span class="auto-details">${data.chance}% / ${data.cooldown}min</span>
                         <button type="button" class="badge badge-sm bot-trigger-toggle ${botTriggersEnabled ? 'badge-info' : 'badge-muted'}" onclick="quickToggleBotTriggers('${channelId}', ${!botTriggersEnabled})" title="${botTriggersEnabled ? 'Bot triggers enabled - click to disable' : 'Bot triggers disabled - click to enable'}">
-                            bots: ${botTriggersEnabled ? '✓' : '✗'}
+                            Bot triggers ${botTriggersEnabled ? 'on' : 'off'}
                         </button>
                     `;
                 } else {
@@ -1007,12 +1007,12 @@ async function quickToggleAuto(channelId, enable) {
                 }
             }
 
-            showToast(enable ? 'Autonomous mode enabled' : 'Autonomous mode disabled', 'success');
+            showToast(enable ? 'Auto replies enabled' : 'Auto replies disabled', 'success');
         } else {
-            showToast('Failed to toggle autonomous mode', 'error');
+            showToast('Failed to toggle auto replies', 'error');
         }
     } catch (e) {
-        showToast('Error toggling autonomous mode', 'error');
+        showToast('Error toggling auto replies', 'error');
     }
 }
 
@@ -1049,7 +1049,7 @@ async function quickToggleBotTriggers(channelId, enable) {
                 botToggle.className = `badge badge-sm bot-trigger-toggle ${enable ? 'badge-info' : 'badge-muted'}`;
                 botToggle.setAttribute('onclick', `quickToggleBotTriggers('${channelId}', ${!enable})`);
                 botToggle.setAttribute('title', enable ? 'Bot triggers enabled - click to disable' : 'Bot triggers disabled - click to enable');
-                botToggle.textContent = `bots: ${enable ? '✓' : '✗'}`;
+                botToggle.textContent = `Bot triggers ${enable ? 'on' : 'off'}`;
             }
 
             showToast(enable ? 'Bot triggers enabled' : 'Bot triggers disabled', 'success');

@@ -77,8 +77,10 @@
             margin-bottom: 32px;
         }
 
-        .login-icon {
-            font-size: 2.5rem;
+        .login-brand {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
             margin-bottom: 16px;
         }
 
@@ -179,6 +181,11 @@
             color: var(--text-primary);
             border-color: var(--border);
         }
+
+        :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
     </style>
     <script>
         (function() {
@@ -193,7 +200,7 @@
     <div class="login-container">
         <div class="login-card">
             <div class="login-header">
-                <div class="login-icon">🤖</div>
+                <img src="/static/dashboard-brand.webp" alt="" class="login-brand" width="48" height="48">
                 <h1>Discord Pals</h1>
                 <p>Sign in to your dashboard</p>
             </div>

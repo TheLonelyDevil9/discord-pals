@@ -52,6 +52,9 @@ if "discord" not in sys.modules:
     class Message:
         pass
 
+    class Interaction:
+        pass
+
     class Attachment:
         pass
 
@@ -115,6 +118,10 @@ if "discord" not in sys.modules:
             self.name = name
             self.value = value
 
+        def __class_getitem__(cls, item):
+            del item
+            return cls
+
     class Group:
         def __init__(self, name=None, description=None):
             self.name = name
@@ -140,6 +147,7 @@ if "discord" not in sys.modules:
     discord.User = User
     discord.Member = Member
     discord.Message = Message
+    discord.Interaction = Interaction
     discord.Attachment = Attachment
     discord.Emoji = Emoji
     discord.Guild = Guild

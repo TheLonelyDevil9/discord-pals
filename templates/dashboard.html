@@ -4,12 +4,11 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Dashboard</h1>
-    <p class="page-subtitle">Monitor and control your Discord bots</p>
+    <p class="page-subtitle">Check bot health and use the controls people reach for most.</p>
 </div>
 
 <!-- Killswitch Banner (shown when active) -->
 <div id="killswitch-banner" class="alert-banner {% if not global_paused %}hidden{% endif %}">
-    <span class="alert-icon">⚠️</span>
     <div class="alert-content">
         <div class="alert-title">Killswitch Active</div>
         <div class="alert-text">All bot responses are currently paused</div>
@@ -24,7 +23,7 @@
         <div class="stat-value">{{ bots|length }}</div>
     </div>
     <div class="card stat-card">
-        <div class="stat-label">Memory Files</div>
+        <div class="stat-label">Saved Memory</div>
         <div class="stat-value">{{ memory_count }}</div>
     </div>
     <div class="card stat-card">
@@ -46,7 +45,6 @@
         <div class="controls-grid">
             <div class="control-item" id="killswitch-control">
                 <div class="control-info">
-                    <div class="control-icon">🛑</div>
                     <div>
                         <div class="control-label">Global Killswitch</div>
                         <div class="control-desc">Stops all bot responses</div>
@@ -58,9 +56,8 @@
             </div>
             <div class="control-item">
                 <div class="control-info">
-                    <div class="control-icon">🤖</div>
                     <div>
-                        <div class="control-label">Bot-to-Bot Chat</div>
+                        <div class="control-label">Bot-to-Bot Replies</div>
                         <div class="control-desc">Allow bots to respond to each other</div>
                     </div>
                 </div>
@@ -70,7 +67,6 @@
             </div>
             <div class="control-item">
                 <div class="control-info">
-                    <div class="control-icon">📝</div>
                     <div>
                         <div class="control-label">Message Format</div>
                         <div class="control-desc">How messages are sent to LLM</div>
@@ -82,7 +78,6 @@
             </div>
             <div class="control-item">
                 <div class="control-info">
-                    <div class="control-icon">⬇️</div>
                     <div>
                         <div class="control-label">Update Bot</div>
                         <div class="control-desc" id="update-desc">Pull latest from GitHub</div>
@@ -97,7 +92,6 @@
             </div>
             <div class="control-item">
                 <div class="control-info">
-                    <div class="control-icon">🔄</div>
                     <div>
                         <div class="control-label">Restart Bot</div>
                         <div class="control-desc">Restart without terminal</div>
@@ -110,8 +104,8 @@
         </div>
 
         <div class="control-help">
-            <details>
-                <summary>Message Format Help</summary>
+            <details class="advanced-panel">
+                <summary>Advanced message format help</summary>
                 <div class="help-content">
                     <p><strong>Multi-Role (Default):</strong> Uses traditional system/user/assistant roles. This is the standard OpenAI-compatible format that most LLM APIs expect.</p>
                     <p><strong>Single-User:</strong> All messages combined into one user message with [Author]: prefixes. Use this only if your LLM provider has issues with multi-role format.</p>
@@ -130,7 +124,7 @@
             Live
         </div>
     </div>
-    <div id="bot-status-empty" class="empty {% if bots %}hidden{% endif %}">No bots running</div>
+    <div id="bot-status-empty" class="empty {% if bots %}hidden{% endif %}">No bots are running. Start Discord Pals from the terminal or restart it from your service manager.</div>
     <div id="bot-status-wrapper" class="table-responsive {% if not bots %}hidden{% endif %}">
         <table>
             <thead>

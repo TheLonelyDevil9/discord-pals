@@ -4,6 +4,27 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.0] - 2026-05-05
+
+### Added
+
+- Added provider reasoning-effort controls for OpenAI-compatible, OpenAI Responses, Claude output config, top-level effort, and thinking-object request shapes.
+- Added an optional Prose Polisher post-generation pass with dashboard controls, provider tier selection, and an editable `prompts/other_prompts.md` section.
+
+### Changed
+
+- Reframed the dashboard memory page as Bot Memory with search-first Learned Memories, Add Memory, and Manual Lore tabs.
+- Moved memory cleanup, bulk forget, and Developer JSON controls into Advanced sections while keeping normal memory cards focused on Edit and Forget.
+- Renamed consolidation actions to cleanup-oriented language and removed merge controls from the default memory-card workflow.
+- Provider add/edit flows now preserve reasoning effort settings in `providers.json` without manual JSON editing.
+- Polished dashboard copy across home, characters, channels, config, logs, reminders, and login around plainer human-facing labels.
+
+### Fixed
+
+- Reminder bulk cancel now confirms that only pending reminders can be cancelled before sending the request.
+- Channel bot-trigger labels now use readable on/off text instead of symbol-only status.
+- Prompt time placeholders now preserve explicit timezone-aware datetimes used by tests and runtime context builders.
+
 ## [v2.1.3] - 2026-05-05
 
 ### Changed
