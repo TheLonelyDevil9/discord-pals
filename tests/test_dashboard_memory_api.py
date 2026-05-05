@@ -122,6 +122,28 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(dm_data["memories"][0]["scope"], "dm")
         self.assertEqual(dm_data["memories"][0]["scope_label"], "DM (Nahida)")
 
+    def test_auto_memory_search_matches_people_and_server_labels(self):
+        self.manager.add_auto_memory(123, 456, "Likes tea", user_name="Alice", server_name="Tea House")
+        self.manager.add_auto_memory(999, 777, "Likes tea", user_name="Bob", server_name="Coffee Club")
+
+        person_response = self.client.get("/api/v2/memories/auto?search=alice")
+        person_data = person_response.get_json()
+        server_response = self.client.get("/api/v2/memories/auto?search=coffee%20club")
+        server_data = server_response.get_json()
+
+        self.assertEqual(person_response.status_code, 200)
+        self.assertEqual([memory["key"] for memory in person_data["memories"]], ["server:123:user:456"])
+        self.assertEqual(server_response.status_code, 200)
+        self.assertEqual([memory["key"] for memory in server_data["memories"]], ["server:999:user:777"])
+
+    def test_add_memory_copy_clarifies_simple_server_user_lore(self):
+        page = self.client.get("/memories").get_data(as_text=True)
+
+        self.assertIn("simple server/user lore note", page)
+        self.assertIn("Server lore note", page)
+        self.assertIn("User lore note", page)
+        self.assertIn("Server for lore", page)
+
     def test_auto_memory_bulk_delete_by_user_returns_counts(self):
         self.manager.add_auto_memory(123, 456, "Alice likes tea")
         self.manager.add_auto_memory(0, 456, "Alice prefers DMs")

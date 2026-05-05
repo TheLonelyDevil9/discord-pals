@@ -153,7 +153,7 @@
             <span class="card-title">Add Memory</span>
         </div>
         <div class="card-body">
-            <p class="tab-description">Add a learned memory or a manual lore note without editing JSON.</p>
+            <p class="tab-description">Add a learned memory or a simple server/user lore note without editing JSON.</p>
 
             <div class="form-row">
                 <div class="form-group">
@@ -161,12 +161,12 @@
                     <select id="memory-type" onchange="updateMemoryForm()" title="Select memory type">
                         <option value="server">Learned server memory</option>
                         <option value="user">Learned user memory</option>
-                        <option value="lore">Server lore</option>
-                        <option value="global">User lore</option>
+                        <option value="lore">Server lore note</option>
+                        <option value="global">User lore note</option>
                     </select>
                 </div>
                 <div class="form-group" id="guild-select-group">
-                    <label for="memory-guild">Server</label>
+                    <label for="memory-guild" id="memory-guild-label">Server</label>
                     <select id="memory-guild" title="Select a server">
                         <option value="">Select a server...</option>
                         {% for guild in guilds %}
@@ -175,7 +175,7 @@
                     </select>
                 </div>
                 <div class="form-group hidden" id="user-id-group">
-                    <label for="memory-user-id">User ID</label>
+                    <label for="memory-user-id" id="memory-user-label">User ID</label>
                     <input type="text" id="memory-user-id" placeholder="Discord user ID">
                 </div>
             </div>
@@ -725,16 +725,30 @@ function scheduleAutoMemoryLoad() {
 function updateMemoryForm() {
     const type = document.getElementById('memory-type').value;
     const guildGroup = document.getElementById('guild-select-group');
+    const guildLabel = document.getElementById('memory-guild-label');
     const userGroup = document.getElementById('user-id-group');
+    const userLabel = document.getElementById('memory-user-label');
+    const contentInput = document.getElementById('memory-content');
 
     if (type === 'global') {
         guildGroup.classList.add('hidden');
         userGroup.classList.remove('hidden');
+        userLabel.textContent = 'User ID';
+        contentInput.placeholder = 'Example: Alice should be treated as a trusted regular.';
         return;
     }
 
     guildGroup.classList.remove('hidden');
     userGroup.classList.toggle('hidden', type !== 'user');
+    guildLabel.textContent = type === 'lore' ? 'Server for lore' : 'Server';
+    userLabel.textContent = 'User ID';
+    if (type === 'lore') {
+        contentInput.placeholder = 'Example: This server prefers low-chaos bot replies after midnight.';
+    } else if (type === 'user') {
+        contentInput.placeholder = 'Example: Alice prefers gentle reminders in this server.';
+    } else {
+        contentInput.placeholder = 'Example: This server has a weekly art night on Fridays.';
+    }
 }
 
 async function addMemory() {
@@ -748,7 +762,7 @@ async function addMemory() {
         return;
     }
     if ((type === 'server' || type === 'user' || type === 'lore') && !guildId) {
-        showToast('Please select a server', 'error');
+        showToast(type === 'lore' ? 'Please pick the server this lore belongs to' : 'Please select a server', 'error');
         return;
     }
     if ((type === 'user' || type === 'global') && !userId) {
