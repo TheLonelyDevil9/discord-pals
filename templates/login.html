@@ -4,39 +4,42 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Discord Pals</title>
-    <link rel="icon" type="image/jpeg" href="/static/banner.jpg">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta name="color-scheme" content="dark light">
+    <link rel="icon" type="image/png" href="/static/favicon-96x96.png" sizes="96x96">
+    <link rel="shortcut icon" href="/static/favicon.ico">
     <style>
         /* Dark Theme (Default) */
         :root, [data-theme="dark"] {
-            --bg-primary: #09090b;
-            --bg-secondary: #18181b;
-            --bg-tertiary: #27272a;
-            --border: #3f3f46;
-            --border-subtle: #27272a;
-            --text-primary: #fafafa;
-            --text-secondary: #a1a1aa;
-            --text-muted: #71717a;
-            --accent: #3b82f6;
-            --danger: #ef4444;
-            --danger-muted: rgba(239, 68, 68, 0.1);
+            color-scheme: dark;
+            --bg-primary: oklch(17% 0.009 270);
+            --bg-secondary: oklch(22% 0.011 270);
+            --bg-tertiary: oklch(28% 0.012 270);
+            --border: oklch(42% 0.014 270);
+            --border-subtle: oklch(31% 0.012 270);
+            --text-primary: oklch(96% 0.006 270);
+            --text-secondary: oklch(73% 0.012 270);
+            --text-muted: oklch(61% 0.011 270);
+            --accent: oklch(62% 0.18 255);
+            --on-accent: oklch(98% 0.006 260);
+            --danger: oklch(66% 0.2 25);
+            --danger-muted: color-mix(in oklch, var(--danger) 14%, transparent);
         }
 
         /* Light Theme */
         [data-theme="light"] {
-            --bg-primary: #ffffff;
-            --bg-secondary: #f4f4f5;
-            --bg-tertiary: #e4e4e7;
-            --border: #d4d4d8;
-            --border-subtle: #e4e4e7;
-            --text-primary: #09090b;
-            --text-secondary: #52525b;
-            --text-muted: #71717a;
-            --accent: #2563eb;
-            --danger: #dc2626;
-            --danger-muted: rgba(220, 38, 38, 0.1);
+            color-scheme: light;
+            --bg-primary: oklch(98% 0.006 270);
+            --bg-secondary: oklch(95% 0.008 270);
+            --bg-tertiary: oklch(91% 0.01 270);
+            --border: oklch(80% 0.012 270);
+            --border-subtle: oklch(88% 0.01 270);
+            --text-primary: oklch(20% 0.012 270);
+            --text-secondary: oklch(39% 0.014 270);
+            --text-muted: oklch(51% 0.013 270);
+            --accent: oklch(55% 0.18 255);
+            --on-accent: oklch(98% 0.006 260);
+            --danger: oklch(56% 0.2 25);
+            --danger-muted: color-mix(in oklch, var(--danger) 12%, transparent);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,7 +68,7 @@
         .login-card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 40px;
         }
 
@@ -128,7 +131,7 @@
             width: 100%;
             padding: 10px 16px;
             background: var(--accent);
-            color: white;
+            color: var(--on-accent);
             border: none;
             border-radius: 6px;
             font-family: inherit;
@@ -161,14 +164,14 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 40px;
-            height: 40px;
+            width: 44px;
+            height: 44px;
             border-radius: 8px;
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
             color: var(--text-muted);
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
             font-size: 1.125rem;
         }
 

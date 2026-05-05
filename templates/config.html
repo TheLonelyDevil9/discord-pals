@@ -16,20 +16,20 @@
 {% endif %}
 
 <div class="config-tabs" role="tablist" aria-label="Configuration sections">
-    <button type="button" class="tab active" data-config-tab="context" onclick="switchConfigTab('context')">Context</button>
-    <button type="button" class="tab" data-config-tab="prompting" onclick="switchConfigTab('prompting')">Prompting</button>
-    <button type="button" class="tab" data-config-tab="time" onclick="switchConfigTab('time')">Time</button>
+    <button type="button" id="tab-button-context" class="tab active" data-config-tab="context" role="tab" aria-controls="tab-context" aria-selected="true" onclick="switchConfigTab('context')">Context</button>
+    <button type="button" id="tab-button-prompting" class="tab" data-config-tab="prompting" role="tab" aria-controls="tab-prompting" aria-selected="false" onclick="switchConfigTab('prompting')">Prompting</button>
+    <button type="button" id="tab-button-time" class="tab" data-config-tab="time" role="tab" aria-controls="tab-time" aria-selected="false" onclick="switchConfigTab('time')">Time</button>
     {% if bots %}
-    <button type="button" class="tab" data-config-tab="automation" onclick="switchConfigTab('automation')">Automation</button>
+    <button type="button" id="tab-button-automation" class="tab" data-config-tab="automation" role="tab" aria-controls="tab-automation" aria-selected="false" onclick="switchConfigTab('automation')">Automation</button>
     {% endif %}
-    <button type="button" class="tab" data-config-tab="providers" onclick="switchConfigTab('providers')">Providers</button>
-    <button type="button" class="tab" data-config-tab="performance" onclick="switchConfigTab('performance')">Performance</button>
-    <button type="button" class="tab" data-config-tab="maintenance" onclick="switchConfigTab('maintenance')">Maintenance</button>
-    <button type="button" class="tab" data-config-tab="advanced" onclick="switchConfigTab('advanced')">Advanced</button>
+    <button type="button" id="tab-button-providers" class="tab" data-config-tab="providers" role="tab" aria-controls="tab-providers" aria-selected="false" onclick="switchConfigTab('providers')">Providers</button>
+    <button type="button" id="tab-button-performance" class="tab" data-config-tab="performance" role="tab" aria-controls="tab-performance" aria-selected="false" onclick="switchConfigTab('performance')">Performance</button>
+    <button type="button" id="tab-button-maintenance" class="tab" data-config-tab="maintenance" role="tab" aria-controls="tab-maintenance" aria-selected="false" onclick="switchConfigTab('maintenance')">Maintenance</button>
+    <button type="button" id="tab-button-advanced" class="tab" data-config-tab="advanced" role="tab" aria-controls="tab-advanced" aria-selected="false" onclick="switchConfigTab('advanced')">Advanced</button>
 </div>
 
 <div class="config-main">
-    <section id="tab-context" class="config-panel active" data-config-panel>
+    <section id="tab-context" class="config-panel active" data-config-panel role="tabpanel" aria-labelledby="tab-button-context">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Context</h2>
@@ -171,7 +171,7 @@
         </div>
     </section>
 
-    <section id="tab-prompting" class="config-panel" data-config-panel>
+    <section id="tab-prompting" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-prompting">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Prompting</h2>
@@ -257,7 +257,7 @@
         </div>
     </section>
 
-    <section id="tab-time" class="config-panel" data-config-panel data-needs-timezones>
+    <section id="tab-time" class="config-panel" data-config-panel data-needs-timezones role="tabpanel" aria-labelledby="tab-button-time">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Time</h2>
@@ -395,7 +395,7 @@
     </section>
 
     {% if bots %}
-    <section id="tab-automation" class="config-panel" data-config-panel>
+    <section id="tab-automation" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-automation">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Automation</h2>
@@ -538,7 +538,7 @@
     </section>
     {% endif %}
 
-    <section id="tab-providers" class="config-panel" data-config-panel>
+    <section id="tab-providers" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-providers">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Providers</h2>
@@ -651,7 +651,7 @@
         </div>
     </section>
 
-    <section id="tab-performance" class="config-panel" data-config-panel>
+    <section id="tab-performance" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-performance">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Performance</h2>
@@ -690,7 +690,7 @@
         </div>
     </section>
 
-    <section id="tab-maintenance" class="config-panel" data-config-panel>
+    <section id="tab-maintenance" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-maintenance">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Maintenance</h2>
@@ -747,7 +747,7 @@
         </div>
     </section>
 
-    <section id="tab-advanced" class="config-panel" data-config-panel>
+    <section id="tab-advanced" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-advanced">
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Advanced</h2>
@@ -804,11 +804,11 @@
     </section>
 </div>
 
-<div id="edit-provider-modal" class="modal-overlay">
+<div id="edit-provider-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-provider-title">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Edit Provider</h3>
-            <button type="button" class="modal-close" onclick="closeEditModal()">&times;</button>
+            <h3 id="edit-provider-title">Edit Provider</h3>
+            <button type="button" class="modal-close" onclick="closeEditModal()" aria-label="Close provider editor">Close</button>
         </div>
         <form id="edit-provider-form" class="provider-form">
             <input type="hidden" id="edit-provider-index">
@@ -862,12 +862,14 @@
 .form-group:last-child { margin-bottom: 0; }
 .form-group label { display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-secondary); font-size: 0.875rem; }
 .form-hint { color: var(--text-muted); font-size: 0.75rem; margin-top: 6px; }
-.impact-pill { color: var(--accent); background: var(--accent-muted); border-radius: 999px; padding: 3px 8px; font-size: 0.6875rem; font-weight: 600; }
+.impact-pill { color: var(--accent); background: var(--accent-muted); border-radius: 6px; padding: 3px 8px; font-size: 0.6875rem; font-weight: 600; }
 .slider-row { display: flex; align-items: center; gap: 12px; }
 .slider-val { min-width: 48px; text-align: right; font-weight: 500; color: var(--text-primary); }
-input[type="range"] { flex: 1; height: 6px; background: var(--bg-tertiary); border-radius: 3px; outline: none; -webkit-appearance: none; }
-input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--accent); border-radius: 50%; cursor: pointer; }
-input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: var(--accent); border-radius: 50%; cursor: pointer; border: none; }
+input[type="range"] { flex: 1; min-height: 40px; background: transparent; outline: none; -webkit-appearance: none; appearance: none; }
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: var(--bg-tertiary); border-radius: 3px; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: var(--accent); border-radius: 50%; cursor: pointer; margin-top: -7px; }
+input[type="range"]::-moz-range-track { height: 6px; background: var(--bg-tertiary); border-radius: 3px; }
+input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; background: var(--accent); border-radius: 50%; cursor: pointer; border: none; }
 select, input[type="text"], input[type="password"], input[type="number"], input[type="time"] {
     padding: 8px 12px;
     background: var(--bg-primary);
@@ -878,9 +880,59 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
     font-size: 0.875rem;
 }
 select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
-.checkbox-label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.checkbox-label { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; min-height: 40px; }
+.checkbox-label input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 24px; accent-color: var(--accent); }
 .checkbox-label span { font-weight: 500; color: var(--text-primary); }
+.form-group label.toggle-switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: 52px;
+    height: 40px;
+    cursor: pointer;
+}
+.toggle-switch input[type="checkbox"] {
+    position: absolute;
+    inset: 0;
+    width: 52px;
+    height: 40px;
+    opacity: 0;
+    cursor: pointer;
+    margin: 0;
+    flex: none;
+}
+.toggle-slider {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    left: 2px;
+    top: 2px;
+    border-radius: 4px;
+    background: var(--text-secondary);
+    transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.toggle-switch input:checked + .toggle-slider {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+    background: var(--on-accent);
+}
+.toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 .bot-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; }
 .bot-row:last-child { margin-bottom: 0; }
 .bot-row.compact { padding: 10px 12px; }
@@ -938,15 +990,15 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 .provider-name { font-weight: 500; color: var(--text-primary); }
 .provider-tier, .provider-model { font-size: 0.75rem; color: var(--text-muted); }
 .provider-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.btn-icon { padding: 6px 8px; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 4px; }
+.btn-icon { padding: 8px 10px; min-height: 40px; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 6px; font: inherit; }
 .btn-icon:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
-.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay { display: none; position: fixed; inset: 0; background: var(--scrim); z-index: 1000; align-items: center; justify-content: center; padding: 16px; }
 .modal-overlay.active { display: flex; }
 .modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-header h3 { margin: 0; }
-.modal-close { background: none; border: none; font-size: 24px; color: var(--text-muted); cursor: pointer; }
+.modal-close { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font: inherit; min-height: 36px; padding: 6px 10px; }
 @media (max-width: 768px) {
     .section-grid, .settings-grid { grid-template-columns: 1fr; }
     .bot-row, .schedule-bot-header { flex-wrap: wrap; }
@@ -971,8 +1023,16 @@ function csrfHeaders() {
 }
 
 function switchConfigTab(tabName) {
-    document.querySelectorAll('[data-config-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.configTab === tabName));
-    document.querySelectorAll('[data-config-panel]').forEach(panel => panel.classList.toggle('active', panel.id === 'tab-' + tabName));
+    document.querySelectorAll('[data-config-tab]').forEach(btn => {
+        const active = btn.dataset.configTab === tabName;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-config-panel]').forEach(panel => {
+        const active = panel.id === 'tab-' + tabName;
+        panel.classList.toggle('active', active);
+        panel.toggleAttribute('hidden', !active);
+    });
     localStorage.setItem('config.activeTab', tabName);
     if (tabName === 'providers') {
         ensureProvidersLoaded();
@@ -1319,11 +1379,11 @@ function renderProviderList() {
                 <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.url || 'Default endpoint')}</span>
             </div>
             <div class="provider-actions">
-                <button type="button" class="btn-icon" onclick="moveProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up">Up</button>
-                <button type="button" class="btn-icon" onclick="moveProvider(${i}, 1)" ${i === providersData.length - 1 ? 'disabled' : ''} title="Move down">Down</button>
-                <button type="button" class="btn-icon" onclick="editProvider(${i})" title="Edit">Edit</button>
-                <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection">Test</button>
-                <button type="button" class="btn-icon" onclick="deleteProvider(${i})" title="Delete">Delete</button>
+                <button type="button" class="btn-icon" onclick="moveProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up" aria-label="Move ${escapeHtml(p.name || 'provider')} up">Up</button>
+                <button type="button" class="btn-icon" onclick="moveProvider(${i}, 1)" ${i === providersData.length - 1 ? 'disabled' : ''} title="Move down" aria-label="Move ${escapeHtml(p.name || 'provider')} down">Down</button>
+                <button type="button" class="btn-icon" onclick="editProvider(${i})" title="Edit" aria-label="Edit ${escapeHtml(p.name || 'provider')}">Edit</button>
+                <button type="button" class="btn-icon" onclick="testProvider(${i})" title="Test connection" aria-label="Test ${escapeHtml(p.name || 'provider')} connection">Test</button>
+                <button type="button" class="btn-icon" onclick="deleteProvider(${i})" title="Delete" aria-label="Delete ${escapeHtml(p.name || 'provider')}">Delete</button>
             </div>
         </div>
     `).join('');
@@ -1365,7 +1425,12 @@ async function reorderProviders(fromIndex, toIndex) {
 }
 
 async function deleteProvider(index) {
-    if (!confirm('Delete this provider?')) return;
+    const confirmed = await confirmAction(
+        'Delete Provider',
+        'Delete this provider from the fallback list? This cannot be undone.',
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
     providersData.splice(index, 1);
     await saveProvidersToServer();
     renderProviderList();

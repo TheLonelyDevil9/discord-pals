@@ -4,6 +4,23 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.1.3] - 2026-05-05
+
+### Changed
+
+- Refined dashboard light and dark theme tokens with tinted OKLCH neutrals and restrained accent usage.
+- Standardized dashboard cards, pills, buttons, modals, tabs, checkboxes, ranges, and toggles around tighter 8px-or-less corner radii.
+- Improved dashboard navigation, tab panels, tables, filters, logs controls, memory actions, provider controls, reminders, and channel modals for better keyboard, screen-reader, and mobile behavior.
+- Replaced native destructive browser confirms with the shared accessible confirmation dialog across dashboard flows.
+- Reduced avoidable decorative effects, heavyweight login assets, and fragile polling behavior in shared dashboard UI.
+
+### Fixed
+
+- Dashboard pages now expose active nav and tab state through ARIA attributes and hide inactive tab panels from assistive tech.
+- Config toggles, memory selectors, reminder selectors, channel checkboxes, and icon/text buttons now provide larger rendered interaction targets.
+- Dashboard status and memory tables/lists now avoid horizontal overflow and wrap stacked actions more predictably on small screens.
+- Toasts, destructive confirmations, modal close controls, auto-scroll state, restart controls, and reminder counts now announce or expose state more clearly.
+
 ## [v2.1.2] - 2026-05-05
 
 ### Added

@@ -50,7 +50,7 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">Reminder Queue</span>
-        <span class="text-muted" id="reminder-count">Loading…</span>
+        <span class="text-muted" id="reminder-count" aria-live="polite">Loading</span>
     </div>
     <div class="card-body">
         <div id="reminder-empty" class="empty" style="display:none;">No reminders match the current filters.</div>
@@ -58,7 +58,7 @@
             <table class="table">
                 <thead>
                     <tr>
-                        <th style="width: 40px;"></th>
+                        <th style="width: 48px;"><span class="sr-only">Select</span></th>
                         <th>ID</th>
                         <th>Bot</th>
                         <th>User</th>
@@ -144,7 +144,7 @@
     display: inline-flex;
     align-items: center;
     padding: 4px 8px;
-    border-radius: 999px;
+    border-radius: 6px;
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -169,6 +169,12 @@
 
 .text-muted {
     color: var(--text-muted);
+}
+
+.reminder-checkbox {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--accent);
 }
 </style>
 
@@ -216,7 +222,7 @@ function renderReminders(rows) {
             <td>${escapeHtml(reminder.target_user_name || '')}<div class="text-muted">${escapeHtml(String(reminder.target_user_id || ''))}</div></td>
             <td>${escapeHtml(reminder.event_summary || '')}</td>
             <td>${escapeHtml(reminder.due_display || '')}</td>
-            <td>${escapeHtml(reminder.pre_due_display || '—')}</td>
+            <td>${escapeHtml(reminder.pre_due_display || 'None')}</td>
             <td><span class="status-badge ${escapeHtml(reminder.status || 'pending')}">${escapeHtml(reminder.status || 'pending')}</span></td>
             <td>${escapeHtml(reminder.source_channel_name || '')}<div class="text-muted">${escapeHtml(reminder.source_type || '')}</div></td>
             <td>${escapeHtml(reminder.creation_mode || '')}</td>

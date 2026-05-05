@@ -126,10 +126,10 @@
 </div>
 
 <!-- Autonomous Configuration Modal -->
-<div id="auto-modal" class="modal" style="display: none;">
+<div id="auto-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="auto-modal-title">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">Configure Channel</h3>
+            <h3 class="modal-title" id="auto-modal-title">Configure Channel</h3>
             <p id="auto-modal-channel" class="modal-subtitle"></p>
         </div>
 
@@ -336,14 +336,15 @@
 /* Auto Toggle Badge */
 .auto-toggle {
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
     border: none;
     font-weight: 600;
     font-size: 0.6875rem;
+    min-height: 36px;
 }
 
 .auto-toggle:hover {
-    transform: scale(1.05);
+    border-color: var(--border);
 }
 
 /* Bot Trigger Toggle */
@@ -352,16 +353,17 @@
     font-size: 0.6875rem;
     padding: 2px 6px;
     border: none;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+    min-height: 36px;
 }
 
 .bot-trigger-toggle:hover {
-    transform: scale(1.05);
+    border-color: var(--border);
 }
 
 .badge-info {
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
 }
 
 .badge-muted {
@@ -397,9 +399,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -409,7 +409,7 @@
 .modal-content {
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 24px;
     max-width: 480px;
     width: 90%;
@@ -493,8 +493,8 @@
 }
 
 .checkbox-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     accent-color: var(--accent);
 }
 
@@ -506,26 +506,39 @@
 /* Range Input */
 input[type="range"] {
     width: 100%;
+    min-height: 40px;
+    background: transparent;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: 8px;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
     height: 6px;
     background: var(--bg-tertiary);
     border-radius: 3px;
-    outline: none;
-    -webkit-appearance: none;
-    margin-top: 8px;
 }
 
 input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
+    margin-top: -7px;
+}
+
+input[type="range"]::-moz-range-track {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
 }
 
 input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     background: var(--accent);
     border-radius: 50%;
     cursor: pointer;

@@ -33,9 +33,9 @@
     </div>
     <div class="card-body">
         <p class="danger-desc">Once you delete a character, there is no going back. Please be certain.</p>
-        <form action="/characters/{{ name }}/delete" method="post" style="display: inline;">
+        <form id="delete-character-form" action="/characters/{{ name }}/delete" method="post" style="display: inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete {{ name }}? This cannot be undone.')">
+            <button type="button" class="btn btn-danger" onclick="confirmDeleteCharacter()">
                 Delete Character
             </button>
         </form>
@@ -106,4 +106,16 @@
     margin-bottom: 16px;
 }
 </style>
+<script>
+async function confirmDeleteCharacter() {
+    const confirmed = await confirmAction(
+        'Delete Character',
+        'Delete {{ name }}? This cannot be undone.',
+        { confirmText: 'Delete' }
+    );
+    if (confirmed) {
+        document.getElementById('delete-character-form').submit();
+    }
+}
+</script>
 {% endblock %}

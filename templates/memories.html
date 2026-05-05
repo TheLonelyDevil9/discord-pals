@@ -7,16 +7,16 @@
     <p class="page-subtitle">Manage auto memory profiles and manual lore.</p>
 </div>
 
-<div class="tabs">
-    <button type="button" class="tab active" data-tab-button="files" onclick="switchTab('files')">Auto Memory Profiles</button>
-    <button type="button" class="tab" data-tab-button="add" onclick="switchTab('add')">Add Memory</button>
-    <button type="button" class="tab" data-tab-button="lore" onclick="switchTab('lore')">Manual Lore</button>
+<div class="tabs" role="tablist" aria-label="Memory sections">
+    <button type="button" id="tab-button-files" class="tab active" data-tab-button="files" role="tab" aria-controls="tab-files" aria-selected="true" onclick="switchTab('files')">Auto Memory Profiles</button>
+    <button type="button" id="tab-button-add" class="tab" data-tab-button="add" role="tab" aria-controls="tab-add" aria-selected="false" onclick="switchTab('add')">Add Memory</button>
+    <button type="button" id="tab-button-lore" class="tab" data-tab-button="lore" role="tab" aria-controls="tab-lore" aria-selected="false" onclick="switchTab('lore')">Manual Lore</button>
 </div>
 
 <datalist id="known-auto-users"></datalist>
 <datalist id="known-lore-users"></datalist>
 
-<div id="tab-files" class="tab-content active">
+<div id="tab-files" class="tab-content active" role="tabpanel" aria-labelledby="tab-button-files">
     <div class="stats-row">
         <div class="stat-card">
             <span class="stat-value" id="total-memories">0</span>
@@ -121,7 +121,7 @@
     </div>
 </div>
 
-<div id="tab-add" class="tab-content">
+<div id="tab-add" class="tab-content" role="tabpanel" aria-labelledby="tab-button-add">
     <div class="card">
         <div class="card-header">
             <span class="card-title">Add New Memory</span>
@@ -164,7 +164,7 @@
     </div>
 </div>
 
-<div id="tab-lore" class="tab-content">
+<div id="tab-lore" class="tab-content" role="tabpanel" aria-labelledby="tab-button-lore">
     <div class="card">
         <div class="card-header">
             <span class="card-title">Manual Lore Management</span>
@@ -225,11 +225,11 @@
     </div>
 </div>
 
-<div id="memory-modal" class="modal hidden">
+<div id="memory-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-content">
         <div class="modal-header">
             <h3 id="modal-title">Edit Memory</h3>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="closeModal()">&times;</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="closeModal()" aria-label="Close memory editor">Close</button>
         </div>
         <div class="form-group">
             <label for="modal-content-input">Content</label>
@@ -292,7 +292,7 @@
 .stat-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
     text-align: center;
 }
@@ -349,7 +349,7 @@
 .memory-card {
     background: var(--bg-primary);
     border: 1px solid var(--border-subtle);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 16px;
     margin-bottom: 12px;
 }
@@ -367,11 +367,11 @@
 .memory-card-select input[type="checkbox"],
 .lore-entry > input[type="checkbox"],
 .select-all input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     margin: 0;
-    flex: 0 0 16px;
+    flex: 0 0 24px;
     accent-color: var(--accent);
 }
 
@@ -601,7 +601,7 @@
 .modal {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -613,7 +613,7 @@
     width: min(560px, 100%);
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
 }
 
@@ -689,14 +689,16 @@ function escapeHtml(text) {
 
 function switchTab(tabName) {
     activeMemoryTab = tabName;
-    document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-
-    const button = document.querySelector(`[data-tab-button="${tabName}"]`);
-    if (button) button.classList.add('active');
-
-    const content = document.getElementById(`tab-${tabName}`);
-    if (content) content.classList.add('active');
+    document.querySelectorAll('[data-tab-button]').forEach(btn => {
+        const active = btn.dataset.tabButton === tabName;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-content').forEach(content => {
+        const active = content.id === `tab-${tabName}`;
+        content.classList.toggle('active', active);
+        content.toggleAttribute('hidden', !active);
+    });
 
     if (tabName === 'files') {
         loadAutoMemories();
@@ -1177,7 +1179,12 @@ async function deleteSelectedAuto() {
     }));
 
     if (!items.length) return;
-    if (!confirm(`Delete ${items.length} auto memories?`)) return;
+    const confirmed = await confirmAction(
+        'Delete Auto Memories',
+        `Delete ${items.length} selected auto memories? This cannot be undone.`,
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/auto/delete-batch', {
@@ -1206,9 +1213,12 @@ async function bulkDeleteAutoByUser() {
     const payload = buildAutoUserActionPayload();
     if (!payload) return;
 
-    if (!confirm(`Delete auto memories for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
-        return;
-    }
+    const confirmed = await confirmAction(
+        'Delete Targeted Auto Memories',
+        `Delete auto memories for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`,
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/auto/bulk-delete', {
@@ -1241,9 +1251,12 @@ async function bulkConsolidateAutoByUser() {
     const payload = buildAutoUserActionPayload();
     if (!payload) return;
 
-    if (!confirm(`Merge auto memory profiles for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`)) {
-        return;
-    }
+    const confirmed = await confirmAction(
+        'Merge Auto Memory Profiles',
+        `Merge auto memory profiles for ${payload.user_ids.length} user(s) in ${formatTargetScopeLabel(payload.scope_mode, payload.server_id)}?`,
+        { confirmText: 'Merge', confirmClass: 'btn-primary' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/auto/consolidate', {
@@ -1406,7 +1419,12 @@ async function saveMemoryModal() {
 }
 
 async function deleteAutoMemory(key, index) {
-    if (!confirm('Delete this auto memory?')) return;
+    const confirmed = await confirmAction(
+        'Delete Auto Memory',
+        'Delete this auto memory? This cannot be undone.',
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/auto/item', {
@@ -1541,7 +1559,12 @@ async function bulkDeleteUserLore() {
         showToast(`Could not resolve: ${unresolved.join(', ')}`, 'error');
         return;
     }
-    if (!confirm(`Delete user lore for ${userIds.length} user(s)?`)) return;
+    const confirmed = await confirmAction(
+        'Delete User Lore',
+        `Delete user lore for ${userIds.length} user(s)? This cannot be undone.`,
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/lore/bulk-delete', {
@@ -1577,7 +1600,12 @@ async function deleteSelectedLore() {
     }));
 
     if (!items.length) return;
-    if (!confirm(`Delete ${items.length} lore entries?`)) return;
+    const confirmed = await confirmAction(
+        'Delete Lore Entries',
+        `Delete ${items.length} lore entries? This cannot be undone.`,
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/lore/delete-batch', {
@@ -1603,7 +1631,12 @@ async function deleteSelectedLore() {
 }
 
 async function deleteSingleLore(key, index) {
-    if (!confirm('Delete this lore entry?')) return;
+    const confirmed = await confirmAction(
+        'Delete Lore Entry',
+        'Delete this lore entry? This cannot be undone.',
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
 
     try {
         const response = await fetch('/api/v2/memories/lore/delete-batch', {

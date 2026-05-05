@@ -52,7 +52,7 @@
                         <div class="control-desc">Stops all bot responses</div>
           </div>
                 </div>
-                <button type="button" id="killswitch-btn" class="btn {% if global_paused %}btn-danger{% else %}btn-ghost{% endif %}" onclick="toggleKillswitch()">
+                <button type="button" id="killswitch-btn" class="btn {% if global_paused %}btn-danger{% else %}btn-ghost{% endif %}" onclick="toggleKillswitch()" aria-pressed="{{ 'true' if global_paused else 'false' }}">
                     <span class="toggle-status">{{ 'Active' if global_paused else 'Inactive' }}</span>
                 </button>
             </div>
@@ -64,7 +64,7 @@
                         <div class="control-desc">Allow bots to respond to each other</div>
                     </div>
                 </div>
-                <button type="button" id="bot-interactions-btn" class="btn {% if bot_interactions_paused %}btn-ghost{% else %}btn-success{% endif %}" onclick="toggleBotInteractions()">
+                <button type="button" id="bot-interactions-btn" class="btn {% if bot_interactions_paused %}btn-ghost{% else %}btn-success{% endif %}" onclick="toggleBotInteractions()" aria-pressed="{{ 'false' if bot_interactions_paused else 'true' }}">
                     <span class="toggle-status">{{ 'Paused' if bot_interactions_paused else 'Enabled' }}</span>
                 </button>
             </div>
@@ -76,7 +76,7 @@
                         <div class="control-desc">How messages are sent to LLM</div>
                     </div>
                 </div>
-                <button type="button" id="message-format-btn" class="btn {% if use_single_user %}btn-primary{% else %}btn-ghost{% endif %}" onclick="toggleMessageFormat()">
+                <button type="button" id="message-format-btn" class="btn {% if use_single_user %}btn-primary{% else %}btn-ghost{% endif %}" onclick="toggleMessageFormat()" aria-pressed="{{ 'true' if use_single_user else 'false' }}">
                     <span class="toggle-status">{{ 'Single-User' if use_single_user else 'Multi-Role' }}</span>
                 </button>
             </div>
@@ -131,32 +131,34 @@
         </div>
     </div>
     <div id="bot-status-empty" class="empty {% if bots %}hidden{% endif %}">No bots running</div>
-    <table id="bot-status-wrapper" {% if not bots %}class="hidden"{% endif %}>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Character</th>
-                <th>Status</th>
-                <th>Last Activity</th>
-            </tr>
-        </thead>
-        <tbody id="bot-status-table">
-            {% for bot in bots %}
-            <tr data-bot-name="{{ bot.name }}">
-                <td><strong>{{ bot.name }}</strong></td>
-                <td style="color: var(--text-secondary);">{{ bot.character }}</td>
-                <td>
-                    {% if bot.online %}
-                    <span class="badge badge-success"><span class="badge-dot"></span> Online</span>
-                    {% else %}
-                    <span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>
-                    {% endif %}
-                </td>
-                <td style="color: var(--text-muted);">{{ bot.last_activity }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div id="bot-status-wrapper" class="table-responsive {% if not bots %}hidden{% endif %}">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Character</th>
+                    <th>Status</th>
+                    <th>Last Activity</th>
+                </tr>
+            </thead>
+            <tbody id="bot-status-table">
+                {% for bot in bots %}
+                <tr data-bot-name="{{ bot.name }}">
+                    <td><strong>{{ bot.name }}</strong></td>
+                    <td style="color: var(--text-secondary);">{{ bot.character }}</td>
+                    <td>
+                        {% if bot.online %}
+                        <span class="badge badge-success"><span class="badge-dot"></span> Online</span>
+                        {% else %}
+                        <span class="badge badge-danger"><span class="badge-dot"></span> Offline</span>
+                        {% endif %}
+                    </td>
+                    <td style="color: var(--text-muted);">{{ bot.last_activity }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 
 <style>
@@ -223,6 +225,7 @@
 
 .stat-card {
     padding: 24px;
+    border-radius: 8px;
 }
 
 .stat-card .stat-label {
@@ -255,12 +258,14 @@
     background: var(--bg-primary);
     border-radius: 8px;
     border: 1px solid var(--border-subtle);
+    min-width: 0;
 }
 
 .control-info {
     display: flex;
     align-items: center;
     gap: 14px;
+    min-width: 0;
 }
 
 .control-icon {
@@ -451,10 +456,12 @@ function updateKillswitchUI(isPaused) {
 
     if (isPaused) {
         btn.className = 'btn btn-danger';
+        btn.setAttribute('aria-pressed', 'true');
         status.textContent = 'Active';
         banner.classList.remove('hidden');
     } else {
         btn.className = 'btn btn-ghost';
+        btn.setAttribute('aria-pressed', 'false');
         status.textContent = 'Inactive';
         banner.classList.add('hidden');
     }
@@ -467,9 +474,11 @@ function updateBotInteractionsUI(isPaused) {
 
     if (isPaused) {
         btn.className = 'btn btn-ghost';
+        btn.setAttribute('aria-pressed', 'false');
         status.textContent = 'Paused';
     } else {
         btn.className = 'btn btn-success';
+        btn.setAttribute('aria-pressed', 'true');
         status.textContent = 'Enabled';
     }
 }
@@ -481,9 +490,11 @@ function updateMessageFormatUI(isSingleUser) {
 
     if (isSingleUser) {
         btn.className = 'btn btn-primary';
+        btn.setAttribute('aria-pressed', 'true');
         status.textContent = 'Single-User';
     } else {
         btn.className = 'btn btn-ghost';
+        btn.setAttribute('aria-pressed', 'false');
         status.textContent = 'Multi-Role';
     }
 }
@@ -579,9 +590,12 @@ checkPendingUpdate();
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         clearInterval(statusPollInterval);
+        statusPollInterval = null;
     } else {
         refreshStatus();
-        statusPollInterval = setInterval(refreshStatus, 15000);
+        if (!statusPollInterval) {
+            statusPollInterval = setInterval(refreshStatus, 15000);
+        }
     }
 });
 
@@ -686,8 +700,13 @@ async function updateBot() {
 async function restartBot(skipConfirm = false) {
     const btn = document.getElementById('restart-btn');
 
-    if (!skipConfirm && !confirm('Are you sure you want to restart the bot? This will briefly disconnect all bots.')) {
-        return;
+    if (!skipConfirm) {
+        const confirmed = await confirmAction(
+            'Restart Bot',
+            'Restart the bot now? This will briefly disconnect all bots.',
+            { confirmText: 'Restart', confirmClass: 'btn-primary' }
+        );
+        if (!confirmed) return;
     }
 
     btn.disabled = true;

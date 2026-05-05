@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Discord Pals{% endblock %}</title>
+    <meta name="color-scheme" content="dark light">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-96x96.png') }}" sizes="96x96">
     <!-- The generated SVG favicon embeds a multi-megabyte raster payload; keep it off the critical path. -->
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
@@ -16,42 +17,54 @@
 
         /* Dark Theme (Default) */
         :root, [data-theme="dark"] {
-            --bg-primary: #09090b;
-            --bg-secondary: #18181b;
-            --bg-tertiary: #27272a;
-            --border: #3f3f46;
-            --border-subtle: #27272a;
-            --text-primary: #fafafa;
-            --text-secondary: #a1a1aa;
-            --text-muted: #71717a;
-            --accent: #3b82f6;
-            --accent-muted: rgba(59, 130, 246, 0.1);
-            --success: #22c55e;
-            --success-muted: rgba(34, 197, 94, 0.1);
-            --warning: #eab308;
-            --warning-muted: rgba(234, 179, 8, 0.1);
-            --danger: #ef4444;
-            --danger-muted: rgba(239, 68, 68, 0.1);
+            color-scheme: dark;
+            --bg-primary: oklch(17% 0.009 270);
+            --bg-secondary: oklch(22% 0.011 270);
+            --bg-tertiary: oklch(28% 0.012 270);
+            --border: oklch(42% 0.014 270);
+            --border-subtle: oklch(31% 0.012 270);
+            --text-primary: oklch(96% 0.006 270);
+            --text-secondary: oklch(73% 0.012 270);
+            --text-muted: oklch(61% 0.011 270);
+            --on-accent: oklch(98% 0.006 260);
+            --on-warning: oklch(20% 0.012 85);
+            --accent: oklch(62% 0.18 255);
+            --accent-muted: color-mix(in oklch, var(--accent) 14%, transparent);
+            --success: oklch(70% 0.17 150);
+            --success-muted: color-mix(in oklch, var(--success) 14%, transparent);
+            --warning: oklch(78% 0.16 85);
+            --warning-muted: color-mix(in oklch, var(--warning) 16%, transparent);
+            --danger: oklch(66% 0.2 25);
+            --danger-muted: color-mix(in oklch, var(--danger) 14%, transparent);
+            --scrim: color-mix(in oklch, var(--bg-primary) 72%, transparent);
+            --row-hover: color-mix(in oklch, var(--bg-secondary) 72%, var(--text-primary) 4%);
+            --shadow-color: oklch(8% 0.01 270 / 0.38);
         }
 
         /* Light Theme */
         [data-theme="light"] {
-            --bg-primary: #ffffff;
-            --bg-secondary: #f4f4f5;
-            --bg-tertiary: #e4e4e7;
-            --border: #d4d4d8;
-            --border-subtle: #e4e4e7;
-            --text-primary: #09090b;
-            --text-secondary: #52525b;
-            --text-muted: #71717a;
-            --accent: #2563eb;
-            --accent-muted: rgba(37, 99, 235, 0.1);
-            --success: #16a34a;
-            --success-muted: rgba(22, 163, 74, 0.1);
-            --warning: #ca8a04;
-            --warning-muted: rgba(202, 138, 4, 0.1);
-            --danger: #dc2626;
-            --danger-muted: rgba(220, 38, 38, 0.1);
+            color-scheme: light;
+            --bg-primary: oklch(98% 0.006 270);
+            --bg-secondary: oklch(95% 0.008 270);
+            --bg-tertiary: oklch(91% 0.01 270);
+            --border: oklch(80% 0.012 270);
+            --border-subtle: oklch(88% 0.01 270);
+            --text-primary: oklch(20% 0.012 270);
+            --text-secondary: oklch(39% 0.014 270);
+            --text-muted: oklch(51% 0.013 270);
+            --on-accent: oklch(98% 0.006 260);
+            --on-warning: oklch(20% 0.012 85);
+            --accent: oklch(55% 0.18 255);
+            --accent-muted: color-mix(in oklch, var(--accent) 12%, transparent);
+            --success: oklch(58% 0.16 150);
+            --success-muted: color-mix(in oklch, var(--success) 12%, transparent);
+            --warning: oklch(62% 0.15 85);
+            --warning-muted: color-mix(in oklch, var(--warning) 14%, transparent);
+            --danger: oklch(56% 0.2 25);
+            --danger-muted: color-mix(in oklch, var(--danger) 12%, transparent);
+            --scrim: color-mix(in oklch, var(--bg-primary) 76%, var(--text-primary) 30%);
+            --row-hover: color-mix(in oklch, var(--bg-secondary) 78%, var(--text-primary) 4%);
+            --shadow-color: oklch(25% 0.012 270 / 0.18);
         }
 
         /* ===== Base Styles ===== */
@@ -71,6 +84,34 @@
             color: var(--text-primary);
             line-height: 1.5;
             font-size: 0.875rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        .skip-link {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 3000;
+            transform: translateY(-160%);
+        }
+
+        .skip-link:focus {
+            transform: translateY(0);
         }
 
         /* Accessibility: Focus indicators */
@@ -145,8 +186,8 @@
 
         .new-version-badge {
             font-size: 0.7rem;
-            color: #fff;
-            background: var(--success, #22c55e);
+            color: var(--on-accent);
+            background: var(--success);
             padding: 2px 8px;
             border-radius: 4px;
             font-weight: 600;
@@ -169,8 +210,8 @@
             left: 0;
             width: 400px;
             max-width: 90vw;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px var(--shadow-color);
             border: 1px solid var(--border);
             opacity: 0;
             visibility: hidden;
@@ -199,6 +240,9 @@
             font-weight: 500;
             font-size: 0.875rem;
             transition: color 0.12s ease, background-color 0.12s ease;
+            min-height: 40px;
+            display: inline-flex;
+            align-items: center;
         }
 
         .nav-link:hover {
@@ -207,6 +251,11 @@
         }
 
         .nav-link.active {
+            color: var(--text-primary);
+            background: var(--bg-secondary);
+        }
+
+        .nav-link[aria-current="page"] {
             color: var(--text-primary);
             background: var(--bg-secondary);
         }
@@ -226,8 +275,8 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 36px;
-            height: 36px;
+            width: 44px;
+            height: 44px;
             border-radius: 6px;
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
@@ -246,7 +295,7 @@
         .card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
-            border-radius: 12px;
+            border-radius: 8px;
             margin-bottom: 24px;
         }
 
@@ -361,11 +410,7 @@
         }
 
         tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
-        }
-
-        [data-theme="light"] tr:hover td {
-            background: rgba(0, 0, 0, 0.02);
+            background: var(--row-hover);
         }
 
         /* Responsive table wrapper */
@@ -414,11 +459,13 @@
             cursor: pointer;
             transition: opacity 0.12s ease, color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
             text-decoration: none;
+            min-height: 40px;
+            line-height: 1.2;
         }
 
         .btn-primary {
             background: var(--accent);
-            color: white;
+            color: var(--on-accent);
         }
 
         .btn-primary:hover {
@@ -438,7 +485,7 @@
 
         .btn-success {
             background: var(--success);
-            color: white;
+            color: var(--on-accent);
         }
 
         .btn-success:hover {
@@ -447,7 +494,13 @@
 
         .btn-danger {
             background: var(--danger);
-            color: white;
+            color: var(--on-accent);
+        }
+
+        .btn:disabled,
+        .btn[aria-disabled="true"] {
+            cursor: not-allowed;
+            opacity: 0.55;
         }
 
         .btn-danger:hover {
@@ -525,6 +578,7 @@
             border-bottom: 2px solid transparent;
             margin-bottom: -1px;
             transition: color 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+            min-height: 44px;
         }
 
         .tab:hover {
@@ -532,6 +586,11 @@
         }
 
         .tab.active {
+            color: var(--text-primary);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab[aria-selected="true"] {
             color: var(--text-primary);
             border-bottom-color: var(--accent);
         }
@@ -544,7 +603,6 @@
             display: block;
         }
 
-        .card,
         .memory-card,
         .lore-entry,
         .provider-item {
@@ -568,6 +626,7 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            pointer-events: none;
         }
 
         .toast {
@@ -575,9 +634,10 @@
             border-radius: 8px;
             font-size: 0.8125rem;
             font-weight: 500;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 4px 12px var(--shadow-color);
             animation: toastIn 0.3s ease;
             max-width: 360px;
+            pointer-events: auto;
         }
 
         .toast.hiding {
@@ -586,17 +646,17 @@
 
         .toast.success {
             background: var(--success);
-            color: white;
+            color: var(--on-accent);
         }
 
         .toast.error {
             background: var(--danger);
-            color: white;
+            color: var(--on-accent);
         }
 
         .toast.warning {
             background: var(--warning);
-            color: #09090b;
+            color: var(--on-warning);
         }
 
         @keyframes toastIn {
@@ -616,9 +676,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            -webkit-backdrop-filter: blur(4px);
-            backdrop-filter: blur(4px);
+            background: var(--scrim);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -634,16 +692,11 @@
         .confirm-modal-content {
             background: var(--bg-secondary);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 24px;
             max-width: 400px;
             width: 90%;
-            animation: modalSlideIn 0.2s ease;
-        }
-
-        @keyframes modalSlideIn {
-            from { transform: scale(0.95); opacity: 0; }
-            to { transform: scale(1); opacity: 1; }
+            box-shadow: 0 20px 48px var(--shadow-color);
         }
 
         .confirm-modal h3 {
@@ -748,10 +801,21 @@
             .btn {
                 padding: 8px 12px;
                 font-size: 0.8125rem;
+                min-height: 44px;
             }
 
             h1 {
                 font-size: 1.5rem;
+            }
+
+            .toast-container {
+                left: 12px;
+                right: 12px;
+                bottom: 12px;
+            }
+
+            .toast {
+                max-width: none;
             }
         }
 
@@ -778,9 +842,10 @@
 </head>
 
 <body>
+    <a href="#main-content" class="btn btn-primary skip-link">Skip to content</a>
     <div class="toast-container" id="toast-container"></div>
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <nav>
+    <nav aria-label="Primary navigation">
         <div class="nav-brand">
             <img src="/static/dashboard-brand.webp" alt="Discord Pals" class="nav-brand-icon" width="32" height="32" decoding="async">
             <a href="https://github.com/TheLonelyDevil9/discord-pals" target="_blank" rel="noopener" class="nav-brand-text">Discord Pals</a>
@@ -788,31 +853,32 @@
             <img alt="Discord Pals Banner" class="nav-brand-preview" data-src="/static/dashboard-banner-preview.webp" width="400" height="400" decoding="async">
         </div>
         <div class="nav-links">
-            <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}">Dashboard</a>
-            <a href="/characters" class="nav-link {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}active{% endif %}">Characters</a>
-            <a href="/memories" class="nav-link {% if request.path=='/memories' %}active{% endif %}">Memories</a>
-            <a href="/reminders" class="nav-link {% if request.path=='/reminders' %}active{% endif %}">Reminders</a>
-            <a href="/channels" class="nav-link {% if request.path=='/channels' %}active{% endif %}">Channels</a>
-            <a href="/config" class="nav-link {% if request.path=='/config' or request.path=='/settings' %}active{% endif %}">Config</a>
-            <a href="/logs" class="nav-link {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}active{% endif %}">Logs</a>
+            <a href="/" class="nav-link {% if request.path=='/' %}active{% endif %}" {% if request.path=='/' %}aria-current="page"{% endif %}>Dashboard</a>
+            <a href="/characters" class="nav-link {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}active{% endif %}" {% if '/characters' in request.path or '/preview' in request.path or '/prompts' in request.path %}aria-current="page"{% endif %}>Characters</a>
+            <a href="/memories" class="nav-link {% if request.path=='/memories' %}active{% endif %}" {% if request.path=='/memories' %}aria-current="page"{% endif %}>Memories</a>
+            <a href="/reminders" class="nav-link {% if request.path=='/reminders' %}active{% endif %}" {% if request.path=='/reminders' %}aria-current="page"{% endif %}>Reminders</a>
+            <a href="/channels" class="nav-link {% if request.path=='/channels' %}active{% endif %}" {% if request.path=='/channels' %}aria-current="page"{% endif %}>Channels</a>
+            <a href="/config" class="nav-link {% if request.path=='/config' or request.path=='/settings' %}active{% endif %}" {% if request.path=='/config' or request.path=='/settings' %}aria-current="page"{% endif %}>Config</a>
+            <a href="/logs" class="nav-link {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}active{% endif %}" {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}aria-current="page"{% endif %}>Logs</a>
         </div>
         <div class="nav-right">
             {% if is_logged_in %}
             <span class="nav-user">admin</span>
             <a href="/logout" class="nav-link">Logout</a>
             {% endif %}
-            <button type="button" class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
-                <span id="theme-icon">🌙</span>
+            <button type="button" class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
+                <span id="theme-icon" aria-hidden="true">🌙</span>
             </button>
         </div>
     </nav>
-    <main class="container">{% block content %}{% endblock %}</main>
+    <main class="container" id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
     <script>
         function showToast(msg, type) {
             type = type || 'success';
             var c = document.getElementById('toast-container');
             var t = document.createElement('div');
             t.className = 'toast ' + type;
+            t.setAttribute('role', type === 'error' ? 'alert' : 'status');
             t.textContent = msg;
             c.appendChild(t);
             setTimeout(function() {
@@ -821,14 +887,25 @@
             }, 3000);
         }
 
-        function showConfirm(title, msg, cb) {
+        function showConfirm(title, msg, cb, options) {
+            options = options || {};
+            var confirmText = options.confirmText || 'Delete';
+            var confirmClass = options.confirmClass || 'btn-danger';
+            var onCancel = typeof options.onCancel === 'function' ? options.onCancel : function() {};
+            var previousFocus = document.activeElement;
             var m = document.createElement('div');
             m.className = 'confirm-modal';
+            m.setAttribute('role', 'dialog');
+            m.setAttribute('aria-modal', 'true');
+            m.setAttribute('aria-labelledby', 'confirm-title');
+            m.setAttribute('aria-describedby', 'confirm-message');
             var content = document.createElement('div');
             content.className = 'confirm-modal-content';
             var h3 = document.createElement('h3');
+            h3.id = 'confirm-title';
             h3.textContent = title;
             var p = document.createElement('p');
+            p.id = 'confirm-message';
             p.textContent = msg;
             var buttons = document.createElement('div');
             buttons.className = 'confirm-modal-buttons';
@@ -836,8 +913,8 @@
             cancelBtn.className = 'btn btn-secondary';
             cancelBtn.textContent = 'Cancel';
             var confirmBtn = document.createElement('button');
-            confirmBtn.className = 'btn btn-danger';
-            confirmBtn.textContent = 'Delete';
+            confirmBtn.className = 'btn ' + confirmClass;
+            confirmBtn.textContent = confirmText;
             buttons.appendChild(cancelBtn);
             buttons.appendChild(confirmBtn);
             content.appendChild(h3);
@@ -845,11 +922,66 @@
             content.appendChild(buttons);
             m.appendChild(content);
             document.body.appendChild(m);
-            cancelBtn.onclick = function() { m.remove(); };
-            confirmBtn.onclick = function() { m.remove(); cb(); };
-            m.onclick = function(e) { if (e.target === m) m.remove(); };
+            cancelBtn.focus();
+
+            function close(cancelled) {
+                m.remove();
+                if (previousFocus && typeof previousFocus.focus === 'function') {
+                    previousFocus.focus();
+                }
+                if (cancelled) onCancel();
+            }
+
+            cancelBtn.onclick = function() { close(true); };
+            confirmBtn.onclick = function() { close(false); cb(); };
+            m.onclick = function(e) { if (e.target === m) close(true); };
             document.addEventListener('keydown', function handler(e) {
-                if (e.key === 'Escape') { m.remove(); document.removeEventListener('keydown', handler); }
+                if (!document.body.contains(m)) {
+                    document.removeEventListener('keydown', handler);
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    close(true);
+                    document.removeEventListener('keydown', handler);
+                }
+                if (e.key === 'Tab') {
+                    var focusable = Array.from(m.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+                        .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
+                    if (!focusable.length) return;
+                    var first = focusable[0];
+                    var last = focusable[focusable.length - 1];
+                    if (e.shiftKey && document.activeElement === first) {
+                        e.preventDefault();
+                        last.focus();
+                    } else if (!e.shiftKey && document.activeElement === last) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            });
+        }
+
+        function confirmAction(title, msg, options) {
+            return new Promise(function(resolve) {
+                var settled = false;
+                function settle(value) {
+                    if (settled) return;
+                    settled = true;
+                    resolve(value);
+                }
+                var mergedOptions = Object.assign({}, options || {}, {
+                    onCancel: function() {
+                        if (options && typeof options.onCancel === 'function') {
+                            options.onCancel();
+                        }
+                        settle(false);
+                    }
+                });
+                showConfirm(title, msg, function() { settle(true); }, mergedOptions);
+                var modal = document.querySelector('.confirm-modal:last-of-type');
+                if (!modal) {
+                    settle(false);
+                }
             });
         }
 
@@ -897,11 +1029,13 @@
         async function withButtonLoading(btn, asyncFn) {
             var originalText = btn.textContent;
             btn.disabled = true;
-            btn.textContent = 'Loading...';
+            btn.setAttribute('aria-busy', 'true');
+            btn.textContent = 'Loading';
             try {
                 return await asyncFn();
             } finally {
                 btn.disabled = false;
+                btn.removeAttribute('aria-busy');
                 btn.textContent = originalText;
             }
         }

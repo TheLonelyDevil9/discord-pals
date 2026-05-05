@@ -8,14 +8,14 @@
 </div>
 
 <!-- Tab Navigation -->
-<div class="tabs">
-    <button type="button" class="tab active" onclick="switchTab('live')">Live Logs</button>
-    <button type="button" class="tab" onclick="switchTab('stats')">Stats</button>
-    <button type="button" class="tab" onclick="switchTab('context')">Context</button>
+<div class="tabs" role="tablist" aria-label="Log sections">
+    <button type="button" id="tab-button-live" class="tab active" data-tab-button="live" role="tab" aria-controls="tab-live" aria-selected="true" onclick="switchTab('live')">Live Logs</button>
+    <button type="button" id="tab-button-stats" class="tab" data-tab-button="stats" role="tab" aria-controls="tab-stats" aria-selected="false" onclick="switchTab('stats')">Stats</button>
+    <button type="button" id="tab-button-context" class="tab" data-tab-button="context" role="tab" aria-controls="tab-context" aria-selected="false" onclick="switchTab('context')">Context</button>
 </div>
 
 <!-- Live Logs Tab -->
-<div id="tab-live" class="tab-content active">
+<div id="tab-live" class="tab-content active" role="tabpanel" aria-labelledby="tab-button-live">
     <div class="card">
         <div class="logs-controls">
             <button type="button" class="btn btn-primary btn-sm" onclick="toggleAutoScroll()">
@@ -31,10 +31,10 @@
                 <option value="error">Error</option>
             </select>
             <span class="log-count" id="log-count">0 entries</span>
-            <span class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()">
+            <button type="button" class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()" aria-pressed="true">
                 <span class="scroll-dot" id="scroll-dot"></span>
                 Auto-scroll
-            </span>
+            </button>
         </div>
         <div class="logs-container" id="logs-container">
             <div class="logs-empty">Loading logs...</div>
@@ -43,7 +43,7 @@
 </div>
 
 <!-- Stats Tab -->
-<div id="tab-stats" class="tab-content">
+<div id="tab-stats" class="tab-content" role="tabpanel" aria-labelledby="tab-button-stats">
     {% if stats.created_at %}
     <p class="stats-since">Tracking since {{ stats.created_at[:10] }}</p>
     {% endif %}
@@ -151,7 +151,7 @@
 </div>
 
 <!-- Context Tab -->
-<div id="tab-context" class="tab-content">
+<div id="tab-context" class="tab-content" role="tabpanel" aria-labelledby="tab-button-context">
     <p class="context-intro">See what was sent to the LLM on the last API call for each bot.</p>
     <div id="context-container">
         <div class="card"><div class="card-body"><div class="empty">Loading contexts...</div></div></div>
@@ -196,7 +196,7 @@
     font-family: inherit;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease;
 }
 
 .tab:hover {
@@ -262,7 +262,11 @@
     cursor: pointer;
     padding: 6px 12px;
     border-radius: 6px;
-    transition: all 0.15s ease;
+    transition: color 0.15s ease, background-color 0.15s ease;
+    min-height: 40px;
+    border: 1px solid transparent;
+    background: transparent;
+    font-family: inherit;
 }
 
 .auto-scroll-indicator:hover {
@@ -366,7 +370,7 @@
 .stat-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
     text-align: center;
 }
@@ -599,10 +603,16 @@ if (typeof debounce === 'undefined') {
 }
 
 function switchTab(tabName) {
-    document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-    document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
-    document.getElementById('tab-' + tabName).classList.add('active');
+    document.querySelectorAll('[data-tab-button]').forEach(btn => {
+        const active = btn.dataset.tabButton === tabName;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-content').forEach(content => {
+        const active = content.id === 'tab-' + tabName;
+        content.classList.toggle('active', active);
+        content.toggleAttribute('hidden', !active);
+    });
 
     if (tabName === 'live') {
         fetchLogs();
@@ -757,7 +767,9 @@ function renderFilteredLogs(logs) {
 function toggleAutoScroll() {
     autoScroll = !autoScroll;
     document.getElementById('auto-scroll-btn').textContent = autoScroll ? 'Pause' : 'Resume';
-    document.getElementById('scroll-indicator').className = 'auto-scroll-indicator' + (autoScroll ? ' active' : '');
+    const indicator = document.getElementById('scroll-indicator');
+    indicator.className = 'auto-scroll-indicator' + (autoScroll ? ' active' : '');
+    indicator.setAttribute('aria-pressed', autoScroll ? 'true' : 'false');
 }
 
 async function clearLogs() {

@@ -8,16 +8,17 @@
 </div>
 
 <!-- Tab Navigation -->
-<div class="tabs">
-    <button type="button" class="tab active" onclick="switchTab('files')">Files</button>
-    <button type="button" class="tab" onclick="switchTab('preview')">Preview</button>
-    <button type="button" class="tab" onclick="switchTab('prompts')">Prompts</button>
+<div class="tabs" role="tablist" aria-label="Character sections">
+    <button type="button" id="tab-button-files" class="tab active" data-tab-button="files" role="tab" aria-controls="tab-files" aria-selected="true" onclick="switchTab('files')">Files</button>
+    <button type="button" id="tab-button-preview" class="tab" data-tab-button="preview" role="tab" aria-controls="tab-preview" aria-selected="false" onclick="switchTab('preview')">Preview</button>
+    <button type="button" id="tab-button-prompts" class="tab" data-tab-button="prompts" role="tab" aria-controls="tab-prompts" aria-selected="false" onclick="switchTab('prompts')">Prompts</button>
 </div>
 
 <!-- Files Tab -->
-<div id="tab-files" class="tab-content active">
+<div id="tab-files" class="tab-content active" role="tabpanel" aria-labelledby="tab-button-files">
     {% if characters %}
     <div class="search-box">
+        <label class="sr-only" for="character-search">Search characters</label>
         <input type="text" id="character-search" placeholder="Search characters..." oninput="debouncedFilterCharacters()">
     </div>
     <div class="character-grid">
@@ -47,7 +48,8 @@
         <div class="card-body">
             <form action="/characters/new" method="post" class="new-character-form">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="text" name="name" placeholder="Character name" required>
+                <label class="sr-only" for="new-character-name">Character name</label>
+                <input type="text" id="new-character-name" name="name" placeholder="Character name" required>
                 <button type="submit" class="btn btn-primary">Create</button>
             </form>
         </div>
@@ -60,7 +62,7 @@
 </div>
 
 <!-- Preview Tab -->
-<div id="tab-preview" class="tab-content">
+<div id="tab-preview" class="tab-content" role="tabpanel" aria-labelledby="tab-button-preview">
     <p class="tab-description">See the complete prompt plus which character-file blocks always inject, only inject for matching users, or are ignored by the parser.</p>
     <div class="preview-controls">
         <select id="character-select" onchange="loadPreview()" title="Select a character to preview">
@@ -87,7 +89,7 @@
 </div>
 
 <!-- Prompts Tab -->
-<div id="tab-prompts" class="tab-content">
+<div id="tab-prompts" class="tab-content" role="tabpanel" aria-labelledby="tab-button-prompts">
     <p class="tab-description">System prompt is read-only here. Character-facing guidance that should be sent after it lives in Other Prompts.</p>
     <div class="prompts-layout">
         <div class="card prompt-editor-card">
@@ -172,7 +174,7 @@
 .character-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 20px;
     transition: border-color 0.15s ease;
 }
@@ -222,7 +224,7 @@
     left: 0;
     right: 0;
     height: 40px;
-    background: linear-gradient(transparent, var(--bg-primary));
+    background: linear-gradient(to bottom, color-mix(in oklch, var(--bg-primary) 0%, transparent), var(--bg-primary));
 }
 
 .character-error {
@@ -309,13 +311,13 @@
 .preview-structure-item {
     background: var(--bg-primary);
     border: 1px solid var(--border-subtle);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 12px;
     margin-bottom: 10px;
 }
 
 .preview-structure-item.active {
-    border-color: var(--accent, #3b82f6);
+    border-color: var(--accent);
 }
 
 .preview-structure-item.inactive {
@@ -449,6 +451,19 @@
 </style>
 
 <script>
+// Local debounce fallback because this block renders before base.html's shared helpers.
+if (typeof debounce === 'undefined') {
+    function debounce(fn, delay) {
+        var timeout;
+        return function() {
+            var args = arguments;
+            var context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(function() { fn.apply(context, args); }, delay);
+        };
+    }
+}
+
 function filterCharacters() {
     const search = document.getElementById('character-search').value.toLowerCase();
     document.querySelectorAll('.character-card').forEach(card => {
@@ -464,10 +479,16 @@ function filterCharacters() {
 const debouncedFilterCharacters = debounce(filterCharacters, 150);
 
 function switchTab(tabName) {
-    document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-    document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
-    document.getElementById('tab-' + tabName).classList.add('active');
+    document.querySelectorAll('[data-tab-button]').forEach(btn => {
+        const active = btn.dataset.tabButton === tabName;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-content').forEach(content => {
+        const active = content.id === 'tab-' + tabName;
+        content.classList.toggle('active', active);
+        content.toggleAttribute('hidden', !active);
+    });
 }
 
 function confirmDeleteCharacter(name) {
@@ -561,7 +582,7 @@ async function loadPreview() {
         document.getElementById('preview-structure').classList.add('hidden');
         return;
     }
-    document.getElementById('preview-content').innerHTML = '<div class="empty">Loading...</div>';
+    document.getElementById('preview-content').innerHTML = '<div class="empty">Loading</div>';
     try {
         const params = new URLSearchParams({ user_name: previewUser });
         const response = await fetch('/api/preview/' + encodeURIComponent(charName) + '?' + params.toString());
