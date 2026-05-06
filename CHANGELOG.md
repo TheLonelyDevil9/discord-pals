@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.1] - 2026-05-06
+
+### Changed
+
+- Expanded the Prose Polisher prompt with a structured banned-trope checklist and explicit text corpus block.
+
+### Fixed
+
+- Post-system prompt parsing now preserves nested `##` headings inside known prompt sections instead of truncating expanded prompt bodies.
+- Prose Polisher now appends the response body as a text corpus when a customized prompt omits the response placeholder.
+
 ## [v2.2.0] - 2026-05-05
 
 ### Added
