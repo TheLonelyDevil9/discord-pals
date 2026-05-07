@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.6] - 2026-05-07
+
+### Fixed
+
+- Latest-version checks now include `git ls-remote --tags` so the dashboard can see freshly pushed tags even when GitHub API tag data is stale.
+
 ## [v2.2.5] - 2026-05-07
 
 ### Fixed

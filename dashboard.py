@@ -2805,6 +2805,42 @@ def _fetch_github_latest_version():
     return max(semantic_versions, key=version_key)
 
 
+def _fetch_remote_latest_tag_version():
+    """Return the highest semantic version advertised by the Git remote's tags."""
+    try:
+        bot_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_dir = _repo_root(bot_dir)
+        remote = _select_git_remote(repo_dir)
+        result = _run_git(["ls-remote", "--tags", remote], repo_dir, timeout=30)
+        if result.returncode != 0:
+            return None
+
+        versions = set()
+        for line in result.stdout.splitlines():
+            _sha, _sep, ref = line.partition("\t")
+            tag_name = ref.removeprefix("refs/tags/").removesuffix("^{}")
+            versions.add(tag_name.lstrip("v"))
+
+        semantic_versions = [version for version in versions if _compare_versions(version, "0.0.0") >= 0]
+        if not semantic_versions:
+            return None
+        return max(semantic_versions, key=lambda version: [int(part) for part in version.split(".")[:3]])
+    except Exception:
+        return None
+
+
+def _fetch_latest_available_version():
+    """Return the highest version visible from GitHub metadata or Git remote refs."""
+    candidates = [
+        _fetch_github_latest_version(),
+        _fetch_remote_latest_tag_version(),
+    ]
+    versions = [version for version in candidates if version]
+    if not versions:
+        return None
+    return max(versions, key=lambda version: [int(part) for part in version.split(".")[:3]])
+
+
 def _invalidate_github_version_cache():
     """Clear the cached GitHub version result."""
     with _github_version_cache_lock:
@@ -2825,7 +2861,7 @@ def _check_github_latest_version(force_refresh: bool = False):
         if has_fresh_cache:
             return _github_version_cache["github_version"]
 
-        github_version = _fetch_github_latest_version()
+        github_version = _fetch_latest_available_version()
         if github_version is not None:
             _github_version_cache["fetched_at"] = now
             _github_version_cache["github_version"] = github_version

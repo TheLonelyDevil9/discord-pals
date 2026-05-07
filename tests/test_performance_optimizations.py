@@ -406,7 +406,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         dependencies = {"status": "skipped", "message": "", "warning": None}
 
         with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0"]), \
-                patch.object(dashboard_module, "_fetch_github_latest_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
+                patch.object(dashboard_module, "_fetch_latest_available_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
                 patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
                 patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies):
@@ -478,6 +478,13 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(latest, "2.2.4")
         self.assertEqual(urlopen.call_count, 2)
+
+    def test_latest_available_version_uses_remote_tags_when_github_tags_lag(self):
+        with patch.object(dashboard_module, "_fetch_github_latest_version", return_value="2.2.4"), \
+                patch.object(dashboard_module, "_fetch_remote_latest_tag_version", return_value="2.2.5"):
+            latest = dashboard_module._fetch_latest_available_version()
+
+        self.assertEqual(latest, "2.2.5")
 
     def test_update_endpoint_rejects_false_up_to_date_when_latest_version_missing(self):
         git_update = {
