@@ -405,11 +405,10 @@
                     <span class="impact-pill">Changes when bots act</span>
                 </div>
                 <div class="card-body">
-                    <p class="form-hint" style="margin-bottom: 16px;">Unavailable windows pause autonomous responses, reminders, and DM follow-ups.</p>
+                    <p class="form-hint" style="margin-bottom: 16px;">Set offline hours. Start with the same hours every day, then adjust individual days only when needed.</p>
                     <div class="schedule-bot-list">
                         {% for bot in bots %}
                         {% set schedule = bot.schedule or {} %}
-                        {% set windows = schedule.unavailable if schedule.unavailable else [{}] %}
                         <div class="schedule-bot-panel" data-bot-name="{{ bot.name }}">
                             <div class="schedule-bot-header">
                                 <label class="checkbox-label schedule-enabled">
@@ -417,7 +416,7 @@
                                     <span>{{ bot.name }}</span>
                                 </label>
                                 <div class="schedule-actions">
-                                    <button type="button" class="btn btn-ghost btn-sm" onclick="addScheduleWindow(this)">Add Window</button>
+                                    <button type="button" class="btn btn-ghost btn-sm" onclick="applyEverydaySchedule(this)">Apply to All Days</button>
                                     <button type="button" class="btn btn-primary btn-sm" onclick="saveBotSchedule(this)">Save</button>
                                 </div>
                             </div>
@@ -428,20 +427,31 @@
                                 </select>
                             </div>
                             <div class="schedule-windows">
-                                {% for window in windows %}
-                                {% set selected_days = window.days if window.days else ['mon','tue','wed','thu','fri','sat','sun'] %}
-                                <div class="schedule-window" data-schedule-window>
-                                    <select class="schedule-days" multiple title="Unavailable days for {{ bot.name }}">
-                                        {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
-                                        <option value="{{ value }}" {% if value in selected_days %}selected{% endif %}>{{ label }}</option>
-                                        {% endfor %}
-                                    </select>
-                                    <input class="schedule-start" type="time" value="{{ window.start or '22:00' }}" title="Unavailable start time">
+                                <div class="schedule-everyday-row">
+                                    <div>
+                                        <span class="schedule-row-title">Every day offline</span>
+                                        <span class="schedule-row-hint">Use this for the normal sleep block.</span>
+                                    </div>
+                                    <input class="schedule-everyday-start" type="time" value="03:00" title="Every day offline start time">
                                     <span class="text-muted">to</span>
-                                    <input class="schedule-end" type="time" value="{{ window.end or '08:00' }}" title="Unavailable end time">
-                                    <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
+                                    <input class="schedule-everyday-end" type="time" value="08:00" title="Every day offline end time">
+                                    <button type="button" class="btn btn-ghost btn-sm" onclick="applyEverydaySchedule(this)">Set All</button>
                                 </div>
-                                {% endfor %}
+                                <div class="schedule-week" data-schedule-week data-windows='{{ (schedule.unavailable or []) | tojson }}'>
+                                    {% for value, label in [('mon','Mon'),('tue','Tue'),('wed','Wed'),('thu','Thu'),('fri','Fri'),('sat','Sat'),('sun','Sun')] %}
+                                    <div class="schedule-day-row" data-schedule-day="{{ value }}">
+                                        <label class="toggle-switch schedule-day-toggle">
+                                            <input type="checkbox" class="schedule-day-enabled" checked title="{{ label }} offline enabled">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                        <span class="schedule-day-name">{{ label }}</span>
+                                        <input class="schedule-start" type="time" value="03:00" title="{{ label }} offline start time">
+                                        <span class="text-muted">to</span>
+                                        <input class="schedule-end" type="time" value="08:00" title="{{ label }} offline end time">
+                                        <button type="button" class="btn btn-ghost btn-sm" onclick="matchEverydaySchedule(this)">Match Every Day</button>
+                                    </div>
+                                    {% endfor %}
+                                </div>
                             </div>
                         </div>
                         {% endfor %}
@@ -991,7 +1001,7 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 .checkbox-label { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; min-height: 40px; }
 .checkbox-label input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 24px; accent-color: var(--accent); }
 .checkbox-label span { font-weight: 500; color: var(--text-primary); }
-.form-group label.toggle-switch {
+label.toggle-switch {
     position: relative;
     display: inline-flex;
     align-items: center;
@@ -1057,9 +1067,31 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 .schedule-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .schedule-timezone-row { display: grid; grid-template-columns: minmax(130px, 0.4fr) minmax(240px, 1fr); gap: 12px; align-items: center; margin-bottom: 12px; }
 .schedule-timezone-row label, .schedule-enabled { margin: 0; }
-.schedule-windows { display: flex; flex-direction: column; gap: 10px; }
-.schedule-window { display: grid; grid-template-columns: minmax(140px, 1fr) 120px auto 120px auto; gap: 10px; align-items: center; }
-.schedule-days { min-height: 112px; }
+.schedule-windows { display: flex; flex-direction: column; gap: 12px; }
+.schedule-everyday-row, .schedule-day-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) 120px auto 120px auto;
+    gap: 10px;
+    align-items: center;
+}
+.schedule-everyday-row {
+    padding: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+}
+.schedule-row-title, .schedule-day-name { display: block; font-weight: 600; color: var(--text-primary); }
+.schedule-row-hint { display: block; margin-top: 2px; font-size: 0.75rem; color: var(--text-muted); }
+.schedule-week { display: grid; gap: 8px; }
+.schedule-day-row {
+    grid-template-columns: 58px minmax(54px, 0.35fr) 120px auto 120px auto;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+}
+.schedule-day-row.is-disabled { opacity: 0.58; }
+.schedule-day-toggle { min-width: 52px; }
 .auto-section { padding: 16px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; }
 .auto-section:last-child { margin-bottom: 0; }
 .auto-section-header { font-weight: 600; color: var(--accent); margin-bottom: 12px; font-size: 0.875rem; }
@@ -1110,7 +1142,7 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 @media (max-width: 768px) {
     .section-grid, .settings-grid { grid-template-columns: 1fr; }
     .bot-row, .schedule-bot-header { flex-wrap: wrap; }
-    .schedule-timezone-row, .schedule-window { grid-template-columns: 1fr; }
+    .schedule-timezone-row, .schedule-everyday-row, .schedule-day-row { grid-template-columns: 1fr; }
     .provider-item { align-items: flex-start; flex-wrap: wrap; }
     .provider-actions { width: 100%; justify-content: flex-start; }
 }
@@ -1393,34 +1425,105 @@ async function saveBotTimezone(botName) {
     }
 }
 
-function addScheduleWindow(button, start = '', end = '', days = ['mon','tue','wed','thu','fri','sat','sun']) {
-    const panel = button.closest('.schedule-bot-panel');
-    const container = panel.querySelector('.schedule-windows');
-    const wrapper = document.createElement('div');
-    wrapper.className = 'schedule-window';
-    wrapper.dataset.scheduleWindow = '';
-    wrapper.innerHTML = `
-        <select class="schedule-days" multiple title="Unavailable days">
-            ${['mon','tue','wed','thu','fri','sat','sun'].map(day => `<option value="${day}" ${days.includes(day) ? 'selected' : ''}>${day.charAt(0).toUpperCase() + day.slice(1)}</option>`).join('')}
-        </select>
-        <input class="schedule-start" type="time" value="${start || '22:00'}" title="Unavailable start time">
-        <span class="text-muted">to</span>
-        <input class="schedule-end" type="time" value="${end || '08:00'}" title="Unavailable end time">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="removeScheduleWindow(this)">Remove</button>
-    `;
-    container.appendChild(wrapper);
-    populateTimezoneSelects(wrapper);
+const scheduleDays = ['mon','tue','wed','thu','fri','sat','sun'];
+
+function normalizeScheduleDayValues(days) {
+    if (typeof days === 'string') {
+        days = days.split(',');
+    }
+    if (!Array.isArray(days) || !days.length) {
+        return [...scheduleDays];
+    }
+    const selected = new Set(days.map(day => String(day).trim().toLowerCase().slice(0, 3)));
+    return scheduleDays.filter(day => selected.has(day));
 }
 
-function removeScheduleWindow(button) {
-    const windowEl = button.closest('[data-schedule-window]');
-    const container = windowEl.closest('.schedule-windows');
-    if (container.querySelectorAll('[data-schedule-window]').length > 1) {
-        windowEl.remove();
-    } else {
-        windowEl.querySelector('.schedule-start').value = '22:00';
-        windowEl.querySelector('.schedule-end').value = '08:00';
+function setScheduleDay(row, start, end, enabled = true) {
+    row.querySelector('.schedule-day-enabled').checked = enabled;
+    row.querySelector('.schedule-start').value = start || '03:00';
+    row.querySelector('.schedule-end').value = end || '08:00';
+    updateScheduleDayState(row);
+}
+
+function updateScheduleDayState(row) {
+    const enabled = row.querySelector('.schedule-day-enabled').checked;
+    row.classList.toggle('is-disabled', !enabled);
+    row.querySelectorAll('.schedule-start, .schedule-end').forEach(input => {
+        input.disabled = !enabled;
+    });
+}
+
+function applyEverydaySchedule(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    const start = panel.querySelector('.schedule-everyday-start').value || '03:00';
+    const end = panel.querySelector('.schedule-everyday-end').value || '08:00';
+    panel.querySelectorAll('.schedule-day-row').forEach(row => setScheduleDay(row, start, end, true));
+}
+
+function matchEverydaySchedule(button) {
+    const panel = button.closest('.schedule-bot-panel');
+    const row = button.closest('.schedule-day-row');
+    const start = panel.querySelector('.schedule-everyday-start').value || '03:00';
+    const end = panel.querySelector('.schedule-everyday-end').value || '08:00';
+    setScheduleDay(row, start, end, true);
+}
+
+function hydrateBotSchedule(panel) {
+    const week = panel.querySelector('[data-schedule-week]');
+    if (!week) return;
+    let windows = [];
+    try {
+        windows = JSON.parse(week.dataset.windows || '[]');
+    } catch (error) {
+        windows = [];
     }
+    const rows = Array.from(panel.querySelectorAll('.schedule-day-row'));
+    rows.forEach(row => setScheduleDay(row, '03:00', '08:00', false));
+    if (!windows.length) {
+        rows.forEach(row => setScheduleDay(row, '03:00', '08:00', true));
+    }
+    windows.forEach(windowConfig => {
+        const start = windowConfig.start || '03:00';
+        const end = windowConfig.end || '08:00';
+        normalizeScheduleDayValues(windowConfig.days).forEach(day => {
+            const row = panel.querySelector(`[data-schedule-day="${day}"]`);
+            if (row) {
+                setScheduleDay(row, start, end, true);
+            }
+        });
+    });
+    const enabledRows = rows.filter(row => row.querySelector('.schedule-day-enabled').checked);
+    const commonRow = enabledRows[0] || rows[0];
+    if (commonRow) {
+        panel.querySelector('.schedule-everyday-start').value = commonRow.querySelector('.schedule-start').value || '03:00';
+        panel.querySelector('.schedule-everyday-end').value = commonRow.querySelector('.schedule-end').value || '08:00';
+    }
+}
+
+function initializeScheduleEditors() {
+    document.querySelectorAll('.schedule-bot-panel').forEach(panel => {
+        hydrateBotSchedule(panel);
+        panel.querySelectorAll('.schedule-day-enabled').forEach(input => {
+            input.addEventListener('change', () => updateScheduleDayState(input.closest('.schedule-day-row')));
+        });
+    });
+}
+
+function collectScheduleWindows(panel) {
+    const grouped = new Map();
+    panel.querySelectorAll('.schedule-day-row').forEach(row => {
+        if (!row.querySelector('.schedule-day-enabled').checked) return;
+        const day = row.dataset.scheduleDay;
+        const start = row.querySelector('.schedule-start').value;
+        const end = row.querySelector('.schedule-end').value;
+        if (!day || !start || !end) return;
+        const key = `${start}|${end}`;
+        if (!grouped.has(key)) {
+            grouped.set(key, { days: [], start, end });
+        }
+        grouped.get(key).days.push(day);
+    });
+    return Array.from(grouped.values());
 }
 
 async function saveBotSchedule(button) {
@@ -1428,15 +1531,11 @@ async function saveBotSchedule(button) {
     const botName = panel.dataset.botName;
     const enabled = panel.querySelector('.schedule-enabled-input').checked;
     const timezone = panel.querySelector('.schedule-timezone-select').value;
-    const unavailable = Array.from(panel.querySelectorAll('[data-schedule-window]')).map(row => ({
-        days: Array.from(row.querySelector('.schedule-days').selectedOptions).map(option => option.value),
-        start: row.querySelector('.schedule-start').value,
-        end: row.querySelector('.schedule-end').value
-    })).filter(item => item.days.length && item.start && item.end);
+    const unavailable = collectScheduleWindows(panel);
     const response = await fetch('/api/bot-schedules', {
         method: 'POST',
         headers: csrfHeaders(),
-        body: JSON.stringify({ bot_name: botName, enabled, timezone, unavailable })
+        body: JSON.stringify({ bot_name: botName, enabled, timezone, windows: unavailable })
     });
     const result = await response.json();
     showToast(result.status === 'ok' ? (enabled ? `Schedule saved for ${botName}` : `Schedule cleared for ${botName}`) : (result.message || 'Failed to save schedule'), result.status === 'ok' ? 'success' : 'error');
@@ -1710,6 +1809,7 @@ document.querySelectorAll('.json-editor').forEach(textarea => {
 document.addEventListener('DOMContentLoaded', () => {
     initializeConfigTabs();
     initializeLazyEditors();
+    initializeScheduleEditors();
 });
 </script>
 {% endblock %}

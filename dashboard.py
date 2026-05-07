@@ -294,6 +294,8 @@ def _normalize_schedule_windows(payload: dict) -> tuple[list[dict], list[str]]:
     """Normalize one or more dashboard unavailable windows."""
     raw_windows = payload.get("windows")
     if not isinstance(raw_windows, list):
+        raw_windows = payload.get("unavailable")
+    if not isinstance(raw_windows, list):
         raw_window = payload.get("window")
         raw_windows = [raw_window] if isinstance(raw_window, dict) else []
 

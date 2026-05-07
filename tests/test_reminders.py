@@ -246,6 +246,27 @@ class ReminderTimezoneAndDashboardTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(schedule["unavailable"][0]["days"], ["mon", "wed"])
         self.assertEqual(schedule["unavailable"][1]["start"], "22:00")
 
+    def test_bot_schedule_endpoint_accepts_dashboard_unavailable_payload(self):
+        response = self.client.post(
+            "/api/bot-schedules",
+            json={
+                "bot_name": "Nahida",
+                "enabled": True,
+                "timezone": "UTC",
+                "unavailable": [
+                    {"days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": "03:00", "end": "08:00"},
+                ],
+            },
+            headers=self.csrf_headers()
+        )
+
+        schedule = runtime_config_module.get_bot_schedule("Nahida")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "ok")
+        self.assertEqual(schedule["unavailable"][0]["start"], "03:00")
+        self.assertEqual(schedule["unavailable"][0]["end"], "08:00")
+
     def test_auto_memory_api_resolves_guild_name_labels(self):
         self.manager.auto_memories = {
             "server:123:user:42": [

@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.3] - 2026-05-07
+
+### Changed
+
+- Reworked bot availability schedules around an everyday offline block with per-day adjustments instead of multi-select window editing.
+
+### Fixed
+
+- Fixed dashboard schedule saves being rejected when valid unavailable windows were posted from the UI.
+
 ## [v2.2.2] - 2026-05-07
 
 ### Added
