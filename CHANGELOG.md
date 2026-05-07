@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.4] - 2026-05-07
+
+### Changed
+
+- Dashboard updates now fetch tags and prefer the advertised GitHub release tag when that tag is available locally after fetch.
+
+### Fixed
+
+- Prevented the dashboard updater from reporting "Already up to date" when the checkout still lacks the advertised latest version.
+- Kept the update badge visible and surfaced the version/source mismatch when update verification fails.
+
 ## [v2.2.3] - 2026-05-07
 
 ### Changed

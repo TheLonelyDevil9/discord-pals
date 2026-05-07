@@ -680,6 +680,9 @@ async function updateBot() {
                 showToast(data.message || 'Already up to date', 'success');
             }
         } else {
+            if (data.expected_version) {
+                showNewVersionBadge(data.expected_version, false);
+            }
             showToast('Update failed: ' + (data.message || 'Unknown error'), 'error');
         }
     } catch (e) {

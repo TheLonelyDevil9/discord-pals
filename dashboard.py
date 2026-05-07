@@ -2825,6 +2825,31 @@ def _check_github_latest_version(force_refresh: bool = False):
         return None
 
 
+def _update_verification_failure(expected_version: str | None, file_version: str, git_result: dict) -> dict | None:
+    """Return an error payload when Git update did not reach the advertised version."""
+    if not expected_version or _compare_versions(expected_version, file_version) <= 0:
+        return None
+
+    upstream = git_result.get("upstream") or "the selected update branch"
+    output = git_result.get("output") or "No git output"
+    return {
+        'status': 'error',
+        'message': (
+            f"Update did not reach v{expected_version}. The checkout is still at v{file_version}. "
+            f"The selected update source ({upstream}) may not contain the latest release yet."
+        ),
+        'expected_version': expected_version,
+        'file_version': file_version,
+        'running_version': VERSION,
+        'updated': git_result.get("updated", False),
+        'output': output,
+        'warnings': git_result.get("warnings", []),
+        'upstream': upstream,
+        'before_head': git_result.get("before_head"),
+        'after_head': git_result.get("after_head"),
+    }
+
+
 @app.route('/api/version', methods=['GET'])
 @requires_auth
 def api_version():
@@ -3030,6 +3055,19 @@ def _update_upstream_ref(repo_dir: str, current_branch: str | None) -> str:
     raise RuntimeError(f"No update branch found on remote '{remote}'")
 
 
+def _version_tag_ref(repo_dir: str, version: str | None) -> str | None:
+    """Return a fetched tag ref for the advertised version, if one exists."""
+    if not version:
+        return None
+
+    clean_version = str(version).strip().lstrip("v")
+    candidates = [f"refs/tags/v{clean_version}", f"refs/tags/{clean_version}"]
+    for ref in candidates:
+        if _git_ref_exists(repo_dir, ref):
+            return ref
+    return None
+
+
 def _working_tree_status(repo_dir: str) -> str:
     result = _run_git(["status", "--porcelain", "--untracked-files=all"], repo_dir, timeout=30)
     _require_git_success(result, "Reading Git worktree status")
@@ -3095,15 +3133,17 @@ def _create_update_backup_branch(repo_dir: str) -> str:
     raise RuntimeError("Could not create a unique backup branch before update reset")
 
 
-def _perform_git_update(repo_dir: str) -> dict:
+def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> dict:
     """Fetch and update the checkout while preserving user changes where possible."""
     warnings = []
 
-    fetch = _run_git(["fetch", "--all", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
+    fetch = _run_git(["fetch", "--all", "--tags", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
     _require_git_success(fetch, "Fetching updates")
 
     current_branch = _current_git_branch(repo_dir)
-    upstream = _update_upstream_ref(repo_dir, current_branch)
+    branch_upstream = _update_upstream_ref(repo_dir, current_branch)
+    tag_ref = _version_tag_ref(repo_dir, expected_version)
+    upstream = tag_ref or branch_upstream
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
     stash = _stash_local_changes(repo_dir)
@@ -3153,6 +3193,9 @@ def _perform_git_update(repo_dir: str) -> dict:
         "before_head": before_head,
         "after_head": after_head,
         "upstream": upstream,
+        "branch_upstream": branch_upstream,
+        "target_version": expected_version,
+        "target_ref": upstream,
     }
 
 
@@ -3237,7 +3280,8 @@ def api_update():
         # Get the directory where the bot is running
         bot_dir = os.path.dirname(os.path.abspath(__file__))
         repo_dir = _repo_root(bot_dir)
-        git_result = _perform_git_update(repo_dir)
+        expected_version = _check_github_latest_version(force_refresh=True)
+        git_result = _perform_git_update(repo_dir, expected_version=expected_version)
         dependency_result = _install_update_dependencies(repo_dir)
 
         new_version = _get_file_version()
@@ -3246,7 +3290,16 @@ def api_update():
         if dependency_result.get("warning"):
             warnings.append(dependency_result["warning"])
 
-        _invalidate_github_version_cache()
+        verification_error = _update_verification_failure(expected_version, new_version, git_result)
+        if verification_error:
+            if dependency_result.get("warning"):
+                verification_error["warnings"] = list(verification_error["warnings"]) + [dependency_result["warning"]]
+            verification_error["dependency_status"] = dependency_result["status"]
+            log.error(verification_error["message"])
+            return jsonify(verification_error), 409
+
+        if expected_version is None:
+            _invalidate_github_version_cache()
 
         if git_result["updated"]:
             log.info(f"Git update successful: {git_result['output']}")

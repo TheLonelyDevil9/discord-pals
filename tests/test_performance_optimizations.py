@@ -405,7 +405,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         }
         dependencies = {"status": "skipped", "message": "", "warning": None}
 
-        with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
+        with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0"]), \
                 patch.object(dashboard_module, "_fetch_github_latest_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
                 patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
@@ -450,6 +450,95 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(data["dependency_status"], "warning")
         self.assertEqual(data["new_version"], "9.9.9")
         self.assertEqual(len(data["warnings"]), 2)
+
+    def test_update_endpoint_rejects_false_up_to_date_when_latest_version_missing(self):
+        git_update = {
+            "updated": False,
+            "output": "Already up to date",
+            "warnings": [],
+            "before_head": "abc123",
+            "after_head": "abc123",
+            "upstream": "origin/main",
+        }
+        dependencies = {"status": "skipped", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.2.0"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"):
+            response = self.client.post("/api/update", headers=self.csrf_headers())
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(data["status"], "error")
+        self.assertEqual(data["expected_version"], "1.2.0")
+        self.assertEqual(data["file_version"], "1.0.0")
+        self.assertIn("origin/main", data["message"])
+
+    def test_update_endpoint_allows_current_checkout_after_verification(self):
+        git_update = {
+            "updated": False,
+            "output": "Already up to date",
+            "warnings": [],
+            "before_head": "abc123",
+            "after_head": "abc123",
+            "upstream": "origin/main",
+        }
+        dependencies = {"status": "skipped", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.2.0"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_get_file_version", return_value="1.2.0"):
+            response = self.client.post("/api/update", headers=self.csrf_headers())
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["message"], "Already up to date.")
+
+    def test_git_update_prefers_advertised_version_tag_when_available(self):
+        refs = {
+            "HEAD": "aaa111",
+            "origin/main": "aaa111",
+            "refs/tags/v1.2.0": "bbb222",
+        }
+        commands = []
+
+        def fake_run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            commands.append(args)
+            command = args[0]
+            if command == "fetch":
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return types.SimpleNamespace(returncode=0, stdout="main\n", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+                return types.SimpleNamespace(returncode=0, stdout="origin/main\n", stderr="")
+            if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if args[3] in refs else 1, stdout="", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                return types.SimpleNamespace(returncode=0, stdout=f"{refs[args[2]]}\n", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["merge-base", "--is-ancestor"]:
+                return types.SimpleNamespace(returncode=0 if args[2] == "aaa111" and args[3] == "bbb222" else 1, stdout="", stderr="")
+            if args[:2] == ["merge", "--ff-only"]:
+                refs["HEAD"] = refs[args[2]]
+                return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
+            raise AssertionError(f"Unexpected git command: {args}")
+
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+            result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["upstream"], "refs/tags/v1.2.0")
+        self.assertEqual(result["branch_upstream"], "origin/main")
+        self.assertEqual(result["after_head"], "bbb222")
+        self.assertIn(["fetch", "--all", "--tags", "--prune"], commands)
 
 
 class HistoryPersistenceTests(unittest.TestCase):
