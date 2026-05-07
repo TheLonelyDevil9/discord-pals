@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.2] - 2026-05-07
+
+### Added
+
+- Added dashboard settings for strict human-only context, neutral bot reply references, and identity guard behavior.
+- Added an identity guard that regenerates once, then drops unsafe responses that structurally attribute speech or roleplay to another known bot.
+
+### Changed
+
+- Hardened user-only context so strict mode excludes bot and assistant prose while preserving raw Discord routing triggers.
+- Replaced referenced bot message text with neutral reply metadata in hardened mode, while keeping human reply quotes intact.
+- Recorded bot-origin trigger messages as bot history and exposed only neutral bot-event metadata to the model in strict mode.
+
+### Fixed
+
+- Prevented identity-guard drops from being reported as provider failures or written to conversation history.
+- Validated identity guard and bot-reference mode settings at the runtime config boundary.
+
 ## [v2.2.1] - 2026-05-06
 
 ### Changed

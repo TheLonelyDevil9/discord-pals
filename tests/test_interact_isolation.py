@@ -134,7 +134,7 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(msg.get("content"), str)
         )
         self.assertIn("Invoker: *waves*", rendered_text)
-        self.assertIn("*waves back*", rendered_text)
+        self.assertNotIn("*waves back*", rendered_text)
         self.assertIn("Invoker: *hugs you*", rendered_text)
         self.assertNotIn("OtherUser", rendered_text)
         self.assertNotIn("Hi, OtherUser.", rendered_text)

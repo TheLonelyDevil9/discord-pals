@@ -76,7 +76,17 @@
                                         {% if config.user_only_context %}checked{% endif %}>
                                     <span class="toggle-slider"></span>
                                 </label>
-                                <p class="form-hint">Mostly sends human messages, with small bot anchoring, to reduce personality bleed between bots.</p>
+                                <p class="form-hint">Sends human messages as the practical conversation window. Use strict mode to keep bot prose out of model context.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="strict_human_only_context">Strict Human-Only Context</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="strict_human_only_context" name="strict_human_only_context"
+                                        {% if config.strict_human_only_context is not defined or config.strict_human_only_context %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">User-only mode excludes bot and assistant prose from model history. Turn off only for legacy cross-bot continuity.</p>
                             </div>
 
                             <div class="form-group">
@@ -89,6 +99,34 @@
                                     <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
                                 </div>
                                 <p class="form-hint">User-only mode only. This is the practical history size when User-Only Context is enabled.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="bot_reference_context_mode">Bot Reply References</label>
+                                <select id="bot_reference_context_mode" name="bot_reference_context_mode" title="Bot reply reference context mode">
+                                    <option value="neutral" {% if config.bot_reference_context_mode != 'legacy' %}selected{% endif %}>Neutral metadata</option>
+                                    <option value="legacy" {% if config.bot_reference_context_mode == 'legacy' %}selected{% endif %}>Legacy quoted text</option>
+                                </select>
+                                <p class="form-hint">Neutral mode hides referenced bot text while preserving the fact that a reply happened.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="identity_guard_enabled">Identity Guard</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="identity_guard_enabled" name="identity_guard_enabled"
+                                        {% if config.identity_guard_enabled is not defined or config.identity_guard_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">Blocks exact structural speaker turns attributed to other bot names before anything is sent.</p>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="identity_guard_policy">Identity Guard Policy</label>
+                                <select id="identity_guard_policy" name="identity_guard_policy" title="Identity guard policy">
+                                    <option value="regenerate_then_drop" {% if config.identity_guard_policy != 'drop' %}selected{% endif %}>Regenerate once, then drop</option>
+                                    <option value="drop" {% if config.identity_guard_policy == 'drop' %}selected{% endif %}>Drop immediately</option>
+                                </select>
+                                <p class="form-hint">Blocked responses are never saved to history.</p>
                             </div>
 
                             <div class="form-group">
@@ -1162,6 +1200,10 @@ document.getElementById('context-settings-form')?.addEventListener('submit', asy
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
         user_only_context: document.getElementById('user_only_context').checked,
         user_only_context_count: parseInt(document.getElementById('user_only_context_count').value),
+        strict_human_only_context: document.getElementById('strict_human_only_context').checked,
+        identity_guard_enabled: document.getElementById('identity_guard_enabled').checked,
+        identity_guard_policy: document.getElementById('identity_guard_policy').value,
+        bot_reference_context_mode: document.getElementById('bot_reference_context_mode').value,
         time_passage_context_enabled: document.getElementById('time_passage_context_enabled').checked
     }, 'Context settings saved');
 });

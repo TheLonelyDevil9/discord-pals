@@ -135,6 +135,12 @@ _SOFT_SENTENCE_BRIDGE_WORDS = frozenset({
     "with",
 })
 
+IDENTITY_GUARD_RETRY_INSTRUCTION = (
+    "Your previous draft was blocked because it structurally attributed speech "
+    "or action to another bot. Reply only as the current character. Do not write "
+    "another bot's dialogue, name-prefixed turn, or roleplay action."
+)
+
 _FOLLOWUP_TOPIC_STOPWORDS = frozenset({
     "about",
     "after",
@@ -630,6 +636,28 @@ class BotInstance:
             return summarized
         return summarized[: limit - 3].rstrip() + "..."
 
+    def _should_neutralize_bot_reference(self, referenced_message) -> bool:
+        """Return True when a referenced bot's prose should be hidden from model input."""
+        if not getattr(getattr(referenced_message, "author", None), "bot", False):
+            return False
+        if getattr(referenced_message.author, "id", None) == getattr(getattr(self.client, "user", None), "id", None):
+            return False
+        if not runtime_config.get("user_only_context", False):
+            return False
+        return runtime_config.get("bot_reference_context_mode", "neutral") == "neutral"
+
+    @staticmethod
+    def _neutral_reply_reference(author_name: str) -> str:
+        """Return an attribution-only Discord reply marker."""
+        safe_author = " ".join(str(author_name or "another bot").split())
+        return f"[Replying to {safe_author}'s message]"
+
+    @staticmethod
+    def _neutral_bot_event(author_name: str, event: str = "sent a message") -> str:
+        """Return an attribution-only bot event marker."""
+        safe_author = " ".join(str(author_name or "another bot").split())
+        return f"[{safe_author} {event}]"
+
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
                                   sticker_info: str, is_other_bot: bool,
                                   is_autonomous: bool, guild: discord.Guild) -> str:
@@ -662,6 +690,10 @@ class BotInstance:
         referenced_message = await self._get_referenced_message(message)
         if referenced_message and referenced_message.author != message.author:
             referenced_author = get_user_display_name(referenced_message.author)
+            if self._should_neutralize_bot_reference(referenced_message):
+                content = f"{self._neutral_reply_reference(referenced_author)} {content}"
+                return content
+
             referenced_content = referenced_message.content or ""
             if guild:
                 referenced_content = resolve_discord_formatting(
@@ -1994,14 +2026,17 @@ Return exactly one JSON object with this shape:
         relevant_messages = []
         current_bot_name = self.character.name if self.character else None
         keep_following_assistant = False
+        strict_human_only = user_only and runtime_config.get("strict_human_only_context", True)
 
         for msg in raw_history:
             role = msg.get("role", "user")
             if role == "assistant":
+                if strict_human_only:
+                    continue
+
                 author = msg.get("author")
                 if (author and current_bot_name and author.lower() != current_bot_name.lower()) or not keep_following_assistant:
                     continue
-
                 relevant_messages.append({
                     "role": "assistant",
                     "content": msg.get("content", ""),
@@ -2131,6 +2166,7 @@ Return exactly one JSON object with this shape:
             add_to_history(
                 channel_id, "user", content,
                 author_name=user_name, user_id=user_id, guild=guild, message_id=message_id,
+                is_bot=getattr(getattr(message, "author", None), "bot", False),
                 timestamp=getattr(message, "created_at", None)
             )
 
@@ -2298,6 +2334,19 @@ Return exactly one JSON object with this shape:
             messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
         messages_for_api.extend(immediate)
 
+        message_author = getattr(message, "author", None)
+        current_message_is_bot = getattr(message_author, "bot", False)
+        strict_human_only = (
+            user_only_context
+            and runtime_config.get("strict_human_only_context", True)
+        )
+        bot_event_context = None
+        if current_message_is_bot and strict_human_only:
+            bot_event_context = self._neutral_bot_event(user_name)
+            if content.startswith("[Replying to "):
+                reply_marker = content.split("]", 1)[0] + "]"
+                bot_event_context = f"{reply_marker} {bot_event_context}"
+
         # Synthetic first-turn fallback for user_only mode
         # If user_only is enabled and there are no assistant turns, inject one from example_dialogue
         use_user_only = runtime_config.get("user_only_context", False)
@@ -2330,6 +2379,13 @@ Return exactly one JSON object with this shape:
                         insert_pos,
                         {"role": "assistant", "content": synthetic_turn, "author": self.character.name}
                     )
+
+        if bot_event_context:
+            messages_for_api.append({
+                "role": "system",
+                "content": bot_event_context,
+                "kind": "bot_event_context"
+            })
 
         current_message_index = None
         for i in range(len(messages_for_api) - 1, -1, -1):
@@ -2376,6 +2432,8 @@ Return exactly one JSON object with this shape:
         messages_for_api = context["messages_for_api"]
         chatroom_context = context["chatroom_context"]
         other_bot_names = context["other_bot_names"]
+        context["identity_guard_blocked"] = False
+        context["identity_guard_reason"] = None
 
         async with message.channel.typing():
             # Store context for dashboard visualization
@@ -2397,13 +2455,13 @@ Return exactly one JSON object with this shape:
             use_single_user = runtime_config.get("use_single_user", False)
             preferred_tier = CHARACTER_PROVIDERS.get(self.character_name, "") if self.character_name else ""
 
-            response = await provider_manager.generate(
-                messages=messages_for_api,
+            response = await self._generate_identity_guarded_response(
+                messages_for_api=messages_for_api,
                 system_prompt=system_prompt,
-                temperature=None,
-                max_tokens=None,
                 use_single_user=use_single_user,
-                preferred_tier=preferred_tier
+                preferred_tier=preferred_tier,
+                other_bot_names=other_bot_names,
+                context=context,
             )
 
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -2416,17 +2474,92 @@ Return exactly one JSON object with this shape:
             )
 
         if not response:
+            if context.get("identity_guard_blocked"):
+                return None
             log.error("All providers failed to generate response")
             metrics_manager.record_error(bot_name=self.name, error_type='provider_failure')
             return None
 
-        # Sanitize response (pass character name for third-person self-reference detection)
-        response = sanitize_response(response, self.character.name)
-        response = await self._polish_response(response)
-        response = sanitize_response(response, self.character.name)
-        response = self._strip_other_bot_prefixes(response, other_bot_names)
-
         return response
+
+    async def _generate_identity_guarded_response(
+        self,
+        *,
+        messages_for_api: list[dict],
+        system_prompt: str,
+        use_single_user: bool,
+        preferred_tier: str,
+        other_bot_names: list[str],
+        context: dict,
+    ) -> str | None:
+        """Generate, sanitize, and block structurally attributed other-bot turns."""
+        max_attempts = 2 if runtime_config.get("identity_guard_policy", "regenerate_then_drop") == "regenerate_then_drop" else 1
+        attempt_messages = list(messages_for_api)
+        last_violation = None
+
+        for attempt in range(max_attempts):
+            response = await provider_manager.generate(
+                messages=attempt_messages,
+                system_prompt=system_prompt,
+                temperature=None,
+                max_tokens=None,
+                use_single_user=use_single_user,
+                preferred_tier=preferred_tier
+            )
+
+            if not response:
+                return None
+
+            response = sanitize_response(response, self.character.name)
+            response = await self._polish_response(response)
+            response = sanitize_response(response, self.character.name)
+            violation = self._detect_identity_violation(response, other_bot_names)
+            if not violation:
+                return response
+
+            last_violation = violation
+            log.warn(
+                f"Identity guard blocked generated {violation['pattern']} attribution to "
+                f"{violation['name']}",
+                self.name
+            )
+            metrics_manager.record_error(bot_name=self.name, error_type='identity_guard_blocked')
+            if attempt + 1 >= max_attempts:
+                break
+
+            attempt_messages = list(messages_for_api) + [
+                {"role": "system", "content": IDENTITY_GUARD_RETRY_INSTRUCTION, "kind": "identity_guard_retry"}
+            ]
+
+        context["identity_guard_blocked"] = True
+        context["identity_guard_reason"] = last_violation
+        return None
+
+    def _detect_identity_violation(self, response: str, other_bot_names: list[str]) -> dict | None:
+        """Detect structural attempts to speak as another bot using exact names only."""
+        if not runtime_config.get("identity_guard_enabled", True):
+            return None
+        if not response or not other_bot_names:
+            return None
+
+        for raw_name in other_bot_names:
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            escaped = re.escape(name)
+            patterns = (
+                ("speaker_prefix", rf"(?im)^\s*(?:\[{escaped}\]|\*?{escaped}\*?)\s*:"),
+                ("roleplay_speech", rf"(?im)^\s*\*+\s*\b{escaped}\b\s+(?:says?|whispers?|replies?|responds?|asks?|shouts?|murmurs?|mutters?)\b[^\n]*\*+\s*$"),
+            )
+            for pattern_name, pattern in patterns:
+                match = re.search(pattern, response)
+                if match:
+                    return {
+                        "name": name,
+                        "pattern": pattern_name,
+                        "preview": response[:160],
+                    }
+        return None
 
     async def _send_and_finalize_response(self, response: str, context: dict,
                                            message, request: dict) -> bool:
@@ -2580,6 +2713,9 @@ Return exactly one JSON object with this shape:
                 # Generate AI response (handles provider call, sanitization)
                 response = await self._generate_ai_response(context, message)
                 if response is None:
+                    if context.get("identity_guard_blocked"):
+                        log.warn("Identity guard dropped response after retry", self.name)
+                        return
                     await message.channel.send(
                         "Something went wrong - all providers failed.",
                         delete_after=ERROR_DELETE_AFTER

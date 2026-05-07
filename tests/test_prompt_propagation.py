@@ -33,7 +33,7 @@ class PromptPropagationTests(unittest.TestCase):
         discord_utils_module.channel_names = self._history_originals["channel_names"]
         discord_utils_module._channel_last_activity = self._history_originals["channel_last_activity"]
 
-    def test_format_history_split_preserves_current_bot_author_in_user_only_mode(self):
+    def test_format_history_split_user_only_defaults_to_human_only_context(self):
         channel_id = 123
         discord_utils_module.conversation_history[channel_id] = [
             {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
@@ -47,6 +47,36 @@ class PromptPropagationTests(unittest.TestCase):
             context_count=5,
             current_bot_name="Nahida"
         )
+
+        self.assertEqual(history, [])
+        self.assertEqual(
+            immediate,
+            [
+                {"role": "user", "content": "Alice: Hi"},
+            ]
+        )
+        self.assertFalse(any("Hello there" in msg["content"] for msg in immediate))
+        self.assertFalse(any("I can help too" in msg["content"] for msg in immediate))
+
+    def test_format_history_split_user_only_legacy_context_keeps_bot_prose(self):
+        channel_id = 124
+        discord_utils_module.conversation_history[channel_id] = [
+            {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
+            {"role": "assistant", "content": "Hello there", "author": "Nahida"},
+            {"role": "user", "content": "I can help too", "author": "Nilou", "is_bot": True},
+        ]
+
+        with patch.object(
+            discord_utils_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: False if key == "strict_human_only_context" else default,
+        ):
+            history, immediate = discord_utils_module.format_history_split(
+                channel_id,
+                user_only=True,
+                context_count=5,
+                current_bot_name="Nahida"
+            )
 
         self.assertEqual(history, [])
         self.assertEqual(
@@ -462,6 +492,10 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('data-config-tab="prompting"', page)
         self.assertIn('data-config-tab="providers"', page)
         self.assertIn('id="time_passage_context_enabled"', page)
+        self.assertIn('id="strict_human_only_context"', page)
+        self.assertIn('id="identity_guard_enabled"', page)
+        self.assertIn('id="identity_guard_policy"', page)
+        self.assertIn('id="bot_reference_context_mode"', page)
         self.assertIn("prompts/system.md (read only)", page)
         self.assertIn("/prompts/other/save", page)
         self.assertIn("moveProvider(", page)
@@ -474,6 +508,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "context_message_count": 9,
                 "prose_polisher_enabled": "true",
                 "prose_polisher_max_tokens": "9000",
+                "identity_guard_enabled": "false",
+                "identity_guard_policy": "drop",
+                "bot_reference_context_mode": "legacy",
             },
             headers=self.csrf_headers()
         )
@@ -485,6 +522,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["user_only_context_count"], 9)
         self.assertIs(config["prose_polisher_enabled"], True)
         self.assertEqual(config["prose_polisher_max_tokens"], 9000)
+        self.assertIs(config["identity_guard_enabled"], False)
+        self.assertEqual(config["identity_guard_policy"], "drop")
+        self.assertEqual(config["bot_reference_context_mode"], "legacy")
         self.assertNotIn("context_message_count", config)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
@@ -497,6 +537,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "bot_interactions_paused": "true",
                 "bot_falloff_hard_limit": "-10",
                 "bot_timezones": "not-a-dict",
+                "identity_guard_policy": "send_anyway",
+                "bot_reference_context_mode": "quote",
                 "unknown_extension": "ignored",
             },
             headers=self.csrf_headers()
@@ -510,6 +552,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIs(config["bot_interactions_paused"], True)
         self.assertEqual(config["bot_falloff_hard_limit"], 1)
         self.assertEqual(config["bot_timezones"], {})
+        self.assertEqual(config["identity_guard_policy"], "regenerate_then_drop")
+        self.assertEqual(config["bot_reference_context_mode"], "neutral")
         self.assertNotIn("unknown_extension", config)
 
     def test_runtime_config_rejects_non_object_payload(self):

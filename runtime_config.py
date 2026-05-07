@@ -21,6 +21,7 @@ class ConfigField:
     default: object
     min_value: float | None = None
     max_value: float | None = None
+    choices: tuple | None = None
 
 
 # Default values
@@ -56,6 +57,10 @@ DEFAULTS = {
     # Context system
     "user_only_context": False,  # When True, only human user messages are sent to the AI (discards all bot/assistant messages)
     "user_only_context_count": 20,  # Last N user messages to include when user_only_context is True
+    "strict_human_only_context": True,  # User-only mode excludes bot/assistant prose from model history
+    "identity_guard_enabled": True,  # Block generated text that structurally speaks as another bot
+    "identity_guard_policy": "regenerate_then_drop",  # Guard response policy
+    "bot_reference_context_mode": "neutral",  # Replace referenced bot prose with neutral metadata
     "time_passage_context_enabled": True,  # Add elapsed-time world-state cues after long chat gaps
     # DM follow-up settings
     "dm_followup_enabled": False,  # Enable autonomous DM follow-ups after silence
@@ -95,6 +100,18 @@ CONFIG_FIELDS = {
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),
     "user_only_context": ConfigField(bool, DEFAULTS["user_only_context"]),
     "user_only_context_count": ConfigField(int, DEFAULTS["user_only_context_count"], 1, 100),
+    "strict_human_only_context": ConfigField(bool, DEFAULTS["strict_human_only_context"]),
+    "identity_guard_enabled": ConfigField(bool, DEFAULTS["identity_guard_enabled"]),
+    "identity_guard_policy": ConfigField(
+        str,
+        DEFAULTS["identity_guard_policy"],
+        choices=("regenerate_then_drop", "drop"),
+    ),
+    "bot_reference_context_mode": ConfigField(
+        str,
+        DEFAULTS["bot_reference_context_mode"],
+        choices=("neutral", "legacy"),
+    ),
     "time_passage_context_enabled": ConfigField(bool, DEFAULTS["time_passage_context_enabled"]),
     "dm_followup_enabled": ConfigField(bool, DEFAULTS["dm_followup_enabled"]),
     "dm_followup_timeout_minutes": ConfigField(int, DEFAULTS["dm_followup_timeout_minutes"], 1, 10080),
@@ -182,6 +199,9 @@ def _coerce_config_value(key: str, value):
             coerced = field.max_value
         if field.value_type is int:
             coerced = int(coerced)
+
+    if field.choices is not None and coerced not in field.choices:
+        return field.default
 
     return coerced
 

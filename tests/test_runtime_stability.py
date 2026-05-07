@@ -9,6 +9,14 @@ import bot_instance as bot_instance_module
 import runtime_config
 
 
+class _AsyncNoop:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_request_context_allows_same_message_for_multiple_split_targets(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -623,6 +631,176 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response.assert_not_called()
         instance._update_mood.assert_not_called()
         instance._record_failure.assert_called_once()
+
+    async def test_generate_ai_response_regenerates_then_drops_identity_violation(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        context = {
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Alice: hi"}],
+            "chatroom_context": "",
+            "other_bot_names": ["Firefly"],
+        }
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+        message.channel.typing = lambda: _AsyncNoop()
+        generate_mock = AsyncMock(side_effect=[
+            "Firefly: I can handle that.",
+            "*Firefly says \"Sure.\"*",
+        ])
+
+        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "identity_guard_enabled": True,
+                    "identity_guard_policy": "regenerate_then_drop",
+                    "use_single_user": False,
+                    "prose_polisher_enabled": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "store_last_context"), \
+                patch.object(bot_instance_module.stats_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_error"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            response = await instance._generate_ai_response(context, message)
+
+        self.assertIsNone(response)
+        self.assertTrue(context["identity_guard_blocked"])
+        self.assertEqual(generate_mock.await_count, 2)
+
+    async def test_generate_ai_response_sends_safe_regeneration(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        context = {
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Alice: hi"}],
+            "chatroom_context": "",
+            "other_bot_names": ["Firefly"],
+        }
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+        message.channel.typing = lambda: _AsyncNoop()
+        generate_mock = AsyncMock(side_effect=[
+            "Firefly: I can handle that.",
+            "I can help with that from here.",
+        ])
+
+        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "identity_guard_enabled": True,
+                    "identity_guard_policy": "regenerate_then_drop",
+                    "use_single_user": False,
+                    "prose_polisher_enabled": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "store_last_context"), \
+                patch.object(bot_instance_module.stats_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_error"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            response = await instance._generate_ai_response(context, message)
+
+        self.assertEqual(response, "I can help with that from here.")
+        self.assertFalse(context["identity_guard_blocked"])
+        self.assertEqual(generate_mock.await_count, 2)
+
+    def test_identity_guard_allows_plain_bot_name_reference(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=True):
+            violation = instance._detect_identity_violation(
+                "I saw Firefly earlier, but I can answer for myself.",
+                ["Firefly"],
+            )
+
+        self.assertIsNone(violation)
+
+    def test_identity_guard_allows_nonstructural_says_reference(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=True):
+            violation = instance._detect_identity_violation(
+                "When Firefly says things like that, I usually pause before answering.",
+                ["Firefly"],
+            )
+
+        self.assertIsNone(violation)
+
+    async def test_build_request_context_marks_triggered_bot_message_as_bot_history(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="tea-room")
+        guild = types.SimpleNamespace(id=5, name="Sumeru")
+        author = types.SimpleNamespace(id=222, bot=True)
+        message = types.SimpleNamespace(
+            id=1234,
+            content="<@999> can you answer this?",
+            author=author,
+            channel=channel,
+            guild=guild,
+            mentions=[],
+        )
+        request = {
+            "message": message,
+            "content": "Nilou can you answer this?",
+            "guild": guild,
+            "attachments": [],
+            "user_name": "Nilou",
+            "is_dm": False,
+            "user_id": 222,
+            "sticker_info": None,
+        }
+        runtime_values = {
+            "user_only_context": True,
+            "user_only_context_count": 20,
+            "strict_human_only_context": True,
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": False,
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            add_history_mock = stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(bot_instance_module, "format_history_split", Mock(return_value=([], []))))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+
+            context = await instance._build_request_context(request)
+
+        self.assertIsNotNone(context)
+        self.assertTrue(add_history_mock.call_args.kwargs["is_bot"])
+        self.assertNotIn("Nilou can you answer this?", str(context["messages_for_api"]))
+        self.assertIn(
+            {"role": "system", "content": "[Nilou sent a message]", "kind": "bot_event_context"},
+            context["messages_for_api"],
+        )
 
 
 class NewRuntimeBehaviorTests(unittest.TestCase):

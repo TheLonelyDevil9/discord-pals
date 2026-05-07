@@ -19,6 +19,11 @@ from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 from scopes import dm_history_id
 
+try:
+    import runtime_config
+except Exception:
+    runtime_config = None
+
 # Re-export from response_sanitizer for backwards compatibility
 # These are used by other modules that import from discord_utils
 from response_sanitizer import (  # noqa: F401
@@ -560,6 +565,22 @@ def strip_character_prefix(content: str) -> str:
     return content
 
 
+def _runtime_bool(key: str, default: bool) -> bool:
+    """Read a runtime boolean without making history formatting depend on config startup."""
+    if runtime_config is None:
+        return default
+    try:
+        return bool(runtime_config.get(key, default))
+    except Exception:
+        return default
+
+
+def _neutral_bot_event(author: str, event: str = "sent a message") -> str:
+    """Return a prose-free marker for bot activity in model context."""
+    safe_author = " ".join(str(author or "another bot").split())
+    return f"[{safe_author} {event}]"
+
+
 def resolve_discord_formatting(
     content: str,
     guild=None,
@@ -943,12 +964,11 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
     all_history = get_history(channel_id)
 
     if user_only:
-        # Paper-backed mode: primarily human user messages, with the current bot's
-        # last 3 responses and other bots' last 5 messages each for conversational context.
+        strict_human_only = _runtime_bool("strict_human_only_context", True)
 
         # Find the current bot's last 3 responses (for conversational anchoring)
         bot_responses = []
-        if current_bot_name:
+        if current_bot_name and not strict_human_only:
             for i in range(len(all_history) - 1, -1, -1):
                 msg = all_history[i]
                 if msg.get("role") == "assistant":
@@ -959,22 +979,22 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
                             break
             bot_responses.reverse()
 
-        # Collect last 5 messages from each OTHER bot/app for conversational context
-        # Without these, replies to other bots and bot-bot conversations lose all context
+        # Legacy-compatible mode may keep recent bot/app prose for cross-bot continuity.
         other_bot_messages = []
-        bot_authors = {}
-        for i in range(len(all_history) - 1, -1, -1):
-            msg = all_history[i]
-            if msg.get("is_bot", False) and msg.get("role") == "user":
-                author = msg.get("author", "")
-                if author and (not current_bot_name or author.lower() != current_bot_name.lower()):
-                    if author not in bot_authors:
-                        bot_authors[author] = []
-                    if len(bot_authors[author]) < 5:
-                        bot_authors[author].append((i, msg))
-        for msgs in bot_authors.values():
-            other_bot_messages.extend(msgs)
-        other_bot_messages.sort(key=lambda x: x[0])
+        if not strict_human_only:
+            bot_authors = {}
+            for i in range(len(all_history) - 1, -1, -1):
+                msg = all_history[i]
+                if msg.get("is_bot", False) and msg.get("role") == "user":
+                    author = msg.get("author", "")
+                    if author and (not current_bot_name or author.lower() != current_bot_name.lower()):
+                        if author not in bot_authors:
+                            bot_authors[author] = []
+                        if len(bot_authors[author]) < 5:
+                            bot_authors[author].append((i, msg))
+            for msgs in bot_authors.values():
+                other_bot_messages.extend(msgs)
+            other_bot_messages.sort(key=lambda x: x[0])
 
         # Collect human user messages only
         user_messages = [
