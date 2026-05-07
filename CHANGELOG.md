@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.5] - 2026-05-07
+
+### Fixed
+
+- Latest-version checks now compare GitHub release and tag versions and choose the highest semantic version.
+- Dashboard updates now peel annotated tags to commits before merge, reset, or ancestry checks.
+
 ## [v2.2.4] - 2026-05-07
 
 ### Changed

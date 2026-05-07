@@ -2745,7 +2745,10 @@ def _get_github_repo_info():
 def _compare_versions(v1: str, v2: str) -> int:
     """Compare semantic versions. Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal."""
     def parse_version(v):
-        return [int(x) for x in (v or '').lstrip('v').split('.') if x.isdigit()]
+        parts = str(v or '').lstrip('v').split('.')
+        if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+            raise ValueError(f"Invalid semantic version: {v}")
+        return [int(part) for part in parts[:3]]
     try:
         parts1, parts2 = parse_version(v1), parse_version(v2)
         max_len = max(len(parts1), len(parts2))
@@ -2757,7 +2760,7 @@ def _compare_versions(v1: str, v2: str) -> int:
 
 
 def _fetch_github_latest_version():
-    """Check GitHub API for the latest release/tag version."""
+    """Check GitHub API for the highest semantic release or tag version."""
     import urllib.request
     import json
 
@@ -2765,7 +2768,7 @@ def _fetch_github_latest_version():
     if not owner or not repo:
         return None
 
-    # Try releases first, then tags
+    versions = []
     urls = [
         f'https://api.github.com/repos/{owner}/{repo}/releases/latest',
         f'https://api.github.com/repos/{owner}/{repo}/tags',
@@ -2779,16 +2782,27 @@ def _fetch_github_latest_version():
 
                 if 'tag_name' in data:
                     # Latest release response
-                    version = data['tag_name'].lstrip('v')
-                    return version
+                    versions.append(data['tag_name'].lstrip('v'))
                 elif isinstance(data, list) and len(data) > 0:
-                    # Tags list response
-                    version = data[0]['name'].lstrip('v')
-                    return version
+                    # Tags list response, usually newest first, but compare defensively.
+                    versions.extend(
+                        tag.get('name', '').lstrip('v')
+                        for tag in data
+                        if isinstance(tag, dict) and tag.get('name')
+                    )
         except Exception:
             continue
 
-    return None
+    def version_key(version: str) -> list[int] | None:
+        parts = str(version or "").split(".")
+        if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+            return None
+        return [int(part) for part in parts[:3]]
+
+    semantic_versions = [version for version in versions if version_key(version) is not None]
+    if not semantic_versions:
+        return None
+    return max(semantic_versions, key=version_key)
 
 
 def _invalidate_github_version_cache():
@@ -3008,7 +3022,7 @@ def _git_ref_exists(repo_dir: str, ref: str) -> bool:
 
 
 def _git_ref_sha(repo_dir: str, ref: str) -> str:
-    result = _run_git(["rev-parse", "--verify", ref], repo_dir, timeout=30)
+    result = _run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], repo_dir, timeout=30)
     _require_git_success(result, f"Resolving Git ref {ref}")
     return result.stdout.strip()
 

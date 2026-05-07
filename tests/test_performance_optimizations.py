@@ -4,7 +4,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
@@ -451,6 +451,34 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(data["new_version"], "9.9.9")
         self.assertEqual(len(data["warnings"]), 2)
 
+    def test_github_latest_version_uses_highest_release_or_tag(self):
+        responses = [
+            {"tag_name": "v2.2.3"},
+            [{"name": "v2.2.4"}, {"name": "not-a-release"}, {"name": "v2.1.0"}],
+        ]
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode()
+
+        urlopen = Mock(side_effect=[FakeResponse(payload) for payload in responses])
+
+        with patch.object(dashboard_module, "_get_github_repo_info", return_value=("owner", "repo")), \
+                patch("urllib.request.urlopen", urlopen):
+            latest = dashboard_module._fetch_github_latest_version()
+
+        self.assertEqual(latest, "2.2.4")
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_update_endpoint_rejects_false_up_to_date_when_latest_version_missing(self):
         git_update = {
             "updated": False,
@@ -521,7 +549,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             if args[:3] == ["rev-parse", "--verify", "--quiet"]:
                 return types.SimpleNamespace(returncode=0 if args[3] in refs else 1, stdout="", stderr="")
             if args[:2] == ["rev-parse", "--verify"]:
-                return types.SimpleNamespace(returncode=0, stdout=f"{refs[args[2]]}\n", stderr="")
+                ref = args[2].removesuffix("^{commit}")
+                return types.SimpleNamespace(returncode=0, stdout=f"{refs[ref]}\n", stderr="")
             if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[:2] == ["merge-base", "--is-ancestor"]:
