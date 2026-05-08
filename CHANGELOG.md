@@ -4,6 +4,18 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.11] - 2026-05-08
+
+### Changed
+
+- Increased the default response burst cap so repaired short conversational chunks can remain readable instead of being folded back together.
+
+### Fixed
+
+- Added current-speaker context metadata so replies stay anchored to the newest human message instead of inheriting earlier third-person framing.
+- Reflowed obvious newline-fragmented response text before Discord delivery so broken provider line breaks do not become separate clipped messages.
+- Preserved existing safeguards for intentional line breaks, abbreviation handling, dash-started lines, and split-reply targeting.
+
 ## [v2.2.10] - 2026-05-08
 
 ### Added

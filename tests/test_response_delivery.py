@@ -1,5 +1,6 @@
 import unittest
 
+import module_stubs  # noqa: F401
 from response_delivery import DeliveryFormatOptions, format_response_for_delivery
 
 
@@ -97,6 +98,44 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
         parts = format_response_for_delivery("I can handle that\n\u2014 wait, actually, give me one second.")
 
         self.assertEqual(parts, ["I can handle that.", "\u2014 wait, actually, give me one second."])
+
+    def test_newline_fragments_reflow_before_delivery_split(self):
+        parts = format_response_for_delivery(
+            "Hmm, you're.\n"
+            "Timoruz! You play.\n"
+            "Beyond.\n\n"
+            "All.\n\n"
+            "Reason, right? Cortex.\n\n"
+            "Vehicles if I remember correctly.\n\n"
+            "Is there something else I should know about you?"
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "Hmm, you're Timoruz!",
+                "You play Beyond All Reason, right? Cortex.",
+                "Vehicles if I remember correctly.",
+                "Is there something else I should know about you?",
+            ],
+        )
+
+    def test_comma_and_connector_newlines_reflow_without_extra_punctuation(self):
+        parts = format_response_for_delivery(
+            "I mean,\n"
+            "that sounds like a good reason\n"
+            "to ask about it directly."
+        )
+
+        self.assertEqual(parts, ["I mean, that sounds like a good reason to ask about it directly."])
+
+    def test_complete_play_sentence_does_not_merge_next_topic(self):
+        parts = format_response_for_delivery(
+            "I play.\n\n"
+            "Anyway, that's beside the point."
+        )
+
+        self.assertEqual(parts, ["I play.", "Anyway, that's beside the point."])
 
     def test_screenshot_transcript_splits_and_repairs_question_fragment(self):
         parts = format_response_for_delivery(

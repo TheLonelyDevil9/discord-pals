@@ -602,6 +602,35 @@ class BotInstance:
         safe_author = " ".join(str(author_name or "another bot").split())
         return f"[{safe_author} {event}]"
 
+    @staticmethod
+    def _current_speaker_context(
+        *,
+        speaker_name: str,
+        speaker_is_bot: bool,
+        target_user_name: str | None = None,
+        split_target_name: str | None = None,
+    ) -> str:
+        """Return code-owned context that anchors who the bot is answering now."""
+        safe_speaker = " ".join(str(speaker_name or "Unknown").split())
+        safe_target = " ".join(str(target_user_name or safe_speaker).split())
+        safe_split_target = " ".join(str(split_target_name or "").split())
+        if speaker_is_bot:
+            return (
+                f"Current Discord event author: {safe_speaker} (bot/app). "
+                "Use this only as routing context unless explicitly instructed otherwise."
+            )
+        if safe_split_target and safe_split_target != safe_speaker:
+            return (
+                f"Current Discord message author: {safe_speaker}. "
+                f"This split reply is addressed to {safe_split_target}; address {safe_split_target} directly as \"you\". "
+                "Earlier third-person lines about the addressed user do not change who this split reply addresses."
+            )
+        return (
+            f"Current Discord message author: {safe_speaker}. "
+            f"The reply is addressed to {safe_target}; address {safe_target} directly as \"you\". "
+            "Earlier third-person lines about the addressed user do not change who this reply addresses."
+        )
+
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
                                   sticker_info: str, is_other_bot: bool,
                                   is_autonomous: bool, guild: discord.Guild) -> str:
@@ -2077,10 +2106,21 @@ Return exactly one JSON object with this shape:
         messages_for_api.extend(history_msgs)
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
-        messages_for_api.extend(immediate)
-
         message_author = getattr(message, "author", None)
         current_message_is_bot = getattr(message_author, "bot", False)
+        speaker_context = self._current_speaker_context(
+            speaker_name=user_name,
+            speaker_is_bot=current_message_is_bot,
+            target_user_name=target_user_name,
+            split_target_name=getattr(split_target, "display_name", None) or getattr(split_target, "name", None),
+        )
+        messages_for_api.append({
+            "role": "system",
+            "content": speaker_context,
+            "kind": "current_speaker_context"
+        })
+        messages_for_api.extend(immediate)
+
         strict_human_only = (
             user_only_context
             and runtime_config.get("strict_human_only_context", True)
