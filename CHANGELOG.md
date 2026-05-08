@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.8] - 2026-05-08
+
+### Fixed
+
+- Repaired obvious question-shaped response fragments before Discord delivery, including screenshot-style `What about you, after Operation.` output.
+- Added regression coverage for wrapped and newline-separated question-fragment transcripts.
+
 ## [v2.2.7] - 2026-05-08
 
 ### Changed

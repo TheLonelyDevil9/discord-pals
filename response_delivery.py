@@ -169,6 +169,7 @@ def format_response_for_delivery(
 
     logical_parts = _split_by_explicit_breaks(normalized)
     logical_parts = _expand_plain_paragraphs(logical_parts)
+    logical_parts = [_repair_obvious_question_fragment(part) for part in logical_parts]
     logical_parts = _cap_logical_parts(logical_parts, options.max_parts)
 
     final_parts: list[str] = []
@@ -222,6 +223,41 @@ def _cap_logical_parts(parts: list[str], max_parts: int) -> list[str]:
 
     overflow = "\n\n".join(parts[max_parts - 1:])
     return parts[:max_parts - 1] + [overflow]
+
+
+def _repair_obvious_question_fragment(part: str) -> str:
+    """Repair short question-shaped fragments that providers punctuate as statements."""
+    part = (part or "").strip()
+    if not part or "\n" in part:
+        return part
+
+    text = _repair_what_about_you_fragment(part)
+    text = _repair_question_stem_period(text)
+    return text
+
+
+def _repair_what_about_you_fragment(part: str) -> str:
+    match = re.fullmatch(r"(?i)(what\s+about\s+you),\s+(after|before|during|with|for|on|in|at)\s+(.+?)\.", part)
+    if not match:
+        return part
+
+    return f"{match.group(1)} {match.group(2)} {match.group(3)}?"
+
+
+def _repair_question_stem_period(part: str) -> str:
+    if not part.endswith("."):
+        return part
+    if not re.match(
+        r"(?i)^(?:what\s+about|how\s+about|what\s+are|what\s+is|what\s+was|"
+        r"where\s+are|where\s+is|where\s+was|when\s+are|when\s+is|when\s+was|"
+        r"why\s+are|why\s+is|why\s+was|how\s+are|how\s+is|how\s+was|"
+        r"do\s+you|did\s+you|does\s+that|are\s+you|is\s+that|"
+        r"will\s+you|would\s+you|could\s+you|can\s+you|should\s+we)\b",
+        part,
+    ):
+        return part
+
+    return f"{part[:-1]}?"
 
 
 def _starts_like_new_thought(text: str) -> bool:

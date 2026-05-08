@@ -56,6 +56,41 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
 
         self.assertEqual(parts, ["I can handle that.", "\u2014 wait, actually, give me one second."])
 
+    def test_screenshot_transcript_splits_and_repairs_question_fragment(self):
+        parts = format_response_for_delivery(
+            "March mentioned some new flowers bloomed overnight, and I want to see them before she photographs "
+            "every single one and blocks the whole pathway.\n"
+            "What about you, after Operation.\n\n"
+            "Breakfast wraps up? Job hunting all afternoon?"
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "March mentioned some new flowers bloomed overnight, and I want to see them before she photographs "
+                "every single one and blocks the whole pathway.",
+                "What about you after Operation?",
+                "Breakfast wraps up? Job hunting all afternoon?",
+            ],
+        )
+
+    def test_wrapped_screenshot_transcript_splits_and_repairs_question_fragment(self):
+        parts = format_response_for_delivery(
+            "March mentioned some new flowers bloomed overnight, and I want to see them before she photographs "
+            "every single one and blocks the whole pathway. What about you, after Operation.\n\n"
+            "Breakfast wraps up? Job hunting all afternoon?"
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "March mentioned some new flowers bloomed overnight, and I want to see them before she photographs "
+                "every single one and blocks the whole pathway.",
+                "What about you after Operation?",
+                "Breakfast wraps up? Job hunting all afternoon?",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
