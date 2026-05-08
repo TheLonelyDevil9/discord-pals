@@ -9,9 +9,9 @@ Usage:
     python bump_version.py 1.2.3              # Set specific version
 
 Options:
-    --tag         Create a git tag for the new version
+    --tag         Create a git tag for the new version and publish the release
     --no-tag      Skip git tag creation (default)
-    --commit      Commit version/changelog changes before tagging
+    --commit      Commit version/changelog changes before publishing
     --allow-non-main-release
                   Allow tagging from a branch other than main/release/*
     --message "X" Custom message for changelog entry
@@ -98,27 +98,6 @@ def bump_version(current, bump_type):
         return bump_type
 
 
-def get_recent_commits(since_tag=None):
-    """Get commit messages since last tag or recent commits."""
-    try:
-        if since_tag:
-            cmd = ['git', 'log', f'{since_tag}..HEAD', '--pretty=format:- %s']
-        else:
-            cmd = ['git', 'log', '-10', '--pretty=format:- %s']
-
-        result = subprocess.run(
-            cmd,
-            cwd=get_script_dir(),
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return None
-
-
 def get_last_tag():
     """Get the most recent git tag."""
     try:
@@ -135,14 +114,22 @@ def get_last_tag():
     return None
 
 
+def summarize_changelog_scope():
+    """Build a broad, release-level changelog summary."""
+    return [
+        "This release brings together release automation, runtime hardening, documentation updates, and regression coverage.",
+        "The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.",
+        "Related work is grouped together so the history stays readable without turning into a transcript.",
+    ]
+
+
 def update_changelog(new_version, message=None):
-    """Update CHANGELOG.md with new version entry."""
+    """Update CHANGELOG.md with a broad, release-level entry."""
     changelog_path = get_changelog_path()
     date_str = datetime.now().strftime('%Y-%m-%d')
 
-    # Get commits since last tag for changelog
-    last_tag = get_last_tag()
-    commits = get_recent_commits(last_tag)
+    # Build a high-level release summary without replaying commit-by-commit notes.
+    summary_lines = summarize_changelog_scope()
 
     # Build changelog entry
     entry_lines = [f"## [v{new_version}] - {date_str}", ""]
@@ -151,12 +138,11 @@ def update_changelog(new_version, message=None):
         entry_lines.append(message)
         entry_lines.append("")
 
-    if commits:
-        entry_lines.append("### Changes")
-        entry_lines.append("")
-        entry_lines.append(commits)
-        entry_lines.append("")
-
+    entry_lines.append("### Notes")
+    entry_lines.append("")
+    for line in summary_lines:
+        entry_lines.append(f"- {line}")
+    entry_lines.append("")
     new_entry = '\n'.join(entry_lines)
 
     # Read existing changelog or create new
@@ -226,38 +212,60 @@ def create_git_tag(version, allow_non_main=False):
     """Create a git tag for the version."""
     tag_name = f"v{version}"
 
-    try:
-        ensure_release_branch_allowed(allow_non_main)
-        ensure_release_commit_published()
+    ensure_release_branch_allowed(allow_non_main)
+    ensure_release_commit_published()
 
-        # Check if tag already exists
-        result = subprocess.run(
-            ['git', 'tag', '-l', tag_name],
-            cwd=get_script_dir(),
-            capture_output=True,
-            text=True
-        )
-        if result.stdout.strip() == tag_name:
-            print(f"Tag {tag_name} already exists, skipping")
-            return False
+    # Check if tag already exists locally.
+    result = run_git(['tag', '-l', tag_name])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to inspect existing tags: {result.stderr.strip()}")
 
-        # Create tag
-        result = subprocess.run(
-            ['git', 'tag', '-a', tag_name, '-m', f'Release {tag_name}'],
-            cwd=get_script_dir(),
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            print(f"Created git tag: {tag_name}")
-            print(f"  Push with: git push origin {tag_name}")
-            return True
-        else:
-            print(f"Failed to create tag: {result.stderr}", file=sys.stderr)
-            return False
-    except Exception as e:
-        print(f"Error creating tag: {e}", file=sys.stderr)
-        return False
+    if result.stdout.strip() == tag_name:
+        tag_commit = run_git(['rev-parse', f'{tag_name}^{{}}'])
+        head_commit = run_git(['rev-parse', 'HEAD'])
+        if tag_commit.returncode != 0:
+            raise RuntimeError(f"Failed to inspect existing tag {tag_name}: {tag_commit.stderr.strip()}")
+        if head_commit.returncode != 0:
+            raise RuntimeError(f"Failed to inspect HEAD for tag reuse: {head_commit.stderr.strip()}")
+        if tag_commit.stdout.strip() != head_commit.stdout.strip():
+            raise RuntimeError(
+                f"Existing tag {tag_name} points to {tag_commit.stdout.strip()}, "
+                f"but HEAD is {head_commit.stdout.strip()}."
+            )
+        print(f"Tag {tag_name} already exists locally, reusing")
+        return tag_name
+
+    # Create tag.
+    result = run_git(['tag', '-a', tag_name, '-m', f'Release {tag_name}'])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create tag {tag_name}: {result.stderr.strip()}")
+
+    print(f"Created git tag: {tag_name}")
+    return tag_name
+
+
+def push_release_commit_to_main():
+    """Push the release commit to origin/main."""
+    result = run_git(['push', 'origin', 'HEAD:main'])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to push release commit to origin/main: {result.stderr.strip()}")
+    print("Pushed release commit to origin/main")
+
+
+def refresh_origin_main():
+    """Refresh the local origin/main tracking ref after pushing."""
+    result = run_git(['fetch', 'origin', 'main'])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to refresh origin/main: {result.stderr.strip()}")
+    print("Refreshed origin/main")
+
+
+def push_git_tag(tag_name):
+    """Push a release tag to the remote."""
+    result = run_git(['push', 'origin', tag_name])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to push git tag {tag_name}: {result.stderr.strip()}")
+    print(f"Pushed git tag: {tag_name}")
 
 
 def run_git(args):
@@ -359,13 +367,16 @@ def main(args=None):
         # Update changelog
         update_changelog(new_version, message)
 
-        # Commit before tagging so release tags point at commits containing the bump.
+        # Commit before publishing so release tags point at commits containing the bump.
         if commit or create_tag:
             commit_release(new_version)
+            push_release_commit_to_main()
+            refresh_origin_main()
 
-        # Create git tag if requested, after the release commit exists.
+        # Create and publish the git tag after the release commit is on origin/main.
         if create_tag:
-            create_git_tag(new_version, allow_non_main=allow_non_main_release)
+            tag_name = create_git_tag(new_version, allow_non_main=allow_non_main_release)
+            push_git_tag(tag_name)
 
         return 0
     except Exception as e:

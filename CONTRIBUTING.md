@@ -137,7 +137,7 @@ This will:
 - Add an entry to `CHANGELOG.md` with recent commits
 - Create a git tag (e.g., `v1.2.4`)
 
-Don't forget to push the tag: `git push origin v1.2.4`
+When `--tag` is used, the release flow publishes the release commit and tag automatically.
 
 ## Reporting Bugs
 

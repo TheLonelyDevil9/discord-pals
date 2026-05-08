@@ -1172,7 +1172,7 @@ If the installed copy is old enough that `update.py` is not present yet, downloa
 
 Before any Git mutation, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`, including bot/provider config, runtime data, characters, and local prompt files. Update outcomes are recorded in `bot_data/update_log.json` without storing tokens or message contents.
 
-Release tags must be cut only after the release commit is on `main` or an approved release branch. Latest-version tags should not live only on feature branches, because old dashboard updaters may follow their configured branch before they have the newer exact-tag updater logic.
+Release tags must be cut only after the release commit is on `main` or an approved release branch. Latest-version tags should not live only on feature branches, because old dashboard updaters may follow their configured branch before they have the newer exact-tag updater logic. The `bump_version.py --tag` flow now publishes `main` and the tag automatically after creating the release commit.
 
 ### When to Adjust Settings
 
