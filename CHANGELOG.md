@@ -4,6 +4,17 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.7] - 2026-05-08
+
+### Changed
+
+- Moved final Discord response splitting into a dedicated delivery formatter boundary.
+
+### Fixed
+
+- Split short greeting-plus-followup responses and missing-punctuation thought joins into separate Discord messages before sending.
+- Preserved compact question replies and inline conjunctions so sentence splitting does not create broken grammar.
+
 ## [v2.2.6] - 2026-05-07
 
 ### Fixed

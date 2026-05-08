@@ -14,7 +14,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
-from constants import MAX_MESSAGE_LENGTH, MAX_RESPONSE_MESSAGE_PARTS
 from providers import provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
@@ -25,11 +24,11 @@ from discord_utils import (
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
-    split_message,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
+from response_delivery import format_response_for_delivery
 from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
@@ -79,61 +78,6 @@ RE_REMINDER_KEYWORD = re.compile(
     r")\b",
     re.IGNORECASE
 )
-
-_NON_TERMINAL_ABBREVIATIONS = frozenset({
-    "mr.",
-    "mrs.",
-    "ms.",
-    "miss.",
-    "mx.",
-    "dr.",
-    "prof.",
-    "sr.",
-    "jr.",
-    "st.",
-    "vs.",
-    "etc.",
-    "e.g.",
-    "i.e.",
-    "a.m.",
-    "p.m.",
-    "u.s.",
-    "u.k.",
-})
-
-_SOFT_SENTENCE_BRIDGE_WORDS = frozenset({
-    "a",
-    "about",
-    "after",
-    "an",
-    "and",
-    "are",
-    "artist",
-    "as",
-    "band",
-    "by",
-    "called",
-    "earlier",
-    "for",
-    "from",
-    "in",
-    "is",
-    "like",
-    "mentioned",
-    "named",
-    "of",
-    "on",
-    "or",
-    "song",
-    "that",
-    "the",
-    "this",
-    "to",
-    "titled",
-    "was",
-    "were",
-    "with",
-})
 
 IDENTITY_GUARD_RETRY_INSTRUCTION = (
     "Your previous draft was blocked because it structurally attributed speech "
@@ -1685,208 +1629,9 @@ Return exactly one JSON object with this shape:
                 if not remove_message_from_history(message.channel.id, message.id):
                     remove_assistant_from_history(message.channel.id, 1)
 
-    @staticmethod
-    def _starts_like_new_thought(text: str) -> bool:
-        """Check whether text starts like a fresh Discord thought."""
-        text = (text or "").lstrip()
-        if not text:
-            return False
-
-        return (
-            text[0].isupper() or
-            text[0].isdigit() or
-            text.startswith(("@", "<@", "*", "—", "-", "•", "\"", "'", "(", "["))
-        )
-
-    @staticmethod
-    def _ends_with_nonterminal_abbreviation(text: str) -> bool:
-        """Detect titles and abbreviations that should not count as a hard break."""
-        trimmed = (text or "").strip()
-        if not trimmed or "." not in trimmed:
-            return False
-
-        trimmed = trimmed.rstrip(")]}\"'>")
-        match = re.search(r"([A-Za-z][A-Za-z.]*)$", trimmed)
-        if not match:
-            return False
-
-        token = match.group(1).lower()
-        return (
-            token in _NON_TERMINAL_ABBREVIATIONS or
-            re.fullmatch(r"(?:[A-Za-z]\.){2,}", token) is not None or
-            re.fullmatch(r"[A-Za-z]\.", token) is not None
-        )
-
-    @staticmethod
-    def _should_split_single_newline(previous_line: str, next_line: str) -> bool:
-        """Decide when a single newline reads like a new chat message instead of formatting."""
-        previous_line = (previous_line or "").strip()
-        next_line = (next_line or "").strip()
-        if not previous_line or not next_line:
-            return False
-        if not BotInstance._starts_like_new_thought(next_line):
-            return False
-        if BotInstance._ends_with_nonterminal_abbreviation(previous_line):
-            return False
-        if previous_line[-1] in ",:;/-–—([{":
-            return False
-        return True
-
-    @staticmethod
-    def _complete_split_boundary(text: str) -> str:
-        """Keep delivered split messages from training punctuationless sentence breaks."""
-        text = (text or "").strip()
-        if not text:
-            return text
-
-        body = text.rstrip(")]}'\"›»")
-        if not body or body[-1] in ".!?…":
-            return text
-        if body[-1].isalnum():
-            return f"{text}."
-        return text
-
-    @staticmethod
-    def _looks_like_missing_sentence_boundary(previous_text: str, next_text: str) -> bool:
-        """Detect long model text where punctuation was omitted before a new thought."""
-        previous_text = (previous_text or "").strip()
-        next_text = (next_text or "").strip()
-        if len(previous_text) < 45 or not next_text:
-            return False
-        if not BotInstance._starts_like_new_thought(next_text):
-            return False
-        if previous_text[-1] in ",:;/-–—([{":
-            return False
-        if BotInstance._ends_with_nonterminal_abbreviation(previous_text):
-            return False
-
-        previous_word_match = re.search(r"([A-Za-z][A-Za-z'-]*)\s*$", previous_text)
-        if not previous_word_match:
-            return False
-        if previous_word_match.group(1).lower().strip("'") in _SOFT_SENTENCE_BRIDGE_WORDS:
-            return False
-
-        next_word_match = re.match(r"([A-Z][A-Za-z'’-]+)\b", next_text)
-        if not next_word_match:
-            return False
-        # A lone capital "I" is grammatical mid-sentence too often to treat as a boundary.
-        if next_word_match.group(1) == "I":
-            return False
-
-        return True
-
-    @staticmethod
-    def _split_plain_response_sentences(response: str) -> list[str]:
-        """Split long single-paragraph responses into short natural bursts."""
-        normalized = (response or "").strip()
-        if not normalized or "\n" in normalized or len(normalized) < 80:
-            return []
-
-        sentences = []
-        start = 0
-        boundaries = []
-        repaired_soft_boundary = False
-        for match in re.finditer(r"[.!?…]+(?=\s+)", normalized):
-            next_start = match.end()
-            while next_start < len(normalized) and normalized[next_start].isspace():
-                next_start += 1
-            boundaries.append((match.end(), next_start, "terminal"))
-
-        for match in re.finditer(r"(?<=[a-z0-9\)\]\"'])\s+(?=[A-Z][a-z][A-Za-z'’\-]*\b)", normalized):
-            boundaries.append((match.start(), match.end(), "soft"))
-
-        for boundary_end, next_start, boundary_type in sorted(boundaries, key=lambda item: item[1]):
-            if boundary_end <= start or next_start <= start:
-                continue
-
-            candidate = normalized[start:boundary_end].strip()
-            if not candidate:
-                continue
-
-            next_segment = normalized[next_start:]
-            if not next_segment:
-                continue
-            if not BotInstance._starts_like_new_thought(next_segment):
-                continue
-            if boundary_type == "terminal":
-                boundary_text = normalized[boundary_end - 1:boundary_end]
-                if boundary_text == "." and BotInstance._ends_with_nonterminal_abbreviation(candidate):
-                    continue
-            elif not BotInstance._looks_like_missing_sentence_boundary(candidate, next_segment):
-                continue
-
-            if boundary_type == "soft":
-                candidate = BotInstance._complete_split_boundary(candidate)
-                repaired_soft_boundary = True
-            sentences.append(candidate)
-            start = next_start
-
-        remainder = normalized[start:].strip()
-        if remainder:
-            sentences.append(remainder)
-        if len(sentences) < 2:
-            return []
-
-        grouped = []
-        current_sentences = [sentences[0]]
-        for sentence in sentences[1:]:
-            current = " ".join(current_sentences).strip()
-            candidate = f"{current} {sentence}".strip()
-            if len(current_sentences) >= 2 or len(current) >= 90 or len(candidate) > 120:
-                grouped.append(current)
-                current_sentences = [sentence]
-            else:
-                current_sentences.append(sentence)
-        grouped.append(" ".join(current_sentences).strip())
-
-        return grouped if len(grouped) > 1 or repaired_soft_boundary else []
-
     def _split_response_for_delivery(self, response: str) -> list[str]:
         """Turn one model response into natural Discord-sized message parts."""
-        normalized = (response or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-        if not normalized:
-            return []
-
-        logical_parts = []
-        for paragraph in re.split(r"\n{2,}", normalized):
-            paragraph = paragraph.strip()
-            if not paragraph:
-                continue
-
-            lines = [line.strip() for line in paragraph.split("\n") if line.strip()]
-            if not lines:
-                continue
-
-            current_part = lines[0]
-            for next_line in lines[1:]:
-                if self._should_split_single_newline(current_part, next_line):
-                    logical_parts.append(self._complete_split_boundary(current_part))
-                    current_part = next_line
-                else:
-                    current_part = f"{current_part}\n{next_line}"
-            logical_parts.append(current_part)
-
-        if not logical_parts:
-            logical_parts = [normalized]
-
-        expanded_parts = []
-        for part in logical_parts:
-            sentence_parts = self._split_plain_response_sentences(part)
-            if sentence_parts:
-                expanded_parts.extend(sentence_parts)
-            else:
-                expanded_parts.append(part)
-        logical_parts = expanded_parts
-
-        if len(logical_parts) > MAX_RESPONSE_MESSAGE_PARTS:
-            overflow = "\n\n".join(logical_parts[MAX_RESPONSE_MESSAGE_PARTS - 1:])
-            logical_parts = logical_parts[:MAX_RESPONSE_MESSAGE_PARTS - 1] + [overflow]
-
-        final_parts = []
-        for part in logical_parts:
-            final_parts.extend(split_message(part, max_length=MAX_MESSAGE_LENGTH))
-
-        return [part for part in final_parts if part and part.strip()]
+        return format_response_for_delivery(response)
 
     async def _send_organic_response(self, message: discord.Message, response: str) -> list[dict]:
         """Send response organically and return the sent Discord messages with their delivered content."""
