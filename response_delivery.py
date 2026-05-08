@@ -148,6 +148,56 @@ _STANDALONE_OPENERS = (
     "yep",
 )
 
+_INCOMPLETE_LINE_ENDERS = frozenset({
+    "a",
+    "about",
+    "am",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "because",
+    "been",
+    "being",
+    "but",
+    "by",
+    "called",
+    "for",
+    "from",
+    "her",
+    "his",
+    "in",
+    "into",
+    "is",
+    "like",
+    "my",
+    "named",
+    "of",
+    "or",
+    "our",
+    "than",
+    "that",
+    "the",
+    "their",
+    "to",
+    "was",
+    "were",
+    "with",
+    "without",
+    "you",
+    "your",
+    "youre",
+    "you're",
+})
+
+_OBJECT_SEEKING_LINE_ENDERS = frozenset({
+    "play",
+    "played",
+    "playing",
+    "plays",
+})
+
 
 @dataclass(frozen=True)
 class DeliveryFormatOptions:
@@ -201,10 +251,11 @@ def _split_by_explicit_breaks(normalized: str) -> list[str]:
                 logical_parts.append(_complete_split_boundary(current_part))
                 current_part = next_line
             else:
-                current_part = f"{current_part}\n{next_line}"
+                separator = " " if _should_reflow_single_newline(current_part, next_line) else "\n"
+                current_part = _join_reflowed_fragments(current_part, next_line) if separator == " " else f"{current_part}\n{next_line}"
         logical_parts.append(current_part)
 
-    return logical_parts or [normalized]
+    return _merge_fragmented_structural_parts(logical_parts) or [normalized]
 
 
 def _expand_plain_paragraphs(parts: Iterable[str]) -> list[str]:
@@ -302,6 +353,8 @@ def _should_split_single_newline(previous_line: str, next_line: str) -> bool:
     next_line = (next_line or "").strip()
     if not previous_line or not next_line:
         return False
+    if _should_reflow_single_newline(previous_line, next_line):
+        return False
     if not _starts_like_new_thought(next_line):
         return False
     if _ends_with_nonterminal_abbreviation(previous_line):
@@ -309,6 +362,126 @@ def _should_split_single_newline(previous_line: str, next_line: str) -> bool:
     if previous_line[-1] in ",:;/-([{":
         return False
     return True
+
+
+def _merge_fragmented_structural_parts(parts: list[str]) -> list[str]:
+    merged: list[str] = []
+    for part in parts:
+        part = (part or "").strip()
+        if not part:
+            continue
+        if merged and _should_reflow_single_newline(merged[-1], part):
+            merged[-1] = _join_reflowed_fragments(merged[-1], part)
+        else:
+            merged.append(part)
+    return merged
+
+
+def _should_reflow_single_newline(previous_line: str, next_line: str) -> bool:
+    previous_text = previous_line
+    next_text = next_line
+    previous_line = _last_nonempty_line(previous_text)
+    next_line = _first_nonempty_line(next_text)
+    if not previous_line or not next_line:
+        return False
+    if next_line.startswith(("-", "\u2013", "\u2014", "\u2022", "* ", ">")):
+        return False
+    if _ends_with_nonterminal_abbreviation(previous_line):
+        return False
+    if _is_standalone_opener(previous_line):
+        return False
+    if previous_line.rstrip()[-1:] == ",":
+        return True
+    if previous_line.rstrip()[-1:] in ".!?\u2026":
+        return _tail_title_fragment_needs_next_line(previous_text, next_line)
+
+    next_word = _first_word(next_line)
+    if next_word in {"to", "for", "of", "with"}:
+        return True
+
+    previous_word = _last_word_token(previous_line).lower().replace("\u2019", "'")
+    if previous_word in _INCOMPLETE_LINE_ENDERS:
+        return True
+    return _tail_title_fragment_needs_next_line(previous_text, next_line)
+
+
+def _join_reflowed_fragments(previous_text: str, next_text: str) -> str:
+    previous = (previous_text or "").rstrip()
+    next_part = (next_text or "").lstrip()
+    if _strip_terminal_for_reflow(previous, next_part):
+        previous = previous.rstrip(".!?\u2026")
+    return f"{previous} {next_part}".strip()
+
+
+def _strip_terminal_for_reflow(previous_text: str, next_text: str) -> bool:
+    previous_line = _last_nonempty_line(previous_text)
+    if not previous_line or previous_line.rstrip()[-1:] not in ".!?\u2026":
+        return False
+    return _tail_title_fragment_needs_next_line(previous_text, next_text)
+
+
+def _last_nonempty_line(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def _first_nonempty_line(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[0] if lines else ""
+
+
+def _tail_title_fragment_needs_next_line(previous_line: str, next_line: str) -> bool:
+    next_word = _first_word_token(next_line)
+    if not next_word or not _is_titleish_token(next_word):
+        return False
+    if next_word.lower().replace("\u2019", "'") in _SHORT_THOUGHT_STARTERS:
+        return False
+
+    trimmed_previous = (previous_line or "").strip()
+    without_terminal = trimmed_previous.rstrip(".!?\u2026").strip()
+    tail_match = re.search(r"(?:^|[.!?\u2026]\s+)([^.!?\u2026]+)$", without_terminal)
+    tail = (tail_match.group(1) if tail_match else without_terminal).strip()
+    if not tail:
+        return False
+
+    tokens = _word_tokens(tail)
+    if not tokens or len(tokens) > 4:
+        return False
+
+    normalized_tokens = [token.lower().replace("\u2019", "'") for token in tokens]
+    if normalized_tokens[-1] in _OBJECT_SEEKING_LINE_ENDERS:
+        return (
+            len(tokens) <= 3
+            and normalized_tokens[0] in {"i", "you", "we", "they", "he", "she"}
+        )
+    if normalized_tokens[-1] in _INCOMPLETE_LINE_ENDERS:
+        return True
+    if len(tokens) > 1 and all(_is_titleish_token(token) for token in tokens):
+        return True
+    if normalized_tokens[0] in {"i", "i'm", "you", "you're", "youre"} and len(tokens) > 1:
+        return any(token in _INCOMPLETE_LINE_ENDERS for token in normalized_tokens[:-1])
+    if len(tokens) == 1:
+        if normalized_tokens[0] in _INCOMPLETE_LINE_ENDERS:
+            return True
+        return False
+    return (
+        _is_titleish_token(tokens[-1])
+        and any(token in _INCOMPLETE_LINE_ENDERS for token in normalized_tokens[:-1])
+    )
+
+
+def _word_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9][A-Za-z0-9'\u2019-]*", text or "")
+
+
+def _first_word_token(text: str) -> str:
+    tokens = _word_tokens(text)
+    return tokens[0] if tokens else ""
+
+
+def _is_titleish_token(token: str) -> bool:
+    token = token or ""
+    return bool(token) and (token[0].isupper() or token.isupper() or token[0].isdigit())
 
 
 def _complete_split_boundary(text: str) -> str:
@@ -343,11 +516,15 @@ def _looks_like_missing_sentence_boundary(previous_text: str, next_text: str) ->
     previous_word = previous_word_match.group(1).lower().strip("'")
     if previous_word in _SOFT_SENTENCE_BRIDGE_WORDS:
         return False
+    if previous_word in _INCOMPLETE_LINE_ENDERS:
+        return False
     if previous_word in {"anyway", "though"}:
         return False
 
     next_word = _first_word(next_text)
     if next_word in _TITLE_STARTERS:
+        return False
+    if _tail_title_fragment_needs_next_line(previous_text, next_text):
         return False
 
     next_word_match = re.match(r"([A-Z][A-Za-z'\u2019-]+)\b", next_text)
@@ -539,6 +716,8 @@ def _should_split_after_short_sentence(
     if _is_standalone_opener(current):
         return True
     if repaired_soft_boundary:
+        return True
+    if current[-1:] == "!" and len(current) > 12 and len(next_sentence) > 24:
         return True
     return current.endswith(".")
 

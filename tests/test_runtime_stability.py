@@ -101,6 +101,105 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             memories_mock.call_args_list,
             [call(5, 100, "Alice"), call(5, 101, "Bob")]
         )
+        first_speaker_context = [
+            msg for msg in first["messages_for_api"]
+            if msg.get("kind") == "current_speaker_context"
+        ]
+        self.assertEqual(len(first_speaker_context), 1)
+        self.assertIn("Current Discord message author: Invoker.", first_speaker_context[0]["content"])
+        self.assertIn("address Alice directly as \"you\"", first_speaker_context[0]["content"])
+        self.assertNotIn("address Invoker directly", first_speaker_context[0]["content"])
+
+    async def test_build_request_context_anchors_current_human_after_third_person_claims(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character_name = "firefly"
+        instance.character = types.SimpleNamespace(name="Firefly", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="lounge")
+        guild = types.SimpleNamespace(id=5, name="Astral Express")
+        author = types.SimpleNamespace(id=42, bot=False)
+        message = types.SimpleNamespace(
+            id=3003,
+            content="Who's he?",
+            author=author,
+            channel=channel,
+            guild=guild,
+            mentions=[],
+        )
+        request = {
+            "message": message,
+            "content": "Who's he?",
+            "guild": guild,
+            "attachments": [],
+            "user_name": "CurrentUser",
+            "is_dm": False,
+            "user_id": 42,
+            "sticker_info": None,
+        }
+        immediate_history = [
+            {"role": "user", "content": "Friend: CurrentUser is drunk"},
+            {"role": "user", "content": "CurrentUser: No but I've never had booze nearby for a good reason"},
+            {"role": "user", "content": "CurrentUser: I'm drunk sorry"},
+            {"role": "user", "content": "CurrentUser: Who's he?"},
+        ]
+        runtime_values = {
+            "user_only_context": True,
+            "user_only_context_count": 20,
+            "strict_human_only_context": True,
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": False,
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], immediate_history))
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+
+            context = await instance._build_request_context(request)
+
+        self.assertIsNotNone(context)
+        rendered_messages = context["messages_for_api"]
+        speaker_context = [
+            msg for msg in rendered_messages
+            if msg.get("kind") == "current_speaker_context"
+        ]
+        self.assertEqual(len(speaker_context), 1)
+        self.assertIn("Current Discord message author: CurrentUser.", speaker_context[0]["content"])
+        self.assertIn("address CurrentUser directly as \"you\"", speaker_context[0]["content"])
+        self.assertIn("Earlier third-person lines about the addressed user", speaker_context[0]["content"])
+        speaker_index = rendered_messages.index(speaker_context[0])
+        self.assertGreater(speaker_index, 0)
+        self.assertEqual(rendered_messages[speaker_index - 1]["kind"], "chatroom_context")
+        self.assertEqual(rendered_messages[speaker_index + 1]["content"], "Friend: CurrentUser is drunk")
 
     async def test_build_request_context_passes_time_passage_context_when_enabled(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -423,9 +522,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         first = types.SimpleNamespace(id=1)
         second = types.SimpleNamespace(id=2)
         third = types.SimpleNamespace(id=3)
+        fourth = types.SimpleNamespace(id=4)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(side_effect=[second, third])),
+            channel=types.SimpleNamespace(send=AsyncMock(side_effect=[second, third, fourth])),
         )
 
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
@@ -435,10 +535,11 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
                 "One.\n\nTwo.\n\nThree.\n\nFour."
             )
 
-        self.assertEqual(len(sent), 3)
+        self.assertEqual(len(sent), 4)
         self.assertEqual(sent[0]["content"], "One.")
         self.assertEqual(sent[1]["content"], "Two.")
-        self.assertEqual(sent[2]["content"], "Three.\n\nFour.")
+        self.assertEqual(sent[2]["content"], "Three.")
+        self.assertEqual(sent[3]["content"], "Four.")
 
     async def test_send_and_finalize_records_each_sent_part_separately(self):
         instance = object.__new__(bot_instance_module.BotInstance)
