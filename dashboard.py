@@ -2203,9 +2203,6 @@ def api_v2_auto_memories():
             continue
         if not isinstance(entries, list) or not entries:
             continue
-        if search and not any(search in str(entry.get('content', '')).lower() for entry in entries if isinstance(entry, dict)):
-            continue
-
         profile_index = None
         pending_index = None
         legacy_indices = []
@@ -2243,6 +2240,31 @@ def api_v2_auto_memories():
             (str(item.get('timestamp', '')) for item in entries if isinstance(item, dict)),
             default=''
         )
+        if search:
+            search_parts = [
+                key,
+                scope_label,
+                key_label,
+                'DM' if is_dm_scope else 'Server',
+                str(entry.get('user_id', '')),
+                str(entry.get('server_id', '')),
+            ]
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                search_parts.extend([
+                    item.get('content', ''),
+                    item.get('user_name', ''),
+                    item.get('server_name', ''),
+                    item.get('character', ''),
+                    item.get('learned_from', ''),
+                ])
+            if resolved_server_id is not None:
+                search_parts.append(guild_name_map.get(resolved_server_id, ''))
+            search_haystack = ' '.join(str(part) for part in search_parts if part).lower()
+            if search not in search_haystack:
+                continue
+
         entry_type = entry.get('entry_type') or ('profile' if len(entries) == 1 else 'legacy')
         results.append({
             'key': key,
