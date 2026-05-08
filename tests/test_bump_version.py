@@ -52,6 +52,39 @@ class BumpVersionTests(unittest.TestCase):
 
         self.assertEqual(calls, [['merge-base', '--is-ancestor', 'HEAD', 'origin/main']])
 
+    def test_update_changelog_uses_broad_summary_instead_of_commit_messages(self):
+        writes = {}
+
+        def fake_open(path, mode='r', encoding=None):
+            if 'r' in mode:
+                return type("Reader", (), {"read": lambda self: "# Changelog\n\nExisting text\n", "__enter__": lambda self: self, "__exit__": lambda self, exc_type, exc, tb: False})()
+
+            class Writer:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def write(self, text):
+                    writes["text"] = text
+
+            return Writer()
+
+        with patch.object(bump_version.os.path, "exists", return_value=True), \
+                patch.object(bump_version, "open", side_effect=fake_open), \
+                patch.object(bump_version, "datetime") as fake_datetime:
+            fake_datetime.now.return_value.strftime.return_value = "2026-05-08"
+            bump_version.update_changelog("1.2.4")
+
+        text = writes["text"]
+        self.assertIn("This release brings together release automation, runtime hardening, documentation updates, and regression coverage.", text)
+        self.assertIn("The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.", text)
+        self.assertIn("Related work is grouped together so the history stays readable without turning into a transcript.", text)
+        self.assertNotIn("commit subjects", text.split("### Notes", 1)[0])
+        self.assertNotIn("bump_version.py", text)
+        self.assertNotIn("dashboard.py", text)
+
     def test_create_git_tag_reuses_existing_local_tag_on_same_commit(self):
         head_sha = "abc123"
 

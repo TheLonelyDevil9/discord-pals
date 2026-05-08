@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard updates now back up mutable local state before Git mutation and report clearer target/version metadata.
 - Dashboard updates now preserve untracked runtime data outside of Git stash handling.
 - Release tagging now keeps stricter branch checks unless an explicit override is passed.
+- Release notes now stay broad and descriptive instead of echoing commit subjects.
 
 ### Fixed
 

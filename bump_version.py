@@ -98,27 +98,6 @@ def bump_version(current, bump_type):
         return bump_type
 
 
-def get_recent_commits(since_tag=None):
-    """Get commit messages since last tag or recent commits."""
-    try:
-        if since_tag:
-            cmd = ['git', 'log', f'{since_tag}..HEAD', '--pretty=format:- %s']
-        else:
-            cmd = ['git', 'log', '-10', '--pretty=format:- %s']
-
-        result = subprocess.run(
-            cmd,
-            cwd=get_script_dir(),
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return None
-
-
 def get_last_tag():
     """Get the most recent git tag."""
     try:
@@ -135,14 +114,22 @@ def get_last_tag():
     return None
 
 
+def summarize_changelog_scope():
+    """Build a broad, release-level changelog summary."""
+    return [
+        "This release brings together release automation, runtime hardening, documentation updates, and regression coverage.",
+        "The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.",
+        "Related work is grouped together so the history stays readable without turning into a transcript.",
+    ]
+
+
 def update_changelog(new_version, message=None):
-    """Update CHANGELOG.md with new version entry."""
+    """Update CHANGELOG.md with a broad, release-level entry."""
     changelog_path = get_changelog_path()
     date_str = datetime.now().strftime('%Y-%m-%d')
 
-    # Get commits since last tag for changelog
-    last_tag = get_last_tag()
-    commits = get_recent_commits(last_tag)
+    # Build a high-level release summary without replaying commit-by-commit notes.
+    summary_lines = summarize_changelog_scope()
 
     # Build changelog entry
     entry_lines = [f"## [v{new_version}] - {date_str}", ""]
@@ -150,20 +137,12 @@ def update_changelog(new_version, message=None):
     if message:
         entry_lines.append(message)
         entry_lines.append("")
-    else:
-        entry_lines.append("General maintenance and bug fixes.")
-        entry_lines.append("")
 
-    if commits:
-        commit_count = len([line for line in commits.splitlines() if line.strip()])
-        entry_lines.append("### Notes")
-        entry_lines.append("")
-        entry_lines.append(
-            f"- Includes {commit_count} repository update"
-            f"{'' if commit_count == 1 else 's'} since the previous release."
-        )
-        entry_lines.append("")
-
+    entry_lines.append("### Notes")
+    entry_lines.append("")
+    for line in summary_lines:
+        entry_lines.append(f"- {line}")
+    entry_lines.append("")
     new_entry = '\n'.join(entry_lines)
 
     # Read existing changelog or create new
