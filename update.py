@@ -53,6 +53,40 @@ def command_output(result: subprocess.CompletedProcess) -> str:
     return "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip()).strip()
 
 
+def fetch_all_with_tag_recovery(repo: Path, remote: str) -> subprocess.CompletedProcess:
+    result = run(["git", "fetch", "--all", "--tags", "--prune"], repo, timeout=GIT_TIMEOUT)
+    if result.returncode == 0:
+        return result
+
+    output = command_output(result).lower()
+    if "would clobber existing tag" not in output:
+        return result
+
+    retry = run(
+        [
+            "git",
+            "fetch",
+            "--prune",
+            "--force",
+            remote,
+            f"+refs/heads/*:refs/remotes/{remote}/*",
+            "+refs/tags/*:refs/tags/*",
+        ],
+        repo,
+        timeout=GIT_TIMEOUT,
+    )
+    if retry.returncode == 0:
+        retry.stdout = "\n".join(
+            part for part in [
+                command_output(result),
+                command_output(retry),
+                "Recovered from stale local release tags by forcing tag refresh.",
+            ] if part
+        )
+        retry.stderr = ""
+    return retry
+
+
 def repo_root(start: Path) -> Path:
     result = run(["git", "rev-parse", "--show-toplevel"], start, timeout=30, check=True)
     return Path(result.stdout.strip() or start).resolve()
@@ -338,7 +372,10 @@ def main() -> int:
         info(f"Standalone updater {BOOTSTRAP_VERSION}")
         info(f"Repository: {repo}")
         info("Fetching updates and tags...")
-        run(["git", "fetch", "--all", "--tags", "--prune"], repo, timeout=GIT_TIMEOUT, check=True)
+        fetch = fetch_all_with_tag_recovery(repo, remote)
+        if fetch.returncode != 0:
+            details = command_output(fetch) or f"git fetch exited with code {fetch.returncode}"
+            raise RuntimeError(f"Fetching updates failed: {details}")
         target_version = newest_remote_tag(repo, remote)
         if not target_version:
             log_update_failure(repo, "no_release_tag", from_version=current_version)

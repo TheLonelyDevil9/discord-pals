@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.12] - 2026-05-08
+
+### Fixed
+
+- Recovered dashboard and standalone updater fetches when stale local release tags conflict with remote release tags.
+- Added regression coverage for forced tag refresh after Git reports that fetching would clobber an existing local tag.
+
 ## [v2.2.11] - 2026-05-08
 
 ### Changed

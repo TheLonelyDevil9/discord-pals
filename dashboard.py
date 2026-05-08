@@ -3086,6 +3086,43 @@ def _require_git_success(result, action: str) -> None:
         raise RuntimeError(f"{action} failed: {details}")
 
 
+def _fetch_all_with_tag_recovery(repo_dir: str):
+    """Fetch updates, retrying with forced tag refs when local release tags are stale."""
+    fetch = _run_git(["fetch", "--all", "--tags", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
+    if fetch.returncode == 0:
+        return fetch
+
+    output = _command_output(fetch).lower()
+    if "would clobber existing tag" not in output:
+        return fetch
+
+    remote = _select_git_remote(repo_dir)
+    retry = _run_git(
+        [
+            "fetch",
+            "--prune",
+            "--force",
+            remote,
+            f"+refs/heads/*:refs/remotes/{remote}/*",
+            "+refs/tags/*:refs/tags/*",
+        ],
+        repo_dir,
+        timeout=_UPDATE_GIT_TIMEOUT,
+    )
+    if retry.returncode != 0:
+        return retry
+
+    retry.stdout = "\n".join(
+        part for part in [
+            _command_output(fetch),
+            _command_output(retry),
+            "Recovered from stale local release tags by forcing tag refresh.",
+        ] if part
+    )
+    retry.stderr = ""
+    return retry
+
+
 def _repo_root(bot_dir: str) -> str:
     result = _run_git(["rev-parse", "--show-toplevel"], bot_dir, timeout=30)
     _require_git_success(result, "Locating Git repository")
@@ -3348,8 +3385,11 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> d
     warnings = []
     backup_path = _create_update_state_backup(repo_dir)
 
-    fetch = _run_git(["fetch", "--all", "--tags", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
+    fetch = _fetch_all_with_tag_recovery(repo_dir)
     _require_git_success(fetch, "Fetching updates")
+    fetch_output = _command_output(fetch)
+    if "Recovered from stale local release tags" in fetch_output:
+        warnings.append("Recovered from stale local release tags by forcing tag refresh.")
 
     current_branch = _current_git_branch(repo_dir)
     branch_upstream = _update_upstream_ref(repo_dir, current_branch)
@@ -3358,7 +3398,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> d
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
     stash = _stash_local_changes(repo_dir)
-    output = _command_output(fetch)
+    output = fetch_output
     updated = False
 
     try:

@@ -602,6 +602,70 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(result["after_head"], "bbb222")
         self.assertIn(["fetch", "--all", "--tags", "--prune"], commands)
 
+    def test_git_update_recovers_from_stale_local_release_tag(self):
+        refs = {
+            "HEAD": "aaa111",
+            "origin/main": "aaa111",
+            "refs/tags/v1.2.0": "bbb222",
+        }
+        commands = []
+
+        def fake_run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            commands.append(args)
+            if args == ["fetch", "--all", "--tags", "--prune"]:
+                return types.SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="! [rejected] v1.1.0 -> v1.1.0 (would clobber existing tag)",
+                )
+            if args == [
+                "fetch",
+                "--prune",
+                "--force",
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+                "+refs/tags/*:refs/tags/*",
+            ]:
+                return types.SimpleNamespace(returncode=0, stdout="forced tags\n", stderr="")
+            if args == ["remote"]:
+                return types.SimpleNamespace(returncode=0, stdout="origin\n", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return types.SimpleNamespace(returncode=0, stdout="main\n", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+                return types.SimpleNamespace(returncode=0, stdout="origin/main\n", stderr="")
+            if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if args[3] in refs else 1, stdout="", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                ref = args[2].removesuffix("^{commit}")
+                return types.SimpleNamespace(returncode=0, stdout=f"{refs[ref]}\n", stderr="")
+            if args[:2] == ["show", "refs/tags/v1.2.0:version.py"]:
+                return types.SimpleNamespace(returncode=0, stdout='__version__ = "1.2.0"\n', stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=no"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["merge-base", "--is-ancestor"]:
+                return types.SimpleNamespace(returncode=0 if args[2] == "aaa111" and args[3] == "bbb222" else 1, stdout="", stderr="")
+            if args[:2] == ["merge", "--ff-only"]:
+                refs["HEAD"] = refs[args[2]]
+                return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
+            raise AssertionError(f"Unexpected git command: {args}")
+
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+            result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["after_head"], "bbb222")
+        self.assertIn([
+            "fetch",
+            "--prune",
+            "--force",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+            "+refs/tags/*:refs/tags/*",
+        ], commands)
+        self.assertTrue(any("Recovered from stale local release tags" in warning for warning in result["warnings"]))
+
     def test_git_update_skips_tag_whose_version_file_does_not_match(self):
         refs = {
             "HEAD": "aaa111",
