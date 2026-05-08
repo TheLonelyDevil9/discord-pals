@@ -167,13 +167,14 @@ def format_response_for_delivery(
     if not normalized:
         return []
 
-    logical_parts = _split_by_explicit_breaks(normalized)
-    logical_parts = _expand_plain_paragraphs(logical_parts)
-    logical_parts = [_repair_obvious_question_fragment(part) for part in logical_parts]
-    logical_parts = _cap_logical_parts(logical_parts, options.max_parts)
+    structural_parts = _split_by_explicit_breaks(normalized)
+    structural_parts = [_repair_obvious_question_fragment(part) for part in structural_parts]
+    sentence_parts = _expand_plain_paragraphs(structural_parts)
+    sentence_parts = [_repair_obvious_question_fragment(part) for part in sentence_parts]
+    sentence_parts = _cap_logical_parts(sentence_parts, options.max_parts)
 
     final_parts: list[str] = []
-    for part in logical_parts:
+    for part in sentence_parts:
         final_parts.extend(split_message(part, max_length=options.max_message_length))
 
     return [part.strip() for part in final_parts if part and part.strip()]
@@ -278,6 +279,12 @@ def _ends_with_nonterminal_abbreviation(text: str) -> bool:
         return False
 
     trimmed = trimmed.rstrip(")]}\"'>")
+    lower_trimmed = trimmed.lower()
+    if any(lower_trimmed.endswith(abbreviation) for abbreviation in _NON_TERMINAL_ABBREVIATIONS):
+        return True
+    if re.search(r"(?:[A-Za-z]\.){2,}\s*$", trimmed) is not None:
+        return True
+
     match = re.search(r"([A-Za-z][A-Za-z.]*)$", trimmed)
     if not match:
         return False
@@ -449,18 +456,7 @@ def _group_sentence_bursts(
 
 
 def _is_nonterminal_period_boundary(candidate: str, next_segment: str) -> bool:
-    if not _ends_with_nonterminal_abbreviation(candidate):
-        return False
-
-    next_word = _first_word(next_segment)
-    if not next_word:
-        return True
-
-    candidate_token = _last_word_token(candidate).lower()
-    if candidate_token.rstrip(".") in _TITLE_STARTERS:
-        return True
-
-    return next_word in {"jr", "sr"} or len(next_word) == 1
+    return _ends_with_nonterminal_abbreviation(candidate)
 
 
 def _last_word_token(text: str) -> str:

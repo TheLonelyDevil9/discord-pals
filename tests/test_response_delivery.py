@@ -43,6 +43,48 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
             ],
         )
 
+    def test_title_and_initialism_false_positives_are_not_split(self):
+        parts = format_response_for_delivery(
+            "Mr. Rogers said hello to the neighborhood. I talked to Dr. Smith about the results. "
+            "The U.S. Embassy downtown was busy. It happened around 3 p.m. People started leaving.",
+            DeliveryFormatOptions(max_parts=10),
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "Mr. Rogers said hello to the neighborhood.",
+                "I talked to Dr. Smith about the results.",
+                "The U.S. Embassy downtown was busy.",
+                "It happened around 3 p.m. People started leaving.",
+            ],
+        )
+
+    def test_bridge_word_false_positives_are_not_split(self):
+        parts = format_response_for_delivery(
+            "The artist named Sarah plays at the venue on Fridays. I heard a song called Yesterday by the Beatles. "
+            "We talked about it earlier but I'll be there. He mentioned it to the team and Everyone agreed.",
+            DeliveryFormatOptions(max_parts=10),
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "The artist named Sarah plays at the venue on Fridays.",
+                "I heard a song called Yesterday by the Beatles.",
+                "We talked about it earlier but I'll be there.",
+                "He mentioned it to the team and Everyone agreed.",
+            ],
+        )
+
+    def test_time_abbreviation_false_positive_is_not_split(self):
+        parts = format_response_for_delivery(
+            "We met at 6 a.m. People were already awake.",
+            DeliveryFormatOptions(max_parts=10),
+        )
+
+        self.assertEqual(parts, ["We met at 6 a.m. People were already awake."])
+
     def test_max_parts_rolls_overflow_into_last_part(self):
         parts = format_response_for_delivery(
             "One.\n\nTwo.\n\nThree.\n\nFour.",
@@ -90,6 +132,18 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
                 "Breakfast wraps up? Job hunting all afternoon?",
             ],
         )
+
+    def test_idempotent_delivery_is_stable(self):
+        input_text = (
+            "Good morning You're up early. Or did you not sleep? "
+            "The artist named Sarah plays at the venue on Fridays."
+        )
+
+        options = DeliveryFormatOptions(max_parts=10)
+        first_pass = format_response_for_delivery(input_text, options)
+        second_pass = [part for item in first_pass for part in format_response_for_delivery(item, options)]
+
+        self.assertEqual(first_pass, second_pass)
 
 
 if __name__ == "__main__":

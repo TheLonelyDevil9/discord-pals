@@ -4,6 +4,13 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.9] - 2026-05-08
+
+### Fixed
+
+- Refined response delivery grammar repair and sentence-boundary tests.
+- Expanded regression coverage for title, abbreviation, bridge-word, and idempotency cases.
+
 ## [v2.2.8] - 2026-05-08
 
 ### Fixed
