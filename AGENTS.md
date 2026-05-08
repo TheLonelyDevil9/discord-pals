@@ -19,6 +19,8 @@ Start with [docs/README.md](docs/README.md), then open only the deeper document 
 
 **Guardrails over style:** Prefer small, enforceable checks and focused tests over long prose rules.
 
+Before planning or editing, read [lessons.md](lessons.md) and apply its history-derived guardrails; do not repeat known project mistakes.
+
 ## Version Bump Checklist
 
 **When bumping a version, ALL of these must be updated together:**
