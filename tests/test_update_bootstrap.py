@@ -4,6 +4,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import update as update_module
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +80,15 @@ class BootstrapUpdaterTests(unittest.TestCase):
         ensure_remote_default_branch(self.remote)
         run_git(["push", "origin", f"v{version}"], self.seed)
 
+    def retarget_remote_tag(self, version: str) -> None:
+        run_git(["checkout", "main"], self.seed)
+        write_version(self.seed, version)
+        marker = self.seed / "retarget-marker.txt"
+        marker.write_text(f"retargeted {version}\n", encoding="utf-8")
+        commit_all(self.seed, f"retarget {version}")
+        run_git(["tag", "-f", f"v{version}"], self.seed)
+        run_git(["push", "--force", "origin", f"v{version}"], self.seed)
+
     def run_update(self):
         return subprocess.run(
             [sys.executable, "update.py"],
@@ -116,3 +128,46 @@ class BootstrapUpdaterTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         log_path = self.install / "bot_data" / "update_log.json"
         self.assertTrue(log_path.exists())
+
+    def test_bootstrap_recovers_from_stale_local_release_tag(self):
+        self.release_tag_ahead_of_branch("2.2.2")
+        run_git(["fetch", "origin", "--tags"], self.install)
+        self.retarget_remote_tag("2.2.2")
+
+        result = self.run_update()
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn('__version__ = "2.2.2"', (self.install / "version.py").read_text(encoding="utf-8"))
+
+
+class BootstrapUpdaterFetchRecoveryTests(unittest.TestCase):
+    def test_fetch_all_with_tag_recovery_forces_tags_after_clobber_error(self):
+        calls = []
+
+        def fake_run(args, cwd, timeout=update_module.GIT_TIMEOUT, check=False):
+            calls.append(args)
+            if args == ["git", "fetch", "--all", "--tags", "--prune"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    1,
+                    "",
+                    "! [rejected] v1.1.0 -> v1.1.0 (would clobber existing tag)",
+                )
+            if args == [
+                "git",
+                "fetch",
+                "--prune",
+                "--force",
+                "origin",
+                "+refs/heads/*:refs/remotes/origin/*",
+                "+refs/tags/*:refs/tags/*",
+            ]:
+                return subprocess.CompletedProcess(args, 0, "forced tags\n", "")
+            raise AssertionError(f"Unexpected command: {args}")
+
+        with patch.object(update_module, "run", side_effect=fake_run):
+            result = update_module.fetch_all_with_tag_recovery(Path("repo"), "origin")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Recovered from stale local release tags", result.stdout)
+        self.assertEqual(len(calls), 2)
