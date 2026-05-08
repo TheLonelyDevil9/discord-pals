@@ -44,10 +44,7 @@ Before planning or editing, read [lessons.md](lessons.md) and apply its history-
    - Use `major` for breaking changes
 3. **Update CHANGELOG.md** - Add entry for new version with ALL changes
 4. **Commit** - Stage and commit all changes (including version.py and CHANGELOG.md) with a descriptive message
-5. **Push to GitHub** - Push both commits and tags:
-   ```bash
-   git push origin main && git push origin --tags
-   ```
+5. **Publish release** - `bump_version.py --tag` now pushes `main` and the release tag automatically after the release commit is created
 
 **CRITICAL: Version bump MUST happen before commit.** If you commit first, the version.py file won't be included and the release will have the wrong version number.
 
