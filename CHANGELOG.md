@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.10] - 2026-05-08
+
+### Added
+
+- Added a standalone `update.py` bootstrap updater for installs whose dashboard updater is too old to recover itself.
+- Added persistent update result logging under `bot_data/update_log.json`.
+
+### Changed
+
+- Dashboard updates now back up mutable local state before Git mutation and report exact target/version metadata.
+- Dashboard updates now stop stashing untracked runtime data and stash only tracked local edits.
+- Release tagging now rejects feature branches unless an explicit override is passed.
+
+### Fixed
+
+- Prevented false “already up to date” reporting when a newer version is already staged on disk and only needs restart.
+- Verified release tags against their `version.py` contents before treating them as valid update targets.
+
 ## [v2.2.9] - 2026-05-08
 
 ### Fixed

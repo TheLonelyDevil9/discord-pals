@@ -1156,6 +1156,24 @@ Conversation prompting is split into two files:
 | `dm_followup_max_count` | 1 | Max follow-up messages before stopping |
 | `dm_followup_cooldown_hours` | 24 | Hours between follow-up attempts for same user |
 
+---
+
+## Updating and Recovery
+
+The dashboard update button is the normal update path. It checks GitHub releases and remote tags, backs up local state, updates to the exact release target, installs dependencies, and asks for a restart when new code is staged.
+
+If the dashboard updater is too old or reports that it is already current while the badge still shows a newer version, use the standalone bootstrap updater from the Discord Pals folder:
+
+```bash
+python update.py
+```
+
+If the installed copy is old enough that `update.py` is not present yet, download the latest `update.py` from the repository into the Discord Pals folder and run it with Python. The bootstrap updater is self-contained so old installs can use it without importing the running bot code.
+
+Before any Git mutation, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`, including bot/provider config, runtime data, characters, and local prompt files. Update outcomes are recorded in `bot_data/update_log.json` without storing tokens or message contents.
+
+Release tags must be cut only after the release commit is on `main` or an approved release branch. Latest-version tags should not live only on feature branches, because old dashboard updaters may follow their configured branch before they have the newer exact-tag updater logic.
+
 ### When to Adjust Settings
 
 **Slow responses?**

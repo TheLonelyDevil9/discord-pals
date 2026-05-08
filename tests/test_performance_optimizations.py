@@ -405,7 +405,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         }
         dependencies = {"status": "skipped", "message": "", "warning": None}
 
-        with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0"]), \
+        with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0", "1.2.0"]), \
                 patch.object(dashboard_module, "_fetch_latest_available_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
                 patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
@@ -439,7 +439,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
                 patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
-                patch.object(dashboard_module, "_get_file_version", return_value="9.9.9"):
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
+                patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]):
             response = self.client.post("/api/update", headers=self.csrf_headers())
 
         data = response.get_json()
@@ -534,7 +535,28 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["message"], "Already up to date.")
+        self.assertEqual(data["message"], "Already up to date at v1.2.0.")
+
+    def test_update_endpoint_reports_restart_required_when_disk_is_newer(self):
+        dependencies = {"status": "skipped", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "VERSION", "2.2.9"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="2.2.10"), \
+                patch.object(dashboard_module, "_get_file_version", return_value="2.2.10"), \
+                patch.object(dashboard_module, "_perform_git_update") as perform_update, \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_write_update_log") as write_log:
+            response = self.client.post("/api/update", headers=self.csrf_headers())
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data["restart_required"])
+        self.assertFalse(data["updated"])
+        self.assertEqual(data["message"], "Restart to apply v2.2.10.")
+        perform_update.assert_not_called()
+        write_log.assert_called()
 
     def test_git_update_prefers_advertised_version_tag_when_available(self):
         refs = {
@@ -558,6 +580,10 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             if args[:2] == ["rev-parse", "--verify"]:
                 ref = args[2].removesuffix("^{commit}")
                 return types.SimpleNamespace(returncode=0, stdout=f"{refs[ref]}\n", stderr="")
+            if args[:2] == ["show", "refs/tags/v1.2.0:version.py"]:
+                return types.SimpleNamespace(returncode=0, stdout='__version__ = "1.2.0"\n', stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=no"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[:2] == ["merge-base", "--is-ancestor"]:
@@ -575,6 +601,73 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(result["branch_upstream"], "origin/main")
         self.assertEqual(result["after_head"], "bbb222")
         self.assertIn(["fetch", "--all", "--tags", "--prune"], commands)
+
+    def test_git_update_skips_tag_whose_version_file_does_not_match(self):
+        refs = {
+            "HEAD": "aaa111",
+            "origin/main": "aaa111",
+            "refs/tags/v1.2.0": "bbb222",
+        }
+
+        def fake_run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            if args[:2] == ["show", "refs/tags/v1.2.0:version.py"]:
+                return types.SimpleNamespace(returncode=0, stdout='__version__ = "1.1.0"\n', stderr="")
+            if args[0] == "fetch":
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return types.SimpleNamespace(returncode=0, stdout="main\n", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+                return types.SimpleNamespace(returncode=0, stdout="origin/main\n", stderr="")
+            if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if args[3] in refs else 1, stdout="", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                ref = args[2].removesuffix("^{commit}")
+                return types.SimpleNamespace(returncode=0, stdout=f"{refs[ref]}\n", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=no"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["merge-base", "--is-ancestor"]:
+                return types.SimpleNamespace(returncode=0 if args[2] == "aaa111" and args[3] == "bbb222" else 1, stdout="", stderr="")
+            if args[:2] == ["merge", "--ff-only"]:
+                refs["HEAD"] = refs[args[2]]
+                return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
+            raise AssertionError(f"Unexpected git command: {args}")
+
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+            result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
+
+        self.assertEqual(result["target_ref"], "origin/main")
+
+    def test_stash_local_changes_does_not_include_untracked(self):
+        calls = []
+
+        def fake_run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            calls.append(args)
+            if args[:3] == ["status", "--porcelain", "--untracked-files=no"]:
+                return types.SimpleNamespace(returncode=0, stdout=" M dashboard.py\n", stderr="")
+            if args[:2] == ["stash", "push"]:
+                return types.SimpleNamespace(returncode=0, stdout="Saved working directory and index state", stderr="")
+            if args[:3] == ["stash", "list", "--format=%gd%x00%s"]:
+                return types.SimpleNamespace(returncode=0, stdout="stash@{0}\x00discord-pals-dashboard-update-123\n", stderr="")
+            raise AssertionError(f"Unexpected git command: {args}")
+
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+            stash = dashboard_module._stash_local_changes("repo")
+
+        self.assertEqual(stash["ref"], "stash@{0}")
+        self.assertNotIn(["stash", "push", "--include-untracked", "-m", "discord-pals-dashboard-update-123"], calls)
+
+    def test_write_update_log_persists_entries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "bot_data" / "update_log.json"
+            with patch.object(dashboard_module, "_UPDATE_LOG_FILE", log_path):
+                dashboard_module._write_update_log({"status": "ok", "from_version": "2.2.9"})
+
+            entries = json.loads(log_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(entries[0]["status"], "ok")
+        self.assertEqual(entries[0]["from_version"], "2.2.9")
 
 
 class HistoryPersistenceTests(unittest.TestCase):

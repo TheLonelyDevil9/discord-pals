@@ -19,7 +19,7 @@ DOCS_REQUIRED = (
 )
 TRACKED_LARGE_MODULES = {
     "bot_instance.py": 3146,
-    "dashboard.py": 3372,
+    "dashboard.py": 3763,  # v2.2.10 updater recovery baseline
     "memory.py": 1938,
     "discord_utils.py": 1777,
 }

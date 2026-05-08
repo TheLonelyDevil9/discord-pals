@@ -11,7 +11,9 @@ import json
 import os
 import io
 import hashlib
+import re
 import time
+import shutil
 import zipfile
 from pathlib import Path
 from datetime import timedelta, datetime
@@ -42,7 +44,12 @@ _github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value":
 _update_lock = threading.Lock()
 _UPDATE_GIT_TIMEOUT = 180
 _UPDATE_PIP_TIMEOUT = 300
-_STALE_GIT_LOCK_SECONDS = 15 * 60
+_STALE_GIT_LOCK_SECONDS = _UPDATE_GIT_TIMEOUT + 60
+_UPDATE_BACKUP_RETENTION = 3
+_UPDATE_BACKUP_ROOT = DATA_DIR / "update_backups"
+_UPDATE_LOG_FILE = DATA_DIR / "update_log.json"
+_UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
+_UPDATE_BACKUP_DIRS = ("bot_data", "characters", "prompts")
 UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
 # Initialize secret key securely
@@ -2781,6 +2788,13 @@ def _compare_versions(v1: str, v2: str) -> int:
         return 0
 
 
+def _version_key(version: str) -> list[int] | None:
+    parts = str(version or "").strip().lstrip("v").split(".")
+    if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+        return None
+    return [int(part) for part in parts[:3]]
+
+
 def _fetch_github_latest_version():
     """Check GitHub API for the highest semantic release or tag version."""
     import urllib.request
@@ -2815,16 +2829,10 @@ def _fetch_github_latest_version():
         except Exception:
             continue
 
-    def version_key(version: str) -> list[int] | None:
-        parts = str(version or "").split(".")
-        if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
-            return None
-        return [int(part) for part in parts[:3]]
-
-    semantic_versions = [version for version in versions if version_key(version) is not None]
+    semantic_versions = [version for version in versions if _version_key(version) is not None]
     if not semantic_versions:
         return None
-    return max(semantic_versions, key=version_key)
+    return max(semantic_versions, key=_version_key)
 
 
 def _fetch_remote_latest_tag_version():
@@ -2843,10 +2851,10 @@ def _fetch_remote_latest_tag_version():
             tag_name = ref.removeprefix("refs/tags/").removesuffix("^{}")
             versions.add(tag_name.lstrip("v"))
 
-        semantic_versions = [version for version in versions if _compare_versions(version, "0.0.0") >= 0]
+        semantic_versions = [version for version in versions if _version_key(version) is not None]
         if not semantic_versions:
             return None
-        return max(semantic_versions, key=lambda version: [int(part) for part in version.split(".")[:3]])
+        return max(semantic_versions, key=_version_key)
     except Exception:
         return None
 
@@ -2860,7 +2868,7 @@ def _fetch_latest_available_version():
     versions = [version for version in candidates if version]
     if not versions:
         return None
-    return max(versions, key=lambda version: [int(part) for part in version.split(".")[:3]])
+    return max(versions, key=_version_key)
 
 
 def _invalidate_github_version_cache():
@@ -2902,13 +2910,13 @@ def _update_verification_failure(expected_version: str | None, file_version: str
     if not expected_version or _compare_versions(expected_version, file_version) <= 0:
         return None
 
-    upstream = git_result.get("upstream") or "the selected update branch"
+    upstream = git_result.get("target_ref") or git_result.get("upstream") or "the selected update target"
     output = git_result.get("output") or "No git output"
     return {
         'status': 'error',
         'message': (
             f"Update did not reach v{expected_version}. The checkout is still at v{file_version}. "
-            f"The selected update source ({upstream}) may not contain the latest release yet."
+            f"The selected update target ({upstream}) may not contain the latest release yet."
         ),
         'expected_version': expected_version,
         'file_version': file_version,
@@ -2917,8 +2925,39 @@ def _update_verification_failure(expected_version: str | None, file_version: str
         'output': output,
         'warnings': git_result.get("warnings", []),
         'upstream': upstream,
+        'target_version': git_result.get("target_version"),
+        'target_ref': git_result.get("target_ref"),
+        'backup_path': git_result.get("backup_path"),
         'before_head': git_result.get("before_head"),
         'after_head': git_result.get("after_head"),
+    }
+
+
+def _update_payload_base(
+    *,
+    expected_version: str | None,
+    file_version: str,
+    git_result: dict | None = None,
+    dependency_result: dict | None = None,
+    warnings: list[str] | None = None,
+) -> dict:
+    if not isinstance(git_result, dict):
+        git_result = {}
+    if not isinstance(dependency_result, dict):
+        dependency_result = {"status": "skipped"}
+    return {
+        'running_version': VERSION,
+        'file_version': file_version,
+        'github_version': expected_version,
+        'latest_version': expected_version or file_version or VERSION,
+        'target_version': git_result.get("target_version") or expected_version,
+        'target_ref': git_result.get("target_ref"),
+        'upstream': git_result.get("upstream"),
+        'before_head': git_result.get("before_head"),
+        'after_head': git_result.get("after_head"),
+        'backup_path': git_result.get("backup_path"),
+        'dependency_status': dependency_result.get("status"),
+        'warnings': warnings or [],
     }
 
 
@@ -3085,6 +3124,13 @@ def _git_ref_sha(repo_dir: str, ref: str) -> str:
     return result.stdout.strip()
 
 
+def _git_tag_contains_version(repo_dir: str, ref: str, version: str) -> bool:
+    result = _run_git(["show", f"{ref}:version.py"], repo_dir, timeout=30)
+    if result.returncode != 0:
+        return False
+    return re.search(r'__version__\s*=\s*["\']' + re.escape(version) + r'["\']', result.stdout) is not None
+
+
 def _git_is_ancestor(repo_dir: str, ancestor: str, descendant: str) -> bool:
     result = _run_git(["merge-base", "--is-ancestor", ancestor, descendant], repo_dir, timeout=30)
     if result.returncode == 0:
@@ -3135,7 +3181,7 @@ def _version_tag_ref(repo_dir: str, version: str | None) -> str | None:
     clean_version = str(version).strip().lstrip("v")
     candidates = [f"refs/tags/v{clean_version}", f"refs/tags/{clean_version}"]
     for ref in candidates:
-        if _git_ref_exists(repo_dir, ref):
+        if _git_ref_exists(repo_dir, ref) and _git_tag_contains_version(repo_dir, ref, clean_version):
             return ref
     return None
 
@@ -3146,14 +3192,106 @@ def _working_tree_status(repo_dir: str) -> str:
     return result.stdout.strip()
 
 
+def _tracked_worktree_status(repo_dir: str) -> str:
+    result = _run_git(["status", "--porcelain", "--untracked-files=no"], repo_dir, timeout=30)
+    _require_git_success(result, "Reading tracked Git worktree status")
+    return result.stdout.strip()
+
+
+def _copy_update_backup_item(source: Path, destination: Path) -> None:
+    if not source.exists():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        ignore = shutil.ignore_patterns(
+            "__pycache__",
+            "*.pyc",
+            "update_backups",
+        )
+        shutil.copytree(source, destination, ignore=ignore)
+    else:
+        shutil.copy2(source, destination)
+
+
+def _prune_update_backups(backup_root: Path, retention: int = _UPDATE_BACKUP_RETENTION) -> None:
+    if not backup_root.exists():
+        return
+    backups = sorted(
+        [path for path in backup_root.iterdir() if path.is_dir() and path.name.startswith("pre-update-")],
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    for old_backup in backups[retention:]:
+        try:
+            shutil.rmtree(old_backup)
+        except OSError as e:
+            log.warn(f"Could not prune update backup {old_backup}: {e}")
+
+
+def _create_update_state_backup(repo_dir: str) -> str | None:
+    backup_root = Path(repo_dir) / _UPDATE_BACKUP_ROOT
+    backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    copied = False
+
+    for name in _UPDATE_BACKUP_FILES:
+        source = Path(repo_dir) / name
+        if source.exists():
+            _copy_update_backup_item(source, backup_dir / name)
+            copied = True
+
+    for name in _UPDATE_BACKUP_DIRS:
+        source = Path(repo_dir) / name
+        if source.exists():
+            _copy_update_backup_item(source, backup_dir / name)
+            copied = True
+
+    if not copied:
+        return None
+
+    _prune_update_backups(backup_root)
+    return str(backup_dir)
+
+
+def _safe_json_read(path: Path, default):
+    try:
+        if not path.exists():
+            return default
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+
+def _write_update_log(event: dict) -> None:
+    path = Path(_UPDATE_LOG_FILE)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = _safe_json_read(path, [])
+        if not isinstance(entries, list):
+            entries = []
+        clean_event = {
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            **event,
+        }
+        entries.append(clean_event)
+        entries = entries[-50:]
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+        tmp_path.replace(path)
+    except Exception as e:
+        log.warn(f"Could not write update log: {e}")
+
+
 def _stash_local_changes(repo_dir: str) -> dict | None:
-    """Stash local tracked and untracked changes so updates are not blocked."""
-    if not _working_tree_status(repo_dir):
+    """Stash local tracked changes only so runtime data is not moved into Git stash."""
+    if not _tracked_worktree_status(repo_dir):
         return None
 
     message = f"discord-pals-dashboard-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     result = _run_git(
-        ["stash", "push", "--include-untracked", "-m", message],
+        ["stash", "push", "-m", message],
         repo_dir,
         timeout=120,
     )
@@ -3208,6 +3346,7 @@ def _create_update_backup_branch(repo_dir: str) -> str:
 def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> dict:
     """Fetch and update the checkout while preserving user changes where possible."""
     warnings = []
+    backup_path = _create_update_state_backup(repo_dir)
 
     fetch = _run_git(["fetch", "--all", "--tags", "--prune"], repo_dir, timeout=_UPDATE_GIT_TIMEOUT)
     _require_git_success(fetch, "Fetching updates")
@@ -3268,6 +3407,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> d
         "branch_upstream": branch_upstream,
         "target_version": expected_version,
         "target_ref": upstream,
+        "backup_path": backup_path,
     }
 
 
@@ -3353,11 +3493,37 @@ def api_update():
         bot_dir = os.path.dirname(os.path.abspath(__file__))
         repo_dir = _repo_root(bot_dir)
         expected_version = _check_github_latest_version(force_refresh=True)
+
+        file_version_before = _get_file_version()
+        if (
+            file_version_before != VERSION
+            and _compare_versions(file_version_before, VERSION) > 0
+        ):
+            payload = _update_payload_base(
+                expected_version=expected_version,
+                file_version=file_version_before,
+            )
+            payload.update({
+                'status': 'ok',
+                'message': f'Restart to apply v{file_version_before}.',
+                'updated': False,
+                'restart_required': True,
+                'new_version': file_version_before,
+                'output': 'Update already staged on disk; restart required.',
+            })
+            _write_update_log({
+                "status": "restart_required",
+                "from_version": VERSION,
+                "file_version": file_version_before,
+                "expected_version": expected_version,
+            })
+            return jsonify(payload)
+
         git_result = _perform_git_update(repo_dir, expected_version=expected_version)
         dependency_result = _install_update_dependencies(repo_dir)
 
         new_version = _get_file_version()
-        version_changed = new_version != VERSION
+        version_changed = new_version != VERSION and _compare_versions(new_version, VERSION) > 0
         warnings = list(git_result["warnings"])
         if dependency_result.get("warning"):
             warnings.append(dependency_result["warning"])
@@ -3367,6 +3533,17 @@ def api_update():
             if dependency_result.get("warning"):
                 verification_error["warnings"] = list(verification_error["warnings"]) + [dependency_result["warning"]]
             verification_error["dependency_status"] = dependency_result["status"]
+            _write_update_log({
+                "status": "verification_failed",
+                "from_version": VERSION,
+                "file_version": new_version,
+                "expected_version": expected_version,
+                "target_ref": git_result.get("target_ref"),
+                "before_head": git_result.get("before_head"),
+                "after_head": git_result.get("after_head"),
+                "dependency_status": dependency_result.get("status"),
+                "warnings": verification_error.get("warnings", []),
+            })
             log.error(verification_error["message"])
             return jsonify(verification_error), 409
 
@@ -3386,40 +3563,63 @@ def api_update():
                 if version_changed
                 else f"Update successful!{dependency_result['message']} Restart to apply changes."
             )
+        elif version_changed:
+            message = f"Restart to apply v{new_version}.{dependency_result['message']}"
+        elif expected_version and _compare_versions(expected_version, new_version) == 0:
+            message = f"Already up to date at v{new_version}.{dependency_result['message']}"
         else:
-            message = f"Already up to date.{dependency_result['message']}"
+            message = f"No newer verified update target was applied.{dependency_result['message']}"
 
         if warnings:
             message += " Some local recovery steps need attention."
 
-        return jsonify({
+        _write_update_log({
+            "status": "ok",
+            "from_version": VERSION,
+            "file_version": new_version,
+            "expected_version": expected_version,
+            "target_ref": git_result.get("target_ref"),
+            "updated": git_result["updated"],
+            "before_head": git_result.get("before_head"),
+            "after_head": git_result.get("after_head"),
+            "dependency_status": dependency_result.get("status"),
+            "warnings": warnings,
+        })
+
+        payload = _update_payload_base(
+            expected_version=expected_version,
+            file_version=new_version,
+            git_result=git_result,
+            dependency_result=dependency_result,
+            warnings=warnings,
+        )
+        payload.update({
             'status': 'ok',
             'message': message,
             'output': git_result["output"],
             'updated': git_result["updated"],
-            'running_version': VERSION,
+            'restart_required': version_changed,
             'new_version': new_version if version_changed else None,
-            'warnings': warnings,
-            'upstream': git_result["upstream"],
-            'before_head': git_result["before_head"],
-            'after_head': git_result["after_head"],
-            'dependency_status': dependency_result["status"],
         })
+        return jsonify(payload)
 
     except subprocess.TimeoutExpired:
         log.error("Update command timed out")
+        _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION})
         return jsonify({
             'status': 'error',
             'message': 'Update timed out while fetching, applying, or installing dependencies'
         }), 500
     except FileNotFoundError:
         log.error("Git not found")
+        _write_update_log({"status": "error", "error": "git_not_found", "from_version": VERSION})
         return jsonify({
             'status': 'error',
             'message': 'Git is not installed or not in PATH'
         }), 500
     except Exception as e:
         log.error(f"Update error: {e}")
+        _write_update_log({"status": "error", "error": type(e).__name__, "from_version": VERSION})
         return jsonify({
             'status': 'error',
             'message': str(e)

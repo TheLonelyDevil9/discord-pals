@@ -666,7 +666,10 @@ async function updateBot() {
         const data = await response.json();
 
         if (data.status === 'ok') {
-            if (data.updated) {
+            if (data.restart_required && !data.updated) {
+                showNewVersionBadge(data.new_version || data.file_version, true);
+                showToast(data.message || ('Restart to apply v' + (data.new_version || data.file_version)), 'success');
+            } else if (data.updated) {
                 if (data.new_version) {
                     showNewVersionBadge(data.new_version);
                     showToast('Updated to v' + data.new_version + '! Restarting...', 'success');

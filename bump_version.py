@@ -12,6 +12,8 @@ Options:
     --tag         Create a git tag for the new version
     --no-tag      Skip git tag creation (default)
     --commit      Commit version/changelog changes before tagging
+    --allow-non-main-release
+                  Allow tagging from a branch other than main/release/*
     --message "X" Custom message for changelog entry
 
 Examples:
@@ -184,11 +186,50 @@ All notable changes to Discord Pals.
     print(f"Updated CHANGELOG.md")
 
 
-def create_git_tag(version):
+def current_branch():
+    """Return the current branch name or None for detached HEAD."""
+    result = run_git(['rev-parse', '--abbrev-ref', 'HEAD'])
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to inspect current branch: {result.stderr.strip()}")
+    branch = result.stdout.strip()
+    return branch if branch and branch != 'HEAD' else None
+
+
+def ensure_release_branch_allowed(allow_non_main=False):
+    """Reject accidental release tags from feature branches."""
+    if allow_non_main:
+        return
+
+    branch = current_branch()
+    if branch == 'main' or (branch and branch.startswith('release/')):
+        return
+    raise RuntimeError(
+        "Refusing to create release tag from non-release branch "
+        f"{branch or 'detached HEAD'}. Merge to main first or pass --allow-non-main-release."
+    )
+
+
+def ensure_release_commit_published():
+    """Require the release commit to already be contained in origin/main."""
+    result = run_git(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'])
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        raise RuntimeError(
+            "Refusing to tag until HEAD is contained in origin/main. "
+            "Push or merge main first, then create the tag."
+        )
+    raise RuntimeError(f"Failed to verify release commit against origin/main: {result.stderr.strip()}")
+
+
+def create_git_tag(version, allow_non_main=False):
     """Create a git tag for the version."""
     tag_name = f"v{version}"
 
     try:
+        ensure_release_branch_allowed(allow_non_main)
+        ensure_release_commit_published()
+
         # Check if tag already exists
         result = subprocess.run(
             ['git', 'tag', '-l', tag_name],
@@ -277,6 +318,7 @@ def parse_args(args):
     create_tag = False
     commit = False
     message = None
+    allow_non_main_release = False
 
     i = 0
     while i < len(args):
@@ -285,6 +327,8 @@ def parse_args(args):
             create_tag = True
         elif arg == '--commit':
             commit = True
+        elif arg == '--allow-non-main-release':
+            allow_non_main_release = True
         elif arg == '--no-tag':
             create_tag = False
         elif arg == '--message' or arg == '-m':
@@ -297,12 +341,12 @@ def parse_args(args):
             bump_type = arg
         i += 1
 
-    return bump_type, create_tag, commit, message
+    return bump_type, create_tag, commit, message, allow_non_main_release
 
 
 def main(args=None):
     args = sys.argv[1:] if args is None else args
-    bump_type, create_tag, commit, message = parse_args(args)
+    bump_type, create_tag, commit, message, allow_non_main_release = parse_args(args)
 
     try:
         current = read_version()
@@ -321,7 +365,7 @@ def main(args=None):
 
         # Create git tag if requested, after the release commit exists.
         if create_tag:
-            create_git_tag(new_version)
+            create_git_tag(new_version, allow_non_main=allow_non_main_release)
 
         return 0
     except Exception as e:
