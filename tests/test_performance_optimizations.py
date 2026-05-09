@@ -260,6 +260,47 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(duplicate)
         self.assertTrue(allowed)
 
+    async def test_route_request_id_and_channel_id_are_stored_and_logged(self):
+        queue = request_queue_module.RequestQueue()
+        channel_id = 203
+        queue.processing[channel_id] = True
+
+        with patch.object(request_queue_module.log, "diagnostic") as diagnostic_mock:
+            added = await queue.add_request(
+                channel_id=channel_id,
+                message=types.SimpleNamespace(),
+                content="Hello there",
+                guild=None,
+                attachments=[],
+                user_name="Alice",
+                is_dm=False,
+                user_id=123,
+                route_req_id="route123",
+            )
+            duplicate = await queue.add_request(
+                channel_id=channel_id,
+                message=types.SimpleNamespace(),
+                content="Hello there",
+                guild=None,
+                attachments=[],
+                user_name="Alice",
+                is_dm=False,
+                user_id=123,
+                route_req_id="route456",
+            )
+
+        self.assertTrue(added)
+        self.assertFalse(duplicate)
+        queued_request = queue.queues[channel_id][0]
+        self.assertEqual(queued_request["req_id"], "route123")
+        self.assertEqual(queued_request["channel_id"], channel_id)
+        queued_log = diagnostic_mock.call_args_list[0].kwargs
+        rejected_log = diagnostic_mock.call_args_list[1].kwargs
+        self.assertEqual(queued_log["req_id"], "route123")
+        self.assertEqual(queued_log["channel_id"], channel_id)
+        self.assertEqual(rejected_log["req_id"], "route456")
+        self.assertEqual(rejected_log["channel_id"], channel_id)
+
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
     def setUp(self):
@@ -290,6 +331,11 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             "seq": logger_module._log_sequence,
             "reset": logger_module._log_reset_marker,
             "level": logger_module.LOG_LEVEL,
+            "file_enabled": logger_module.FILE_LOGGING_ENABLED,
+            "log_file": logger_module.LOG_FILE,
+            "log_dir": logger_module.LOG_DIR,
+            "log_file_max_bytes": logger_module.LOG_FILE_MAX_BYTES,
+            "log_file_backups": logger_module.LOG_FILE_BACKUPS,
         }
         self._runtime_originals = {
             "last_context": dict(runtime_config_module._last_context),
@@ -302,6 +348,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         dashboard_module._invalidate_github_version_cache()
         logger_module.clear_logs()
         logger_module.LOG_LEVEL = logger_module.QUIET
+        logger_module.configure_file_logging(enabled=False)
         runtime_config_module._last_context = {}
         runtime_config_module._last_context_revision = 0
         runtime_config_module._last_activity = {}
@@ -325,6 +372,13 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         logger_module._log_sequence = self._logger_state_originals["seq"]
         logger_module._log_reset_marker = self._logger_state_originals["reset"]
         logger_module.LOG_LEVEL = self._logger_state_originals["level"]
+        logger_module.configure_file_logging(
+            enabled=self._logger_state_originals["file_enabled"],
+            log_dir=self._logger_state_originals["log_dir"],
+            max_bytes=self._logger_state_originals["log_file_max_bytes"],
+            backups=self._logger_state_originals["log_file_backups"],
+        )
+        logger_module.LOG_FILE = self._logger_state_originals["log_file"]
 
         runtime_config_module._last_context = self._runtime_originals["last_context"]
         runtime_config_module._last_context_revision = self._runtime_originals["context_revision"]
@@ -353,7 +407,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(second_data["etag"], first_data["etag"])
 
     def test_logs_delta_returns_appended_entries_and_reset_after_clear(self):
-        logger_module.info("First entry")
+        logger_module.info("First entry", component="routing", event="first", req_id="abc123")
         first = self.client.get("/api/logs/delta?after=0").get_json()
 
         logger_module.warn("Second entry")
@@ -364,10 +418,23 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(len(first["entries"]), 1)
         self.assertEqual(first["entries"][0]["message"], "First entry")
+        self.assertEqual(first["entries"][0]["component"], "routing")
+        self.assertEqual(first["entries"][0]["event"], "first")
+        self.assertEqual(first["entries"][0]["req_id"], "abc123")
         self.assertFalse(second["reset"])
         self.assertEqual([entry["message"] for entry in second["entries"]], ["Second entry"])
         self.assertTrue(reset["reset"])
         self.assertEqual(reset["entries"], [])
+
+    def test_logs_delta_filters_structured_fields(self):
+        logger_module.info("Routing entry", component="routing", event="message_received", req_id="route1")
+        logger_module.info("Provider entry", component="provider", event="provider_response", req_id="prov1")
+
+        by_component = self.client.get("/api/logs/delta?after=0&component=provider").get_json()
+        by_req = self.client.get("/api/logs/delta?after=0&req_id=route1").get_json()
+
+        self.assertEqual([entry["message"] for entry in by_component["entries"]], ["Provider entry"])
+        self.assertEqual([entry["message"] for entry in by_req["entries"]], ["Routing entry"])
 
     def test_contexts_delta_uses_revision_counter(self):
         unchanged = self.client.get("/api/contexts/delta?revision=0").get_json()

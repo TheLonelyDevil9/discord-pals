@@ -4,6 +4,26 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.13] - 2026-05-09
+
+### Added
+
+- Added structured diagnostic logging with request IDs, components, events, JSONL persistence, rotation, and local redaction.
+- Added lifecycle diagnostics across routing, queueing, context construction, provider fallback, identity guard decisions, Discord delivery, and history writes.
+- Added dashboard controls for diagnostic terminal output, local file logging, and log file size.
+- Added Logs page filters for request IDs and components, with structured field summaries in the live log view.
+
+### Changed
+
+- Increased the in-memory dashboard log buffer and log API window to retain deeper local diagnostics.
+- Registered Discord and provider secrets for log redaction during startup/config loading.
+- Raised the response burst cap so repaired DM fragments can remain readable as separate short messages.
+
+### Fixed
+
+- Reflowed hallucinated terminal fragments such as `before.\nMarch` and `where.\nHimeko` before Discord delivery.
+- Added regression coverage for diagnostic logging, redaction, queue correlation IDs, dashboard log filters, runtime logging settings, and DM delivery formatting.
+
 ## [v2.2.12] - 2026-05-08
 
 ### Fixed

@@ -1675,7 +1675,15 @@ def logs_page():
 def api_logs():
     """Get recent logs."""
     import logger
-    logs = logger.get_logs(100)
+    logs = logger.get_logs(
+        1000,
+        level=request.args.get('level') or None,
+        bot=request.args.get('bot') or None,
+        req_id=request.args.get('req_id') or None,
+        component=request.args.get('component') or None,
+        event=request.args.get('event') or None,
+        search=request.args.get('search') or None,
+    )
     return jsonify(logs)
 
 
@@ -1689,7 +1697,16 @@ def api_logs_delta():
     except (TypeError, ValueError):
         after = 0
 
-    return jsonify(logger.get_logs_after(after, limit=100))
+    return jsonify(logger.get_logs_after(
+        after,
+        limit=1000,
+        level=request.args.get('level') or None,
+        bot=request.args.get('bot') or None,
+        req_id=request.args.get('req_id') or None,
+        component=request.args.get('component') or None,
+        event=request.args.get('event') or None,
+        search=request.args.get('search') or None,
+    ))
 
 
 @app.route('/api/logs/clear', methods=['POST'])

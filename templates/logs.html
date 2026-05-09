@@ -23,12 +23,27 @@
             </button>
             <button type="button" class="btn btn-ghost btn-sm" onclick="clearLogs()">Clear</button>
             <input type="text" id="log-search" placeholder="Search logs..." oninput="debouncedFilterLogs()" title="Search logs">
+            <input type="text" id="log-req-filter" placeholder="Request ID" oninput="debouncedFilterLogs()" title="Filter by request ID">
             <select id="log-level-filter" onchange="filterLogs()" title="Filter by level">
                 <option value="">All Levels</option>
                 <option value="ok">Success</option>
                 <option value="info">Info</option>
+                <option value="debug">Debug</option>
+                <option value="diagnostic">Diagnostic</option>
                 <option value="warn">Warning</option>
                 <option value="error">Error</option>
+            </select>
+            <select id="log-component-filter" onchange="filterLogs()" title="Filter by component">
+                <option value="">All Components</option>
+                <option value="routing">Routing</option>
+                <option value="queue">Queue</option>
+                <option value="context">Context</option>
+                <option value="provider">Provider</option>
+                <option value="guard">Guard</option>
+                <option value="delivery">Delivery</option>
+                <option value="history">History</option>
+                <option value="request">Request</option>
+                <option value="coordinator">Coordinator</option>
             </select>
             <span class="log-count" id="log-count">0 entries</span>
             <button type="button" class="auto-scroll-indicator active" id="scroll-indicator" onclick="toggleAutoScroll()" aria-pressed="true">
@@ -340,6 +355,17 @@
     flex-shrink: 0;
     min-width: 80px;
     font-weight: 500;
+}
+
+.log-req,
+.log-component {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 0.75rem;
+}
+
+.log-component {
+    color: var(--warning);
 }
 
 .log-message {
@@ -655,15 +681,38 @@ function createLogNode(log) {
     botSpan.className = 'log-bot';
     botSpan.textContent = log.bot ? `[${log.bot}]` : '';
 
+    const reqSpan = document.createElement('span');
+    reqSpan.className = 'log-req';
+    reqSpan.textContent = log.req_id ? `[req:${log.req_id}]` : '';
+
+    const componentSpan = document.createElement('span');
+    componentSpan.className = 'log-component';
+    componentSpan.textContent = log.component ? `[${log.component}]` : '';
+
     const messageSpan = document.createElement('span');
     messageSpan.className = 'log-message';
-    messageSpan.textContent = log.message || '';
+    const fieldSummary = summarizeLogFields(log);
+    messageSpan.textContent = (log.message || '') + (fieldSummary ? ' ' + fieldSummary : '');
 
     entry.appendChild(timeSpan);
     entry.appendChild(iconSpan);
     entry.appendChild(botSpan);
+    entry.appendChild(reqSpan);
+    entry.appendChild(componentSpan);
     entry.appendChild(messageSpan);
     return entry;
+}
+
+function summarizeLogFields(log) {
+    const fields = log.fields && typeof log.fields === 'object' ? log.fields : {};
+    const pairs = [];
+    for (const [key, value] of Object.entries(fields)) {
+        if (value === null || value === undefined || value === '') continue;
+        if (['content', 'system_prompt', 'messages'].includes(key)) continue;
+        pairs.push(`${key}=${Array.isArray(value) ? value.join(',') : value}`);
+        if (pairs.length >= 8) break;
+    }
+    return pairs.length ? `(${pairs.join(' ')})` : '';
 }
 
 function createContextCard(botName, ctx) {
@@ -725,22 +774,32 @@ function renderContextEmptyState() {
 }
 
 function isLogFilterActive() {
-    return Boolean(document.getElementById('log-search').value.trim() || document.getElementById('log-level-filter').value);
+    return Boolean(
+        document.getElementById('log-search').value.trim() ||
+        document.getElementById('log-req-filter').value.trim() ||
+        document.getElementById('log-level-filter').value ||
+        document.getElementById('log-component-filter').value
+    );
 }
 
 function trimLogsBuffer() {
-    if (allLogs.length > 200) {
-        allLogs = allLogs.slice(-200);
+    if (allLogs.length > 1000) {
+        allLogs = allLogs.slice(-1000);
     }
 }
 
 function filterLogs() {
     const search = document.getElementById('log-search').value.toLowerCase();
+    const reqId = document.getElementById('log-req-filter').value.toLowerCase();
     const level = document.getElementById('log-level-filter').value;
+    const component = document.getElementById('log-component-filter').value;
     const filtered = allLogs.filter(log => {
-        const matchesSearch = !search || log.message.toLowerCase().includes(search) || (log.bot && log.bot.toLowerCase().includes(search));
+        const fieldText = JSON.stringify(log.fields || {}).toLowerCase();
+        const matchesSearch = !search || log.message.toLowerCase().includes(search) || fieldText.includes(search) || (log.bot && log.bot.toLowerCase().includes(search));
+        const matchesReq = !reqId || (log.req_id && log.req_id.toLowerCase().includes(reqId));
         const matchesLevel = !level || log.level === level;
-        return matchesSearch && matchesLevel;
+        const matchesComponent = !component || log.component === component;
+        return matchesSearch && matchesReq && matchesLevel && matchesComponent;
     });
     renderFilteredLogs(filtered);
 }
@@ -850,7 +909,8 @@ function applyLogDelta(payload) {
 
 async function fetchLogs() {
     try {
-        const response = await fetch('/api/logs/delta?after=' + encodeURIComponent(lastLogCursor));
+        const params = new URLSearchParams({ after: String(lastLogCursor) });
+        const response = await fetch('/api/logs/delta?' + params.toString());
         const payload = await response.json();
         applyLogDelta(payload);
     } catch (err) {

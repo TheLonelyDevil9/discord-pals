@@ -9,6 +9,7 @@ from config import PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 import asyncio
 import copy
+import time
 import logger as log
 
 try:
@@ -447,11 +448,14 @@ class AIProviderManager:
         extra_body: Optional[dict] = None,
         include_body: str = "",
         exclude_body: str = "",
-        include_headers: str = ""
+        include_headers: str = "",
+        req_id: str | None = None,
+        cycle: int = 0,
     ) -> str | None:
         """Try to generate with retries on rate limit."""
-        
+
         for attempt in range(MAX_RETRIES):
+            attempt_started = time.perf_counter()
             try:
                 # Build request kwargs
                 request_kwargs = {
@@ -464,12 +468,12 @@ class AIProviderManager:
                 # Apply SillyTavern-style YAML parameters (preferred)
                 if include_body:
                     merge_yaml_to_dict(request_kwargs, include_body)
-                    log.debug(f"[{tier}] Applied include_body YAML")
+                    log.debug(f"[{tier}] Applied include_body YAML", component="provider", event="provider_include_body", req_id=req_id, tier=tier)
 
                 # Remove keys specified in exclude_body
                 if exclude_body:
                     exclude_keys_by_yaml(request_kwargs, exclude_body)
-                    log.debug(f"[{tier}] Applied exclude_body YAML")
+                    log.debug(f"[{tier}] Applied exclude_body YAML", component="provider", event="provider_exclude_body", req_id=req_id, tier=tier)
 
                 # Move SDK-passthrough keys from request_kwargs to extra_body
                 # These are provider-specific params that OpenAI SDK doesn't recognize
@@ -488,12 +492,18 @@ class AIProviderManager:
                         extra_body = {**extra_body, **passthrough_params}
                     else:
                         extra_body = passthrough_params
-                    log.debug(f"[{tier}] Moved to extra_body: {list(passthrough_params.keys())}")
+                    log.debug(f"[{tier}] Moved to extra_body: {list(passthrough_params.keys())}", component="provider", event="provider_extra_body", req_id=req_id, tier=tier)
 
                 # Pass extra_body as SDK parameter (bypasses validation)
                 if extra_body:
                     request_kwargs["extra_body"] = extra_body
-                    log.debug(f"[{tier}] Using extra_body: {extra_body}")
+                    log.debug(
+                        f"[{tier}] Using extra_body keys: {list(extra_body.keys())}",
+                        component="provider",
+                        event="provider_extra_body",
+                        req_id=req_id,
+                        tier=tier,
+                    )
 
                 # Parse and pass custom headers (YAML string -> dict)
                 if include_headers and include_headers.strip():
@@ -502,7 +512,7 @@ class AIProviderManager:
                             parsed = yaml.safe_load(include_headers)
                             if isinstance(parsed, dict):
                                 request_kwargs["extra_headers"] = {str(k): str(v) for k, v in parsed.items()}
-                                log.debug(f"[{tier}] Using extra_headers: {list(request_kwargs['extra_headers'].keys())}")
+                                log.debug(f"[{tier}] Using extra_headers: {list(request_kwargs['extra_headers'].keys())}", component="provider", event="provider_headers", req_id=req_id, tier=tier)
                             elif isinstance(parsed, list):
                                 headers = {}
                                 for item in parsed:
@@ -510,18 +520,36 @@ class AIProviderManager:
                                         headers.update({str(k): str(v) for k, v in item.items()})
                                 if headers:
                                     request_kwargs["extra_headers"] = headers
-                                    log.debug(f"[{tier}] Using extra_headers: {list(headers.keys())}")
+                                    log.debug(f"[{tier}] Using extra_headers: {list(headers.keys())}", component="provider", event="provider_headers", req_id=req_id, tier=tier)
                         except Exception as e:
-                            log.warn(f"[{tier}] Failed to parse include_headers YAML: {e}")
+                            log.warn(f"[{tier}] Failed to parse include_headers YAML: {e}", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
                     else:
-                        log.warn(f"[{tier}] include_headers configured but PyYAML not installed")
+                        log.warn(f"[{tier}] include_headers configured but PyYAML not installed", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
                 
-                log.debug(f"[{tier}] Requesting {model} with {len(messages)} messages, max_tokens={max_tokens}")
-                
+                log.diagnostic(
+                    f"[{tier}] Provider request",
+                    component="provider",
+                    event="provider_request",
+                    req_id=req_id,
+                    tier=tier,
+                    model=model,
+                    cycle=cycle,
+                    attempt=attempt + 1,
+                    message_count=len(messages),
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    has_extra_body=bool(extra_body),
+                    include_body=bool(include_body),
+                    exclude_body=bool(exclude_body),
+                    include_headers=bool(include_headers),
+                    timeout=timeout or API_TIMEOUT,
+                )
+
                 response = await asyncio.wait_for(
                     client.chat.completions.create(**request_kwargs),
                     timeout=timeout or API_TIMEOUT
                 )
+                latency_ms = int((time.perf_counter() - attempt_started) * 1000)
                 
                 # Check for valid response
                 if response and response.choices and len(response.choices) > 0:
@@ -530,19 +558,61 @@ class AIProviderManager:
                     
                     # Strip reasoning_content if present (GLM thinking mode leaks)
                     if hasattr(choice.message, 'reasoning_content') and choice.message.reasoning_content:
-                        log.debug(f"[{tier}] Stripped {len(choice.message.reasoning_content)} chars of reasoning_content")
+                        log.debug(
+                            f"[{tier}] Stripped {len(choice.message.reasoning_content)} chars of reasoning_content",
+                            component="provider",
+                            event="reasoning_content_stripped",
+                            req_id=req_id,
+                            tier=tier,
+                            stripped_len=len(choice.message.reasoning_content),
+                        )
                     
                     if not content or content.strip() == "":
                         # Detailed logging for empty responses
-                        log.warn(f"[{tier}] Empty content from {model}")
-                        log.warn(f"[{tier}] finish_reason={choice.finish_reason}")
+                        log.warn(
+                            f"[{tier}] Empty content from {model}",
+                            component="provider",
+                            event="provider_empty",
+                            req_id=req_id,
+                            tier=tier,
+                            model=model,
+                            finish_reason=choice.finish_reason,
+                            latency_ms=latency_ms,
+                        )
                         if hasattr(choice.message, 'refusal') and choice.message.refusal:
-                            log.warn(f"[{tier}] Refusal: {choice.message.refusal}")
+                            log.warn(
+                                f"[{tier}] Refusal: {choice.message.refusal}",
+                                component="provider",
+                                event="provider_refusal",
+                                req_id=req_id,
+                                tier=tier,
+                            )
                         if extra_body:
-                            log.warn(f"[{tier}] extra_body was: {extra_body}")
+                            log.warn(
+                                f"[{tier}] extra_body keys were: {list(extra_body.keys())}",
+                                component="provider",
+                                event="provider_extra_body",
+                                req_id=req_id,
+                                tier=tier,
+                            )
                         return None  # Return None to trigger fallback to next provider
-                    
-                    log.ok(f"[{tier}] Got {len(content)} chars from {model}")
+
+                    usage = getattr(response, "usage", None)
+                    log.ok(
+                        f"[{tier}] Got {len(content)} chars from {model}",
+                        component="provider",
+                        event="provider_response",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        content_len=len(content),
+                        latency_ms=latency_ms,
+                        finish_reason=getattr(choice, "finish_reason", None),
+                        prompt_tokens=getattr(usage, "prompt_tokens", None),
+                        completion_tokens=getattr(usage, "completion_tokens", None),
+                        total_tokens=getattr(usage, "total_tokens", None),
+                        has_reasoning=bool(getattr(choice.message, "reasoning_content", None)),
+                    )
 
                     # Raw generation logging (when enabled)
                     import runtime_config
@@ -550,34 +620,65 @@ class AIProviderManager:
                         # Log in chunks to avoid overwhelming logs
                         preview_len = 1000
                         if len(content) <= preview_len:
-                            log.info(f"[RAW-GEN] {content}")
+                            log.info(f"[RAW-GEN] {log.redact(content)}", component="provider", event="raw_generation", req_id=req_id)
                         else:
-                            log.info(f"[RAW-GEN] {content[:preview_len]}... ({len(content)} chars total)")
+                            log.info(
+                                f"[RAW-GEN] {log.redact(content[:preview_len])}... ({len(content)} chars total)",
+                                component="provider",
+                                event="raw_generation",
+                                req_id=req_id,
+                            )
 
                     # Strip any reasoning/thinking content that leaked into output
                     content = remove_thinking_tags(content)
 
                     return content
                 else:
-                    log.warn(f"[{tier}] No choices in response from {model}")
+                    log.warn(
+                        f"[{tier}] No choices in response from {model}",
+                        component="provider",
+                        event="provider_no_choices",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        latency_ms=latency_ms,
+                    )
                     if response:
-                        log.warn(f"[{tier}] Response: {str(response)[:200]}")
+                        log.warn(f"[{tier}] Response: {str(response)[:200]}", component="provider", event="provider_response_preview", req_id=req_id, tier=tier)
                 return None
                 
             except RateLimitError as e:
                 if attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAYS[attempt]
-                    log.warn(f"[{tier}] Rate limited, retrying in {delay}s...")
+                    log.warn(
+                        f"[{tier}] Rate limited, retrying in {delay}s...",
+                        component="provider",
+                        event="provider_retry",
+                        req_id=req_id,
+                        tier=tier,
+                        attempt=attempt + 1,
+                        delay_s=delay,
+                        reason="rate_limit",
+                    )
                     await asyncio.sleep(delay)
                 else:
-                    log.error(f"[{tier}] Rate limited, max retries exceeded")
+                    log.error(f"[{tier}] Rate limited, max retries exceeded", component="provider", event="provider_rate_limited", req_id=req_id, tier=tier)
                     raise
             except asyncio.TimeoutError:
                 raise
             except APIError as e:
                 if e.status_code == 429 and attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAYS[attempt]
-                    log.warn(f"[{tier}] Rate limited (429), retrying in {delay}s...")
+                    log.warn(
+                        f"[{tier}] Rate limited (429), retrying in {delay}s...",
+                        component="provider",
+                        event="provider_retry",
+                        req_id=req_id,
+                        tier=tier,
+                        attempt=attempt + 1,
+                        delay_s=delay,
+                        reason="api_429",
+                    )
                     await asyncio.sleep(delay)
                 else:
                     raise
@@ -591,7 +692,8 @@ class AIProviderManager:
         temperature: float = None,
         max_tokens: int = None,
         use_single_user: bool = True,  # SillyTavern-style by default
-        preferred_tier: str = ""  # Per-character provider preference
+        preferred_tier: str = "",  # Per-character provider preference
+        req_id: str | None = None,
     ) -> str:
         """Generate response with automatic fallback and retry (3 full cycles).
 
@@ -637,8 +739,19 @@ class AIProviderManager:
 
         # Build tier order dynamically from all configured providers
         tier_order = self._build_tier_order(preferred_tier)
+        req_id = req_id or log.new_request_id()
         if preferred_tier and tier_order and tier_order[0] == preferred_tier:
-            log.info(f"Using preferred provider tier: {preferred_tier}")
+            log.info(f"Using preferred provider tier: {preferred_tier}", component="provider", event="provider_preferred", req_id=req_id)
+        log.diagnostic(
+            "Provider tier order built",
+            component="provider",
+            event="provider_tier_order",
+            req_id=req_id,
+            tier_order=tier_order,
+            preferred_tier=preferred_tier,
+            has_images=has_images,
+            use_single_user=use_single_user,
+        )
 
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
@@ -668,7 +781,7 @@ class AIProviderManager:
                 # Use text-only messages for non-vision providers
                 messages_to_send = full_messages
                 if has_images and not supports_vision:
-                    log.info(f"[{tier}] Provider doesn't support vision, using text-only")
+                    log.info(f"[{tier}] Provider doesn't support vision, using text-only", component="provider", event="vision_text_only", req_id=req_id, tier=tier, model=model)
                     messages_to_send = text_only_messages
 
                 # Use per-provider settings, with fallback to function args or defaults
@@ -687,7 +800,9 @@ class AIProviderManager:
                         extra_body=extra_body if extra_body else None,
                         include_body=include_body,
                         exclude_body=exclude_body,
-                        include_headers=include_headers
+                        include_headers=include_headers,
+                        req_id=req_id,
+                        cycle=cycle + 1,
                     )
                     
                     if result:
@@ -699,14 +814,14 @@ class AIProviderManager:
                     
                 except asyncio.TimeoutError:
                     self.status[tier] = "timeout"
-                    log.error(f"[{tier}] Timeout after {effective_timeout}s")
+                    log.error(f"[{tier}] Timeout after {effective_timeout}s", component="provider", event="provider_timeout", req_id=req_id, tier=tier, model=model, timeout=effective_timeout)
                     continue
                 except RateLimitError:
                     self.status[tier] = "rate limited"
                     continue
                 except APIError as e:
                     if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
-                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only")
+                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
                             result = await self._try_generate(
@@ -715,7 +830,9 @@ class AIProviderManager:
                                 extra_body=extra_body if extra_body else None,
                                 include_body=include_body,
                                 exclude_body=exclude_body,
-                                include_headers=include_headers
+                                include_headers=include_headers,
+                                req_id=req_id,
+                                cycle=cycle + 1,
                             )
                             if result:
                                 self.status[tier] = "ok"
@@ -724,15 +841,15 @@ class AIProviderManager:
                             continue
                         except Exception as fallback_error:
                             self.status[tier] = "error"
-                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}")
+                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model)
                             continue
 
                     self.status[tier] = "error"
-                    log.error(f"[{tier}] {str(e)[:100]}")
+                    log.error(f"[{tier}] {str(e)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model, error_type=type(e).__name__)
                     continue
                 except Exception as e:
                     if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
-                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only")
+                        log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
                             result = await self._try_generate(
@@ -741,7 +858,9 @@ class AIProviderManager:
                                 extra_body=extra_body if extra_body else None,
                                 include_body=include_body,
                                 exclude_body=exclude_body,
-                                include_headers=include_headers
+                                include_headers=include_headers,
+                                req_id=req_id,
+                                cycle=cycle + 1,
                             )
                             if result:
                                 self.status[tier] = "ok"
@@ -750,11 +869,11 @@ class AIProviderManager:
                             continue
                         except Exception as fallback_error:
                             self.status[tier] = "error"
-                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}")
+                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model)
                             continue
 
                     self.status[tier] = "error"
-                    log.error(f"[{tier}] {str(e)[:100]}")
+                    log.error(f"[{tier}] {str(e)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model, error_type=type(e).__name__)
                     continue
             
             # Wait before next cycle
@@ -762,7 +881,7 @@ class AIProviderManager:
                 await asyncio.sleep(2)
         
         # Silent fail - no public error message
-        log.error("All providers failed after 3 cycles")
+        log.error("All providers failed after 3 cycles", component="provider", event="provider_all_failed", req_id=req_id)
         return None
     
     def get_status(self) -> str:

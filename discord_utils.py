@@ -788,6 +788,18 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         _recent_message_hashes[channel_id].popitem(last=False)
 
     conversation_history[channel_id].append(msg)
+    log.diagnostic(
+        "History entry added",
+        component="history",
+        event="history_add",
+        channel_id=channel_id,
+        user_id=user_id,
+        message_id=message_id,
+        role=role,
+        author=author_name,
+        is_bot=is_bot,
+        content_len=len(content or ""),
+    )
 
     if len(conversation_history[channel_id]) > MAX_HISTORY_MESSAGES:
         conversation_history[channel_id] = conversation_history[channel_id][-MAX_HISTORY_MESSAGES:]

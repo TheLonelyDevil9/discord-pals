@@ -162,6 +162,7 @@ _INCOMPLETE_LINE_ENDERS = frozenset({
     "being",
     "but",
     "by",
+    "before",
     "called",
     "for",
     "from",
@@ -183,6 +184,7 @@ _INCOMPLETE_LINE_ENDERS = frozenset({
     "to",
     "was",
     "were",
+    "where",
     "with",
     "without",
     "you",
@@ -196,6 +198,11 @@ _OBJECT_SEEKING_LINE_ENDERS = frozenset({
     "played",
     "playing",
     "plays",
+})
+
+_TERMINAL_REFLOW_LINE_ENDERS = frozenset({
+    "before",
+    "where",
 })
 
 
@@ -393,7 +400,10 @@ def _should_reflow_single_newline(previous_line: str, next_line: str) -> bool:
     if previous_line.rstrip()[-1:] == ",":
         return True
     if previous_line.rstrip()[-1:] in ".!?\u2026":
-        return _tail_title_fragment_needs_next_line(previous_text, next_line)
+        return (
+            _terminal_fragment_needs_next_line(previous_line, next_line)
+            or _tail_title_fragment_needs_next_line(previous_text, next_line)
+        )
 
     next_word = _first_word(next_line)
     if next_word in {"to", "for", "of", "with"}:
@@ -417,7 +427,10 @@ def _strip_terminal_for_reflow(previous_text: str, next_text: str) -> bool:
     previous_line = _last_nonempty_line(previous_text)
     if not previous_line or previous_line.rstrip()[-1:] not in ".!?\u2026":
         return False
-    return _tail_title_fragment_needs_next_line(previous_text, next_text)
+    return (
+        _terminal_fragment_needs_next_line(previous_line, next_text)
+        or _tail_title_fragment_needs_next_line(previous_text, next_text)
+    )
 
 
 def _last_nonempty_line(text: str) -> str:
@@ -468,6 +481,16 @@ def _tail_title_fragment_needs_next_line(previous_line: str, next_line: str) -> 
         _is_titleish_token(tokens[-1])
         and any(token in _INCOMPLETE_LINE_ENDERS for token in normalized_tokens[:-1])
     )
+
+
+def _terminal_fragment_needs_next_line(previous_line: str, next_line: str) -> bool:
+    next_word = _first_word_token(next_line)
+    if not next_word or not _is_titleish_token(next_word):
+        return False
+
+    previous_word = _last_word_token(previous_line.rstrip(".!?\u2026"))
+    normalized_previous = previous_word.lower().replace("\u2019", "'")
+    return normalized_previous in _TERMINAL_REFLOW_LINE_ENDERS
 
 
 def _word_tokens(text: str) -> list[str]:

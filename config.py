@@ -12,6 +12,7 @@ load_dotenv()
 
 # Discord Bot Token
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+log.register_secret(DISCORD_TOKEN)
 
 
 # AI Settings (defined before load_providers so they can be used as defaults)
@@ -109,6 +110,7 @@ def load_providers() -> tuple[dict, int, dict]:
                 key = p["api_key"]
             elif p.get("key_env"):
                 key = os.getenv(p["key_env"], "")
+            log.register_secret(key)
 
             # Fallback for keyless providers (e.g., local llama.cpp)
             if not key:

@@ -25,6 +25,7 @@ from discord_utils import save_history
 from memory import memory_manager
 from reminders import reminder_manager
 import logger as log
+import runtime_config
 
 
 # --- Bot Loading ---
@@ -33,7 +34,6 @@ def load_bot_configs() -> List[dict]:
     """Load bot configurations from bots.json or fall back to single-bot mode."""
     import json
     import os
-    import runtime_config
     
     if os.path.exists('bots.json'):
         try:
@@ -49,6 +49,7 @@ def load_bot_configs() -> List[dict]:
             if not token:
                 log.warn(f"Token env var '{bot_cfg['token_env']}' not set, skipping {bot_cfg['name']}")
                 continue
+            log.register_secret(token)
             bots.append({
                 "name": bot_cfg["name"],
                 "token": token,
@@ -126,6 +127,8 @@ async def run_bots():
 if __name__ == "__main__":
     # Run startup validation first
     from startup import validate_startup
+
+    runtime_config.apply_logging_config()
     
     if not validate_startup(interactive=True):
         log.error("Startup validation failed. Please fix the issues above.")

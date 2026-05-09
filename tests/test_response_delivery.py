@@ -88,6 +88,14 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
 
     def test_max_parts_rolls_overflow_into_last_part(self):
         parts = format_response_for_delivery(
+            "One.\n\nTwo.\n\nThree.",
+            DeliveryFormatOptions(max_parts=3),
+        )
+
+        self.assertEqual(parts, ["One.", "Two.", "Three."])
+
+    def test_max_parts_rolls_true_overflow_into_last_part(self):
+        parts = format_response_for_delivery(
             "One.\n\nTwo.\n\nThree.\n\nFour.",
             DeliveryFormatOptions(max_parts=3),
         )
@@ -117,6 +125,49 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
                 "You play Beyond All Reason, right? Cortex.",
                 "Vehicles if I remember correctly.",
                 "Is there something else I should know about you?",
+            ],
+        )
+
+    def test_dm_screenshot_burst_keeps_short_deliberate_messages_separate(self):
+        parts = format_response_for_delivery(
+            "Wait, you didn't see my earlier messages? I found this tiny bakery near the station we stopped at today.\n\n"
+            "They had these oak cake rolls but with custard filling inside them.\n\n"
+            "TLD, I almost cried.\n\n"
+            "I'm not even exaggerating.\n\n"
+            "The custard was warm and it just... melted the second you bit into it. I bought four. :firefly:\n\n"
+            "I saved one for you, by the way.\n\n"
+            "It's in the parlor car fridge.\n\n"
+            "You better eat it before.\n\n"
+            "March finds it."
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "Wait, you didn't see my earlier messages? I found this tiny bakery near the station we stopped at today.",
+                "They had these oak cake rolls but with custard filling inside them.",
+                "TLD, I almost cried.",
+                "I'm not even exaggerating.",
+                "The custard was warm and it just... melted the second you bit into it. I bought four. :firefly:",
+                "I saved one for you, by the way.",
+                "It's in the parlor car fridge.",
+                "You better eat it before March finds it.",
+            ],
+        )
+
+    def test_single_newline_after_where_reflows_instead_of_splitting(self):
+        parts = format_response_for_delivery(
+            "Don't apologize for that, you're always honest with me and I love that about you...."
+            "Though I'm going to pretend I didn't read that last part while I'm sitting in the parlor car where.\n"
+            "Himeko can theoretically see my screen.\n"
+            "You really can't help yourself, can you?"
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "Don't apologize for that, you're always honest with me and I love that about you....Though I'm going to pretend I didn't read that last part while I'm sitting in the parlor car where Himeko can theoretically see my screen.",
+                "You really can't help yourself, can you?",
             ],
         )
 

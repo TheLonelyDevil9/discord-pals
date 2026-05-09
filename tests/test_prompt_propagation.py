@@ -511,6 +511,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "identity_guard_enabled": "false",
                 "identity_guard_policy": "drop",
                 "bot_reference_context_mode": "legacy",
+                "diagnostic_logging": "true",
+                "file_logging_enabled": "false",
+                "log_file_max_mb": "5000",
             },
             headers=self.csrf_headers()
         )
@@ -525,6 +528,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIs(config["identity_guard_enabled"], False)
         self.assertEqual(config["identity_guard_policy"], "drop")
         self.assertEqual(config["bot_reference_context_mode"], "legacy")
+        self.assertIs(config["diagnostic_logging"], True)
+        self.assertIs(config["file_logging_enabled"], False)
+        self.assertEqual(config["log_file_max_mb"], 100)
         self.assertNotIn("context_message_count", config)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):

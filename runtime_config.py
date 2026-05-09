@@ -38,6 +38,9 @@ DEFAULTS = {
     "name_trigger_chance": 1.0,  # 0.0-1.0, chance to respond when bot's name/nickname is mentioned without @mention
     "custom_nicknames": "",  # Legacy global nickname field; current UI persists per-bot nicknames
     "raw_generation_logging": False,  # Log raw LLM output to live logs
+    "diagnostic_logging": False,  # Print high-volume structured diagnostics to terminal
+    "file_logging_enabled": True,  # Persist local JSONL logs in bot_data/logs
+    "log_file_max_mb": 10,  # Max size of one JSONL log file before rotation
     "bot_timezones": {},  # Per-bot IANA timezone overrides
     "bot_schedules": {},  # Per-bot availability schedules
     # Bot-on-bot conversation fall-off settings
@@ -85,6 +88,9 @@ CONFIG_FIELDS = {
     "name_trigger_chance": ConfigField(float, DEFAULTS["name_trigger_chance"], 0.0, 1.0),
     "custom_nicknames": ConfigField(str, DEFAULTS["custom_nicknames"]),
     "raw_generation_logging": ConfigField(bool, DEFAULTS["raw_generation_logging"]),
+    "diagnostic_logging": ConfigField(bool, DEFAULTS["diagnostic_logging"]),
+    "file_logging_enabled": ConfigField(bool, DEFAULTS["file_logging_enabled"]),
+    "log_file_max_mb": ConfigField(int, DEFAULTS["log_file_max_mb"], 1, 100),
     "bot_timezones": ConfigField(dict, DEFAULTS["bot_timezones"]),
     "bot_schedules": ConfigField(dict, DEFAULTS["bot_schedules"]),
     "bot_falloff_enabled": ConfigField(bool, DEFAULTS["bot_falloff_enabled"]),
@@ -275,6 +281,7 @@ def save_config(config: dict):
     with open(RUNTIME_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2)
     invalidate_cache()
+    _apply_logging_config(config)
 
 
 def get(key: str, default=None):
@@ -295,6 +302,25 @@ def set(key: str, value):
 def get_all() -> dict:
     """Get all config values (returns copy for safety)."""
     return load_config().copy()
+
+
+def _apply_logging_config(config: dict | None = None) -> None:
+    """Apply runtime logging settings without making logger import mandatory at startup."""
+    config = config or load_config()
+    try:
+        import logger
+        logger.configure_file_logging(
+            enabled=config.get("file_logging_enabled", DEFAULTS["file_logging_enabled"]),
+            max_bytes=int(config.get("log_file_max_mb", DEFAULTS["log_file_max_mb"])) * 1024 * 1024,
+        )
+        logger.LOG_LEVEL = logger.DIAGNOSTIC if config.get("diagnostic_logging", False) else logger.NORMAL
+    except Exception:
+        pass
+
+
+def apply_logging_config() -> None:
+    """Apply persisted logging settings to the logger module."""
+    _apply_logging_config(load_config())
 
 
 def get_bot_falloff_config() -> dict:

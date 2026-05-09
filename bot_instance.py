@@ -45,6 +45,7 @@ from scopes import (
     memory_server_id,
 )
 from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
+import diagnostic_events
 
 
 RE_ASSISTANT_RESPONSE_WRAPPER = re.compile(
@@ -1504,6 +1505,7 @@ Return exactly one JSON object with this shape:
         
         @self.client.event
         async def on_message(message: discord.Message):
+            route_req_id = log.new_request_id()
             if message.author == self.client.user:
                 return
             if message.content.startswith('/'):  # Slash commands and // OOC messages
@@ -1514,6 +1516,22 @@ Return exactly one JSON object with this shape:
             discord_channel_id = message.channel.id
             channel_id = self._conversation_key(message, message.author.id)
             guild = message.guild
+            log.diagnostic(
+                "Discord message received",
+                self.name,
+                component="routing",
+                event="message_received",
+                req_id=route_req_id,
+                channel_id=discord_channel_id,
+                guild_id=getattr(guild, "id", None),
+                user_id=getattr(message.author, "id", None),
+                message_id=getattr(message, "id", None),
+                is_dm=is_dm,
+                is_bot=is_other_bot,
+                content_len=len(message.content or ""),
+                attachment_count=len(getattr(message, "attachments", []) or []),
+                mention_count=len(getattr(message, "mentions", []) or []),
+            )
 
             # Track DM activity for follow-up system
             if is_dm and not is_other_bot:
@@ -1542,6 +1560,17 @@ Return exactly one JSON object with this shape:
 
             # Prevent self-loop: Don't respond to messages from bots with same character name
             if is_other_bot and self._should_ignore_self_loop(message):
+                log.diagnostic(
+                    "Message skipped by self-loop guard",
+                    self.name,
+                    component="routing",
+                    event="message_skipped",
+                    req_id=route_req_id,
+                    channel_id=discord_channel_id,
+                    user_id=getattr(message.author, "id", None),
+                    message_id=getattr(message, "id", None),
+                    reason="self_loop",
+                )
                 return
 
             user_name = get_user_display_name(message.author)
@@ -1549,6 +1578,17 @@ Return exactly one JSON object with this shape:
 
             # Bot chain prevention - don't respond to bots if we recently responded to a bot
             if is_other_bot and self._should_skip_bot_message(message, user_name):
+                log.diagnostic(
+                    "Message skipped by bot chain guard",
+                    self.name,
+                    component="routing",
+                    event="message_skipped",
+                    req_id=route_req_id,
+                    channel_id=discord_channel_id,
+                    user_id=getattr(message.author, "id", None),
+                    message_id=getattr(message, "id", None),
+                    reason="bot_chain_guard",
+                )
                 return
 
             # Detect all response triggers
@@ -1561,6 +1601,17 @@ Return exactly one JSON object with this shape:
             if triggers["should_respond"]:
                 reason = [k for k, v in triggers.items() if v and k != "should_respond"]
                 log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
+            log.diagnostic(
+                "Trigger evaluation complete",
+                self.name,
+                component="routing",
+                event="trigger_eval",
+                req_id=route_req_id,
+                channel_id=discord_channel_id,
+                user_id=getattr(message.author, "id", None),
+                message_id=getattr(message, "id", None),
+                **{key: bool(value) for key, value in triggers.items()},
+            )
 
             if triggers["should_respond"]:
                 # Update bot conversation state
@@ -1599,6 +1650,7 @@ Return exactly one JSON object with this shape:
                             pending_reminder_clarification=pending_reminder_clarification,
                             is_autonomous=triggers.get("is_autonomous", False),
                             dm_invite_requested=dm_invite_requested,
+                            route_req_id=route_req_id,
                         )
                 else:
                     # Normal single request
@@ -1622,6 +1674,7 @@ Return exactly one JSON object with this shape:
                         pending_reminder_clarification=pending_reminder_clarification,
                         is_autonomous=triggers.get("is_autonomous", False),
                         dm_invite_requested=dm_invite_requested,
+                        route_req_id=route_req_id,
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -1635,6 +1688,17 @@ Return exactly one JSON object with this shape:
                         mentioned_channels=getattr(message, "channel_mentions", None),
                         mentioned_roles=getattr(message, "role_mentions", None),
                     )
+                log.diagnostic(
+                    "Message did not trigger response",
+                    self.name,
+                    component="routing",
+                    event="message_not_triggered",
+                    req_id=route_req_id,
+                    channel_id=discord_channel_id,
+                    user_id=getattr(message.author, "id", None),
+                    message_id=getattr(message, "id", None),
+                    passive_history=channel_id in autonomous_manager.enabled_channels,
+                )
 
         @self.client.event
         async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -1664,9 +1728,11 @@ Return exactly one JSON object with this shape:
 
     async def _send_organic_response(self, message: discord.Message, response: str) -> list[dict]:
         """Send response organically and return the sent Discord messages with their delivered content."""
+        req_id = getattr(message, "_discord_pals_req_id", None)
         lines = self._split_response_for_delivery(response)
         if not lines:
             return []
+        diagnostic_events.log_delivery_split(self.name, req_id, getattr(message, "channel", None), lines)
 
         sent_records = []
         is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
@@ -1675,6 +1741,7 @@ Return exactly one JSON object with this shape:
             if not line.strip():
                 continue
             try:
+                started = time.perf_counter()
                 if i == 0:
                     if is_synthetic:
                         # Use interaction followup for synthetic messages from /interact
@@ -1686,29 +1753,59 @@ Return exactly one JSON object with this shape:
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                     sent_msg = await message.channel.send(line)
                 sent_records.append({"message": sent_msg, "content": line})
+                diagnostic_events.log_discord_send(
+                    self.name,
+                    req_id,
+                    getattr(message, "channel", None),
+                    sent_msg,
+                    part=i + 1,
+                    total_parts=len(lines),
+                    content_len=len(line),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                )
             except discord.HTTPException as e:
-                log.error(f"Failed to send: {e}", self.name)
+                diagnostic_events.log_discord_send_failed(
+                    self.name,
+                    req_id,
+                    getattr(message, "channel", None),
+                    e,
+                    part=i + 1,
+                    total_parts=len(lines),
+                )
                 break
 
         return sent_records
 
-    async def _send_organic_response_to_channel(self, channel, response: str) -> list[dict]:
+    async def _send_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> list[dict]:
         """Send an organic response directly to a channel without replying to a source message."""
         lines = self._split_response_for_delivery(response)
         if not lines:
             return []
+        diagnostic_events.log_delivery_split(self.name, req_id, channel, lines, direct_channel=True)
 
         sent_records = []
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
             try:
+                started = time.perf_counter()
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                 sent_msg = await channel.send(line)
                 sent_records.append({"message": sent_msg, "content": line})
+                diagnostic_events.log_discord_send(
+                    self.name,
+                    req_id,
+                    channel,
+                    sent_msg,
+                    part=i + 1,
+                    total_parts=len(lines),
+                    content_len=len(line),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    direct_channel=True,
+                )
             except discord.HTTPException as e:
-                log.error(f"Failed to send: {e}", self.name)
+                diagnostic_events.log_discord_send_failed(self.name, req_id, channel, e, part=i + 1, total_parts=len(lines))
                 break
         return sent_records
     
@@ -1851,7 +1948,12 @@ Return exactly one JSON object with this shape:
 
         Returns context dict or None if request should be skipped (duplicate, etc.)
         """
+        req_id = request.get("req_id")
         message = request['message']
+        try:
+            setattr(message, "_discord_pals_req_id", req_id)
+        except Exception:
+            pass
         content = request['content']
         guild = request['guild']
         attachments = request['attachments']
@@ -1919,7 +2021,16 @@ Return exactly one JSON object with this shape:
         message_id = message.id
         processed_key = self._processed_request_key(message, target_user_id)
         if processed_key in self._processed_message_ids:
-            log.debug(f"Skipping - already processed request {processed_key} from {user_name}", self.name)
+            log.debug(
+                f"Skipping - already processed request {processed_key} from {user_name}",
+                self.name,
+                component="context",
+                event="duplicate_request_skipped",
+                req_id=req_id,
+                channel_id=discord_channel_id,
+                user_id=target_user_id,
+                message_id=message_id,
+            )
             return None
 
         # Mark as processed
@@ -1966,7 +2077,16 @@ Return exactly one JSON object with this shape:
             mentioned_context = await mentioned_task
 
         if attachment_content:
-            log.info(f"[DEBUG] Processed attachments: {len(attachment_content)} parts, types: {[p.get('type') for p in attachment_content]}")
+            log.info(
+                f"Processed attachments: {len(attachment_content)} parts",
+                self.name,
+                component="context",
+                event="attachments_processed",
+                req_id=req_id,
+                channel_id=discord_channel_id,
+                attachment_part_count=len(attachment_content),
+                attachment_types=[p.get('type') for p in attachment_content],
+            )
 
         # Get emojis and lore
         emojis = get_guild_emojis(guild) if guild else ""
@@ -2179,13 +2299,64 @@ Return exactly one JSON object with this shape:
                 break
 
         if attachment_content and current_message_index is not None:
-            log.info(f"[DEBUG] Attaching multimodal content to current message")
+            log.info(
+                "Attaching multimodal content to current message",
+                self.name,
+                component="context",
+                event="multimodal_attached",
+                req_id=req_id,
+                channel_id=discord_channel_id,
+                message_index=current_message_index,
+            )
             messages_for_api[current_message_index] = {
                 **messages_for_api[current_message_index],
                 "content": attachment_content
             }
         elif attachment_content and current_message_index is None:
-            log.warn(f"[DEBUG] Have attachment_content but no current message was found!")
+            log.warn(
+                "Have attachment_content but no current message was found",
+                self.name,
+                component="context",
+                event="multimodal_attach_failed",
+                req_id=req_id,
+                channel_id=discord_channel_id,
+            )
+
+        system_count = sum(1 for item in messages_for_api if item.get("role") == "system")
+        user_count = sum(1 for item in messages_for_api if item.get("role") == "user")
+        assistant_count = sum(1 for item in messages_for_api if item.get("role") == "assistant")
+        log.diagnostic(
+            "Request context built",
+            self.name,
+            component="context",
+            event="context_built",
+            req_id=req_id,
+            channel_id=discord_channel_id,
+            guild_id=guild_id,
+            user_id=target_user_id,
+            history_id=str(channel_id),
+            message_id=message_id,
+            total_history=len(get_history(channel_id)),
+            history_msgs=len(history_msgs),
+            immediate_msgs=len(immediate),
+            messages_for_api=len(messages_for_api),
+            system_messages=system_count,
+            user_messages=user_count,
+            assistant_messages=assistant_count,
+            system_prompt_len=len(system_prompt or ""),
+            chatroom_context_len=len(chatroom_context or ""),
+            memories_len=len(memories or ""),
+            lore_len=len(lore or ""),
+            active_users_count=len(active_users or []),
+            mentionable_users_count=len(mentionable_users or []),
+            mentionable_bots_count=len(mentionable_bots or []),
+            user_only_context=user_only_context,
+            strict_human_only=strict_human_only,
+            from_interact_command=from_interact_command,
+            split_target_id=getattr(split_target, "id", None),
+            has_attachments=bool(attachment_content),
+            bot_event_context=bool(bot_event_context),
+        )
 
         return {
             "system_prompt": system_prompt,
@@ -2205,7 +2376,8 @@ Return exactly one JSON object with this shape:
             "mention_resolution_users": mention_resolution_users,
             "mentionable_bots": mentionable_bots,
             "timezone_context": timezone_context,
-            "prompt_now": prompt_now
+            "prompt_now": prompt_now,
+            "req_id": req_id,
         }
 
     async def _generate_ai_response(self, context: dict, message) -> str | None:
@@ -2217,6 +2389,7 @@ Return exactly one JSON object with this shape:
         messages_for_api = context["messages_for_api"]
         chatroom_context = context["chatroom_context"]
         other_bot_names = context["other_bot_names"]
+        req_id = context.get("req_id")
         context["identity_guard_blocked"] = False
         context["identity_guard_reason"] = None
 
@@ -2232,6 +2405,15 @@ Return exactly one JSON object with this shape:
 
             token_estimate = len(system_prompt) // 4 + len(chatroom_context) // 4 + sum(_get_content_len(m) for m in messages_for_api) // 4
             runtime_config.store_last_context(self.name, system_prompt, messages_for_api, token_estimate)
+            log.diagnostic(
+                "Stored model context for dashboard",
+                self.name,
+                component="context",
+                event="context_stored",
+                req_id=req_id,
+                message_count=len(messages_for_api),
+                token_estimate=token_estimate,
+            )
 
             # Track response time
             start_time = time.time()
@@ -2247,6 +2429,7 @@ Return exactly one JSON object with this shape:
                 preferred_tier=preferred_tier,
                 other_bot_names=other_bot_names,
                 context=context,
+                req_id=req_id,
             )
 
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -2276,6 +2459,7 @@ Return exactly one JSON object with this shape:
         preferred_tier: str,
         other_bot_names: list[str],
         context: dict,
+        req_id: str | None = None,
     ) -> str | None:
         """Generate, sanitize, and block structurally attributed other-bot turns."""
         max_attempts = 2 if runtime_config.get("identity_guard_policy", "regenerate_then_drop") == "regenerate_then_drop" else 1
@@ -2289,7 +2473,8 @@ Return exactly one JSON object with this shape:
                 temperature=None,
                 max_tokens=None,
                 use_single_user=use_single_user,
-                preferred_tier=preferred_tier
+                preferred_tier=preferred_tier,
+                req_id=req_id,
             )
 
             if not response:
@@ -2306,7 +2491,13 @@ Return exactly one JSON object with this shape:
             log.warn(
                 f"Identity guard blocked generated {violation['pattern']} attribution to "
                 f"{violation['name']}",
-                self.name
+                self.name,
+                component="guard",
+                event="identity_guard_blocked",
+                req_id=req_id,
+                violation_pattern=violation["pattern"],
+                violation_name=violation["name"],
+                attempt=attempt + 1,
             )
             metrics_manager.record_error(bot_name=self.name, error_type='identity_guard_blocked')
             if attempt + 1 >= max_attempts:
@@ -2360,6 +2551,7 @@ Return exactly one JSON object with this shape:
         user_name = context["user_name"]
         content = context["content"]
         split_target = context.get("split_reply_target")
+        req_id = context.get("req_id")
 
         # Process outgoing mentions (@Name -> <@user_id>)
         if runtime_config.get("allow_bot_mentions", True):
@@ -2367,6 +2559,7 @@ Return exactly one JSON object with this shape:
             mentionable_users = context.get("mention_resolution_users") or context.get("mentionable_users")
             mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
             response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
+            diagnostic_events.log_mentions_processed(self.name, req_id, channel_id, mentionable_users, mentionable_bots)
 
         # Prepend mention for split replies
         if split_target:
@@ -2382,27 +2575,27 @@ Return exactly one JSON object with this shape:
 
         # Anti-looping: Check rate limit
         if self._check_rate_limit(channel_id):
-            log.warn("Skipping response due to rate limit", self.name)
+            log.warn("Skipping response due to rate limit", self.name, component="delivery", event="rate_limit_skip", req_id=req_id, channel_id=channel_id)
             metrics_manager.record_rate_limit_hit(bot_name=self.name, limit_type='channel')
             return False
 
         # Anti-looping: k circuit breaker
         if self._check_circuit_breaker(channel_id):
-            log.warn("Skipping response due to circuit breaker", self.name)
+            log.warn("Skipping response due to circuit breaker", self.name, component="delivery", event="circuit_breaker_skip", req_id=req_id, channel_id=channel_id)
             metrics_manager.record_circuit_breaker_trip(bot_name=self.name, channel_id=channel_id)
             self._consecutive_failures[channel_id] = max(0, self._consecutive_failures.get(channel_id, 0) - 1)
             return False
 
         # Handle empty response
         if not response or not response.strip():
-            log.warn("Empty response after processing", self.name)
+            log.warn("Empty response after processing", self.name, component="delivery", event="empty_response_fallback", req_id=req_id, channel_id=channel_id)
             self._record_failure(channel_id)
             fallbacks = ["*tilts head*", "*blinks*", "*pauses thoughtfully*", "...", "*hums softly*"]
             response = random.choice(fallbacks)
         else:
             # Check for duplicate/repetitive responses
             if self._is_duplicate_response(channel_id, response, record=False):
-                log.warn("Skipping duplicate response", self.name)
+                log.warn("Skipping duplicate response", self.name, component="delivery", event="duplicate_response_skip", req_id=req_id, channel_id=channel_id)
                 self._record_failure(channel_id)
                 return False
 
@@ -2412,14 +2605,14 @@ Return exactly one JSON object with this shape:
             target_channel = await self._resolve_user_dm_channel(user_id)
             if target_channel:
                 response = f"Hey, you asked me to DM you from the server. {response}"
-                sent_records = await self._send_organic_response_to_channel(target_channel, response)
+                sent_records = await self._send_organic_response_to_channel(target_channel, response, req_id=req_id)
             else:
-                log.warn(f"Could not open requested DM for user {user_id}", self.name)
+                log.warn(f"Could not open requested DM for user {user_id}", self.name, component="delivery", event="dm_open_failed", req_id=req_id, user_id=user_id)
 
         if sent_records is None:
             sent_records = await self._send_organic_response(message, response)
         if not sent_records:
-            log.warn("Response send failed before any content was delivered", self.name)
+            log.warn("Response send failed before any content was delivered", self.name, component="delivery", event="delivery_failed", req_id=req_id, channel_id=channel_id)
             self._record_failure(channel_id)
             return False
 
@@ -2451,6 +2644,16 @@ Return exactly one JSON object with this shape:
             ]
             if len(multipart_ids) > 1:
                 store_multipart_response(channel_id, multipart_ids, delivered_response)
+        diagnostic_events.log_delivery_complete(
+            self.name,
+            req_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            sent_records=sent_records,
+            delivered_response=delivered_response,
+            reactions=reactions,
+            split_target=split_target,
+        )
 
         # Send reactions
         if reactions:
@@ -2470,36 +2673,52 @@ Return exactly one JSON object with this shape:
         from coordinator import coordinator
 
         # GLOBAL KILLSWITCH: Skip all processing when paused
+        req_id = request.get("req_id")
         if runtime_config.get("global_paused", False):
-            log.debug("Request skipped - global killswitch active", self.name)
+            log.debug("Request skipped - global killswitch active", self.name, component="request", event="request_skipped", req_id=req_id, reason="global_paused")
             return
 
         message = request['message']
         if request.get('is_autonomous') and not runtime_config.is_bot_available(self.name):
-            log.debug("Autonomous request skipped - bot is in an unavailable schedule window", self.name)
+            log.debug("Autonomous request skipped - bot is in an unavailable schedule window", self.name, component="request", event="request_skipped", req_id=req_id, reason="schedule_unavailable")
             return
 
         message_id = message.id
+        log.diagnostic(
+            "Request processing started",
+            self.name,
+            component="request",
+            event="request_started",
+            req_id=req_id,
+            channel_id=request.get("channel_id"),
+            user_id=request.get("user_id"),
+            message_id=message_id,
+            is_dm=request.get("is_dm"),
+            is_autonomous=request.get("is_autonomous"),
+        )
 
         if not self.character:
             await message.channel.send("❌ No character loaded!", delete_after=ERROR_DELETE_AFTER)
+            log.warn("Request skipped - no character loaded", self.name, component="request", event="request_skipped", req_id=req_id, reason="no_character")
             return
 
         try:
             # Build context (handles duplicate detection, history, memories)
             context = await self._build_request_context(request)
             if context is None:
+                log.diagnostic("Request skipped during context build", self.name, component="request", event="request_skipped", req_id=req_id, reason="context_none")
                 return  # Duplicate or should skip
 
             # Acquire global coordinator slot (limits concurrent AI requests across all bots)
             await coordinator.acquire_slot(self.name, message_id)
+            log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
 
             try:
                 # Generate AI response (handles provider call, sanitization)
                 response = await self._generate_ai_response(context, message)
                 if response is None:
                     if context.get("identity_guard_blocked"):
-                        log.warn("Identity guard dropped response after retry", self.name)
+                        log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
                         return
                     await message.channel.send(
                         "Something went wrong - all providers failed.",
@@ -2510,7 +2729,7 @@ Return exactly one JSON object with this shape:
                 # Get stagger delay for multi-bot responses (prevents simultaneous sends)
                 stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
                 if stagger_delay > 0:
-                    log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name)
+                    log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name, component="coordinator", event="stagger_delay", req_id=req_id, delay_s=stagger_delay)
                     await asyncio.sleep(stagger_delay)
 
                 # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
@@ -2518,15 +2737,16 @@ Return exactly one JSON object with this shape:
             finally:
                 # Always release the slot, even on error
                 coordinator.release_slot(self.name, message_id)
+                log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
 
         except asyncio.TimeoutError:
-            log.warn("Request timed out", self.name)
+            log.warn("Request timed out", self.name, component="request", event="request_timeout", req_id=req_id)
             await self._send_user_error(message.channel, "timeout")
         except discord.HTTPException as e:
-            log.error(f"Discord API error: {e}", self.name)
+            log.error(f"Discord API error: {e}", self.name, component="request", event="discord_api_error", req_id=req_id)
             await self._send_user_error(message.channel, "provider_error")
         except Exception as e:
-            log.error(f"Error processing ({type(e).__name__}): {e}", self.name)
+            log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
             await self._send_user_error(message.channel, "default")
 
     async def _send_user_error(self, channel, error_type: str):

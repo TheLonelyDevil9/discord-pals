@@ -862,6 +862,28 @@
                         </label>
                         <p class="form-hint">Shows raw provider text in Logs. Leave off unless diagnosing response cleanup.</p>
                     </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="diagnostic_logging" {% if config.diagnostic_logging %}checked{% endif %} onchange="toggleDiagnosticLogging(this.checked)">
+                            <span>Print Diagnostic Logs</span>
+                        </label>
+                        <p class="form-hint">Shows high-volume request traces in the terminal. Dashboard and local log files keep them either way.</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="file_logging_enabled" {% if config.file_logging_enabled is not defined or config.file_logging_enabled %}checked{% endif %} onchange="toggleFileLogging(this.checked)">
+                            <span>Persist Local JSONL Logs</span>
+                        </label>
+                        <p class="form-hint">Writes structured diagnostic logs to bot_data/logs for local troubleshooting.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="log_file_max_mb">Log File Size</label>
+                        <div class="slider-row">
+                            <input type="range" id="log_file_max_mb" min="1" max="100" step="1" value="{{ config.log_file_max_mb or 10 }}" oninput="document.getElementById('log_file_max_mb_val').textContent=this.value + ' MB'">
+                            <span class="slider-val" id="log_file_max_mb_val">{{ config.log_file_max_mb or 10 }} MB</span>
+                        </div>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveLoggingSettings()">Save Log Size</button>
+                    </div>
                 </div>
             </div>
             {% endif %}
@@ -1303,6 +1325,18 @@ async function saveConcurrencySettings() {
 
 async function toggleRawLogging(enabled) {
     await postConfig({ raw_generation_logging: enabled }, enabled ? 'Raw logging enabled' : 'Raw logging disabled');
+}
+
+async function toggleDiagnosticLogging(enabled) {
+    await postConfig({ diagnostic_logging: enabled }, enabled ? 'Diagnostic terminal logging enabled' : 'Diagnostic terminal logging disabled');
+}
+
+async function toggleFileLogging(enabled) {
+    await postConfig({ file_logging_enabled: enabled }, enabled ? 'Local file logging enabled' : 'Local file logging disabled');
+}
+
+async function saveLoggingSettings() {
+    await postConfig({ log_file_max_mb: parseInt(document.getElementById('log_file_max_mb').value) }, 'Logging settings saved');
 }
 
 async function saveCharacterProvider(charName) {

@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Callable
 from collections import defaultdict, deque
 import discord
+import logger as log
 
 
 class RequestQueue:
@@ -84,11 +85,13 @@ class RequestQueue:
         pending_reminder_clarification: dict = None,
         is_autonomous: bool = False,
         dm_invite_requested: bool = False,
+        route_req_id: str = None,
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
         async with self.locks[channel_id]:
             current_time = time.time()
+            req_id = route_req_id or log.new_request_id()
 
             # Pre-compute stripped content once for comparisons
             content_stripped = content.strip()
@@ -100,17 +103,39 @@ class RequestQueue:
 
             # Check for duplicate requests from same user (spam prevention)
             if signature_timestamps:
+                log.diagnostic(
+                    "Request rejected as duplicate",
+                    component="queue",
+                    event="request_rejected",
+                    req_id=req_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    reason="duplicate_signature",
+                    pending_count=self.pending_counts[channel_id][user_id],
+                )
                 return False
 
             # Limit pending requests per user
             if self.pending_counts[channel_id][user_id] >= 3:
+                log.diagnostic(
+                    "Request rejected by per-user pending limit",
+                    component="queue",
+                    event="request_rejected",
+                    req_id=req_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    reason="pending_limit",
+                    pending_count=self.pending_counts[channel_id][user_id],
+                )
                 return False
 
             # Add request to queue
             self._next_request_id[channel_id] += 1
             request = {
                 'id': self._next_request_id[channel_id],
+                'req_id': req_id,
                 'timestamp': current_time,
+                'channel_id': channel_id,
                 'message': message,
                 'content': content,
                 'content_stripped': content_stripped,  # Pre-computed for duplicate checks
@@ -134,6 +159,22 @@ class RequestQueue:
             self.queues[channel_id].append(request)
             self.pending_counts[channel_id][user_id] += 1
             signature_timestamps.append(current_time)
+            log.diagnostic(
+                "Request queued",
+                component="queue",
+                event="request_queued",
+                req_id=req_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                queue_depth=len(self.queues[channel_id]),
+                pending_count=self.pending_counts[channel_id][user_id],
+                is_dm=is_dm,
+                is_autonomous=is_autonomous,
+                from_interact_command=from_interact_command,
+                split_target_id=target_id,
+                content_len=len(content_stripped),
+                attachments_count=len(attachments or []),
+            )
 
             # Start processing if not already
             if not self.processing[channel_id]:
@@ -156,6 +197,16 @@ class RequestQueue:
                     if not self.queues[channel_id]:
                         break
                     request = self.queues[channel_id].popleft()
+                    log.diagnostic(
+                        "Request dequeued",
+                        component="queue",
+                        event="request_dequeued",
+                        req_id=request.get("req_id"),
+                        channel_id=channel_id,
+                        user_id=request.get("user_id"),
+                        queue_depth=len(self.queues[channel_id]),
+                        wait_ms=int((time.time() - request.get("timestamp", time.time())) * 1000),
+                    )
 
                 try:
                     # Process the request while its pending slot/signature remain active.
