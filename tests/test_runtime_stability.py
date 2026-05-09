@@ -311,15 +311,14 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0]["content"], "still thinking about it\nand continuing the same thought")
         message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_can_split_short_single_newlines(self):
+    async def test_send_organic_response_preserves_short_single_newlines(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
@@ -329,17 +328,17 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
                 "Sure.\nI'll tag them now."
             )
 
-        self.assertEqual([item["content"] for item in sent], ["Sure.", "I'll tag them now."])
+        self.assertEqual([item["content"] for item in sent], ["Sure.\nI'll tag them now."])
+        message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_splits_explicit_newline_without_terminal_punctuation(self):
+    async def test_send_organic_response_preserves_single_newline_without_terminal_punctuation(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
@@ -351,19 +350,18 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [item["content"] for item in sent],
-            ["Don't you start, I'm still recovering.", "You weren't even here for the worst of it."]
+            ["Don't you start, I'm still recovering\nYou weren't even here for the worst of it."]
         )
+        message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_repairs_missing_punctuation_inside_split_part(self):
+    async def test_send_organic_response_preserves_missing_punctuation_inside_single_newline_response(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
-        third = types.SimpleNamespace(id=3)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(side_effect=[second, third])),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
@@ -377,10 +375,11 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item["content"] for item in sent],
             [
-                "I mean... they're cute? But I like mine.",
-                "The gradient and the butterfly motifs mean something to me. Why, you thinking of getting me a pair or something",
+                "I mean... they're cute? But I like mine.\n"
+                "The gradient and the butterfly motifs mean something to me Why, you thinking of getting me a pair or something",
             ]
         )
+        message.channel.send.assert_not_called()
 
     async def test_send_organic_response_keeps_salutation_newline_in_one_message(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -401,74 +400,77 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0]["content"], "Tell Mr.\nAnderson I'm busy.")
         message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_can_split_long_single_paragraph_on_sentences(self):
+    async def test_send_organic_response_keeps_long_single_paragraph_together_under_discord_limit(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
+        response = (
+            "Both? Himeko already made a pot earlier but I'll never say no to more coffee. "
+            "And the hugs are non-negotiable, I've been on that observation deck for hours and I'm cold."
+        )
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0):
             sent = await instance._send_organic_response(
                 message,
-                "Both? Himeko already made a pot earlier but I'll never say no to more coffee. "
-                "And the hugs are non-negotiable, I've been on that observation deck for hours and I'm cold."
+                response
             )
 
-        self.assertEqual(len(sent), 2)
-        self.assertTrue(sent[0]["content"].startswith("Both?"))
-        self.assertTrue(sent[1]["content"].startswith("And the hugs"))
+        self.assertEqual([item["content"] for item in sent], [response])
+        message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_splits_missing_punctuation_before_capital_thought(self):
+    async def test_send_organic_response_preserves_missing_punctuation_before_capital_thought(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
+        response = (
+            "The good kind, like when a song just hits you in the chest "
+            "That's the best feeling honestly, when something resonates so deep it's almost physical"
+        )
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0):
             sent = await instance._send_organic_response(
                 message,
-                "The good kind, like when a song just hits you in the chest "
-                "That's the best feeling honestly, when something resonates so deep it's almost physical"
+                response
             )
 
-        self.assertEqual(len(sent), 2)
-        self.assertEqual(sent[0]["content"], "The good kind, like when a song just hits you in the chest.")
-        self.assertTrue(sent[1]["content"].startswith("That's the best feeling"))
+        self.assertEqual([item["content"] for item in sent], [response])
+        message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_splits_missing_punctuation_before_hyphenated_capital_thought(self):
+    async def test_send_organic_response_preserves_missing_punctuation_before_hyphenated_capital_thought(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
+        response = (
+            "That's actually kind of heavy for a song title that sounds like a dessert "
+            "Self-destruct tendencies hit different when you've lived on borrowed time though"
+        )
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0):
             sent = await instance._send_organic_response(
                 message,
-                "That's actually kind of heavy for a song title that sounds like a dessert "
-                "Self-destruct tendencies hit different when you've lived on borrowed time though"
+                response
             )
 
-        self.assertEqual(len(sent), 2)
-        self.assertTrue(sent[0]["content"].endswith("sounds like a dessert."))
-        self.assertTrue(sent[1]["content"].startswith("Self-destruct tendencies"))
+        self.assertEqual([item["content"] for item in sent], [response])
+        message.channel.send.assert_not_called()
 
     async def test_send_organic_response_does_not_soft_split_before_pronoun_i_or_titles(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -491,31 +493,31 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("earlier Nigh to Silence", sent[0]["content"])
         message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_sentence_split_ignores_salutations(self):
+    async def test_send_organic_response_does_not_sentence_split_salutations(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
 
         first = types.SimpleNamespace(id=1)
-        second = types.SimpleNamespace(id=2)
         message = types.SimpleNamespace(
             reply=AsyncMock(return_value=first),
-            channel=types.SimpleNamespace(send=AsyncMock(return_value=second)),
+            channel=types.SimpleNamespace(send=AsyncMock()),
         )
 
+        response = (
+            "I still can't believe Mr. Rogers talked me into this prank earlier, and now everyone thinks it was my idea. "
+            "Anyway I'm hiding in the kitchen until the teasing stops."
+        )
         with patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0):
             sent = await instance._send_organic_response(
                 message,
-                "I still can't believe Mr. Rogers talked me into this prank earlier, and now everyone thinks it was my idea. "
-                "Anyway I'm hiding in the kitchen until the teasing stops."
+                response
             )
 
-        self.assertEqual(len(sent), 2)
-        self.assertNotEqual(sent[0]["content"], "I still can't believe Mr.")
-        self.assertIn("Mr. Rogers", sent[0]["content"])
-        self.assertTrue(sent[1]["content"].startswith("Anyway"))
+        self.assertEqual([item["content"] for item in sent], [response])
+        message.channel.send.assert_not_called()
 
-    async def test_send_organic_response_caps_natural_burst_length(self):
+    async def test_send_organic_response_splits_explicit_blank_line_parts(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
 

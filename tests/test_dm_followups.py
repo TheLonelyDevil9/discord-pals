@@ -120,7 +120,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         generate_mock.assert_not_awaited()
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
 
-    async def test_followup_cycle_splits_newline_response_parts(self):
+    async def test_followup_cycle_preserves_single_newline_response(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
         instance.character = types.SimpleNamespace(name="Firefly")
@@ -155,9 +155,9 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
             sent = await instance._run_dm_followup_cycle(now=2_000.0)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(dm_channel.sent_messages, ["Good morning.", "Did you sleep well?"])
+        self.assertEqual(dm_channel.sent_messages, ["Good morning.\nDid you sleep well?"])
         add_history_mock.assert_called_once_with(
-            "dm:Firefly:user:42", "assistant", "Good morning.\n\nDid you sleep well?", author_name="Firefly", timestamp=None
+            "dm:Firefly:user:42", "assistant", "Good morning.\nDid you sleep well?", author_name="Firefly", timestamp=None
         )
 
     async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):

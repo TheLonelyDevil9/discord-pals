@@ -4,6 +4,18 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.16] - 2026-05-09
+
+### Changed
+
+- Simplified Discord delivery formatting so generated prose is preserved unless explicit blank-line paragraph breaks or Discord length limits require splitting.
+- Removed sentence-boundary guessing, single-newline splitting, and punctuation repair from final Discord delivery.
+
+### Fixed
+
+- Kept forced Discord length splitting lossless for oversized sentence fragments.
+- Updated organic response and DM follow-up regression coverage to protect the conservative formatting contract.
+
 ## [v2.2.15] - 2026-05-09
 
 ### Fixed

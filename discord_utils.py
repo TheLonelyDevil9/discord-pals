@@ -1324,13 +1324,15 @@ async def process_attachments(message: discord.Message) -> List[dict]:
 
 def split_message(content: str, max_length: int = 2000) -> List[str]:
     """Split a long message into Discord-compatible chunks."""
+    if max_length <= 0:
+        return [content] if content else []
     if len(content) <= max_length:
         return [content]
-    
+
     chunks = []
     current_chunk = ""
     paragraphs = content.split('\n\n')
-    
+
     for para in paragraphs:
         if len(current_chunk) + len(para) + 2 <= max_length:
             current_chunk += ('\n\n' if current_chunk else '') + para
@@ -1346,14 +1348,45 @@ def split_message(content: str, max_length: int = 2000) -> List[str]:
                     else:
                         if current_chunk:
                             chunks.append(current_chunk)
-                        current_chunk = sentence[:max_length]
+                            current_chunk = ""
+                        sentence_chunks = _split_long_message_sentence(sentence, max_length)
+                        if len(sentence_chunks) > 1:
+                            chunks.extend(sentence_chunks[:-1])
+                        current_chunk = sentence_chunks[-1] if sentence_chunks else ""
             else:
                 current_chunk = para
-    
+
     if current_chunk:
         chunks.append(current_chunk)
-    
+
     return chunks
+
+
+def _split_long_message_sentence(sentence: str, max_length: int) -> List[str]:
+    """Split one oversized sentence without dropping text."""
+    if len(sentence) <= max_length:
+        return [sentence]
+
+    chunks: List[str] = []
+    remaining = sentence
+    while len(remaining) > max_length:
+        split_at = _find_message_chunk_boundary(remaining, max_length)
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _find_message_chunk_boundary(text: str, max_length: int) -> int:
+    """Find a readable split boundary within Discord's hard message limit."""
+    window = text[:max_length + 1]
+    whitespace_matches = list(re.finditer(r"\s+", window))
+    for match in reversed(whitespace_matches):
+        if 0 < match.start() <= max_length:
+            return match.start()
+    return max_length
 
 
 # --- Multi-part Response Tracking ---
