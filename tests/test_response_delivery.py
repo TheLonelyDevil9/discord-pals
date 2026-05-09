@@ -206,6 +206,20 @@ class ResponseDeliveryFormattingTests(unittest.TestCase):
             ],
         )
 
+    def test_short_followup_fragment_stays_with_next_sentence(self):
+        parts = format_response_for_delivery(
+            "I noticed, babe. Adding. Kaveh's name at the end doesn't hide it from me.",
+            DeliveryFormatOptions(max_parts=10),
+        )
+
+        self.assertEqual(
+            parts,
+            [
+                "I noticed, babe.",
+                "Adding. Kaveh's name at the end doesn't hide it from me.",
+            ],
+        )
+
     def test_wrapped_screenshot_transcript_splits_and_repairs_question_fragment(self):
         parts = format_response_for_delivery(
             "March mentioned some new flowers bloomed overnight, and I want to see them before she photographs "

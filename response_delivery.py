@@ -403,6 +403,7 @@ def _should_reflow_single_newline(previous_line: str, next_line: str) -> bool:
         return (
             _terminal_fragment_needs_next_line(previous_line, next_line)
             or _tail_title_fragment_needs_next_line(previous_text, next_line)
+            or _short_followup_fragment_needs_next_line(previous_line, next_line)
         )
 
     next_word = _first_word(next_line)
@@ -491,6 +492,26 @@ def _terminal_fragment_needs_next_line(previous_line: str, next_line: str) -> bo
     previous_word = _last_word_token(previous_line.rstrip(".!?\u2026"))
     normalized_previous = previous_word.lower().replace("\u2019", "'")
     return normalized_previous in _TERMINAL_REFLOW_LINE_ENDERS
+
+
+def _short_followup_fragment_needs_next_line(previous_line: str, next_line: str) -> bool:
+    previous_line = (previous_line or "").strip()
+    next_word = _first_word_token(next_line)
+    if not previous_line or not next_word or not _is_titleish_token(next_word):
+        return False
+    if previous_line.rstrip()[-1:] not in ".!?":
+        return False
+
+    tokens = _word_tokens(previous_line.rstrip(".!?"))
+    if len(tokens) != 1:
+        return False
+
+    token = tokens[0].lower().replace("\u2019", "'")
+    return (
+        len(token) <= 14
+        and token.endswith("ing")
+        and not _is_standalone_opener(token)
+    )
 
 
 def _word_tokens(text: str) -> list[str]:
@@ -614,7 +635,28 @@ def _split_plain_response_sentences(response: str) -> list[str]:
     if len(sentences) < 2:
         return []
 
+    sentences = _merge_short_followup_fragments(sentences)
+    if len(sentences) < 2:
+        return []
+
     return _group_sentence_bursts(sentences, repaired_soft_boundary, terminal_count)
+
+
+def _merge_short_followup_fragments(sentences: list[str]) -> list[str]:
+    merged: list[str] = []
+    index = 0
+    while index < len(sentences):
+        sentence = sentences[index]
+        if (
+            index + 1 < len(sentences)
+            and _short_followup_fragment_needs_next_line(sentence, sentences[index + 1])
+        ):
+            merged.append(f"{sentence} {sentences[index + 1]}".strip())
+            index += 2
+            continue
+        merged.append(sentence)
+        index += 1
+    return merged
 
 
 def _group_sentence_bursts(

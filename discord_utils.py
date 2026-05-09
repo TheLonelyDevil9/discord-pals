@@ -28,7 +28,7 @@ except Exception:
 # These are used by other modules that import from discord_utils
 from response_sanitizer import (  # noqa: F401
     remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response,
-    RE_NAME_PREFIX
+    strip_discord_ooc_comments, visible_user_mention_ids, RE_NAME_PREFIX
 )
 
 
@@ -739,6 +739,11 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         is_bot: Whether the author is a bot (for context filtering)
         timestamp: Optional message timestamp (Discord message time or datetime/ISO string)
     """
+    if role == "user" and not is_bot:
+        content = strip_discord_ooc_comments(content)
+        if not str(content or "").strip():
+            return
+
     if channel_id not in conversation_history:
         conversation_history[channel_id] = []
 
@@ -1292,8 +1297,9 @@ async def process_attachments(message: discord.Message) -> List[dict]:
     content_parts = []
 
     # Add text content if present
-    if message.content and message.content.strip():
-        content_parts.append({"type": "text", "text": message.content.strip()})
+    visible_content = strip_discord_ooc_comments(message.content or "")
+    if visible_content and visible_content.strip():
+        content_parts.append({"type": "text", "text": visible_content.strip()})
 
     for attachment in message.attachments:
         if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):

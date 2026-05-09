@@ -49,6 +49,8 @@ RE_XML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
 RE_XML_DOCTYPE = re.compile(r'<!DOCTYPE.*?>', re.DOTALL | re.IGNORECASE)
 RE_GENERIC_MARKUP_TAG = re.compile(r'</?[A-Za-z][\w:-]*(?:\s+[^<>]*?)?\s*/?>')
 RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
+RE_DISCORD_OOC_COMMENT = re.compile(r'(^|[ \t\r\n])//')
+RE_VISIBLE_USER_MENTION = re.compile(r'<@!?(\d+)>')
 
 # GLM 4.7 plain-text reasoning
 RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
@@ -402,6 +404,28 @@ def clean_ooc_editorial_leakage(text: str) -> str:
     text = RE_OOC_EDITORIAL_LINE.sub('', text)
     text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
     return text.strip()
+
+
+def strip_discord_ooc_comments(text: str) -> str:
+    """Remove user-authored text hidden behind a Discord ``//`` OOC marker."""
+    if not isinstance(text, str) or not text:
+        return text
+
+    match = RE_DISCORD_OOC_COMMENT.search(text)
+    if not match:
+        return text
+    return text[:match.start()].rstrip()
+
+
+def visible_user_mention_ids(text: str) -> set[int]:
+    """Return raw user mention IDs still visible after OOC comment stripping."""
+    ids: set[int] = set()
+    for match in RE_VISIBLE_USER_MENTION.finditer(strip_discord_ooc_comments(text) or ""):
+        try:
+            ids.add(int(match.group(1)))
+        except (TypeError, ValueError):
+            continue
+    return ids
 
 
 def sanitize_response(text: str, character_name: str = None) -> str:

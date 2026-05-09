@@ -1,5 +1,7 @@
 import unittest
 
+import module_stubs  # noqa: F401
+import discord_utils
 import response_sanitizer as sanitizer
 
 
@@ -43,3 +45,41 @@ class ResponseSanitizerTests(unittest.TestCase):
         )
 
         self.assertEqual(cleaned, "You're incorrigible, you know that?")
+
+    def test_strip_discord_ooc_comments_hides_inline_note(self):
+        cleaned = sanitizer.strip_discord_ooc_comments(
+            "Yeah Kaveh, it sure is //Intentional, how do I check attribution"
+        )
+
+        self.assertEqual(cleaned, "Yeah Kaveh, it sure is")
+
+    def test_strip_discord_ooc_comments_preserves_urls(self):
+        cleaned = sanitizer.strip_discord_ooc_comments("Look at https://example.com/docs please")
+
+        self.assertEqual(cleaned, "Look at https://example.com/docs please")
+
+    def test_add_to_history_strips_inline_ooc_marker(self):
+        channel_id = 882
+        original_history = discord_utils.conversation_history
+        original_last_activity = discord_utils._channel_last_activity
+        original_recent_hashes = discord_utils._recent_message_hashes
+        try:
+            discord_utils.conversation_history = {}
+            discord_utils._channel_last_activity = {}
+            discord_utils._recent_message_hashes = {}
+            with unittest.mock.patch.object(discord_utils, "save_history"):
+                discord_utils.add_to_history(
+                    channel_id,
+                    "user",
+                    "Yeah Kaveh, it sure is //Intentional, how do I check attribution",
+                    author_name="TLD",
+                )
+
+            self.assertEqual(
+                discord_utils.conversation_history[channel_id][0]["content"],
+                "Yeah Kaveh, it sure is",
+            )
+        finally:
+            discord_utils.conversation_history = original_history
+            discord_utils._channel_last_activity = original_last_activity
+            discord_utils._recent_message_hashes = original_recent_hashes

@@ -153,6 +153,40 @@ class ReplyThreadContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('[Replying to Alice: "That door was open a minute ago."]', content)
         self.assertIn("Exactly, that's the weird part", content)
 
+    async def test_prepare_message_content_strips_inline_ooc_marker(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999, display_name="Fly"))
+
+        guild = types.SimpleNamespace(
+            me=types.SimpleNamespace(display_name="Fly"),
+            get_member=lambda user_id: None,
+            get_channel=lambda channel_id: None,
+            get_role=lambda role_id: None,
+        )
+        author = types.SimpleNamespace(id=42, display_name="TheLonelyDevil", name="TheLonelyDevil", bot=False)
+        message = types.SimpleNamespace(
+            id=1234,
+            content="<@999> Yeah Kaveh, it sure is //Intentional, how do I check attribution",
+            author=author,
+            guild=guild,
+            channel=types.SimpleNamespace(fetch_message=None),
+            mentions=[instance.client.user],
+            attachments=[],
+            reference=None,
+        )
+
+        content = await instance._prepare_message_content(
+            message=message,
+            user_name="TheLonelyDevil",
+            sticker_info=None,
+            is_other_bot=False,
+            is_autonomous=False,
+            guild=guild,
+        )
+
+        self.assertEqual(content, "Fly Yeah Kaveh, it sure is")
+        self.assertNotIn("Intentional", content)
+
     async def test_get_referenced_message_caches_without_mutating_slotted_messages(self):
         instance = object.__new__(bot_instance_module.BotInstance)
 

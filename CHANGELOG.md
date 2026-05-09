@@ -4,6 +4,14 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.15] - 2026-05-09
+
+### Fixed
+
+- Hid user-authored inline `//` OOC notes from routing, recalled Discord history, multimodal text payloads, and stored model context while preserving URLs.
+- Kept short one-word follow-up fragments like `Adding.` attached to the next sentence so Discord delivery no longer emits them as broken standalone messages.
+- Added regression coverage for inline OOC stripping, hidden mention handling, and screenshot-style response delivery formatting.
+
 ## [v2.2.14] - 2026-05-09
 
 Fixed bot reply reference quoting and OOC cleanup.

@@ -25,7 +25,7 @@ from discord_utils import (
     update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
-    build_time_passage_signal, build_idle_time_passage_signal
+    build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from response_delivery import format_response_for_delivery
@@ -400,7 +400,10 @@ class BotInstance:
             }
 
         # Check direct mention
-        mentioned = self.client.user in message.mentions if not is_dm else True
+        mentioned = (
+            self.client.user in message.mentions
+            and getattr(self.client.user, "id", None) in visible_user_mention_ids(message.content)
+        ) if not is_dm else True
 
         # Reply chain detection
         is_reply_to_bot = False
@@ -426,7 +429,7 @@ class BotInstance:
                 bot_username = self.client.user.name
                 char_name = self.character.name if self.character else ""
 
-                content_lower = message.content.lower()
+                content_lower = strip_discord_ooc_comments(message.content).lower()
 
                 # Skip name trigger if message is quoting the bot itself
                 if char_name and (f"[quoting {char_name.lower()}" in content_lower
@@ -636,11 +639,11 @@ class BotInstance:
             return f"{user_name} {sticker_info}"
 
         if is_other_bot:
-            content = message.content.strip()
+            content = strip_discord_ooc_comments(message.content).strip()
         else:
             # Replace THIS bot's mention with its name
             bot_name = guild.me.display_name if guild else self.client.user.display_name
-            content = message.content.replace(f'<@{self.client.user.id}>', bot_name).strip()
+            content = strip_discord_ooc_comments(message.content.replace(f'<@{self.client.user.id}>', bot_name)).strip()
 
         # Resolve all Discord formatting
         content = resolve_discord_formatting(
@@ -705,7 +708,8 @@ class BotInstance:
             return []
 
         # Get mentioned users (excluding self and other bots)
-        targets = [m for m in message.mentions if m != self.client.user and not m.bot]
+        visible_mention_ids = visible_user_mention_ids(message.content)
+        targets = [m for m in message.mentions if m != self.client.user and not m.bot and getattr(m, "id", None) in visible_mention_ids]
 
         # Need 2+ users to split
         if len(targets) < 2:
@@ -1506,6 +1510,8 @@ Return exactly one JSON object with this shape:
                 return
             if message.content.startswith('/'):  # Slash commands and // OOC messages
                 return
+            if not strip_discord_ooc_comments(message.content).strip() and not getattr(message, "attachments", None):
+                return
 
             is_dm = isinstance(message.channel, discord.DMChannel)
             is_other_bot = message.author.bot
@@ -1828,7 +1834,7 @@ Return exactly one JSON object with this shape:
         # Filter out bots and message author first
         users_to_check = [
             u for u in message.mentions
-            if not u.bot and u.id != message.author.id
+            if not u.bot and u.id != message.author.id and getattr(u, "id", None) in visible_user_mention_ids(message.content)
         ]
 
         if not users_to_check:
@@ -2122,7 +2128,7 @@ Return exactly one JSON object with this shape:
 
             explicit_mentions = [
                 user for user in message.mentions
-                if not user.bot
+                if not user.bot and getattr(user, "id", None) in visible_user_mention_ids(message.content)
             ]
             mention_resolution_users = get_mentionable_users(
                 channel_id,
@@ -3356,7 +3362,7 @@ Return exactly one JSON object with this shape:
         messages = []
         
         async for msg in channel.history(limit=limit):
-            if msg.content and not msg.content.startswith('/'):
+            if msg.content and not msg.content.startswith('/') and strip_discord_ooc_comments(msg.content).strip():
                 messages.append(msg)
         
         messages.reverse()
@@ -3370,7 +3376,7 @@ Return exactly one JSON object with this shape:
             role = "assistant" if is_bot else "user"
             user_name = get_user_display_name(msg.author)  # Always store author, even for bots
             add_to_history(
-                history_key or channel.id, role, msg.content,
+                history_key or channel.id, role, strip_discord_ooc_comments(msg.content),
                 author_name=user_name, user_id=msg.author.id, guild=guild,
                 message_id=msg.id, is_bot=is_any_bot,
                 timestamp=getattr(msg, "created_at", None)
