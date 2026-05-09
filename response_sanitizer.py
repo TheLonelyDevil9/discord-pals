@@ -26,6 +26,7 @@ RE_GLM_ORPHAN_END = re.compile(r'<\|begin_of_box\|>.*$', re.DOTALL)
 # Name/prefix patterns
 RE_NAME_PREFIX = re.compile(r'^\s*\[[^\]]+\]:\s*', re.MULTILINE)
 RE_REPLY_PREFIX = re.compile(r'^\s*\(replying to [^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
+RE_BRACKET_REPLY_PREFIX = re.compile(r'^\s*\[replying to [^\]]+\]\s*', re.IGNORECASE | re.MULTILINE)
 RE_RE_PREFIX = re.compile(r'^\s*\(RE:?\s+[^)]+\)\s*', re.IGNORECASE | re.MULTILINE)
 
 # Em-dash patterns
@@ -62,6 +63,12 @@ RE_GLM_MULTILINE_THINK = re.compile(r'(?:\n|^)(?:Think|Reasoning|Analysis|Intern
 RE_INTERNAL_LABELS = re.compile(r'^(?:message\s+)?(?:duplication\s+)?glitch:?\s*', re.MULTILINE | re.IGNORECASE)
 RE_READABLE_VERSION = re.compile(r'^readable\s+version:?\s*', re.MULTILINE | re.IGNORECASE)
 RE_INTERNAL_NOTE = re.compile(r'^\s*\[(?:internal|note|debug|processing)\].*$', re.MULTILINE | re.IGNORECASE)
+RE_OOC_EDITORIAL_LINE = re.compile(
+    r'^\s*(?:\((?:ooc|out\s+of\s+character|editor(?:ial)?\s+note)[:\s][^)]*\)|'
+    r'\[(?:ooc|out\s+of\s+character|editor(?:ial)?\s+note)[:\s][^\]]*\]|'
+    r'(?:ooc|out\s+of\s+character|editor(?:ial)?\s+note):\s+.*)\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
 RE_STEP_LABELS = re.compile(r'^(?:step\s*\d+|phase\s*\d+|stage\s*\d+):.*$', re.MULTILINE | re.IGNORECASE)
 
 # Deepseek/Qwen style
@@ -332,6 +339,7 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     Strips:
     - [Name]: prefixes (learned from history format)
     - (replying to X's message: "...") prefixes
+    - [Replying to X: "..."] markers when echoed from prompt context
     - CharacterName: prefixes
     - *CharacterName*: prefixes
     """
@@ -343,6 +351,9 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
 
     # Strip (replying to X's message: "...") pattern
     text = RE_REPLY_PREFIX.sub('', text)
+
+    # Strip [Replying to X: "..."] prompt-context markers
+    text = RE_BRACKET_REPLY_PREFIX.sub('', text)
 
     # Strip (RE: ...) or (RE ...) patterns
     text = RE_RE_PREFIX.sub('', text)
@@ -383,6 +394,16 @@ def clean_markup_leakage(text: str) -> str:
     return text.strip()
 
 
+def clean_ooc_editorial_leakage(text: str) -> str:
+    """Remove explicit OOC/editorial note lines from provider output."""
+    if not text:
+        return text
+
+    text = RE_OOC_EDITORIAL_LINE.sub('', text)
+    text = RE_MULTIPLE_NEWLINES.sub('\n\n', text)
+    return text.strip()
+
+
 def sanitize_response(text: str, character_name: str = None) -> str:
     """Apply all sanitization steps to a response.
 
@@ -399,5 +420,6 @@ def sanitize_response(text: str, character_name: str = None) -> str:
     text = remove_thinking_tags(text)
     text = clean_bot_name_prefix(text, character_name)
     text = clean_markup_leakage(text)
+    text = clean_ooc_editorial_leakage(text)
     text = clean_em_dashes(text)
     return text.strip()

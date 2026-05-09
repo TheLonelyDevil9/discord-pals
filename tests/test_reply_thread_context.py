@@ -57,6 +57,54 @@ class ReplyThreadContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Ironically that would hurt", content)
         self.assertNotIn("[Replying to TheLonelyDevil", content)
 
+    async def test_prepare_message_content_neutralizes_reply_to_current_bot_in_neutral_mode(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999, display_name="Firefly"))
+
+        referenced_author = types.SimpleNamespace(id=999, display_name="Firefly", name="Firefly", bot=True)
+        referenced_message = types.SimpleNamespace(
+            id=600,
+            author=referenced_author,
+            content=(
+                "I took my stockings off before I dozed off.\n"
+                "My soles are soft, a little pink from being tucked under the blanket."
+            ),
+        )
+        author = types.SimpleNamespace(id=42, display_name="TheLonelyDevil", name="TheLonelyDevil", bot=False)
+        channel = bot_instance_module.discord.DMChannel()
+        channel.id = 777
+        channel.fetch_message = None
+        message = types.SimpleNamespace(
+            id=1234,
+            content="You too?",
+            author=author,
+            guild=None,
+            channel=channel,
+            mentions=[],
+            attachments=[],
+            reference=types.SimpleNamespace(message_id=600, cached_message=referenced_message),
+        )
+
+        with patch.object(
+            bot_instance_module.runtime_config,
+            "get",
+            side_effect=lambda key, default=None: {
+                "bot_reference_context_mode": "neutral",
+            }.get(key, default),
+        ):
+            content = await instance._prepare_message_content(
+                message=message,
+                user_name="TheLonelyDevil",
+                sticker_info=None,
+                is_other_bot=False,
+                is_autonomous=False,
+                guild=None,
+            )
+
+        self.assertEqual(content, "[Replying to Firefly's message] You too?")
+        self.assertNotIn("stockings", content)
+        self.assertNotIn("soles", content)
+
     async def test_prepare_message_content_keeps_reply_context_for_referenced_human(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999, display_name="Paimon"))

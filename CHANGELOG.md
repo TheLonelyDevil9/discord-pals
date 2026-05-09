@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.2.14] - 2026-05-09
+
+Fixed bot reply reference quoting and OOC cleanup.
+
+### Notes
+
+- This release brings together release automation, runtime hardening, documentation updates, and regression coverage.
+- The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.
+- Related work is grouped together so the history stays readable without turning into a transcript.
+
 ## [v2.2.13] - 2026-05-09
 
 ### Added

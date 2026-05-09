@@ -585,10 +585,6 @@ class BotInstance:
         """Return True when a referenced bot's prose should be hidden from model input."""
         if not getattr(getattr(referenced_message, "author", None), "bot", False):
             return False
-        if getattr(referenced_message.author, "id", None) == getattr(getattr(self.client, "user", None), "id", None):
-            return False
-        if not runtime_config.get("user_only_context", False):
-            return False
         return runtime_config.get("bot_reference_context_mode", "neutral") == "neutral"
 
     @staticmethod
