@@ -347,7 +347,7 @@ def get_all() -> dict:
     return load_config().copy()
 
 
-def _configured_id_set(config: dict, key: str) -> set[str]:
+def _configured_id_set(config: dict, key: str) -> builtins.set[str]:
     """Return one normalized Discord ID config list as a set of strings."""
     value = config.get(key, DEFAULTS.get(key, []))
     return builtins.set(_coerce_id_list(value))
