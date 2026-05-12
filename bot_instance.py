@@ -32,10 +32,12 @@ from response_delivery import format_response_for_delivery
 from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
+import response_access
 import logger as log
 import user_ignores
 from prometheus_metrics import metrics_manager
 from reminders import reminder_manager
+from reminder_delivery import send_scheduled_reminder
 from scopes import (
     DeliveryTarget,
     MemoryScope,
@@ -387,6 +389,9 @@ class BotInstance:
         Returns dict with keys: mentioned, is_reply_to_bot, is_autonomous, name_triggered, should_respond
         """
         channel_id = message.channel.id
+        allowed, _reason = response_access.message_access(is_dm, getattr(message.author, "id", None), channel_id)
+        if not allowed:
+            return response_access.empty_triggers()
 
         # Check if user has ignored this bot
         char_name = self.character.name if self.character else ""
@@ -1170,6 +1175,9 @@ Return exactly one JSON object with this shape:
 
     async def _resolve_user_dm_channel(self, user_id: int):
         """Resolve or create the user's DM channel."""
+        if response_access.log_if_dm_blocked(self.name, user_id, "DM channel resolution"):
+            return None
+
         user = await self._resolve_user(user_id)
         if not user:
             return None
@@ -1201,69 +1209,7 @@ Return exactly one JSON object with this shape:
         return None
 
     async def _send_scheduled_reminder(self, reminder: dict, response: str) -> tuple[list, int | None]:
-        """Send a scheduled reminder in the original location or DM fallback."""
-        response = response.strip()
-        if not response:
-            return [], None
-
-        source_type = reminder.get("source_type")
-        user_id = int(reminder.get("target_user_id"))
-        source_channel_id = int(reminder.get("source_channel_id"))
-        get_guild = getattr(self.client, "get_guild", None)
-        guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
-
-        primary_channel = None
-        if source_type == "dm":
-            primary_channel = await self._resolve_dm_followup_channel(user_id, source_channel_id)
-        else:
-            primary_channel = await self._resolve_channel(source_channel_id)
-
-        channels_to_try = []
-        if primary_channel:
-            channels_to_try.append(("primary", primary_channel))
-
-        if source_type != "dm":
-            fallback_dm = await self._resolve_user_dm_channel(user_id)
-            if fallback_dm and all(getattr(channel, "id", None) != getattr(fallback_dm, "id", None) for _, channel in channels_to_try):
-                channels_to_try.append(("dm_fallback", fallback_dm))
-
-        for channel_mode, channel in channels_to_try:
-            sent_messages = []
-            try:
-                rendered_response = convert_emojis_in_text(response, guild) if guild else response
-                lines = self._split_response_for_delivery(rendered_response)
-                for index, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if channel_mode == "primary" and source_type != "dm" and index == 0:
-                        line = f"<@{user_id}> {line}"
-                    sent = await channel.send(line)
-                    sent_messages.append(sent)
-
-                if sent_messages:
-                    delivered = "\n\n".join(
-                        getattr(sent, "content", "") or ""
-                        for sent in sent_messages
-                    ).strip()
-                    add_to_history(
-                        getattr(channel, "id", source_channel_id),
-                        "assistant",
-                        delivered,
-                        author_name=self.character.name,
-                        guild=getattr(channel, "guild", None),
-                        timestamp=getattr(sent_messages[0], "created_at", None)
-                    )
-                    if len(sent_messages) > 1:
-                        multipart_ids = [getattr(sent, "id", None) for sent in sent_messages if getattr(sent, "id", None) is not None]
-                        if len(multipart_ids) > 1:
-                            store_multipart_response(getattr(channel, "id", source_channel_id), multipart_ids, delivered)
-                    return sent_messages, getattr(channel, "id", source_channel_id)
-            except discord.HTTPException as e:
-                log.warn(f"Reminder send failed via {channel_mode}: {e}", self.name)
-                continue
-
-        return [], None
+        return await send_scheduled_reminder(self, reminder, response)
 
     async def _generate_scheduled_reminder_text(self, reminder: dict, stage: str) -> str | None:
         """Generate the in-character reminder text at send time."""
@@ -1518,6 +1464,7 @@ Return exactly one JSON object with this shape:
             discord_channel_id = message.channel.id
             channel_id = self._conversation_key(message, message.author.id)
             guild = message.guild
+            access_allowed, access_reason = response_access.message_access(is_dm, message.author.id, discord_channel_id)
             log.diagnostic(
                 "Discord message received",
                 self.name,
@@ -1534,6 +1481,10 @@ Return exactly one JSON object with this shape:
                 attachment_count=len(getattr(message, "attachments", []) or []),
                 mention_count=len(getattr(message, "mentions", []) or []),
             )
+
+            if not access_allowed:
+                response_access.log_message_skip(self.name, route_req_id, message, guild, is_dm, discord_channel_id, access_reason)
+                return
 
             # Track DM activity for follow-up system
             if is_dm and not is_other_bot:
@@ -2549,11 +2500,26 @@ Return exactly one JSON object with this shape:
         guild = request['guild']
         is_dm = context["is_dm"]
         guild_id = context["guild_id"]
+        discord_channel_id = context.get("discord_channel_id", channel_id)
         user_id = context["user_id"]
         user_name = context["user_name"]
         content = context["content"]
         split_target = context.get("split_reply_target")
         req_id = context.get("req_id")
+
+        access_allowed, access_reason = response_access.message_access(is_dm, user_id, discord_channel_id)
+        if not access_allowed:
+            response_access.log_debug_skip(
+                self.name,
+                component="delivery",
+                event="delivery_skipped",
+                req_id=req_id,
+                channel_id=discord_channel_id,
+                user_id=user_id,
+                reason=access_reason,
+                message="Response skipped by access policy",
+            )
+            return False
 
         # Process outgoing mentions (@Name -> <@user_id>)
         if runtime_config.get("allow_bot_mentions", True):
@@ -2604,12 +2570,29 @@ Return exactly one JSON object with this shape:
         # Send first so failed Discord sends do not leak phantom assistant turns into history.
         sent_records = None
         if request.get("dm_invite_requested"):
-            target_channel = await self._resolve_user_dm_channel(user_id)
-            if target_channel:
-                response = f"Hey, you asked me to DM you from the server. {response}"
-                sent_records = await self._send_organic_response_to_channel(target_channel, response, req_id=req_id)
+            if response_access.log_if_dm_blocked(
+                self.name,
+                user_id,
+                "Requested DM handoff",
+                component="delivery",
+                event="dm_handoff_skipped",
+                req_id=req_id,
+            ):
+                pass
             else:
-                log.warn(f"Could not open requested DM for user {user_id}", self.name, component="delivery", event="dm_open_failed", req_id=req_id, user_id=user_id)
+                target_channel = await self._resolve_user_dm_channel(user_id)
+                if target_channel:
+                    response = f"Hey, you asked me to DM you from the server. {response}"
+                    sent_records = await self._send_organic_response_to_channel(target_channel, response, req_id=req_id)
+                else:
+                    log.warn(
+                        f"Could not open requested DM for user {user_id}",
+                        self.name,
+                        component="delivery",
+                        event="dm_open_failed",
+                        req_id=req_id,
+                        user_id=user_id,
+                    )
 
         if sent_records is None:
             sent_records = await self._send_organic_response(message, response)
@@ -2681,6 +2664,20 @@ Return exactly one JSON object with this shape:
             return
 
         message = request['message']
+        access_allowed, access_reason, discord_channel_id, user_id = response_access.request_access(request, message)
+        if not access_allowed:
+            response_access.log_debug_skip(
+                self.name,
+                component="request",
+                event="request_skipped",
+                req_id=req_id,
+                reason=access_reason,
+                channel_id=discord_channel_id,
+                user_id=user_id,
+                message="Request skipped by access policy",
+            )
+            return
+
         if request.get('is_autonomous') and not runtime_config.is_bot_available(self.name):
             log.debug("Autonomous request skipped - bot is in an unavailable schedule window", self.name, component="request", event="request_skipped", req_id=req_id, reason="schedule_unavailable")
             return
@@ -2985,6 +2982,9 @@ Return exactly one JSON object with this shape:
 
     async def _resolve_dm_followup_channel(self, user_id: int, channel_id: int):
         """Resolve a DM channel even if it has fallen out of cache."""
+        if response_access.log_if_dm_blocked(self.name, user_id, "DM channel resolution"):
+            return None
+
         channel = self.client.get_channel(channel_id) if channel_id else None
         if channel:
             return channel
@@ -3183,6 +3183,8 @@ Return exactly one JSON object with this shape:
                 history_key = state.get("history_key") or dm_history_key(self.name, user_id)
 
                 if not channel_id or not last_msg:
+                    continue
+                if response_access.log_if_dm_blocked(self.name, user_id, "DM follow-up"):
                     continue
 
                 # Check timeout

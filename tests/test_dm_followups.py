@@ -120,6 +120,35 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         generate_mock.assert_not_awaited()
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
 
+    async def test_followup_cycle_respects_global_dm_disable(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = _FakeClient(_FakeUser(_FakeDMChannel(channel_id=555)))
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+        }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(False, "dm_responses_disabled")), \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock()) as generate_mock:
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 0)
+        generate_mock.assert_not_awaited()
+        self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
+
     async def test_followup_cycle_preserves_single_newline_response(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"

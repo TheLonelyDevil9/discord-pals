@@ -12,6 +12,7 @@ import character as character_module
 import dashboard as dashboard_module
 import discord_utils as discord_utils_module
 import providers as providers_module
+import response_access as response_access_module
 import runtime_config as runtime_config_module
 
 from test_support import MemorySandboxMixin
@@ -501,6 +502,13 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("moveProvider(", page)
         self.assertIn('id="prose_polisher_enabled"', page)
         self.assertIn('id="new-provider-reasoning-effort"', page)
+        self.assertIn('id="response-access-form"', page)
+        self.assertIn('id="server_responses_enabled"', page)
+        self.assertIn('id="dm_responses_enabled"', page)
+        self.assertIn('id="response_channel_whitelist_only"', page)
+        self.assertIn('id="response_channel_whitelist"', page)
+        self.assertIn('id="response_channel_blacklist"', page)
+        self.assertIn('id="dm_user_blacklist"', page)
 
         response = self.client.post(
             "/api/config",
@@ -514,6 +522,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "diagnostic_logging": "true",
                 "file_logging_enabled": "false",
                 "log_file_max_mb": "5000",
+                "server_responses_enabled": "false",
+                "dm_responses_enabled": "false",
+                "response_channel_whitelist_only": "true",
+                "response_channel_whitelist": ["123456789012345678", "123456789012345678"],
+                "response_channel_blacklist": "222222222222222222, 333333333333333333",
+                "dm_user_blacklist": ["444444444444444444"],
             },
             headers=self.csrf_headers()
         )
@@ -531,6 +545,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIs(config["diagnostic_logging"], True)
         self.assertIs(config["file_logging_enabled"], False)
         self.assertEqual(config["log_file_max_mb"], 100)
+        self.assertIs(config["server_responses_enabled"], False)
+        self.assertIs(config["dm_responses_enabled"], False)
+        self.assertIs(config["response_channel_whitelist_only"], True)
+        self.assertEqual(config["response_channel_whitelist"], ["123456789012345678"])
+        self.assertEqual(config["response_channel_blacklist"], ["222222222222222222", "333333333333333333"])
+        self.assertEqual(config["dm_user_blacklist"], ["444444444444444444"])
         self.assertNotIn("context_message_count", config)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
@@ -545,6 +565,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "bot_timezones": "not-a-dict",
                 "identity_guard_policy": "send_anyway",
                 "bot_reference_context_mode": "quote",
+                "response_channel_whitelist": "channel 777, <#888>",
+                "dm_user_blacklist": ["<@999>", "999", "0"],
                 "unknown_extension": "ignored",
             },
             headers=self.csrf_headers()
@@ -560,7 +582,47 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["bot_timezones"], {})
         self.assertEqual(config["identity_guard_policy"], "regenerate_then_drop")
         self.assertEqual(config["bot_reference_context_mode"], "neutral")
+        self.assertEqual(config["response_channel_whitelist"], ["777", "888"])
+        self.assertEqual(config["dm_user_blacklist"], ["999"])
         self.assertNotIn("unknown_extension", config)
+
+    def test_runtime_response_access_helpers_apply_allow_and_deny_lists(self):
+        config = {
+            **runtime_config_module.DEFAULTS,
+            "response_channel_whitelist_only": True,
+            "response_channel_whitelist": ["100"],
+            "response_channel_blacklist": ["200"],
+            "dm_user_blacklist": ["42"],
+        }
+
+        self.assertEqual(runtime_config_module.is_server_response_allowed(100, config), (True, None))
+        self.assertEqual(
+            runtime_config_module.is_server_response_allowed(101, config),
+            (False, "response_channel_not_whitelisted"),
+        )
+        self.assertEqual(
+            runtime_config_module.is_server_response_allowed(200, config),
+            (False, "response_channel_blacklist"),
+        )
+        self.assertEqual(runtime_config_module.is_dm_response_allowed(99, config), (True, None))
+        self.assertEqual(
+            runtime_config_module.is_dm_response_allowed(42, config),
+            (False, "dm_user_blacklist"),
+        )
+
+    def test_response_access_wrappers_delegate_by_scope(self):
+        message = types.SimpleNamespace(channel=types.SimpleNamespace(id=200))
+        request = {"channel_id": 100, "user_id": 42, "is_dm": False}
+
+        with patch.object(runtime_config_module, "is_server_response_allowed", return_value=(False, "server_blocked")) as server_mock, \
+                patch.object(runtime_config_module, "is_dm_response_allowed", return_value=(False, "dm_blocked")) as dm_mock:
+            self.assertEqual(response_access_module.message_access(False, 42, 100), (False, "server_blocked"))
+            self.assertEqual(response_access_module.message_access(True, 42, 100), (False, "dm_blocked"))
+            self.assertEqual(response_access_module.request_access(request, message), (False, "server_blocked", 200, 42))
+
+        server_mock.assert_any_call(100)
+        server_mock.assert_any_call(200)
+        dm_mock.assert_called_once_with(42)
 
     def test_runtime_config_rejects_non_object_payload(self):
         response = self.client.post(
