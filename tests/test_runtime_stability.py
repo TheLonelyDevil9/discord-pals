@@ -905,6 +905,97 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             context["messages_for_api"],
         )
 
+    async def test_process_request_skips_provider_when_server_channel_blocked(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        message = types.SimpleNamespace(
+            id=123,
+            channel=types.SimpleNamespace(id=77),
+        )
+        request = {
+            "req_id": "req-1",
+            "message": message,
+            "channel_id": 77,
+            "user_id": 42,
+            "is_dm": False,
+            "is_autonomous": False,
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
+                patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(False, "response_channel_blacklist")), \
+                patch.object(instance, "_build_request_context", new=AsyncMock()) as build_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock()) as generate_mock, \
+                patch.object(bot_instance_module.log, "debug"):
+            await instance._process_request(request)
+
+        build_mock.assert_not_awaited()
+        generate_mock.assert_not_awaited()
+
+    async def test_send_and_finalize_skips_dm_invite_when_dms_disabled(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance._check_rate_limit = Mock(return_value=False)
+        instance._check_circuit_breaker = Mock(return_value=False)
+        instance._is_duplicate_response = Mock(return_value=False)
+        instance._send_organic_response = AsyncMock(return_value=[
+            {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "server reply"},
+        ])
+        instance._send_organic_response_to_channel = AsyncMock()
+        instance._resolve_user_dm_channel = AsyncMock()
+        instance._remember_recent_response = Mock()
+        instance._reset_failures = Mock()
+        instance._record_response = Mock()
+        instance._update_mood = Mock()
+
+        context = {
+            "channel_id": 1,
+            "discord_channel_id": 77,
+            "is_dm": False,
+            "guild_id": 5,
+            "user_id": 42,
+            "user_name": "Invoker",
+            "content": "please dm me",
+            "split_reply_target": None,
+            "mention_resolution_users": [],
+            "mentionable_users": [],
+            "mentionable_bots": [],
+        }
+        request = {"guild": None, "dm_invite_requested": True}
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+
+        def runtime_get(key, default=None):
+            if key == "allow_bot_mentions":
+                return False
+            return default
+
+        def close_task(coro):
+            coro.close()
+            return None
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=runtime_get), \
+                patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(False, "dm_responses_disabled")), \
+                patch.object(bot_instance_module, "parse_reactions", return_value=("server reply", [])), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
+                patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
+                patch.object(instance, "_maybe_auto_memory", new=AsyncMock()), \
+                patch.object(instance, "_maybe_handle_reminder_capture", new=AsyncMock()), \
+                patch.object(bot_instance_module.asyncio, "create_task", side_effect=close_task), \
+                patch.object(bot_instance_module.log, "debug"):
+            sent = await instance._send_and_finalize_response("server reply", context, message, request)
+
+        self.assertTrue(sent)
+        instance._resolve_user_dm_channel.assert_not_awaited()
+        instance._send_organic_response_to_channel.assert_not_awaited()
+        instance._send_organic_response.assert_awaited_once()
+        self.assertEqual(add_history_mock.call_args.args[2], "server reply")
+
 
 class NewRuntimeBehaviorTests(unittest.TestCase):
     def test_emoji_budget_limits_one_per_response_and_two_per_five(self):

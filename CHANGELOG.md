@@ -4,6 +4,20 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.0] - 2026-05-12
+
+### Added
+
+- Added global response access controls for server replies, DM replies, whitelist-only server mode, server-channel blacklists, and DM user blacklists.
+- Added dashboard controls in the Automation tab so response access can be managed without editing runtime JSON.
+
+### Changed
+
+- Applied response access checks before provider generation and again before delivery for normal replies, queued requests, DM handoffs, reminders, and DM follow-ups.
+
+### Fixed
+
+- Normalized Discord ID lists at the runtime-config boundary so dashboard-entered snowflakes stay as strings and duplicate entries are removed safely.
 ## [v2.2.16] - 2026-05-09
 
 ### Changed

@@ -6,7 +6,9 @@ Live-adjustable settings via the web dashboard.
 import json
 import math
 import os
+import re
 import time
+import builtins
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -31,6 +33,12 @@ DEFAULTS = {
     "active_provider": None,  # None = use first provider
     "bot_interactions_paused": False,  # Global stop for bot-bot conversations
     "global_paused": False,  # KILLSWITCH: Stops ALL bot activity when True
+    "server_responses_enabled": True,  # Allow normal server-channel replies
+    "dm_responses_enabled": True,  # Allow direct-message replies and DM delivery helpers
+    "response_channel_whitelist_only": False,  # Only reply in whitelisted server channels
+    "response_channel_whitelist": [],  # Server channel IDs allowed when whitelist-only mode is on
+    "response_channel_blacklist": [],  # Server channel IDs where all replies are blocked
+    "dm_user_blacklist": [],  # User IDs whose DMs are blocked for replies and follow-ups
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
     "prose_polisher_enabled": False,  # Run a post-generation provider pass to clean repetitive prose patterns
     "prose_polisher_max_tokens": 8192,  # Max tokens for the post-generation polish pass
@@ -81,6 +89,12 @@ CONFIG_FIELDS = {
     "active_provider": ConfigField(str, DEFAULTS["active_provider"]),
     "bot_interactions_paused": ConfigField(bool, DEFAULTS["bot_interactions_paused"]),
     "global_paused": ConfigField(bool, DEFAULTS["global_paused"]),
+    "server_responses_enabled": ConfigField(bool, DEFAULTS["server_responses_enabled"]),
+    "dm_responses_enabled": ConfigField(bool, DEFAULTS["dm_responses_enabled"]),
+    "response_channel_whitelist_only": ConfigField(bool, DEFAULTS["response_channel_whitelist_only"]),
+    "response_channel_whitelist": ConfigField(list, DEFAULTS["response_channel_whitelist"]),
+    "response_channel_blacklist": ConfigField(list, DEFAULTS["response_channel_blacklist"]),
+    "dm_user_blacklist": ConfigField(list, DEFAULTS["dm_user_blacklist"]),
     "use_single_user": ConfigField(bool, DEFAULTS["use_single_user"]),
     "prose_polisher_enabled": ConfigField(bool, DEFAULTS["prose_polisher_enabled"]),
     "prose_polisher_max_tokens": ConfigField(int, DEFAULTS["prose_polisher_max_tokens"], 16, 16000),
@@ -166,6 +180,28 @@ def _coerce_bool(value, default: bool) -> bool:
     return default
 
 
+def _coerce_id_list(value) -> list[str]:
+    """Normalize Discord snowflake lists without passing them through JS numbers."""
+    tokens = []
+    seen = builtins.set()
+
+    def add(raw_value):
+        for match in re.findall(r"\d+", str(raw_value or "")):
+            normalized = match.lstrip("0") or "0"
+            if normalized == "0" or normalized in seen:
+                continue
+            seen.add(normalized)
+            tokens.append(normalized)
+
+    if isinstance(value, (list, tuple, builtins.set)):
+        for item in value:
+            add(item)
+    else:
+        add(value)
+
+    return tokens
+
+
 def _coerce_config_value(key: str, value):
     """Parse a known runtime config value at the storage/API boundary."""
     field = CONFIG_FIELDS.get(key)
@@ -180,6 +216,9 @@ def _coerce_config_value(key: str, value):
 
     if field.value_type is dict:
         return value if isinstance(value, dict) else dict(field.default)
+
+    if field.value_type is list:
+        return _coerce_id_list(value)
 
     try:
         if field.value_type is int:
@@ -215,7 +254,11 @@ def _coerce_config_value(key: str, value):
 def _default_value(key: str):
     """Return a fresh default value for mutable runtime settings."""
     value = DEFAULTS[key]
-    return dict(value) if isinstance(value, dict) else value
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return value
 
 
 def _normalize_config(config: dict | None) -> dict:
@@ -302,6 +345,42 @@ def set(key: str, value):
 def get_all() -> dict:
     """Get all config values (returns copy for safety)."""
     return load_config().copy()
+
+
+def _configured_id_set(config: dict, key: str) -> set[str]:
+    """Return one normalized Discord ID config list as a set of strings."""
+    value = config.get(key, DEFAULTS.get(key, []))
+    return builtins.set(_coerce_id_list(value))
+
+
+def is_server_response_allowed(channel_id, config: dict | None = None) -> tuple[bool, str | None]:
+    """Check whether normal replies may be generated in a server channel."""
+    config = config or load_config()
+    if not config.get("server_responses_enabled", DEFAULTS["server_responses_enabled"]):
+        return False, "server_responses_disabled"
+
+    channel_key = str(channel_id)
+    if channel_key in _configured_id_set(config, "response_channel_blacklist"):
+        return False, "response_channel_blacklist"
+
+    if config.get("response_channel_whitelist_only", DEFAULTS["response_channel_whitelist_only"]):
+        if channel_key not in _configured_id_set(config, "response_channel_whitelist"):
+            return False, "response_channel_not_whitelisted"
+
+    return True, None
+
+
+def is_dm_response_allowed(user_id, config: dict | None = None) -> tuple[bool, str | None]:
+    """Check whether direct-message replies or DM delivery may be sent to a user."""
+    config = config or load_config()
+    if not config.get("dm_responses_enabled", DEFAULTS["dm_responses_enabled"]):
+        return False, "dm_responses_disabled"
+
+    user_key = str(user_id)
+    if user_key in _configured_id_set(config, "dm_user_blacklist"):
+        return False, "dm_user_blacklist"
+
+    return True, None
 
 
 def _apply_logging_config(config: dict | None = None) -> None:

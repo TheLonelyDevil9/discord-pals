@@ -19,9 +19,7 @@
     <button type="button" id="tab-button-context" class="tab active" data-config-tab="context" role="tab" aria-controls="tab-context" aria-selected="true" onclick="switchConfigTab('context')">Context</button>
     <button type="button" id="tab-button-prompting" class="tab" data-config-tab="prompting" role="tab" aria-controls="tab-prompting" aria-selected="false" onclick="switchConfigTab('prompting')">Prompting</button>
     <button type="button" id="tab-button-time" class="tab" data-config-tab="time" role="tab" aria-controls="tab-time" aria-selected="false" onclick="switchConfigTab('time')">Time</button>
-    {% if bots %}
     <button type="button" id="tab-button-automation" class="tab" data-config-tab="automation" role="tab" aria-controls="tab-automation" aria-selected="false" onclick="switchConfigTab('automation')">Automation</button>
-    {% endif %}
     <button type="button" id="tab-button-providers" class="tab" data-config-tab="providers" role="tab" aria-controls="tab-providers" aria-selected="false" onclick="switchConfigTab('providers')">Providers</button>
     <button type="button" id="tab-button-performance" class="tab" data-config-tab="performance" role="tab" aria-controls="tab-performance" aria-selected="false" onclick="switchConfigTab('performance')">Performance</button>
     <button type="button" id="tab-button-maintenance" class="tab" data-config-tab="maintenance" role="tab" aria-controls="tab-maintenance" aria-selected="false" onclick="switchConfigTab('maintenance')">Maintenance</button>
@@ -464,7 +462,6 @@
         </div>
     </section>
 
-    {% if bots %}
     <section id="tab-automation" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-automation">
         <div class="section-heading">
             <div>
@@ -473,6 +470,64 @@
             </div>
         </div>
         <div class="section-grid">
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Response Access</span>
+                    <span class="impact-pill">Global routing</span>
+                </div>
+                <div class="card-body">
+                    <form id="response-access-form">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="server_responses_enabled">Server Responses</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="server_responses_enabled" name="server_responses_enabled"
+                                        {% if config.server_responses_enabled is not defined or config.server_responses_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">Controls all normal server-channel replies, including mentions, replies, name triggers, and auto replies.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_responses_enabled">DM Responses</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="dm_responses_enabled" name="dm_responses_enabled"
+                                        {% if config.dm_responses_enabled is not defined or config.dm_responses_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">Controls direct DM replies, DM follow-ups, and server requests that ask the bot to move into DMs.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="response_channel_whitelist_only">Whitelist-Only Mode</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="response_channel_whitelist_only" name="response_channel_whitelist_only"
+                                        {% if config.response_channel_whitelist_only %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">When enabled, server replies only work in the whitelisted channel IDs below. DMs use their own controls.</p>
+                            </div>
+                        </div>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label for="response_channel_whitelist">Server Channel Whitelist</label>
+                                <textarea id="response_channel_whitelist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_whitelist or []) | join('\n') }}</textarea>
+                                <p class="form-hint">One valid Discord channel ID per line, comma-separated also works. Used only when whitelist-only mode is on; the blacklist still wins.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="response_channel_blacklist">Server Channel Blacklist</label>
+                                <textarea id="response_channel_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_blacklist or []) | join('\n') }}</textarea>
+                                <p class="form-hint">Blocks server replies in these channels even when the bot is mentioned or whitelist-only would otherwise allow them.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_user_blacklist">DM User Blacklist</label>
+                                <textarea id="dm_user_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.dm_user_blacklist or []) | join('\n') }}</textarea>
+                                <p class="form-hint">Blocks direct DM replies, DM follow-ups, and DM handoffs for these valid Discord user IDs.</p>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Response Access</button>
+                    </form>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <span class="card-title">Autonomous Channels</span>
@@ -606,7 +661,6 @@
             </div>
         </div>
     </section>
-    {% endif %}
 
     <section id="tab-providers" class="config-panel" data-config-panel role="tabpanel" aria-labelledby="tab-button-providers">
         <div class="section-heading">
@@ -1128,7 +1182,7 @@ label.toggle-switch {
 .config-editor summary { cursor: pointer; padding: 12px 16px; background: var(--bg-primary); font-weight: 500; user-select: none; }
 .config-editor[open] summary { border-bottom: 1px solid var(--border-subtle); }
 .config-editor form { padding: 16px; }
-.json-editor, .prompt-textarea, .small-code-textarea {
+.json-editor, .prompt-textarea, .small-code-textarea, .id-list-textarea {
     width: 100%;
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     font-size: 0.8125rem;
@@ -1143,6 +1197,7 @@ label.toggle-switch {
 .json-editor { min-height: 250px; max-height: 420px; white-space: pre; overflow-x: auto; margin-bottom: 12px; }
 .prompt-textarea { min-height: 420px; margin-bottom: 12px; }
 .prompt-readonly { color: var(--text-muted); }
+.id-list-textarea { min-height: 116px; resize: vertical; }
 .provider-list { display: flex; flex-direction: column; gap: 8px; }
 .provider-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 8px; }
 .provider-item:hover { border-color: var(--accent); }
@@ -1280,6 +1335,33 @@ document.getElementById('dm-followup-form')?.addEventListener('submit', async (e
         dm_followup_max_count: parseInt(document.getElementById('dm_followup_max_count').value),
         dm_followup_cooldown_hours: parseInt(document.getElementById('dm_followup_cooldown_hours').value)
     }, 'DM follow-up settings saved');
+});
+
+function parseIdList(elementId) {
+    const textarea = document.getElementById(elementId);
+    if (!textarea) return [];
+    const ids = [];
+    const seen = new Set();
+    for (const match of textarea.value.matchAll(/\d+/g)) {
+        const normalized = match[0].replace(/^0+/, '') || '0';
+        if (normalized === '0' || seen.has(normalized)) continue;
+        seen.add(normalized);
+        ids.push(normalized);
+    }
+    textarea.value = ids.join('\n');
+    return ids;
+}
+
+document.getElementById('response-access-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postConfig({
+        server_responses_enabled: document.getElementById('server_responses_enabled').checked,
+        dm_responses_enabled: document.getElementById('dm_responses_enabled').checked,
+        response_channel_whitelist_only: document.getElementById('response_channel_whitelist_only').checked,
+        response_channel_whitelist: parseIdList('response_channel_whitelist'),
+        response_channel_blacklist: parseIdList('response_channel_blacklist'),
+        dm_user_blacklist: parseIdList('dm_user_blacklist')
+    }, 'Response access saved');
 });
 
 async function saveProviderRuntimeSettings() {

@@ -9,6 +9,7 @@ import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import dashboard as dashboard_module
 import memory as memory_module
+import reminder_delivery as reminder_delivery_module
 import reminders as reminders_module
 import runtime_config as runtime_config_module
 import time_utils as time_utils_module
@@ -432,3 +433,61 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         stored = next(item for item in reminders_module.reminder_manager.reminders if item["id"] == reminder["id"])
         self.assertEqual(stored["status"], "completed")
         self.assertEqual(stored["due_status"], "sent")
+
+    async def test_scheduled_reminder_channel_block_does_not_fallback_to_dm(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = types.SimpleNamespace(get_guild=lambda guild_id: None)
+        instance._resolve_channel = AsyncMock()
+        instance._resolve_user_dm_channel = AsyncMock()
+
+        reminder = {
+            "source_type": "channel",
+            "target_user_id": 42,
+            "source_channel_id": 77,
+            "source_guild_id": 5,
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(False, "response_channel_blacklist")), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(True, None)), \
+                patch.object(bot_instance_module.log, "debug"):
+            sent_messages, actual_channel_id = await instance._send_scheduled_reminder(reminder, "Tea time.")
+
+        self.assertEqual(sent_messages, [])
+        self.assertIsNone(actual_channel_id)
+        instance._resolve_channel.assert_not_awaited()
+        instance._resolve_user_dm_channel.assert_not_awaited()
+
+    async def test_scheduled_reminder_missing_channel_can_fallback_to_allowed_dm(self):
+        class FakeDMChannel:
+            id = 555
+            guild = None
+
+            async def send(self, content):
+                return types.SimpleNamespace(id=1, created_at=None, content=content)
+
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = types.SimpleNamespace(get_guild=lambda guild_id: None)
+        instance._resolve_channel = AsyncMock(return_value=None)
+        instance._resolve_user_dm_channel = AsyncMock(return_value=FakeDMChannel())
+
+        reminder = {
+            "source_type": "channel",
+            "target_user_id": 42,
+            "source_channel_id": 77,
+            "source_guild_id": 5,
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(True, None)), \
+                patch.object(reminder_delivery_module, "add_to_history") as add_history_mock:
+            sent_messages, actual_channel_id = await instance._send_scheduled_reminder(reminder, "Tea time.")
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(actual_channel_id, 555)
+        instance._resolve_channel.assert_awaited_once_with(77)
+        instance._resolve_user_dm_channel.assert_awaited_once_with(42)
+        add_history_mock.assert_called_once()

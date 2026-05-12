@@ -1130,6 +1130,12 @@ Conversation prompting is split into two files:
 | `active_provider` | null | Reserved dashboard field; generation order is controlled by provider order and per-character provider preferences |
 | `bot_interactions_paused` | false | Pause all bot-to-bot conversations |
 | `global_paused` | false | **KILLSWITCH** - Stops all bot responses immediately |
+| `server_responses_enabled` | true | Allow normal server-channel replies, including mentions, replies, name triggers, and autonomous replies |
+| `dm_responses_enabled` | true | Allow direct-message replies, DM follow-ups, and server-to-DM handoffs |
+| `response_channel_whitelist_only` | false | Restrict server replies to the channel IDs listed in `response_channel_whitelist` |
+| `response_channel_whitelist` | [] | Server channel IDs allowed when whitelist-only mode is enabled |
+| `response_channel_blacklist` | [] | Server channel IDs where replies are blocked even when triggers match |
+| `dm_user_blacklist` | [] | User IDs blocked from direct DM replies, DM follow-ups, and DM handoffs |
 | `use_single_user` | false | SillyTavern-style formatting that folds the payload into one user-style message for compatible providers |
 | `name_trigger_chance` | 1.0 | Probability (0.0-1.0) of responding when name is mentioned |
 | `custom_nicknames` | "" | Legacy global nickname field; prefer per-bot nicknames from the dashboard |
