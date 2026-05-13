@@ -29,6 +29,7 @@ from discord_utils import (
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from response_delivery import format_response_for_delivery
+from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
 from stats import stats_manager
 import runtime_config
@@ -581,31 +582,20 @@ class BotInstance:
             reference_cache.pop(oldest_key, None)
         return referenced_message
 
-    @staticmethod
-    def _summarize_reply_content(content: str, limit: int = 160) -> str:
-        """Flatten referenced message content for compact reply context."""
-        summarized = " ".join((content or "").split())
-        if len(summarized) <= limit:
-            return summarized
-        return summarized[: limit - 3].rstrip() + "..."
-
     def _should_neutralize_bot_reference(self, referenced_message) -> bool:
         """Return True when a referenced bot's prose should be hidden from model input."""
         if not getattr(getattr(referenced_message, "author", None), "bot", False):
             return False
         return runtime_config.get("bot_reference_context_mode", "neutral") == "neutral"
 
-    @staticmethod
-    def _neutral_reply_reference(author_name: str) -> str:
-        """Return an attribution-only Discord reply marker."""
-        safe_author = " ".join(str(author_name or "another bot").split())
-        return f"[Replying to {safe_author}'s message]"
-
-    @staticmethod
-    def _neutral_bot_event(author_name: str, event: str = "sent a message") -> str:
-        """Return an attribution-only bot event marker."""
-        safe_author = " ".join(str(author_name or "another bot").split())
-        return f"[{safe_author} {event}]"
+    async def _build_current_bot_reply_anchor(self, message, guild, current_message_is_bot: bool) -> dict | None:
+        return await build_current_bot_reply_anchor(
+            message=message,
+            guild=guild,
+            bot_user=getattr(getattr(self, "client", None), "user", None),
+            current_message_is_bot=current_message_is_bot,
+            resolve_reference=self._get_referenced_message,
+        )
 
     @staticmethod
     def _current_speaker_context(
@@ -669,7 +659,7 @@ class BotInstance:
         if referenced_message and referenced_message.author != message.author:
             referenced_author = get_user_display_name(referenced_message.author)
             if self._should_neutralize_bot_reference(referenced_message):
-                content = f"{self._neutral_reply_reference(referenced_author)} {content}"
+                content = f"{neutral_reply_reference(referenced_author)} {content}"
                 return content
 
             referenced_content = referenced_message.content or ""
@@ -683,7 +673,7 @@ class BotInstance:
                 )
             else:
                 referenced_content = sanitize_discord_syntax_fallback(referenced_content)
-            referenced_summary = self._summarize_reply_content(referenced_content)
+            referenced_summary = summarize_reply_content(referenced_content)
             if referenced_summary:
                 content = f"[Replying to {referenced_author}: \"{referenced_summary}\"] {content}"
             else:
@@ -2192,6 +2182,13 @@ Return exactly one JSON object with this shape:
             "content": speaker_context,
             "kind": "current_speaker_context"
         })
+        current_bot_reply_anchor = await self._build_current_bot_reply_anchor(
+            message,
+            guild,
+            current_message_is_bot,
+        )
+        if current_bot_reply_anchor:
+            messages_for_api.append(current_bot_reply_anchor)
         messages_for_api.extend(immediate)
 
         strict_human_only = (
@@ -2200,7 +2197,7 @@ Return exactly one JSON object with this shape:
         )
         bot_event_context = None
         if current_message_is_bot and strict_human_only:
-            bot_event_context = self._neutral_bot_event(user_name)
+            bot_event_context = neutral_bot_event(user_name)
             if content.startswith("[Replying to "):
                 reply_marker = content.split("]", 1)[0] + "]"
                 bot_event_context = f"{reply_marker} {bot_event_context}"

@@ -201,6 +201,112 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rendered_messages[speaker_index - 1]["kind"], "chatroom_context")
         self.assertEqual(rendered_messages[speaker_index + 1]["content"], "Friend: CurrentUser is drunk")
 
+    async def test_build_request_context_anchors_reply_to_current_bot_previous_message(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999, display_name="Nahida"))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="tea-room")
+        guild = types.SimpleNamespace(
+            id=5,
+            name="Sumeru",
+            get_member=lambda user_id: None,
+            get_channel=lambda channel_id: None,
+            get_role=lambda role_id: None,
+        )
+        previous_bot_message = types.SimpleNamespace(
+            id=600,
+            author=instance.client.user,
+            content=(
+                "I don't know how to draw portraits, and I've never met this Firefly before. "
+                "Is she someone from another world beyond Teyvat?"
+            ),
+            mentions=[],
+        )
+        author = types.SimpleNamespace(id=42, bot=False)
+        message = types.SimpleNamespace(
+            id=1234,
+            content="Shes a good bot. One of the very best. So they had to put her down...",
+            author=author,
+            channel=channel,
+            guild=guild,
+            mentions=[],
+            reference=types.SimpleNamespace(message_id=600, cached_message=previous_bot_message),
+        )
+        request = {
+            "message": message,
+            "content": "[Replying to Nahida's message] Shes a good bot. One of the very best. So they had to put her down...",
+            "guild": guild,
+            "attachments": [],
+            "user_name": "The Primogem Guy",
+            "is_dm": False,
+            "user_id": 42,
+            "sticker_info": None,
+        }
+        immediate_history = [
+            {"role": "user", "content": "The Primogem Guy: draw firefly for me"},
+            {
+                "role": "user",
+                "content": (
+                    "The Primogem Guy: [Replying to Nahida's message] Shes a good bot. "
+                    "One of the very best. So they had to put her down..."
+                ),
+            },
+        ]
+        runtime_values = {
+            "user_only_context": True,
+            "user_only_context_count": 20,
+            "strict_human_only_context": True,
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": False,
+            "bot_reference_context_mode": "neutral",
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], immediate_history))
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+
+            context = await instance._build_request_context(request)
+
+        anchors = [
+            msg for msg in context["messages_for_api"]
+            if msg.get("kind") == "current_bot_reply_anchor"
+        ]
+        self.assertEqual(len(anchors), 1)
+        self.assertIn("replying directly to your previous Discord message", anchors[0]["content"])
+        self.assertIn("I've never met this Firefly before", anchors[0]["content"])
+        self.assertIn("do not restart or re-answer older requests", anchors[0]["content"])
+
     async def test_build_request_context_passes_time_passage_context_when_enabled(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"

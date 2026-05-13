@@ -2,6 +2,8 @@
 
 Agent compatibility entrypoint for `discord-pals`. Keep this file in parity with the paired instruction file when project instructions change.
 
+Follow the global AI-stack standards hub first: `C:\Users\TheLonelyDevil\.codex\AI_STACK_STANDARDS.md`. Workspace-only routing lives in `D:\AIStuff\AGENTS.md`.
+
 ## Repository Map
 
 Start with [docs/README.md](docs/README.md), then open only the deeper document that matches the task:
@@ -35,24 +37,19 @@ Before planning or editing, read [lessons.md](lessons.md) and apply its history-
 
 ## After Making Changes
 
-**Always do these steps automatically after completing any code changes:**
+For ordinary implementation work, run the lightest checks that prove the touched path:
 
-1. **Run quality checks** - Run `python tools/quality_check.py` and relevant tests before release steps
-2. **Bump version FIRST** - Run `python bump_version.py patch --tag` BEFORE committing
-   - Use `patch` for bug fixes
-   - Use `minor` for new features
-   - Use `major` for breaking changes
-3. **Update CHANGELOG.md** - Add entry for new version with ALL changes
-4. **Commit** - Stage and commit all changes (including version.py and CHANGELOG.md) with a descriptive message
-5. **Publish release** - `bump_version.py --tag` now pushes `main` and the release tag automatically after the release commit is created
+1. Run `python tools/quality_check.py` when Python/dashboard/backend behavior changed.
+2. Run the relevant focused tests or explain why no focused test exists.
+3. Review the diff for dashboard coverage, config parsing, and lessons-derived guardrails before handoff.
 
-**CRITICAL: Version bump MUST happen before commit.** If you commit first, the version.py file won't be included and the release will have the wrong version number.
+Release steps are separate. Only bump versions, update release changelog sections, create tags, push `main`, or publish a release when the task is explicitly a release/shipping task or the user asks for that workflow.
 
-Do not wait for the user to ask - complete all steps immediately after any fix or feature is done.
+When doing a release, the version bump must happen before the release commit so `version.py` and `CHANGELOG.md` are included together.
 
 ## Commit Message Format
 
-Use clear, concise commit messages. Always include the new version number in the commit message or push output so it's visible in the conversation.
+Use clear, concise commit messages. For release commits, include the new version number in the commit message or push output so it's visible in the conversation.
 
 Example:
 ```

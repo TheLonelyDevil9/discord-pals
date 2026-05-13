@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.2] - 2026-05-13
+
+### Changed
+
+- Relaxed agent/release instructions so ordinary implementation work runs focused verification without forcing release publishing steps.
+- Moved compact reply-thread context helpers into a dedicated module instead of growing `bot_instance.py`.
+
+### Fixed
+
+- Added a current-bot reply anchor so direct replies to a bot's previous Discord message carry one capped summary of that prior answer into model context, preventing limited-context follow-ups from restarting older requests.
+
+### Tests
+
+- Added regression coverage for screenshot-shaped current-bot reply follow-ups and reply-context helper behavior.
+
 ## [v2.3.1] - 2026-05-12
 
 Fixed a Python 3.10 startup crash in runtime config response-access helpers.

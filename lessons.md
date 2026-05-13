@@ -75,14 +75,14 @@ Guardrail: Do not casually rewrite Geechan-authored prompt prose to fix runtime 
 
 Evidence: The `v2.2.7` delivery formatter was initially pushed before the required 4SR pass; the belated review found a dash-started newline regression and required amending the release commit/tag.
 
-Guardrail: For every code contribution, run 4SR before final handoff and before pushing release tags when practical. Treat review as part of implementation, not a postscript. If a review finds an issue after push, fix it, rerun focused and full tests, then clearly report any amended or force-updated refs.
+Guardrail: Match review depth to risk before final handoff. Use the full 4SR review flow before pushing release tags, PR-bound behavior changes, broad refactors, or user-requested review passes. For narrow local fixes, do a focused self-review plus relevant tests. Treat review as part of implementation, not a postscript. If a review finds an issue after push, fix it, rerun focused and full tests, then clearly report any amended or force-updated refs.
 
 ## Agent-First Checks
 
 - Read this file before planning edits.
 - Read `docs/README.md`, then the specific deeper doc for the touched area.
 - For code changes, run focused tests first, then `python tools/quality_check.py`, then `python -m pytest`.
-- For every code contribution, perform the user's 4SR review flow before final handoff.
+- For release-bound or high-risk code contributions, perform the user's 4SR review flow before final handoff; for narrow local fixes, perform a focused review and tests.
 - For response/context changes, add transcript-style regression tests rather than only helper-unit tests.
 - For dashboard settings, test dashboard payload validation and runtime effect.
 - For release work, keep `version.py`, `CHANGELOG.md`, commit, and tag synchronized.
