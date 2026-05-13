@@ -4,6 +4,11 @@ This directory is the repo-local knowledge base for agents and maintainers. Keep
 
 ## Start Here
 
+- [User README](../README.md) is the short first-run guide.
+- [Provider Configuration](provider-config.md) covers provider JSON, fallback tiers, local models, reasoning options, vision, and OpenRouter.
+- [Feature Guide](features.md) covers dashboard behavior, commands, memory, reminders, automation, characters, and multi-bot behavior.
+- [Runtime Configuration](runtime-config.md) lists the live settings stored in `bot_data/runtime_config.json`.
+- [Operations](operations.md) covers dashboard security, updates, deployment, file layout, and troubleshooting.
 - [Architecture](architecture.md) maps the runtime domains and where code belongs.
 - [Quality Guardrails](quality.md) lists mechanical invariants that should stay true as agents refactor.
 - [Agent Workflow](agent-workflow.md) describes the expected change loop for Codex-style work.
