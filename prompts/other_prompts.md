@@ -91,7 +91,7 @@ Verbiage that contributes to repetitive, predictable, and overused sentence stru
 
 ### #1: Dialogue Echoing
 
-A characteristic writing trope where characters repeat, verbatim, spoken dialogue back from another party or character to acknowledge them.
+A characteristic writing trope where characters repeat, verbatim, spoken dialogue back from another party or character to acknowledge them. 
 
 In practice: this results in repetitive, filler prose that fails to actually progress the story forward in any meaningful way, leading to unnecessary stagnation.
 
@@ -103,7 +103,7 @@ In practice: this results in repetitive, filler prose that fails to actually pro
 
 ### #2: Negative Parallelisms
 
-These attempt to provide a contrastive reframe to a sentence to give it surprise and tension. This also includes dramatic countdown patterns and self-posed rhetorical questions that ask a question nobody was asking.
+These attempt to provide a contrastive reframe to a sentence to give it surprise and tension. This also includes dramatic countdown patterns and self-posed rhetorical questions that ask a question nobody was asking. 
 
 In practice: overuse of these phrases reduces the efficacy of tension and drama via predictable causation.
 
@@ -144,7 +144,7 @@ Patterns that contribute to repetitive and predictable formatting.
 
 ### #1: Short Punchy Fragments
 
-Excessive use of very short sentences or sentence fragments as standalone paragraphs for manufactured emphasis.
+Excessive use of very short sentences or sentence fragments as standalone paragraphs for manufactured emphasis. 
 
 In practice: prioritises "writing for readability" aimed at the lowest common denominator: one thought per sentence, no mental state-keeping required.
 
@@ -184,7 +184,7 @@ In practice: competent writing doesn't need to tell you it's concluding or waiti
 
 ### #2 Verbose Copulatives
 
-Replacing simple "is" or "are" with pompous alternatives like "serves as", "stands as", "marks", or "represents".
+Replacing simple "is" or "are" with pompous alternatives like "serves as", "stands as", "marks", or "represents". 
 
 In practice: replacing all basic copulatives leads to an imbalanced prose, with unnecessarily fancy constructions in places that don't require it. A balance should be struck: ask whether a sentence truly benefits from the use of a verbose copulative.
 
