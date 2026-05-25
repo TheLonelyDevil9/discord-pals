@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import module_stubs  # noqa: F401
 import discord_utils
@@ -38,6 +39,29 @@ class ResponseSanitizerTests(unittest.TestCase):
 
         self.assertEqual(cleaned, "You too?")
 
+    def test_sanitize_response_strips_leading_emote_state_markers(self):
+        examples = {
+            "[pleased] It is. A hot brew has its uses.": "It is. A hot brew has its uses.",
+            "pleased] How does one manage to get drunk off fumes?": "How does one manage to get drunk off fumes?",
+            "[angry] Kris! How can you accuse me of such a thing?": "Kris! How can you accuse me of such a thing?",
+            "First line.\n[pleased] Second line.": "First line.\nSecond line.",
+        }
+
+        for raw, expected in examples.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(sanitizer.sanitize_response(raw, "Firefly"), expected)
+
+    def test_sanitize_response_preserves_reaction_tags_and_mid_sentence_brackets(self):
+        cleaned = sanitizer.sanitize_response(
+            "[REACT: :wave:] I meant [pleased] as the literal marker, <@123> <:wave:456>",
+            "Firefly",
+        )
+
+        self.assertEqual(
+            cleaned,
+            "[REACT: :wave:] I meant [pleased] as the literal marker, <@123> <:wave:456>",
+        )
+
     def test_sanitize_response_strips_ooc_editorial_note_lines(self):
         cleaned = sanitizer.sanitize_response(
             "You're incorrigible, you know that?\n\n[OOC: tightened the wording here.]\nEditorial note: keep it casual.",
@@ -67,7 +91,7 @@ class ResponseSanitizerTests(unittest.TestCase):
             discord_utils.conversation_history = {}
             discord_utils._channel_last_activity = {}
             discord_utils._recent_message_hashes = {}
-            with unittest.mock.patch.object(discord_utils, "save_history"):
+            with mock.patch.object(discord_utils, "save_history"):
                 discord_utils.add_to_history(
                     channel_id,
                     "user",

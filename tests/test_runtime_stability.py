@@ -917,6 +917,41 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(context["identity_guard_blocked"])
         self.assertEqual(generate_mock.await_count, 2)
 
+    async def test_generate_ai_response_strips_bracketed_emote_leak_before_delivery(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character_name = "firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+
+        context = {
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Kris: coffee?"}],
+            "chatroom_context": "",
+            "other_bot_names": [],
+        }
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+        message.channel.typing = lambda: _AsyncNoop()
+
+        with patch.object(
+                bot_instance_module.provider_manager,
+                "generate",
+                new=AsyncMock(return_value="[pleased] It is. A hot brew has its uses.")), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "identity_guard_enabled": True,
+                    "identity_guard_policy": "regenerate_then_drop",
+                    "use_single_user": False,
+                    "prose_polisher_enabled": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "store_last_context"), \
+                patch.object(bot_instance_module.stats_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_error"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            response = await instance._generate_ai_response(context, message)
+
+        self.assertEqual(response, "It is. A hot brew has its uses.")
+
     def test_identity_guard_allows_plain_bot_name_reference(self):
         instance = object.__new__(bot_instance_module.BotInstance)
 
