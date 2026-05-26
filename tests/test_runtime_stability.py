@@ -192,7 +192,122 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         speaker_index = rendered_messages.index(speaker_context[0])
         self.assertGreater(speaker_index, 0)
         self.assertEqual(rendered_messages[speaker_index - 1]["kind"], "chatroom_context")
-        self.assertEqual(rendered_messages[speaker_index + 1]["content"], "Friend: CurrentUser is drunk")
+        self.assertEqual(rendered_messages[speaker_index + 1]["kind"], "current_turn_boundary")
+        self.assertEqual(rendered_messages[speaker_index + 2]["content"], "Friend: CurrentUser is drunk")
+
+    async def test_build_request_context_adds_current_turn_boundary_for_topic_ownership(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Kaveh"
+        instance.character_name = "kaveh"
+        instance.character = types.SimpleNamespace(name="Kaveh", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="hangout-general")
+        guild = types.SimpleNamespace(id=5, name="WaWa")
+        author = types.SimpleNamespace(id=43, bot=False)
+        message = types.SimpleNamespace(
+            id=4004,
+            content='kaveh, haitham, wanna see my "Chub"?',
+            author=author,
+            channel=channel,
+            guild=guild,
+            mentions=[],
+        )
+        request = {
+            "message": message,
+            "content": 'kaveh, haitham, wanna see my "Chub"?',
+            "guild": guild,
+            "attachments": [],
+            "user_name": "Kris",
+            "is_dm": False,
+            "user_id": 43,
+            "sticker_info": None,
+        }
+        immediate_history = [
+            {
+                "role": "user",
+                "content": "TheLonelyWaWa: About 3 hours",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Fly: Three hours to build an entire dashboard that replaces a broken API? "
+                    "That's genuinely impressive."
+                ),
+            },
+            {
+                "role": "user",
+                "content": 'Kris: kaveh, haitham, wanna see my "Chub"?',
+            },
+        ]
+        runtime_values = {
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": False,
+            "diagnostic_logging": True,
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], immediate_history))
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+            diagnostic_mock = stack.enter_context(patch.object(bot_instance_module.log, "diagnostic"))
+
+            context = await instance._build_request_context(request)
+
+        self.assertIsNotNone(context)
+        rendered_messages = context["messages_for_api"]
+        boundaries = [
+            msg for msg in rendered_messages
+            if msg.get("kind") == "current_turn_boundary"
+        ]
+        self.assertEqual(len(boundaries), 1)
+        boundary = boundaries[0]["content"]
+        self.assertIn("Newest Discord turn is authored by Kris", boundary)
+        self.assertIn("Treat each earlier chat line as belonging only to the visible author prefix", boundary)
+        self.assertIn("Do not attribute another user's projects", boundary)
+        boundary_index = rendered_messages.index(boundaries[0])
+        self.assertEqual(rendered_messages[boundary_index + 1]["content"], "TheLonelyWaWa: About 3 hours")
+        self.assertEqual(rendered_messages[-1]["content"], 'Kris: kaveh, haitham, wanna see my "Chub"?')
+
+        trace_calls = [
+            call for call in diagnostic_mock.call_args_list
+            if call.kwargs.get("event") == "attribution_context_trace"
+        ]
+        self.assertEqual(len(trace_calls), 1)
+        trace_fields = trace_calls[0].kwargs
+        self.assertEqual(trace_fields["current_author"], "Kris")
+        self.assertEqual(trace_fields["target_user"], "Kris")
+        self.assertEqual(trace_fields["current_message_preview"], 'kaveh, haitham, wanna see my "Chub"?')
+        self.assertIn("current_turn_boundary", trace_fields)
+        self.assertEqual(len(trace_fields["immediate_messages"]), 3)
+        self.assertIn("TheLonelyWaWa", trace_fields["immediate_messages"][0]["content"])
 
     async def test_build_request_context_anchors_reply_to_current_bot_previous_message(self):
         instance = object.__new__(bot_instance_module.BotInstance)
