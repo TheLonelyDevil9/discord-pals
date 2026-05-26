@@ -393,6 +393,14 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual({channel["id"] for channel in data["channels"]}, {10, 20})
         self.assertEqual(len(data["channels"]), 2)
 
+    def test_shared_navigation_exposes_update_indicator_on_non_dashboard_tabs(self):
+        page = self.client.get("/characters").get_data(as_text=True)
+
+        self.assertIn('id="nav-update-status"', page)
+        self.assertIn('id="nav-update-label"', page)
+        self.assertIn('checkGlobalUpdateStatus(true)', page)
+        self.assertIn('href="/#update-bot-control"', page)
+
     def test_status_delta_returns_changed_false_when_etag_matches(self):
         runtime_config_module.update_last_activity("Nahida")
 
