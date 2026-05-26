@@ -4,6 +4,18 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.3] - 2026-05-26
+
+### Added
+
+- Added autonomous DM image follow-ups so configured bots can generate and send image follow-up messages in private conversations.
+- Added dashboard/runtime controls for DM follow-up image generation provider, prompt, timing, cooldown, and per-bot behavior.
+- Added provider and documentation support for the DM image generation path.
+
+### Tests
+
+- Added regression coverage for autonomous DM image follow-up scheduling, prompt propagation, and provider handling.
+
 ## [v2.3.2] - 2026-05-13
 
 ### Changed
