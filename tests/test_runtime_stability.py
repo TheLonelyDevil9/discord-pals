@@ -191,11 +191,10 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Earlier third-person lines about the addressed user", speaker_context[0]["content"])
         speaker_index = rendered_messages.index(speaker_context[0])
         self.assertGreater(speaker_index, 0)
-        self.assertEqual(rendered_messages[speaker_index - 1]["kind"], "chatroom_context")
-        self.assertEqual(rendered_messages[speaker_index + 1]["kind"], "current_turn_boundary")
-        self.assertEqual(rendered_messages[speaker_index + 2]["content"], "Friend: CurrentUser is drunk")
+        self.assertEqual(rendered_messages[speaker_index - 1]["content"], "CurrentUser: I'm drunk sorry")
+        self.assertEqual(rendered_messages[speaker_index + 1]["content"], "CurrentUser: Who's he?")
 
-    async def test_build_request_context_adds_current_turn_boundary_for_topic_ownership(self):
+    async def test_build_request_context_places_speaker_anchor_next_to_current_turn(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Kaveh"
         instance.character_name = "kaveh"
@@ -226,10 +225,7 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             "sticker_info": None,
         }
         immediate_history = [
-            {
-                "role": "user",
-                "content": "TheLonelyWaWa: About 3 hours",
-            },
+            {"role": "user", "content": "TheLonelyWaWa: About 3 hours"},
             {
                 "role": "user",
                 "content": (
@@ -237,15 +233,11 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
                     "That's genuinely impressive."
                 ),
             },
-            {
-                "role": "user",
-                "content": 'Kris: kaveh, haitham, wanna see my "Chub"?',
-            },
+            {"role": "user", "content": 'Kris: kaveh, haitham, wanna see my "Chub"?'},
         ]
         runtime_values = {
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
-            "diagnostic_logging": True,
         }
 
         with ExitStack() as stack:
@@ -277,37 +269,20 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(bot_instance_module.log, "info"))
             stack.enter_context(patch.object(bot_instance_module.log, "warn"))
             stack.enter_context(patch.object(bot_instance_module.log, "debug"))
-            diagnostic_mock = stack.enter_context(patch.object(bot_instance_module.log, "diagnostic"))
 
             context = await instance._build_request_context(request)
 
         self.assertIsNotNone(context)
         rendered_messages = context["messages_for_api"]
-        boundaries = [
+        self.assertNotIn("current_turn_boundary", [msg.get("kind") for msg in rendered_messages])
+        speaker_context = [
             msg for msg in rendered_messages
-            if msg.get("kind") == "current_turn_boundary"
+            if msg.get("kind") == "current_speaker_context"
         ]
-        self.assertEqual(len(boundaries), 1)
-        boundary = boundaries[0]["content"]
-        self.assertIn("Newest Discord turn is authored by Kris", boundary)
-        self.assertIn("Treat each earlier chat line as belonging only to the visible author prefix", boundary)
-        self.assertIn("Do not attribute another user's projects", boundary)
-        boundary_index = rendered_messages.index(boundaries[0])
-        self.assertEqual(rendered_messages[boundary_index + 1]["content"], "TheLonelyWaWa: About 3 hours")
-        self.assertEqual(rendered_messages[-1]["content"], 'Kris: kaveh, haitham, wanna see my "Chub"?')
-
-        trace_calls = [
-            call for call in diagnostic_mock.call_args_list
-            if call.kwargs.get("event") == "attribution_context_trace"
-        ]
-        self.assertEqual(len(trace_calls), 1)
-        trace_fields = trace_calls[0].kwargs
-        self.assertEqual(trace_fields["current_author"], "Kris")
-        self.assertEqual(trace_fields["target_user"], "Kris")
-        self.assertEqual(trace_fields["current_message_preview"], 'kaveh, haitham, wanna see my "Chub"?')
-        self.assertIn("current_turn_boundary", trace_fields)
-        self.assertEqual(len(trace_fields["immediate_messages"]), 3)
-        self.assertIn("TheLonelyWaWa", trace_fields["immediate_messages"][0]["content"])
+        self.assertEqual(len(speaker_context), 1)
+        speaker_index = rendered_messages.index(speaker_context[0])
+        self.assertEqual(rendered_messages[speaker_index - 1]["content"], immediate_history[1]["content"])
+        self.assertEqual(rendered_messages[speaker_index + 1]["content"], immediate_history[2]["content"])
 
     async def test_build_request_context_anchors_reply_to_current_bot_previous_message(self):
         instance = object.__new__(bot_instance_module.BotInstance)

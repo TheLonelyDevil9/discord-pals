@@ -618,47 +618,12 @@ class BotInstance:
             return (
                 f"Current Discord message author: {safe_speaker}. "
                 f"This split reply is addressed to {safe_split_target}; address {safe_split_target} directly as \"you\". "
-                "Earlier third-person lines about the addressed user do not change who this split reply addresses. "
-                "Keep authorship literal: earlier statements, work, offers, and accomplishments from other named users stay with those users."
+                "Earlier third-person lines about the addressed user do not change who this split reply addresses."
             )
         return (
             f"Current Discord message author: {safe_speaker}. "
             f"The reply is addressed to {safe_target}; address {safe_target} directly as \"you\". "
-            "Earlier third-person lines about the addressed user do not change who this reply addresses. "
-            "Keep authorship literal: earlier statements, work, offers, and accomplishments from other named users stay with those users."
-        )
-
-    @staticmethod
-    def _current_turn_boundary_context(
-        *,
-        speaker_name: str,
-        speaker_is_bot: bool,
-        target_user_name: str | None = None,
-        split_target_name: str | None = None,
-        content: str | None = None,
-    ) -> str:
-        """Return a near-current prompt boundary that prevents cross-user attribution bleed."""
-        safe_speaker = " ".join(str(speaker_name or "Unknown").split())
-        safe_target = " ".join(str(target_user_name or safe_speaker).split())
-        safe_split_target = " ".join(str(split_target_name or "").split())
-        addressed_user = safe_split_target or safe_target
-        preview = "" if speaker_is_bot else summarize_reply_content(content or "", limit=220)
-
-        parts = [f"Newest Discord turn is authored by {safe_speaker}"]
-        if speaker_is_bot:
-            parts.append("(a bot/app event used only for routing context)")
-        if addressed_user and addressed_user != safe_speaker:
-            parts.append(f"and this reply is addressed to {addressed_user}")
-        if preview:
-            parts.append(f"Newest message: \"{preview}\"")
-
-        target_suffix = f" or {addressed_user}" if addressed_user and addressed_user != safe_speaker else ""
-
-        return (
-            ". ".join(parts) + ". "
-            "Treat each earlier chat line as belonging only to the visible author prefix on that line. "
-            f"Do not attribute another user's projects, work, offers, time estimates, or accomplishments to {safe_speaker}"
-            f"{target_suffix} unless this newest message explicitly says so."
+            "Earlier third-person lines about the addressed user do not change who this reply addresses."
         )
 
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
@@ -2161,11 +2126,15 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        # Build complete message list for API
+        # Build complete message list for API. Keep the current-turn anchor
+        # adjacent to the newest Discord line, not the whole recent transcript.
         messages_for_api = []
         messages_for_api.extend(history_msgs)
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
+        prior_immediate = immediate[:-1] if immediate else []
+        current_immediate = immediate[-1:] if immediate else []
+        messages_for_api.extend(prior_immediate)
         message_author = getattr(message, "author", None)
         current_message_is_bot = getattr(message_author, "bot", False)
         speaker_context = self._current_speaker_context(
@@ -2186,19 +2155,7 @@ Return exactly one JSON object with this shape:
         )
         if current_bot_reply_anchor:
             messages_for_api.append(current_bot_reply_anchor)
-        current_turn_boundary = self._current_turn_boundary_context(
-            speaker_name=user_name,
-            speaker_is_bot=current_message_is_bot,
-            target_user_name=target_user_name,
-            split_target_name=getattr(split_target, "display_name", None) or getattr(split_target, "name", None),
-            content=content,
-        )
-        messages_for_api.append({
-            "role": "system",
-            "content": current_turn_boundary,
-            "kind": "current_turn_boundary",
-        })
-        messages_for_api.extend(immediate)
+        messages_for_api.extend(current_immediate)
 
         bot_event_context = None
         if current_message_is_bot:
@@ -2242,36 +2199,6 @@ Return exactly one JSON object with this shape:
                 event="multimodal_attach_failed",
                 req_id=req_id,
                 channel_id=discord_channel_id,
-            )
-
-        if runtime_config.get("diagnostic_logging", False):
-            def _trace_message(item, index):
-                item_content = item.get("content", "")
-                content_preview = "[multimodal content]" if isinstance(item_content, list) else log.preview(item_content, 220)
-                return {
-                    "index": index,
-                    "role": item.get("role"),
-                    "kind": item.get("kind"),
-                    "author": item.get("author"),
-                    "content": content_preview,
-                }
-
-            log.diagnostic(
-                "Attribution context trace",
-                self.name,
-                component="context",
-                event="attribution_context_trace",
-                req_id=req_id,
-                channel_id=discord_channel_id,
-                user_id=target_user_id,
-                message_id=message_id,
-                current_author=user_name,
-                target_user=target_user_name,
-                split_target_id=getattr(split_target, "id", None),
-                current_message_index=current_message_index,
-                current_message_preview=log.preview(content, 220),
-                current_turn_boundary=log.preview(current_turn_boundary, 300),
-                immediate_messages=[_trace_message(item, idx) for idx, item in enumerate(immediate)],
             )
 
         system_count = sum(1 for item in messages_for_api if item.get("role") == "system")
