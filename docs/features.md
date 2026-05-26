@@ -101,6 +101,16 @@ Settings live in the dashboard Config page or `bot_data/runtime_config.json`:
 | `dm_followup_max_count` | 1 | Max follow-ups before stopping. |
 | `dm_followup_cooldown_hours` | 24 | Cooldown for the same user. |
 
+DM random images are an optional branch of the same follow-up loop, so they inherit the DM response switch, DM user blacklist, bot schedule, cooldown, and max-count rules. When enabled, an eligible follow-up can generate one image through configured `image_providers` and send it in the DM, optionally with a short in-character caption.
+
+| Setting | Default | Use |
+| --- | --- | --- |
+| `dm_image_generation_enabled` | false | Enables generated-image follow-ups. |
+| `dm_image_generation_chance` | 0.25 | Chance an eligible follow-up sends an image instead of text. |
+| `dm_image_generation_caption_chance` | 0.85 | Chance to include a short generated caption. |
+| `dm_image_generation_preferred_tier` | "" | Preferred `image_providers` tier, or default order. |
+| `dm_image_generation_prompt` | weird meme prompt | Stable style goal mixed with recent DM context. |
+
 ## Bot Availability
 
 Bot schedules define unavailable windows for a bot. Each bot can have multiple windows with selected days, start time, and end time. Overnight windows carry into the next morning.

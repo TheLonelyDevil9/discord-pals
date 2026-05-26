@@ -4,8 +4,9 @@ Discord Pals - AI Providers
 """
 
 from openai import AsyncOpenAI, RateLimitError, APIError
+import base64
 from typing import List, Dict, Optional
-from config import PROVIDERS, API_TIMEOUT
+from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 import asyncio
 import copy
@@ -373,7 +374,9 @@ class AIProviderManager:
 
     def __init__(self):
         self.providers: Dict[str, AsyncOpenAI] = {}
+        self.image_providers: Dict[str, AsyncOpenAI] = {}
         self.status: Dict[str, str] = {tier: "unknown" for tier in PROVIDERS}
+        self.image_status: Dict[str, str] = {tier: "unknown" for tier in IMAGE_PROVIDERS}
         self._vision_support_overrides: Dict[str, bool] = {}
         
         for tier, cfg in PROVIDERS.items():
@@ -390,6 +393,20 @@ class AIProviderManager:
                     api_key=cfg["key"],
                     timeout=cfg.get("timeout") or API_TIMEOUT,
                     default_headers=default_headers or None
+                )
+
+        for tier, cfg in IMAGE_PROVIDERS.items():
+            key = cfg.get("key")
+            if key:
+                default_headers = {}
+                if "openrouter.ai" in cfg.get("url", ""):
+                    default_headers["HTTP-Referer"] = "https://github.com/TheLonelyDevil9/discord-pals"
+                    default_headers["X-OpenRouter-Title"] = cfg.get("name", "Discord Pals")
+                self.image_providers[tier] = AsyncOpenAI(
+                    base_url=cfg["url"],
+                    api_key=key,
+                    timeout=cfg.get("timeout") or API_TIMEOUT,
+                    default_headers=default_headers or None,
                 )
 
     def _supports_vision_for_tier(self, tier: str) -> bool:
@@ -426,6 +443,112 @@ class AIProviderManager:
             tier_order.remove(preferred_tier)
             tier_order.insert(0, preferred_tier)
         return tier_order
+
+    def _build_image_tier_order(self, preferred_tier: str = "") -> List[str]:
+        """Build the image provider order for a request."""
+        tier_order = list(IMAGE_PROVIDERS.keys())
+        if preferred_tier and preferred_tier in tier_order:
+            tier_order.remove(preferred_tier)
+            tier_order.insert(0, preferred_tier)
+        return tier_order
+
+    @staticmethod
+    def _image_bytes_from_response(response) -> tuple[bytes | None, str | None]:
+        """Return generated image bytes and revised prompt metadata when present."""
+        image_items = getattr(response, "data", None) or []
+        if not image_items:
+            return None, None
+
+        first_image = image_items[0]
+        revised_prompt = getattr(first_image, "revised_prompt", None)
+        b64_json = getattr(first_image, "b64_json", None)
+        if b64_json:
+            try:
+                return base64.b64decode(b64_json), revised_prompt
+            except (TypeError, ValueError):
+                return None, revised_prompt
+
+        url = getattr(first_image, "url", None)
+        if isinstance(url, str) and url.startswith("data:image") and "," in url:
+            try:
+                return base64.b64decode(url.split(",", 1)[1]), revised_prompt
+            except (TypeError, ValueError):
+                return None, revised_prompt
+
+        return None, revised_prompt
+
+    async def generate_image(
+        self,
+        prompt: str,
+        preferred_tier: str = "",
+        req_id: str | None = None,
+    ) -> dict | None:
+        """Generate one image with configured image providers and return bytes metadata."""
+        prompt = str(prompt or "").strip()
+        if not prompt:
+            return None
+
+        req_id = req_id or log.new_request_id()
+        for tier in self._build_image_tier_order(preferred_tier):
+            if tier not in self.image_providers:
+                self.image_status[tier] = "no key"
+                continue
+
+            cfg = IMAGE_PROVIDERS[tier]
+            request_kwargs = {
+                "model": cfg.get("model", "gpt-image-1"),
+                "prompt": prompt,
+                "n": 1,
+                "size": cfg.get("size") or "1024x1024",
+            }
+            optional_fields = ("quality", "style", "response_format", "output_format", "background", "moderation")
+            for field in optional_fields:
+                if cfg.get(field):
+                    request_kwargs[field] = cfg[field]
+            if cfg.get("extra_body"):
+                request_kwargs["extra_body"] = dict(cfg["extra_body"])
+
+            try:
+                started = time.perf_counter()
+                response = await asyncio.wait_for(
+                    self.image_providers[tier].images.generate(**request_kwargs),
+                    timeout=cfg.get("timeout") or API_TIMEOUT,
+                )
+                image_bytes, revised_prompt = self._image_bytes_from_response(response)
+                if not image_bytes:
+                    self.image_status[tier] = "empty response"
+                    continue
+
+                self.image_status[tier] = "ok"
+                log.ok(
+                    f"[{tier}] Generated image with {cfg.get('model')}",
+                    component="provider",
+                    event="image_provider_response",
+                    req_id=req_id,
+                    tier=tier,
+                    model=cfg.get("model"),
+                    image_bytes=len(image_bytes),
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                )
+                return {
+                    "bytes": image_bytes,
+                    "filename": "discord-pals-image.png",
+                    "tier": tier,
+                    "provider_name": cfg.get("name", tier),
+                    "model": cfg.get("model"),
+                    "revised_prompt": revised_prompt,
+                }
+            except asyncio.TimeoutError:
+                self.image_status[tier] = "timeout"
+                log.error(f"[{tier}] Image generation timed out", component="provider", event="image_provider_timeout", req_id=req_id, tier=tier)
+                continue
+            except Exception as e:
+                self.image_status[tier] = "error"
+                log.error(f"[{tier}] Image generation failed: {str(e)[:100]}", component="provider", event="image_provider_error", req_id=req_id, tier=tier, error_type=type(e).__name__)
+                continue
+
+        log.error("All image providers failed", component="provider", event="image_provider_all_failed", req_id=req_id)
+        return None
 
     def can_use_vision(self, preferred_tier: str = "") -> bool:
         """Return True if any configured provider for this request supports vision."""

@@ -78,6 +78,11 @@ DEFAULTS = {
     "dm_followup_timeout_minutes": 120,  # Minutes of silence before sending a follow-up
     "dm_followup_max_count": 1,  # Max follow-up messages before stopping
     "dm_followup_cooldown_hours": 24,  # Hours between follow-up attempts for same user
+    "dm_image_generation_enabled": False,  # Allow DM follow-ups to send generated images
+    "dm_image_generation_chance": 0.25,  # Chance that an eligible DM follow-up becomes an image
+    "dm_image_generation_caption_chance": 0.85,  # Chance to include a short in-character caption
+    "dm_image_generation_preferred_tier": "",  # Optional preferred image provider tier
+    "dm_image_generation_prompt": "A weird, low-stakes, incomprehensible AI-generated meme image that looks like something a friend would send without context.",
     "bot_nicknames": {},  # Single-bot nickname fallback, edited through dashboard nickname controls
 }
 LEGACY_KEY_ALIASES = {
@@ -137,6 +142,11 @@ CONFIG_FIELDS = {
     "dm_followup_timeout_minutes": ConfigField(int, DEFAULTS["dm_followup_timeout_minutes"], 1, 10080),
     "dm_followup_max_count": ConfigField(int, DEFAULTS["dm_followup_max_count"], 1, 20),
     "dm_followup_cooldown_hours": ConfigField(int, DEFAULTS["dm_followup_cooldown_hours"], 1, 168),
+    "dm_image_generation_enabled": ConfigField(bool, DEFAULTS["dm_image_generation_enabled"]),
+    "dm_image_generation_chance": ConfigField(float, DEFAULTS["dm_image_generation_chance"], 0.0, 1.0),
+    "dm_image_generation_caption_chance": ConfigField(float, DEFAULTS["dm_image_generation_caption_chance"], 0.0, 1.0),
+    "dm_image_generation_preferred_tier": ConfigField(str, DEFAULTS["dm_image_generation_preferred_tier"]),
+    "dm_image_generation_prompt": ConfigField(str, DEFAULTS["dm_image_generation_prompt"]),
     "bot_nicknames": ConfigField(dict, DEFAULTS["bot_nicknames"]),
 }
 

@@ -399,6 +399,64 @@
 
             <div class="card span-full">
                 <div class="card-header">
+                    <span class="card-title">DM Random Images</span>
+                    <span class="impact-pill">Image provider calls</span>
+                </div>
+                <div class="card-body">
+                    <form id="dm-image-form">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="dm_image_generation_enabled">Enable DM Images</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="dm_image_generation_enabled" name="dm_image_generation_enabled"
+                                        {% if config.dm_image_generation_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">When a DM follow-up is due, the bot can send a random generated image instead of text.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_chance">Image Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_image_generation_chance" min="0" max="100" step="5"
+                                        value="{{ ((config.dm_image_generation_chance or 0) * 100) | int }}"
+                                        oninput="document.getElementById('dm_image_chance_val').textContent = this.value + '%'"
+                                        title="Chance that an eligible DM follow-up sends an image">
+                                    <span class="slider-val" id="dm_image_chance_val">{{ ((config.dm_image_generation_chance or 0) * 100) | int }}%</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_caption_chance">Caption Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_image_generation_caption_chance" min="0" max="100" step="5"
+                                        value="{{ ((config.dm_image_generation_caption_chance or 0) * 100) | int }}"
+                                        oninput="document.getElementById('dm_image_caption_val').textContent = this.value + '%'"
+                                        title="Chance to generate a short in-character caption">
+                                    <span class="slider-val" id="dm_image_caption_val">{{ ((config.dm_image_generation_caption_chance or 0) * 100) | int }}%</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_preferred_tier">Preferred Image Provider</label>
+                                <select id="dm_image_generation_preferred_tier" name="dm_image_generation_preferred_tier" title="Preferred image provider tier">
+                                    <option value="">Default order</option>
+                                    {% for tier in image_provider_tiers %}
+                                    <option value="{{ tier }}" {% if config.dm_image_generation_preferred_tier==tier %}selected{% endif %}>{{ tier|capitalize }} ({{ image_providers_dict.get(tier, {}).get('name', tier) }})</option>
+                                    {% endfor %}
+                                </select>
+                                <p class="form-hint">Configure image providers in providers.json under <code>image_providers</code>.</p>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="dm_image_generation_prompt">Image Style Prompt</label>
+                            <textarea id="dm_image_generation_prompt" name="dm_image_generation_prompt" rows="4" spellcheck="true" placeholder="A strange generated meme image...">{{ config.dm_image_generation_prompt }}</textarea>
+                            <p class="form-hint">Used as the stable style goal. Recent DM context is added automatically at send time.</p>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save DM Image Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card span-full">
+                <div class="card-header">
                     <span class="card-title">Bot Availability Schedules</span>
                     <span class="impact-pill">Changes when bots act</span>
                 </div>
@@ -1335,6 +1393,17 @@ document.getElementById('dm-followup-form')?.addEventListener('submit', async (e
         dm_followup_max_count: parseInt(document.getElementById('dm_followup_max_count').value),
         dm_followup_cooldown_hours: parseInt(document.getElementById('dm_followup_cooldown_hours').value)
     }, 'DM follow-up settings saved');
+});
+
+document.getElementById('dm-image-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postConfig({
+        dm_image_generation_enabled: document.getElementById('dm_image_generation_enabled').checked,
+        dm_image_generation_chance: parseInt(document.getElementById('dm_image_generation_chance').value) / 100,
+        dm_image_generation_caption_chance: parseInt(document.getElementById('dm_image_generation_caption_chance').value) / 100,
+        dm_image_generation_preferred_tier: document.getElementById('dm_image_generation_preferred_tier').value,
+        dm_image_generation_prompt: document.getElementById('dm_image_generation_prompt').value
+    }, 'DM image settings saved');
 });
 
 function parseIdList(elementId) {

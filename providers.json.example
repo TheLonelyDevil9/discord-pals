@@ -95,6 +95,16 @@
     }
   ],
   "timeout": 60,
+  "image_providers": [
+    {
+      "name": "OpenAI Images",
+      "url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-1",
+      "size": "1024x1024",
+      "timeout": 120
+    }
+  ],
   "character_providers": {
     "example_character": "primary"
   }

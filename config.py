@@ -169,7 +169,91 @@ def load_providers() -> tuple[dict, int, dict]:
     }, timeout, CharacterProviderMap()
 
 
+def load_image_providers() -> dict:
+    """Load OpenAI-compatible image generation providers from providers.json."""
+    config_path = os.path.join(os.path.dirname(__file__), "providers.json")
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            log.warn(f"Invalid providers.json image provider section: {e}")
+            return {}
+
+        image_provider_list = data.get("image_providers")
+        if image_provider_list is None:
+            key = os.getenv('OPENAI_API_KEY')
+            log.register_secret(key)
+            return {
+                "primary": {
+                    "name": "OpenAI Images",
+                    "url": "https://api.openai.com/v1",
+                    "key": key,
+                    "model": "gpt-image-1",
+                    "size": "1024x1024",
+                    "timeout": 120,
+                }
+            }
+        if not isinstance(image_provider_list, list):
+            log.warn("providers.json image_providers must be a list")
+            return {}
+
+        image_providers = {}
+        for i, provider in enumerate(image_provider_list):
+            if not isinstance(provider, dict):
+                log.warn(f"Image provider {i+1} is not an object, skipping")
+                continue
+
+            tier = ["primary", "secondary", "fallback"][i] if i < 3 else f"tier_{i}"
+            url = provider.get("url") or provider.get("base_url")
+            if not url:
+                log.warn(f"Image provider {i+1} missing 'url', skipping")
+                continue
+
+            key = None
+            if provider.get("api_key"):
+                key = provider["api_key"]
+            elif provider.get("key_env"):
+                key = os.getenv(provider["key_env"], "")
+            log.register_secret(key)
+            if not key:
+                key = "not-needed"
+
+            image_providers[tier] = {
+                "name": _validate_provider_value(provider.get("name"), str, f"Image Provider {i+1}", name="image_provider.name"),
+                "url": url,
+                "key": key,
+                "model": _validate_provider_value(provider.get("model"), str, "gpt-image-1", name="image_provider.model"),
+                "size": _validate_provider_value(provider.get("size"), str, "1024x1024", name="image_provider.size"),
+                "quality": _validate_provider_value(provider.get("quality"), str, "", name="image_provider.quality"),
+                "style": _validate_provider_value(provider.get("style"), str, "", name="image_provider.style"),
+                "response_format": _validate_provider_value(provider.get("response_format"), str, "", name="image_provider.response_format"),
+                "output_format": _validate_provider_value(provider.get("output_format"), str, "", name="image_provider.output_format"),
+                "background": _validate_provider_value(provider.get("background"), str, "", name="image_provider.background"),
+                "moderation": _validate_provider_value(provider.get("moderation"), str, "", name="image_provider.moderation"),
+                "timeout": _validate_provider_value(provider.get("timeout"), int, 120, min_val=5, max_val=3600, name="image_provider.timeout"),
+                "extra_body": _validate_provider_value(provider.get("extra_body"), dict, {}, name="image_provider.extra_body"),
+            }
+
+        return image_providers
+
+    key = os.getenv('OPENAI_API_KEY')
+    log.register_secret(key)
+    return {
+        "primary": {
+            "name": "OpenAI Images",
+            "url": "https://api.openai.com/v1",
+            "key": key,
+            "model": "gpt-image-1",
+            "size": "1024x1024",
+            "timeout": 120,
+        }
+    }
+
+
 PROVIDERS, API_TIMEOUT, CHARACTER_PROVIDERS = load_providers()
+IMAGE_PROVIDERS = load_image_providers()
 
 
 def reload_character_providers() -> dict:

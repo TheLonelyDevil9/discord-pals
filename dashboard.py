@@ -25,7 +25,7 @@ from security import (
     login_user, logout_user, is_auth_enabled
 )
 from constants import ALLOWED_IMPORT_FILES
-from config import PROVIDERS, CHARACTER_PROVIDERS, AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
+from config import PROVIDERS, IMAGE_PROVIDERS, CHARACTER_PROVIDERS, AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
 from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
@@ -1103,6 +1103,8 @@ def config_page():
         characters=characters,
         providers=providers,
         provider_tiers=list(PROVIDERS.keys()),
+        image_provider_tiers=list(IMAGE_PROVIDERS.keys()),
+        image_providers_dict=IMAGE_PROVIDERS,
         providers_dict=PROVIDERS,
         character_providers=CHARACTER_PROVIDERS,
         bots=bots_info,

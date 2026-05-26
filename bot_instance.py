@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
-from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
+from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
 from providers import provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
@@ -32,7 +32,7 @@ from response_delivery import format_response_for_delivery
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
 from stats import stats_manager
-import runtime_config
+import dm_images, runtime_config
 import response_access
 import logger as log
 import user_ignores
@@ -1751,7 +1751,7 @@ Return exactly one JSON object with this shape:
                 diagnostic_events.log_discord_send_failed(self.name, req_id, channel, e, part=i + 1, total_parts=len(lines))
                 break
         return sent_records
-    
+
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
         for reaction in reactions:
@@ -3223,6 +3223,9 @@ Return exactly one JSON object with this shape:
                     idle_seconds=max(0.0, now - last_msg),
                     timeout_mins=timeout_mins,
                 )
+                if dm_images.should_send_dm_image_followup():
+                    sent_count += await dm_images.generate_and_send_dm_image_followup(bot_name=self.name, channel=channel, user_id=user_id, user_name=state.get("user_name", ""), character_name=char_name, state=state, history=history, history_id=delivery_target.history_id, followups_sent=followups_sent, max_followups=max_followups, now=now)
+                    continue
 
                 response = await provider_manager.generate(
                     messages=[{"role": "user", "content": prompt}],

@@ -132,6 +132,39 @@ When a user sends an image, vision providers receive multimodal content. Text-on
 
 Emoji and shortcode context remains text-only.
 
+## Image Generation Providers
+
+Autonomous DM images use a separate `image_providers` list in `providers.json`. Entries are OpenAI-compatible image-generation clients, tried in order unless `dm_image_generation_preferred_tier` selects a tier from the dashboard.
+
+```json
+{
+  "image_providers": [
+    {
+      "name": "OpenAI Images",
+      "url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-1",
+      "size": "1024x1024",
+      "timeout": 120
+    }
+  ]
+}
+```
+
+Common image provider fields:
+
+| Field | Use |
+| --- | --- |
+| `name` | Friendly dashboard/log name. |
+| `url` | OpenAI-compatible base URL. `base_url` is also accepted. |
+| `key_env` | Environment variable containing the API key. |
+| `model` | Image model name. Defaults to `gpt-image-1`. |
+| `size` | Image size, such as `1024x1024`. |
+| `quality`, `style`, `output_format`, `background`, `moderation` | Optional provider-specific image parameters. |
+| `response_format` | Optional response format for providers that need it. GPT image models return base64 by default. |
+| `extra_body` | Extra JSON passed through to the image generation call. |
+| `timeout` | Per-image timeout in seconds. |
+
 ## Provider-Specific Bodies
 
 Use `extra_body` for JSON:

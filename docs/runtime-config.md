@@ -59,6 +59,11 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `dm_followup_timeout_minutes` | 120 | Silence period before a DM follow-up. |
 | `dm_followup_max_count` | 1 | Max follow-ups before stopping. |
 | `dm_followup_cooldown_hours` | 24 | Cooldown for the same user. |
+| `dm_image_generation_enabled` | false | Allows eligible DM follow-ups to send generated images. |
+| `dm_image_generation_chance` | 0.25 | Probability that an eligible DM follow-up sends an image instead of text. |
+| `dm_image_generation_caption_chance` | 0.85 | Probability that generated images get a short in-character caption. |
+| `dm_image_generation_preferred_tier` | "" | Optional preferred image provider tier. |
+| `dm_image_generation_prompt` | weird meme prompt | Stable image style goal mixed with recent DM context. |
 
 ## Practical Adjustments
 

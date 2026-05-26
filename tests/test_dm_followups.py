@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
+import dm_images as dm_images_module
 
 
 class _FakeTyping:
@@ -18,12 +19,15 @@ class _FakeDMChannel:
     def __init__(self, channel_id):
         self.id = channel_id
         self.sent_messages = []
+        self.sent_files = []
 
     def typing(self):
         return _FakeTyping()
 
-    async def send(self, content):
+    async def send(self, content=None, file=None):
         self.sent_messages.append(content)
+        self.sent_files.append(file)
+        return types.SimpleNamespace(created_at=None)
 
 
 class _FakeUser:
@@ -244,3 +248,99 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("normal punctuation", system_prompt.lower())
         self.assertIn("Loves stargazing on quiet nights.", prompt)
         self.assertIn("Recent topic:", prompt)
+
+    async def test_followup_cycle_can_send_generated_image_in_dm(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        fake_user = _FakeUser(dm_channel)
+        instance.client = _FakeClient(fake_user)
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+                "user_name": "Alice",
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+            "dm_image_generation_enabled": True,
+            "dm_image_generation_chance": 1.0,
+            "dm_image_generation_caption_chance": 0.0,
+            "dm_image_generation_preferred_tier": "primary",
+            "dm_image_generation_prompt": "A nonsense meme image",
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[{"role": "user", "author": "Alice", "content": "send me something cursed"}]), \
+                patch.object(dm_images_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock()) as generate_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate_image", new=AsyncMock(return_value={
+                    "bytes": b"fake-png",
+                    "filename": "meme.png",
+                })) as image_mock, \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.asyncio, "sleep", new=AsyncMock(return_value=None)), \
+                patch.object(dm_images_module.random, "random", return_value=0.0):
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(dm_channel.sent_messages, [None])
+        self.assertEqual(dm_channel.sent_files[0].filename, "meme.png")
+        self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 1)
+        self.assertEqual(instance._dm_followup_state[42]["last_followup"], 2_000.0)
+        self.assertIn("nonsense meme", image_mock.await_args.args[0])
+        self.assertEqual(image_mock.await_args.kwargs["preferred_tier"], "primary")
+        generate_mock.assert_not_awaited()
+        add_history_mock.assert_called_once_with(
+            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", timestamp=None
+        )
+
+    async def test_followup_cycle_does_not_advance_state_when_image_send_fails(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        fake_user = _FakeUser(dm_channel)
+        instance.client = _FakeClient(fake_user)
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+                "user_name": "Alice",
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+            "dm_image_generation_enabled": True,
+            "dm_image_generation_chance": 1.0,
+            "dm_image_generation_caption_chance": 0.0,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[{"role": "user", "author": "Alice", "content": "hi"}]), \
+                patch.object(dm_images_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate_image", new=AsyncMock(return_value=None)), \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(dm_images_module.random, "random", return_value=0.0):
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 0)
+        self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
+        self.assertEqual(instance._dm_followup_state[42]["last_followup"], 0)
+        add_history_mock.assert_not_called()

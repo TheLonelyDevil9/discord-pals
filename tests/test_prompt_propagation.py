@@ -524,6 +524,11 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "log_file_max_mb": "5000",
                 "server_responses_enabled": "false",
                 "dm_responses_enabled": "false",
+                "dm_image_generation_enabled": "true",
+                "dm_image_generation_chance": "0.4",
+                "dm_image_generation_caption_chance": "0.6",
+                "dm_image_generation_preferred_tier": "primary",
+                "dm_image_generation_prompt": "Tiny incomprehensible raccoon meme.",
                 "response_channel_whitelist_only": "true",
                 "response_channel_whitelist": ["123456789012345678", "123456789012345678"],
                 "response_channel_blacklist": "222222222222222222, 333333333333333333",
@@ -547,11 +552,33 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["log_file_max_mb"], 100)
         self.assertIs(config["server_responses_enabled"], False)
         self.assertIs(config["dm_responses_enabled"], False)
+        self.assertIs(config["dm_image_generation_enabled"], True)
+        self.assertEqual(config["dm_image_generation_chance"], 0.4)
+        self.assertEqual(config["dm_image_generation_caption_chance"], 0.6)
+        self.assertEqual(config["dm_image_generation_preferred_tier"], "primary")
+        self.assertEqual(config["dm_image_generation_prompt"], "Tiny incomprehensible raccoon meme.")
         self.assertIs(config["response_channel_whitelist_only"], True)
         self.assertEqual(config["response_channel_whitelist"], ["123456789012345678"])
         self.assertEqual(config["response_channel_blacklist"], ["222222222222222222", "333333333333333333"])
         self.assertEqual(config["dm_user_blacklist"], ["444444444444444444"])
         self.assertNotIn("context_message_count", config)
+
+    def test_config_page_exposes_dm_image_controls_when_bots_loaded(self):
+        dashboard_module.bot_instances = [
+            types.SimpleNamespace(
+                name="Firefly",
+                character=types.SimpleNamespace(name="Firefly"),
+                character_name="firefly",
+                nicknames="",
+                client=types.SimpleNamespace(is_ready=lambda: False),
+            )
+        ]
+
+        page = self.client.get("/config").get_data(as_text=True)
+
+        self.assertIn('id="dm_image_generation_enabled"', page)
+        self.assertIn('id="dm_image_generation_prompt"', page)
+        self.assertIn('id="dm_image_generation_preferred_tier"', page)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
         response = self.client.post(
@@ -565,6 +592,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "bot_timezones": "not-a-dict",
                 "identity_guard_policy": "send_anyway",
                 "bot_reference_context_mode": "quote",
+                "dm_image_generation_chance": "3",
+                "dm_image_generation_caption_chance": "nan",
                 "response_channel_whitelist": "channel 777, <#888>",
                 "dm_user_blacklist": ["<@999>", "999", "0"],
                 "unknown_extension": "ignored",
@@ -582,6 +611,8 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["bot_timezones"], {})
         self.assertEqual(config["identity_guard_policy"], "regenerate_then_drop")
         self.assertEqual(config["bot_reference_context_mode"], "neutral")
+        self.assertEqual(config["dm_image_generation_chance"], 1.0)
+        self.assertEqual(config["dm_image_generation_caption_chance"], 0.85)
         self.assertEqual(config["response_channel_whitelist"], ["777", "888"])
         self.assertEqual(config["dm_user_blacklist"], ["999"])
         self.assertNotIn("unknown_extension", config)
@@ -636,6 +667,45 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
 
 class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_image_generation_uses_configured_provider_and_decodes_base64(self):
+        captured_kwargs = {}
+
+        class FakeImages:
+            async def generate(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                image = types.SimpleNamespace(b64_json="ZmFrZS1wbmc=", revised_prompt="revised")
+                return types.SimpleNamespace(data=[image])
+
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.image_providers = {"primary": types.SimpleNamespace(images=FakeImages())}
+        manager.image_status = {}
+        manager._build_image_tier_order = lambda preferred_tier="": [preferred_tier or "primary"]
+
+        image_cfg = {
+            "primary": {
+                "name": "Image Test",
+                "url": "https://example.invalid/v1",
+                "key": "not-needed",
+                "model": "gpt-image-1",
+                "size": "1024x1024",
+                "quality": "medium",
+                "timeout": 30,
+                "extra_body": {"seed": 4},
+            }
+        }
+
+        with patch.dict(providers_module.IMAGE_PROVIDERS, image_cfg, clear=True), \
+                patch.object(providers_module.log, "ok"), \
+                patch.object(providers_module.log, "error"):
+            result = await manager.generate_image("make meme", preferred_tier="primary")
+
+        self.assertEqual(result["bytes"], b"fake-png")
+        self.assertEqual(result["revised_prompt"], "revised")
+        self.assertEqual(captured_kwargs["model"], "gpt-image-1")
+        self.assertEqual(captured_kwargs["prompt"], "make meme")
+        self.assertEqual(captured_kwargs["quality"], "medium")
+        self.assertEqual(captured_kwargs["extra_body"], {"seed": 4})
+
     async def test_prose_polisher_rewrites_enabled_response(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
