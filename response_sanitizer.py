@@ -51,6 +51,23 @@ RE_GENERIC_MARKUP_TAG = re.compile(r'</?[A-Za-z][\w:-]*(?:\s+[^<>]*?)?\s*/?>')
 RE_MULTIPLE_NEWLINES = re.compile(r'\n{3,}')
 RE_DISCORD_OOC_COMMENT = re.compile(r'(^|[ \t\r\n])//')
 RE_VISIBLE_USER_MENTION = re.compile(r'<@!?(\d+)>')
+RE_LEADING_EMOTE_STATE_MARKER = re.compile(
+    r'^(?P<indent>[ \t]*)(?:'
+    r'\[(?P<bracket>[A-Za-z][A-Za-z0-9_ -]{1,30})\]'
+    r'|(?P<orphan>[A-Za-z][A-Za-z0-9_ -]{1,30})\]'
+    r')(?!:)(?:[ \t]+|(?=\S)|$)',
+    re.IGNORECASE,
+)
+EMOTE_STATE_MARKERS = {
+    "afraid", "angry", "annoyed", "awkward", "bashful", "blank", "blush", "blushing",
+    "bored", "calm", "concerned", "confused", "cry", "crying", "deadpan", "delighted",
+    "disappointed", "distressed", "dizzy", "embarrassed", "excited", "flustered", "frown",
+    "frowning", "frustrated", "giggle", "giggling", "grimace", "grin", "grinning", "happy",
+    "heart eyes", "hurt", "irritated", "laugh", "laughing", "mad", "nervous", "neutral",
+    "panicked", "pleased", "pout", "pouting", "sad", "scared", "serious", "shocked", "shy",
+    "sigh", "sighing", "sleepy", "smile", "smiling", "smirk", "smirking", "smug", "soft",
+    "surprised", "sweat", "sweating", "teary", "teasing", "tired", "upset", "worried",
+}
 
 # GLM 4.7 plain-text reasoning
 RE_GLM_THINK_START = re.compile(r'^think:', re.IGNORECASE)
@@ -368,6 +385,33 @@ def clean_bot_name_prefix(text: str, character_name: str = None) -> str:
     return text.strip()
 
 
+def clean_emote_state_markers(text: str) -> str:
+    """Remove visual-novel-style leading emotion tags leaked by models."""
+    if not text or "]" not in text:
+        return text
+
+    def is_emote_marker(match: re.Match) -> bool:
+        marker = (match.group("bracket") or match.group("orphan") or "").strip()
+        normalized = marker.lower()
+        normalized = " ".join(normalized.replace("_", " ").replace("-", " ").split())
+        return normalized in EMOTE_STATE_MARKERS
+
+    cleaned_lines = []
+    for raw_line in text.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        newline = raw_line[len(line):]
+        match = RE_LEADING_EMOTE_STATE_MARKER.match(line)
+        if not match or not is_emote_marker(match):
+            cleaned_lines.append(raw_line)
+            continue
+
+        cleaned_line = f'{match.group("indent")}{line[match.end():]}'
+        if cleaned_line.strip():
+            cleaned_lines.append(cleaned_line + newline)
+
+    return "".join(cleaned_lines).strip()
+
+
 def clean_em_dashes(text: str) -> str:
     """Replace em-dashes with appropriate punctuation."""
     # Mid-sentence em-dashes become ", "
@@ -442,7 +486,9 @@ def sanitize_response(text: str, character_name: str = None) -> str:
         return text
 
     text = remove_thinking_tags(text)
+    text = clean_emote_state_markers(text)
     text = clean_bot_name_prefix(text, character_name)
+    text = clean_emote_state_markers(text)
     text = clean_markup_leakage(text)
     text = clean_ooc_editorial_leakage(text)
     text = clean_em_dashes(text)
