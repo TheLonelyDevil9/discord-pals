@@ -76,7 +76,7 @@
                     <span class="toggle-status">{{ 'Single-User' if use_single_user else 'Multi-Role' }}</span>
                 </button>
             </div>
-            <div class="control-item">
+            <div class="control-item" id="update-bot-control">
                 <div class="control-info">
                     <div>
                         <div class="control-label">Update Bot</div>
@@ -95,7 +95,7 @@
                     <span id="new-version-badge" class="new-version-badge hidden"></span>
                 </div>
             </div>
-            <div class="control-item">
+            <div class="control-item" id="restart-bot-control">
                 <div class="control-info">
                     <div>
                         <div class="control-label">Restart Bot</div>
@@ -606,6 +606,12 @@ refreshStatus();
 let statusPollInterval = setInterval(refreshStatus, 15000);
 
 // Check for pending updates on page load
+if (window.dashboardVersionState) {
+    applyPendingUpdateState(window.dashboardVersionState);
+}
+document.addEventListener('dashboard-version-state', (event) => {
+    applyPendingUpdateState(event.detail);
+});
 checkPendingUpdate();
 
 document.addEventListener('visibilitychange', () => {
@@ -691,30 +697,33 @@ function hideNewVersionBadge() {
     if (updateBtn) updateBtn.classList.remove('hidden');
 }
 
+function applyPendingUpdateState(data) {
+    if (!data || data.status !== 'ok') return;
+    setSelectedUpdateBranch(data.update_branch);
+    if (data.update_available) {
+        showNewVersionBadge(data.latest_version, false);
+    } else if (data.restart_required) {
+        showNewVersionBadge(data.latest_version, true);
+    } else {
+        hideNewVersionBadge();
+    }
+}
+
 // Check for pending version update on page load (checks GitHub for latest version)
 async function checkPendingUpdate() {
     try {
+        if (typeof window.checkGlobalUpdateStatus === 'function') {
+            const data = await window.checkGlobalUpdateStatus(true);
+            if (data) applyPendingUpdateState(data);
+            return;
+        }
         const response = await fetch('/api/version');
         const data = await response.json();
-        if (data.status === 'ok') {
-            setSelectedUpdateBranch(data.update_branch);
-            if (data.update_available) {
-                // New version available on GitHub - show update badge
-                showNewVersionBadge(data.latest_version, false);
-            } else if (data.restart_required) {
-                // Already updated, just needs restart - show restart badge
-                showNewVersionBadge(data.latest_version, true);
-            } else {
-                hideNewVersionBadge();
-            }
-        }
+        applyPendingUpdateState(data);
     } catch (e) {
         // Silently ignore version check errors
     }
 }
-
-// Periodically check for updates (every 30 minutes)
-setInterval(checkPendingUpdate, 30 * 60 * 1000);
 
 // Update bot (git pull)
 async function updateBot() {
@@ -735,12 +744,21 @@ async function updateBot() {
         const data = await response.json();
 
         if (data.status === 'ok') {
+            if (typeof window.renderGlobalUpdateIndicator === 'function') {
+                window.renderGlobalUpdateIndicator({
+                    status: 'ok',
+                    latest_version: data.new_version || data.file_version,
+                    file_version: data.file_version,
+                    update_available: false,
+                    restart_required: Boolean(data.restart_required)
+                });
+            }
             if (data.restart_required && !data.updated) {
                 showNewVersionBadge(data.new_version || data.file_version, true);
                 showToast(data.message || ('Restart to apply v' + (data.new_version || data.file_version)), 'success');
             } else if (data.updated) {
                 if (data.new_version) {
-                    showNewVersionBadge(data.new_version);
+                    showNewVersionBadge(data.new_version, true);
                     showToast('Updated to v' + data.new_version + '! Restarting...', 'success');
                 } else {
                     showToast('Update successful! Restarting...', 'success');
@@ -754,6 +772,14 @@ async function updateBot() {
         } else {
             if (data.expected_version) {
                 showNewVersionBadge(data.expected_version, false);
+                if (typeof window.renderGlobalUpdateIndicator === 'function') {
+                    window.renderGlobalUpdateIndicator({
+                        status: 'ok',
+                        latest_version: data.expected_version,
+                        update_available: true,
+                        restart_required: false
+                    });
+                }
             }
             showToast('Update failed: ' + (data.message || 'Unknown error'), 'error');
         }
