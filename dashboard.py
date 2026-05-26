@@ -25,7 +25,8 @@ from security import (
     login_user, logout_user, is_auth_enabled
 )
 from constants import ALLOWED_IMPORT_FILES
-from config import PROVIDERS, IMAGE_PROVIDERS, CHARACTER_PROVIDERS, AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
+import config as app_config
+from config import AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
 from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
@@ -354,6 +355,125 @@ def _parse_int_list_values(*values):
             add_candidate(item)
 
     return parsed
+
+
+def _load_providers_json() -> dict:
+    """Load providers.json as an object, or return a safe empty shape."""
+    providers_file = Path("providers.json")
+    if not providers_file.exists():
+        return {"providers": [], "timeout": 60, "image_providers": []}
+    try:
+        with open(providers_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"providers": [], "timeout": 60, "image_providers": []}
+    return data if isinstance(data, dict) else {"providers": [], "timeout": 60, "image_providers": []}
+
+
+def _save_providers_json(data: dict) -> None:
+    """Persist providers.json and refresh in-memory provider clients."""
+    with open("providers.json", "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    app_config.reload_providers()
+    try:
+        import providers as providers_module
+        providers_module.API_TIMEOUT = app_config.API_TIMEOUT
+        provider_manager = providers_module.provider_manager
+        provider_manager.reload()
+    except Exception as e:
+        log.warn(f"Providers saved but live provider reload failed: {e}")
+
+
+def _provider_tier_name(index: int) -> str:
+    names = ["primary", "secondary", "fallback"]
+    return names[index] if index < len(names) else f"tier_{index}"
+
+
+def _summarize_image_providers(provider_list: list) -> list[dict]:
+    providers = []
+    for index, provider in enumerate(provider_list if isinstance(provider_list, list) else []):
+        if not isinstance(provider, dict):
+            continue
+        providers.append({
+            "index": index,
+            "tier": _provider_tier_name(index),
+            "name": provider.get("name") or f"Image Provider {index + 1}",
+            "model": provider.get("model") or "gpt-image-1",
+            "url": provider.get("url") or provider.get("base_url") or "",
+            "size": provider.get("size") or "1024x1024",
+        })
+    return providers
+
+
+def _build_known_access_targets(topology: dict) -> dict:
+    """Return known channels and human users for response access pickers."""
+    from discord_utils import conversation_history, channel_names
+
+    channels_by_id = {int(item["id"]): dict(item) for item in topology.get("channels", [])}
+    for channel_id, name in channel_names.items():
+        try:
+            normalized_id = int(channel_id)
+        except (TypeError, ValueError):
+            continue
+        channels_by_id.setdefault(normalized_id, {
+            "id": normalized_id,
+            "name": str(name or normalized_id),
+            "guild_name": "Seen history",
+        })
+
+    users_by_id = {}
+
+    def add_user(user_id, name, alias=None, source="history"):
+        try:
+            normalized_id = int(user_id)
+        except (TypeError, ValueError):
+            return
+        if normalized_id <= 0:
+            return
+        display_name = " ".join(str(name or alias or normalized_id).split())
+        if not display_name:
+            return
+        existing = users_by_id.setdefault(normalized_id, {
+            "id": normalized_id,
+            "name": display_name,
+            "aliases": [],
+            "source": source,
+        })
+        for candidate in (display_name, alias):
+            if isinstance(candidate, str):
+                cleaned = " ".join(candidate.strip().split())
+                if cleaned and cleaned not in existing["aliases"]:
+                    existing["aliases"].append(cleaned)
+
+    for bot in bot_instances:
+        client = getattr(bot, "client", None)
+        if not client:
+            continue
+        for guild in getattr(client, "guilds", []) or []:
+            for member in getattr(guild, "members", []) or []:
+                if getattr(member, "bot", False):
+                    continue
+                aliases = []
+                for attr in ("display_name", "global_name", "name"):
+                    value = getattr(member, attr, None)
+                    if isinstance(value, str) and value.strip():
+                        aliases.append(value)
+                add_user(getattr(member, "id", None), aliases[0] if aliases else None, source=guild.name)
+                for alias in aliases[1:]:
+                    add_user(getattr(member, "id", None), aliases[0], alias=alias, source=guild.name)
+
+    for messages in conversation_history.values():
+        if not isinstance(messages, list):
+            continue
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("is_bot", False):
+                continue
+            add_user(msg.get("user_id"), msg.get("author"), source="history")
+
+    channels = sorted(channels_by_id.values(), key=lambda item: (str(item.get("guild_name", "")), str(item.get("name", ""))))
+    users = sorted(users_by_id.values(), key=lambda item: str(item.get("name", "")).casefold())
+    return {"channels": channels, "users": users[:500]}
 
 
 def _normalize_scope_mode(raw_scope: str) -> str:
@@ -796,13 +916,16 @@ def save_providers():
     """Save providers.json."""
     content = request.form.get('content', '')
     try:
-        json.loads(content)  # Validate JSON
-        with open('providers.json', 'w') as f:
-            f.write(content)
+        data = json.loads(content)  # Validate JSON
+        if not isinstance(data, dict):
+            raise ValueError("providers.json must be a JSON object")
+        _save_providers_json(data)
         return redirect(url_for('config_page', message='Providers saved successfully'))
     except json.JSONDecodeError as e:
         log.error(f"Failed to save providers.json: Invalid JSON - {e}")
         return redirect(url_for('config_page', error=f'Invalid JSON: {e}'))
+    except ValueError as e:
+        return redirect(url_for('config_page', error=str(e)))
     except Exception as e:
         log.error(f"Failed to save providers.json: {e}")
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
@@ -815,15 +938,87 @@ def api_save_providers():
     data = request.json or {}
     content = data.get('content', '')
     try:
-        json.loads(content)  # Validate JSON
-        with open('providers.json', 'w') as f:
-            f.write(content)
+        providers_data = json.loads(content)  # Validate JSON
+        if not isinstance(providers_data, dict):
+            return jsonify({'status': 'error', 'message': 'providers.json must be a JSON object'}), 400
+        _save_providers_json(providers_data)
         return jsonify({'status': 'ok'})
     except json.JSONDecodeError as e:
         return jsonify({'status': 'error', 'message': f'Invalid JSON: {e}'}), 400
     except Exception as e:
         log.error(f"Failed to save providers.json: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/image-providers', methods=['GET', 'POST'])
+@requires_csrf
+def api_image_providers():
+    """Get or replace OpenAI-compatible image providers in providers.json."""
+    providers_data = _load_providers_json()
+
+    if request.method == 'GET':
+        image_providers = providers_data.get("image_providers", [])
+        if not isinstance(image_providers, list):
+            image_providers = []
+        return jsonify({
+            'status': 'ok',
+            'image_providers': image_providers,
+            'summary': _summarize_image_providers(image_providers),
+        })
+
+    data = request.json
+    if not isinstance(data, dict):
+        return jsonify({'status': 'error', 'message': 'JSON object required'}), 400
+
+    image_providers = data.get('image_providers')
+    if not isinstance(image_providers, list):
+        return jsonify({'status': 'error', 'message': 'image_providers must be a list'}), 400
+
+    cleaned = []
+    for index, provider in enumerate(image_providers, start=1):
+        if not isinstance(provider, dict):
+            return jsonify({'status': 'error', 'message': f'Image provider {index} must be an object'}), 400
+
+        name = str(provider.get('name') or f'Image Provider {index}').strip()
+        url = str(provider.get('url') or provider.get('base_url') or '').strip()
+        model = str(provider.get('model') or 'gpt-image-1').strip()
+        if not url:
+            return jsonify({'status': 'error', 'message': f'Image provider {index} needs an API endpoint'}), 400
+        if not model:
+            return jsonify({'status': 'error', 'message': f'Image provider {index} needs a model'}), 400
+
+        cleaned_provider = {
+            'name': name,
+            'url': url,
+            'model': model,
+            'size': str(provider.get('size') or '1024x1024').strip() or '1024x1024',
+        }
+        for key in ('api_key', 'key_env', 'quality', 'style', 'response_format', 'output_format', 'background', 'moderation'):
+            value = provider.get(key)
+            if isinstance(value, str) and value.strip():
+                cleaned_provider[key] = value.strip()
+        if provider.get('timeout') not in (None, ''):
+            try:
+                cleaned_provider['timeout'] = max(5, min(3600, int(provider.get('timeout'))))
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': f'Image provider {index} timeout must be a number'}), 400
+        if isinstance(provider.get('extra_body'), dict) and provider['extra_body']:
+            cleaned_provider['extra_body'] = provider['extra_body']
+        cleaned.append(cleaned_provider)
+
+    providers_data['image_providers'] = cleaned
+    try:
+        _save_providers_json(providers_data)
+    except Exception as e:
+        log.error(f"Failed to save image providers: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    return jsonify({
+        'status': 'ok',
+        'image_providers': cleaned,
+        'summary': _summarize_image_providers(cleaned),
+        'image_provider_tiers': list(app_config.IMAGE_PROVIDERS.keys()),
+    })
 
 
 @app.route('/settings/bots/save', methods=['POST'])
@@ -1032,17 +1227,19 @@ def config_page():
     other_prompts_content = _read_prompt_file("other_prompts.md", DEFAULT_OTHER_PROMPTS)
     
     # Get providers
-    providers = []
     providers_file = Path("providers.json")
     providers_raw = "{}"
+    providers_data = _load_providers_json()
+    providers = [
+        p.get('name', f"Provider {i}")
+        for i, p in enumerate(providers_data.get('providers', []))
+        if isinstance(p, dict)
+    ]
     if providers_file.exists():
         try:
-            with open(providers_file, 'r') as f:
-                providers_raw = f.read()
-            data = json.loads(providers_raw)
-            providers = [p.get('name', f"Provider {i}") for i, p in enumerate(data.get('providers', []))]
+            providers_raw = providers_file.read_text(encoding="utf-8")
         except Exception as e:
-            log.warn(f"Failed to load providers for config page: {e}")
+            log.warn(f"Failed to read providers.json for config page: {e}")
     
     # Load bots.json
     bots_raw = "{}"
@@ -1102,11 +1299,13 @@ def config_page():
         config=config,
         characters=characters,
         providers=providers,
-        provider_tiers=list(PROVIDERS.keys()),
-        image_provider_tiers=list(IMAGE_PROVIDERS.keys()),
-        image_providers_dict=IMAGE_PROVIDERS,
-        providers_dict=PROVIDERS,
-        character_providers=CHARACTER_PROVIDERS,
+        provider_tiers=list(app_config.PROVIDERS.keys()),
+        image_provider_tiers=list(app_config.IMAGE_PROVIDERS.keys()),
+        image_providers_dict=app_config.IMAGE_PROVIDERS,
+        image_providers_raw=_summarize_image_providers(providers_data.get("image_providers", [])),
+        known_access_targets=_build_known_access_targets(topology),
+        providers_dict=app_config.PROVIDERS,
+        character_providers=app_config.CHARACTER_PROVIDERS,
         bots=bots_info,
         command_sync_statuses=[_serialize_command_sync_status(bot) for bot in bot_instances],
         providers_raw=providers_raw,
@@ -1145,7 +1344,9 @@ def api_config():
         allowed_keys = set(runtime_config.DEFAULTS.keys())
         for key, value in data.items():
             normalized_key = runtime_config.LEGACY_KEY_ALIASES.get(key, key)
-            if normalized_key in allowed_keys:
+            if normalized_key in runtime_config.REMOVED_CONFIG_KEYS:
+                continue
+            elif normalized_key in allowed_keys:
                 runtime_config.set(normalized_key, value)
             else:
                 log.warn(f"Rejected unknown config key: {key}")
@@ -1316,12 +1517,8 @@ def api_switch_character():
 @requires_csrf
 def api_character_provider():
     """Get or set character provider preferences."""
-    from config import reload_character_providers
-
-    providers_file = Path("providers.json")
-
     if request.method == 'GET':
-        return jsonify({'character_providers': CHARACTER_PROVIDERS})
+        return jsonify({'character_providers': app_config.CHARACTER_PROVIDERS})
 
     # POST request
     data = request.json or {}
@@ -1332,16 +1529,12 @@ def api_character_provider():
         return jsonify({'status': 'error', 'message': 'Character name required'}), 400
 
     # Validate tier
-    if tier and tier not in PROVIDERS:
+    if tier and tier not in app_config.PROVIDERS:
         return jsonify({'status': 'error', 'message': f'Invalid tier: {tier}'}), 400
 
     try:
         # Load current providers.json
-        if providers_file.exists():
-            with open(providers_file, 'r') as f:
-                providers_data = json.load(f)
-        else:
-            providers_data = {"providers": [], "timeout": 60}
+        providers_data = _load_providers_json()
 
         # Initialize character_providers if not exists
         if 'character_providers' not in providers_data:
@@ -1355,11 +1548,7 @@ def api_character_provider():
             providers_data['character_providers'].pop(character, None)
 
         # Save back to file
-        with open(providers_file, 'w') as f:
-            json.dump(providers_data, f, indent=2)
-
-        # Reload config
-        reload_character_providers()
+        _save_providers_json(providers_data)
 
         log.info(f"Character provider preference updated: {character} -> {tier or 'default'}")
 

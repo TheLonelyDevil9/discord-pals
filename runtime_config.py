@@ -66,9 +66,6 @@ DEFAULTS = {
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
     "mention_context_limit": 10,  # Max users to show in mention context for AI
     # Context system
-    "user_only_context": False,  # When True, only human user messages are sent to the AI (discards all bot/assistant messages)
-    "user_only_context_count": 20,  # Last N user messages to include when user_only_context is True
-    "strict_human_only_context": True,  # User-only mode excludes bot/assistant prose from model history
     "identity_guard_enabled": True,  # Block generated text that structurally speaks as another bot
     "identity_guard_policy": "regenerate_then_drop",  # Guard response policy
     "bot_reference_context_mode": "neutral",  # Replace referenced bot prose with neutral metadata
@@ -85,9 +82,13 @@ DEFAULTS = {
     "dm_image_generation_prompt": "A weird, low-stakes, incomprehensible AI-generated meme image that looks like something a friend would send without context.",
     "bot_nicknames": {},  # Single-bot nickname fallback, edited through dashboard nickname controls
 }
-LEGACY_KEY_ALIASES = {
-    "context_message_count": "user_only_context_count",
+REMOVED_CONFIG_KEYS = {
+    "context_message_count",
+    "user_only_context",
+    "user_only_context_count",
+    "strict_human_only_context",
 }
+LEGACY_KEY_ALIASES = {}
 CONFIG_FIELDS = {
     "history_limit": ConfigField(int, DEFAULTS["history_limit"], 10, 1000),
     "immediate_message_count": ConfigField(int, DEFAULTS["immediate_message_count"], 1, 50),
@@ -123,9 +124,6 @@ CONFIG_FIELDS = {
     "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
     "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),
-    "user_only_context": ConfigField(bool, DEFAULTS["user_only_context"]),
-    "user_only_context_count": ConfigField(int, DEFAULTS["user_only_context_count"], 1, 100),
-    "strict_human_only_context": ConfigField(bool, DEFAULTS["strict_human_only_context"]),
     "identity_guard_enabled": ConfigField(bool, DEFAULTS["identity_guard_enabled"]),
     "identity_guard_policy": ConfigField(
         str,
@@ -275,6 +273,9 @@ def _normalize_config(config: dict | None) -> dict:
     """Backfill renamed keys, parse known fields, and merge missing defaults."""
     normalized = dict(config or {})
 
+    for removed_key in REMOVED_CONFIG_KEYS:
+        normalized.pop(removed_key, None)
+
     for legacy_key, current_key in LEGACY_KEY_ALIASES.items():
         if current_key not in normalized and legacy_key in normalized:
             normalized[current_key] = normalized[legacy_key]
@@ -340,6 +341,8 @@ def save_config(config: dict):
 def get(key: str, default=None):
     """Get a config value."""
     key = _normalize_key(key)
+    if key in REMOVED_CONFIG_KEYS:
+        return default
     config = load_config()
     return config.get(key, default if default is not None else DEFAULTS.get(key))
 
@@ -347,6 +350,8 @@ def get(key: str, default=None):
 def set(key: str, value):
     """Set a config value."""
     key = _normalize_key(key)
+    if key in REMOVED_CONFIG_KEYS:
+        return
     config = load_config().copy()  # Copy only when modifying
     config[key] = _coerce_config_value(key, value)
     save_config(config)

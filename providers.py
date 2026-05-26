@@ -409,6 +409,10 @@ class AIProviderManager:
                     default_headers=default_headers or None,
                 )
 
+    def reload(self) -> None:
+        """Rebuild provider clients after providers.json changes."""
+        self.__init__()
+
     def _supports_vision_for_tier(self, tier: str) -> bool:
         """Resolve whether a tier should receive multimodal requests."""
         overrides = getattr(self, "_vision_support_overrides", {})

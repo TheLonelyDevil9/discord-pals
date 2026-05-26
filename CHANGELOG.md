@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.4] - 2026-05-26
+
+Removed failed user-only context mode and added dashboard image-provider/access-target controls.
+
+### Notes
+
+- This release brings together release automation, runtime hardening, documentation updates, and regression coverage.
+- The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.
+- Related work is grouped together so the history stays readable without turning into a transcript.
+
 ## [v2.3.3] - 2026-05-26
 
 ### Added

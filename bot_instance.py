@@ -1251,21 +1251,12 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        user_only_context = runtime_config.get("user_only_context", True)
-        if user_only_context:
-            history_msgs, immediate = format_history_split(
-                source_channel_id,
-                user_only=True,
-                context_count=runtime_config.get("user_only_context_count", 20),
-                current_bot_name=self.character.name if self.character else None
-            )
-        else:
-            history_msgs, immediate = format_history_split(
-                source_channel_id,
-                total_limit=runtime_config.get("history_limit", 200),
-                immediate_count=runtime_config.get("immediate_message_count", 5),
-                current_bot_name=self.character.name if self.character else None
-            )
+        history_msgs, immediate = format_history_split(
+            source_channel_id,
+            total_limit=runtime_config.get("history_limit", 200),
+            immediate_count=runtime_config.get("immediate_message_count", 5),
+            current_bot_name=self.character.name if self.character else None
+        )
 
         reminder_local_display = utc_iso_to_local_display(
             reminder.get("due_at_utc"),
@@ -1832,22 +1823,17 @@ Return exactly one JSON object with this shape:
     # === REQUEST PROCESSING HELPERS ===
 
     def _build_interact_history(self, channel_id: int, target_user_id: int,
-                                 target_user_name: str, user_only: bool,
-                                 context_count: int, total_limit: int,
+                                 target_user_name: str, total_limit: int,
                                  immediate_count: int) -> tuple[list[dict], list[dict]]:
         """Keep `/interact` focused on the invoking user instead of the active channel thread."""
         raw_history = get_history(channel_id)
         relevant_messages = []
         current_bot_name = self.character.name if self.character else None
         keep_following_assistant = False
-        strict_human_only = user_only and runtime_config.get("strict_human_only_context", True)
 
         for msg in raw_history:
             role = msg.get("role", "user")
             if role == "assistant":
-                if strict_human_only:
-                    continue
-
                 author = msg.get("author")
                 if (author and current_bot_name and author.lower() != current_bot_name.lower()) or not keep_following_assistant:
                     continue
@@ -1877,11 +1863,10 @@ Return exactly one JSON object with this shape:
             })
             keep_following_assistant = True
 
-        relevant_limit = context_count if user_only else total_limit
-        if relevant_limit > 0:
-            relevant_messages = relevant_messages[-relevant_limit:]
+        if total_limit > 0:
+            relevant_messages = relevant_messages[-total_limit:]
 
-        if user_only or len(relevant_messages) <= immediate_count:
+        if len(relevant_messages) <= immediate_count:
             return [], relevant_messages
 
         return relevant_messages[:-immediate_count], relevant_messages[-immediate_count:]
@@ -2104,47 +2089,24 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        # Split history into older context and immediate messages
-        user_only_context = runtime_config.get('user_only_context', True)
-        if user_only_context:
-            context_count = runtime_config.get('user_only_context_count', 20)
-            if from_interact_command:
-                history_msgs, immediate = self._build_interact_history(
-                    channel_id,
-                    target_user_id=target_user_id,
-                    target_user_name=target_user_name,
-                    user_only=True,
-                    context_count=context_count,
-                    total_limit=0,
-                    immediate_count=context_count
-                )
-            else:
-                history_msgs, immediate = format_history_split(
-                    channel_id,
-                    user_only=True,
-                    context_count=context_count,
-                    current_bot_name=self.character.name
-                )
+        # Split history into older context and immediate messages.
+        total_limit = runtime_config.get('history_limit', 200)
+        immediate_count = runtime_config.get('immediate_message_count', 5)
+        if from_interact_command:
+            history_msgs, immediate = self._build_interact_history(
+                channel_id,
+                target_user_id=target_user_id,
+                target_user_name=target_user_name,
+                total_limit=total_limit,
+                immediate_count=immediate_count
+            )
         else:
-            total_limit = runtime_config.get('history_limit', 200)
-            immediate_count = runtime_config.get('immediate_message_count', 5)
-            if from_interact_command:
-                history_msgs, immediate = self._build_interact_history(
-                    channel_id,
-                    target_user_id=target_user_id,
-                    target_user_name=target_user_name,
-                    user_only=False,
-                    context_count=0,
-                    total_limit=total_limit,
-                    immediate_count=immediate_count
-                )
-            else:
-                history_msgs, immediate = format_history_split(
-                    channel_id,
-                    total_limit=total_limit,
-                    immediate_count=immediate_count,
-                    current_bot_name=self.character.name
-                )
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
+            )
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
@@ -2191,49 +2153,12 @@ Return exactly one JSON object with this shape:
             messages_for_api.append(current_bot_reply_anchor)
         messages_for_api.extend(immediate)
 
-        strict_human_only = (
-            user_only_context
-            and runtime_config.get("strict_human_only_context", True)
-        )
         bot_event_context = None
-        if current_message_is_bot and strict_human_only:
+        if current_message_is_bot:
             bot_event_context = neutral_bot_event(user_name)
             if content.startswith("[Replying to "):
                 reply_marker = content.split("]", 1)[0] + "]"
                 bot_event_context = f"{reply_marker} {bot_event_context}"
-
-        # Synthetic first-turn fallback for user_only mode
-        # If user_only is enabled and there are no assistant turns, inject one from example_dialogue
-        use_user_only = runtime_config.get("user_only_context", False)
-        if use_user_only and not any(m.get("role") == "assistant" for m in messages_for_api):
-            if self.character.example_dialogue:
-                # Parse first assistant line from example_dialogue
-                # Look for patterns like "{{char}}:" or character name followed by colon
-                example_lines = self.character.example_dialogue.strip().split('\n')
-                synthetic_turn = None
-
-                for line in example_lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Match "{{char}}:" or "CharacterName:" at start of line
-                    if line.startswith("{{char}}:") or line.startswith(f"{self.character.name}:"):
-                        # Extract content after the prefix
-                        synthetic_turn = line.split(':', 1)[1].strip()
-                        break
-
-                if synthetic_turn:
-                    # Insert at the beginning of messages_for_api (after system messages)
-                    # Find the first non-system message position
-                    insert_pos = len(messages_for_api)
-                    for i, msg in enumerate(messages_for_api):
-                        if msg.get("role") != "system":
-                            insert_pos = i
-                            break
-                    messages_for_api.insert(
-                        insert_pos,
-                        {"role": "assistant", "content": synthetic_turn, "author": self.character.name}
-                    )
 
         if bot_event_context:
             messages_for_api.append({
@@ -2300,8 +2225,6 @@ Return exactly one JSON object with this shape:
             active_users_count=len(active_users or []),
             mentionable_users_count=len(mentionable_users or []),
             mentionable_bots_count=len(mentionable_bots or []),
-            user_only_context=user_only_context,
-            strict_human_only=strict_human_only,
             from_interact_command=from_interact_command,
             split_target_id=getattr(split_target, "id", None),
             has_attachments=bool(attachment_content),

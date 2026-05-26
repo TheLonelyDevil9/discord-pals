@@ -256,6 +256,22 @@ PROVIDERS, API_TIMEOUT, CHARACTER_PROVIDERS = load_providers()
 IMAGE_PROVIDERS = load_image_providers()
 
 
+def reload_providers() -> tuple[dict, dict, dict]:
+    """Reload provider config in place so dashboard edits take effect without restart."""
+    global API_TIMEOUT
+    providers, timeout, character_providers = load_providers()
+    image_providers = load_image_providers()
+
+    PROVIDERS.clear()
+    PROVIDERS.update(providers)
+    IMAGE_PROVIDERS.clear()
+    IMAGE_PROVIDERS.update(image_providers)
+    CHARACTER_PROVIDERS.clear()
+    CHARACTER_PROVIDERS.update(character_providers)
+    API_TIMEOUT = timeout
+    return PROVIDERS, IMAGE_PROVIDERS, CHARACTER_PROVIDERS
+
+
 def reload_character_providers() -> dict:
     """Reload character_providers from providers.json without full restart."""
     global CHARACTER_PROVIDERS

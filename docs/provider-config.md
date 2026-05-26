@@ -18,7 +18,7 @@ Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider def
 }
 ```
 
-The bot tries providers in list order until one succeeds. You can reorder providers from the dashboard Config page.
+The bot tries providers in list order until one succeeds. You can add, reorder, and edit chat and image providers from the dashboard Config page.
 
 Common provider fields:
 
@@ -134,7 +134,7 @@ Emoji and shortcode context remains text-only.
 
 ## Image Generation Providers
 
-Autonomous DM images use a separate `image_providers` list in `providers.json`. Entries are OpenAI-compatible image-generation clients, tried in order unless `dm_image_generation_preferred_tier` selects a tier from the dashboard.
+Autonomous DM images use a separate `image_providers` list in `providers.json`. Entries are OpenAI-compatible image-generation clients, tried in order unless `dm_image_generation_preferred_tier` selects a tier from the dashboard. The dashboard Providers tab can manage this list directly; raw JSON is only the advanced fallback.
 
 ```json
 {

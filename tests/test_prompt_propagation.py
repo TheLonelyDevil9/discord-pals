@@ -34,7 +34,7 @@ class PromptPropagationTests(unittest.TestCase):
         discord_utils_module.channel_names = self._history_originals["channel_names"]
         discord_utils_module._channel_last_activity = self._history_originals["channel_last_activity"]
 
-    def test_format_history_split_user_only_defaults_to_human_only_context(self):
+    def test_format_history_split_uses_normal_context_and_rewrites_other_bots(self):
         channel_id = 123
         discord_utils_module.conversation_history[channel_id] = [
             {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
@@ -44,40 +44,10 @@ class PromptPropagationTests(unittest.TestCase):
 
         history, immediate = discord_utils_module.format_history_split(
             channel_id,
-            user_only=True,
-            context_count=5,
+            total_limit=5,
+            immediate_count=5,
             current_bot_name="Nahida"
         )
-
-        self.assertEqual(history, [])
-        self.assertEqual(
-            immediate,
-            [
-                {"role": "user", "content": "Alice: Hi"},
-            ]
-        )
-        self.assertFalse(any("Hello there" in msg["content"] for msg in immediate))
-        self.assertFalse(any("I can help too" in msg["content"] for msg in immediate))
-
-    def test_format_history_split_user_only_legacy_context_keeps_bot_prose(self):
-        channel_id = 124
-        discord_utils_module.conversation_history[channel_id] = [
-            {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
-            {"role": "assistant", "content": "Hello there", "author": "Nahida"},
-            {"role": "user", "content": "I can help too", "author": "Nilou", "is_bot": True},
-        ]
-
-        with patch.object(
-            discord_utils_module.runtime_config,
-            "get",
-            side_effect=lambda key, default=None: False if key == "strict_human_only_context" else default,
-        ):
-            history, immediate = discord_utils_module.format_history_split(
-                channel_id,
-                user_only=True,
-                context_count=5,
-                current_bot_name="Nahida"
-            )
 
         self.assertEqual(history, [])
         self.assertEqual(
@@ -89,7 +59,7 @@ class PromptPropagationTests(unittest.TestCase):
             ]
         )
 
-    def test_format_history_split_preserves_current_bot_author_in_legacy_mode(self):
+    def test_format_history_split_preserves_current_bot_author_in_normal_context(self):
         channel_id = 456
         discord_utils_module.conversation_history[channel_id] = [
             {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
@@ -464,27 +434,36 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module.invalidate_cache()
         self.tearDownMemorySandbox()
 
-    def test_runtime_config_migrates_legacy_context_message_count(self):
-        legacy_path = self.data_dir / "runtime_config.json"
-        legacy_path.write_text(
-            json.dumps({"context_message_count": 7, "user_only_context": True}, indent=2),
+    def test_runtime_config_drops_removed_context_keys(self):
+        config_path = self.data_dir / "runtime_config.json"
+        config_path.write_text(
+            json.dumps({
+                "history_limit": 37,
+                "context_message_count": 7,
+                "user_only_context": True,
+                "user_only_context_count": 9,
+                "strict_human_only_context": True,
+            }, indent=2),
             encoding="utf-8"
         )
 
         config = runtime_config_module.get_all()
 
-        self.assertEqual(config["user_only_context_count"], 7)
-        self.assertNotIn("context_message_count", config)
+        self.assertEqual(config["history_limit"], 37)
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, config)
 
         runtime_config_module.save_config(config)
-        saved = json.loads(legacy_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["user_only_context_count"], 7)
-        self.assertNotIn("context_message_count", saved)
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, saved)
 
-    def test_config_ui_and_api_use_user_only_context_count(self):
+    def test_config_ui_omits_removed_context_controls(self):
         page = self.client.get("/config").get_data(as_text=True)
-        self.assertIn('id="user_only_context_count"', page)
         self.assertNotIn('id="context_message_count"', page)
+        self.assertNotIn('id="user_only_context"', page)
+        self.assertNotIn('id="strict_human_only_context"', page)
+        self.assertNotIn('id="user_only_context_count"', page)
 
     def test_config_page_groups_context_prompting_and_provider_controls(self):
         page = self.client.get("/config").get_data(as_text=True)
@@ -493,7 +472,6 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('data-config-tab="prompting"', page)
         self.assertIn('data-config-tab="providers"', page)
         self.assertIn('id="time_passage_context_enabled"', page)
-        self.assertIn('id="strict_human_only_context"', page)
         self.assertIn('id="identity_guard_enabled"', page)
         self.assertIn('id="identity_guard_policy"', page)
         self.assertIn('id="bot_reference_context_mode"', page)
@@ -509,11 +487,18 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('id="response_channel_whitelist"', page)
         self.assertIn('id="response_channel_blacklist"', page)
         self.assertIn('id="dm_user_blacklist"', page)
+        self.assertIn('class="known-target-select"', page)
+        self.assertIn('id="image-provider-list"', page)
+        self.assertIn('id="add-image-provider-form"', page)
+        self.assertIn("existing.image_providers", page)
 
         response = self.client.post(
             "/api/config",
             json={
                 "context_message_count": 9,
+                "user_only_context": True,
+                "user_only_context_count": 9,
+                "strict_human_only_context": True,
                 "prose_polisher_enabled": "true",
                 "prose_polisher_max_tokens": "9000",
                 "identity_guard_enabled": "false",
@@ -541,7 +526,6 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(config_response.status_code, 200)
-        self.assertEqual(config["user_only_context_count"], 9)
         self.assertIs(config["prose_polisher_enabled"], True)
         self.assertEqual(config["prose_polisher_max_tokens"], 9000)
         self.assertIs(config["identity_guard_enabled"], False)
@@ -561,7 +545,107 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["response_channel_whitelist"], ["123456789012345678"])
         self.assertEqual(config["response_channel_blacklist"], ["222222222222222222", "333333333333333333"])
         self.assertEqual(config["dm_user_blacklist"], ["444444444444444444"])
-        self.assertNotIn("context_message_count", config)
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, config)
+
+    def test_image_provider_api_validates_cleans_and_saves(self):
+        saved_payloads = []
+
+        def load_providers():
+            return {
+                "providers": [],
+                "timeout": 60,
+                "image_providers": [
+                    {"name": "Existing", "url": "https://images.invalid/v1", "model": "old-image"}
+                ],
+            }
+
+        with patch.object(dashboard_module, "_load_providers_json", side_effect=load_providers), \
+                patch.object(dashboard_module, "_save_providers_json", side_effect=lambda data: saved_payloads.append(data)):
+            get_response = self.client.get("/api/image-providers")
+            post_response = self.client.post(
+                "/api/image-providers",
+                json={
+                    "image_providers": [
+                        {
+                            "name": " New Images ",
+                            "base_url": " https://example.invalid/v1 ",
+                            "model": " gpt-image-1 ",
+                            "size": "1024x1024",
+                            "quality": " high ",
+                            "timeout": "2",
+                            "extra_body": {"seed": 4},
+                            "ignored": "value",
+                        }
+                    ]
+                },
+                headers=self.csrf_headers(),
+            )
+            invalid_response = self.client.post(
+                "/api/image-providers",
+                json={"image_providers": [{"name": "Bad", "url": ""}]},
+                headers=self.csrf_headers(),
+            )
+
+        get_body = get_response.get_json()
+        post_body = post_response.get_json()
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_body["summary"][0]["tier"], "primary")
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(post_body["summary"][0]["name"], "New Images")
+        self.assertEqual(saved_payloads[-1]["image_providers"][0], {
+            "name": "New Images",
+            "url": "https://example.invalid/v1",
+            "model": "gpt-image-1",
+            "size": "1024x1024",
+            "quality": "high",
+            "timeout": 5,
+            "extra_body": {"seed": 4},
+        })
+        self.assertEqual(invalid_response.status_code, 400)
+
+    def test_known_access_targets_include_channels_and_human_aliases(self):
+        original_history = discord_utils_module.conversation_history
+        original_channel_names = discord_utils_module.channel_names
+        original_bots = dashboard_module.bot_instances
+        try:
+            discord_utils_module.conversation_history = {
+                77: [
+                    {"role": "user", "content": "hi", "author": "Bob", "user_id": "123", "is_bot": False},
+                    {"role": "user", "content": "beep", "author": "Botty", "user_id": "222", "is_bot": True},
+                ]
+            }
+            discord_utils_module.channel_names = {88: "seen-room"}
+            guild = types.SimpleNamespace(
+                name="Sumeru",
+                members=[
+                    types.SimpleNamespace(
+                        id=42,
+                        bot=False,
+                        display_name="Alice Bloom",
+                        global_name="Alice",
+                        name="alice_dev",
+                    ),
+                    types.SimpleNamespace(id=222, bot=True, display_name="Botty", name="Botty"),
+                ],
+            )
+            dashboard_module.bot_instances = [types.SimpleNamespace(client=types.SimpleNamespace(guilds=[guild]))]
+
+            targets = dashboard_module._build_known_access_targets({
+                "channels": [{"id": 99, "name": "general", "guild_name": "Sumeru"}]
+            })
+        finally:
+            discord_utils_module.conversation_history = original_history
+            discord_utils_module.channel_names = original_channel_names
+            dashboard_module.bot_instances = original_bots
+
+        self.assertEqual({channel["id"] for channel in targets["channels"]}, {88, 99})
+        users_by_id = {user["id"]: user for user in targets["users"]}
+        self.assertIn(42, users_by_id)
+        self.assertIn("Alice", users_by_id[42]["aliases"])
+        self.assertIn("alice_dev", users_by_id[42]["aliases"])
+        self.assertIn(123, users_by_id)
+        self.assertNotIn(222, users_by_id)
 
     def test_config_page_exposes_dm_image_controls_when_bots_loaded(self):
         dashboard_module.bot_instances = [

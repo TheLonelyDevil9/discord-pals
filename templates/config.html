@@ -68,38 +68,6 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="user_only_context">User-Only Context</label>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="user_only_context" name="user_only_context"
-                                        {% if config.user_only_context %}checked{% endif %}>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <p class="form-hint">Sends human messages as the practical conversation window. Use strict mode to keep bot prose out of model context.</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="strict_human_only_context">Strict Human-Only Context</label>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="strict_human_only_context" name="strict_human_only_context"
-                                        {% if config.strict_human_only_context is not defined or config.strict_human_only_context %}checked{% endif %}>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <p class="form-hint">User-only mode excludes bot and assistant prose from model history. Turn off only for legacy cross-bot continuity.</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="user_only_context_count">User-Only Message Count</label>
-                                <div class="slider-row">
-                                    <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
-                                        step="1" value="{{ config.user_only_context_count or 20 }}"
-                                        oninput="document.getElementById('context_count_val').textContent = this.value"
-                                        title="Number of recent user messages to include">
-                                    <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
-                                </div>
-                                <p class="form-hint">User-only mode only. This is the practical history size when User-Only Context is enabled.</p>
-                            </div>
-
-                            <div class="form-group">
                                 <label for="bot_reference_context_mode">Bot Reply References</label>
                                 <select id="bot_reference_context_mode" name="bot_reference_context_mode" title="Bot reply reference context mode">
                                     <option value="neutral" {% if config.bot_reference_context_mode != 'legacy' %}selected{% endif %}>Neutral metadata</option>
@@ -442,7 +410,7 @@
                                     <option value="{{ tier }}" {% if config.dm_image_generation_preferred_tier==tier %}selected{% endif %}>{{ tier|capitalize }} ({{ image_providers_dict.get(tier, {}).get('name', tier) }})</option>
                                     {% endfor %}
                                 </select>
-                                <p class="form-hint">Configure image providers in providers.json under <code>image_providers</code>.</p>
+                                <p class="form-hint">Manage image providers in the Providers tab. This selects the first image tier to try.</p>
                             </div>
                         </div>
                         <div class="form-group">
@@ -569,16 +537,34 @@
                                 <label for="response_channel_whitelist">Server Channel Whitelist</label>
                                 <textarea id="response_channel_whitelist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_whitelist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">One valid Discord channel ID per line, comma-separated also works. Used only when whitelist-only mode is on; the blacklist still wins.</p>
+                                <select class="known-target-select" data-target-textarea="response_channel_whitelist" title="Known channel for whitelist">
+                                    <option value="">Add known channel...</option>
+                                    {% for channel in known_access_targets.channels %}
+                                    <option value="{{ channel.id }}">#{{ channel.name }}{% if channel.guild_name %} ({{ channel.guild_name }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="response_channel_blacklist">Server Channel Blacklist</label>
                                 <textarea id="response_channel_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_blacklist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">Blocks server replies in these channels even when the bot is mentioned or whitelist-only would otherwise allow them.</p>
+                                <select class="known-target-select" data-target-textarea="response_channel_blacklist" title="Known channel for blacklist">
+                                    <option value="">Add known channel...</option>
+                                    {% for channel in known_access_targets.channels %}
+                                    <option value="{{ channel.id }}">#{{ channel.name }}{% if channel.guild_name %} ({{ channel.guild_name }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="dm_user_blacklist">DM User Blacklist</label>
                                 <textarea id="dm_user_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.dm_user_blacklist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">Blocks direct DM replies, DM follow-ups, and DM handoffs for these valid Discord user IDs.</p>
+                                <select class="known-target-select" data-target-textarea="dm_user_blacklist" title="Known user for DM blacklist">
+                                    <option value="">Add known user...</option>
+                                    {% for user in known_access_targets.users %}
+                                    <option value="{{ user.id }}">{{ user.name }}{% if user.aliases %} ({{ user.aliases | join(', ') }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Response Access</button>
@@ -749,6 +735,43 @@
                             </div>
                         </form>
                     </details>
+                </div>
+            </div>
+
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Image Providers</span>
+                    <span class="impact-pill">DM images</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Configure OpenAI-compatible image generation providers here. The DM Random Images panel uses these tiers.</p>
+                    <div id="image-provider-list" class="provider-list" data-initial='{{ image_providers_raw | tojson }}'>
+                        {% if image_providers_raw %}
+                        {% for provider in image_providers_raw %}
+                        <div class="provider-item">
+                            <div class="provider-info">
+                                <span class="provider-name">{{ provider.name }} <span class="provider-tier">({{ provider.tier }})</span></span>
+                                <span class="provider-model">{{ provider.model }} &bull; {{ provider.size }} &bull; {{ provider.url }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>
+                        {% endif %}
+                    </div>
+                    <form id="add-image-provider-form" class="provider-form" style="margin-top: 16px;">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group"><label for="new-image-provider-name">Display Name</label><input type="text" id="new-image-provider-name" value="OpenAI Images" required></div>
+                            <div class="form-group"><label for="new-image-provider-endpoint">API Endpoint</label><input type="text" id="new-image-provider-endpoint" value="https://api.openai.com/v1" required></div>
+                            <div class="form-group"><label for="new-image-provider-key-env">API Key Env Var</label><input type="text" id="new-image-provider-key-env" value="OPENAI_API_KEY" placeholder="OPENAI_API_KEY"></div>
+                            <div class="form-group"><label for="new-image-provider-key">Direct API Key</label><input type="password" id="new-image-provider-key" placeholder="Prefer env vars when possible"></div>
+                            <div class="form-group"><label for="new-image-provider-model">Model</label><input type="text" id="new-image-provider-model" value="gpt-image-1" required></div>
+                            <div class="form-group"><label for="new-image-provider-size">Size</label><input type="text" id="new-image-provider-size" value="1024x1024"></div>
+                            <div class="form-group"><label for="new-image-provider-quality">Quality</label><input type="text" id="new-image-provider-quality" placeholder="auto, high, medium, low"></div>
+                            <div class="form-group"><label for="new-image-provider-timeout">Timeout (seconds)</label><input type="number" id="new-image-provider-timeout" min="5" max="3600" value="120"></div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Image Provider</button>
+                    </form>
                 </div>
             </div>
 
@@ -1132,6 +1155,7 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
     font-size: 0.875rem;
 }
 select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+.known-target-select { width: 100%; margin-top: 8px; background: var(--bg-secondary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; min-height: 40px; }
 .checkbox-label input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 24px; accent-color: var(--accent); }
 .checkbox-label span { font-weight: 500; color: var(--text-primary); }
@@ -1288,6 +1312,7 @@ let timezoneOptions = null;
 let timezoneOptionsPromise = null;
 let providersData = [];
 let providersLoaded = false;
+let imageProvidersData = [];
 let sortableLoaded = false;
 
 function csrfHeaders() {
@@ -1319,7 +1344,7 @@ function switchConfigTab(tabName) {
 
 function initializeConfigTabs() {
     const saved = localStorage.getItem('config.activeTab');
-    const target = saved && document.querySelector(`[data-config-tab="${saved}"]`) ? saved : 'context';
+    const target = saved && document.querySelector(`[data-config-tab="${saved}"]`) ? saved : 'prompting';
     switchConfigTab(target);
 }
 
@@ -1365,9 +1390,6 @@ document.getElementById('context-settings-form')?.addEventListener('submit', asy
     await postConfig({
         history_limit: parseInt(document.getElementById('history_limit').value),
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-        user_only_context: document.getElementById('user_only_context').checked,
-        user_only_context_count: parseInt(document.getElementById('user_only_context_count').value),
-        strict_human_only_context: document.getElementById('strict_human_only_context').checked,
         identity_guard_enabled: document.getElementById('identity_guard_enabled').checked,
         identity_guard_policy: document.getElementById('identity_guard_policy').value,
         bot_reference_context_mode: document.getElementById('bot_reference_context_mode').value,
@@ -1420,6 +1442,26 @@ function parseIdList(elementId) {
     textarea.value = ids.join('\n');
     return ids;
 }
+
+function appendIdToTextarea(textareaId, value) {
+    const textarea = document.getElementById(textareaId);
+    const normalized = String(value || '').replace(/\D+/g, '');
+    if (!textarea || !normalized) return false;
+    const ids = parseIdList(textareaId);
+    if (ids.includes(normalized)) return false;
+    ids.push(normalized);
+    textarea.value = ids.join('\n');
+    return true;
+}
+
+document.querySelectorAll('.known-target-select').forEach(select => {
+    select.addEventListener('change', () => {
+        if (!select.value) return;
+        const added = appendIdToTextarea(select.dataset.targetTextarea, select.value);
+        showToast(added ? 'ID added to list' : 'ID is already in that list', added ? 'success' : 'error');
+        select.value = '';
+    });
+});
 
 document.getElementById('response-access-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1734,6 +1776,9 @@ function ensureProvidersLoaded() {
     try {
         const data = JSON.parse(editor?.value || '{}');
         providersData = data.providers || [];
+        if (!imageProvidersData.length && Array.isArray(data.image_providers)) {
+            imageProvidersData = data.image_providers;
+        }
     } catch (e) {
         providersData = [];
         showToast('Could not parse providers.json', 'error');
@@ -1789,6 +1834,95 @@ function renderProviderList() {
         </div>
     `).join('');
     setupDragAndDrop();
+}
+
+function getInitialImageProviders() {
+    const list = document.getElementById('image-provider-list');
+    if (!list || !list.dataset.initial) return [];
+    try {
+        return JSON.parse(list.dataset.initial) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function loadImageProviders() {
+    try {
+        const response = await fetch('/api/image-providers', { headers: { 'X-CSRF-Token': '{{ csrf_token() }}' } });
+        const result = await response.json();
+        if (result.status === 'ok') {
+            imageProvidersData = result.image_providers || [];
+            renderImageProviderList(result.summary || []);
+            return;
+        }
+    } catch (e) { /* fall back to server-rendered summary */ }
+    if (!imageProvidersData.length) {
+        const editor = document.getElementById('providers-json-editor');
+        try {
+            const data = JSON.parse(editor?.dataset.raw || editor?.value || '{}');
+            if (Array.isArray(data.image_providers)) {
+                imageProvidersData = data.image_providers;
+            }
+        } catch (e) { /* keep empty fallback */ }
+    }
+    renderImageProviderList(getInitialImageProviders());
+}
+
+function renderImageProviderList(summary) {
+    const list = document.getElementById('image-provider-list');
+    if (!list) return;
+    const providers = summary || [];
+    if (!providers.length) {
+        list.innerHTML = '<p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>';
+        return;
+    }
+    list.innerHTML = providers.map((p, i) => `
+        <div class="provider-item" data-index="${i}">
+            <div class="provider-info">
+                <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${escapeHtml(p.tier || getTierName(i))})</span></span>
+                <span class="provider-model">${escapeHtml(p.model || 'gpt-image-1')} &bull; ${escapeHtml(p.size || '1024x1024')} &bull; ${escapeHtml(p.url || 'No endpoint')}</span>
+            </div>
+            <div class="provider-actions">
+                <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''}>Up</button>
+                <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, 1)" ${i === providers.length - 1 ? 'disabled' : ''}>Down</button>
+                <button type="button" class="btn-icon" onclick="deleteImageProvider(${i})">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function saveImageProvidersToServer() {
+    const response = await fetch('/api/image-providers', {
+        method: 'POST',
+        headers: csrfHeaders(),
+        body: JSON.stringify({ image_providers: imageProvidersData })
+    });
+    const result = await response.json();
+    if (result.status !== 'ok') {
+        showToast(result.message || 'Failed to save image providers', 'error');
+        return false;
+    }
+    renderImageProviderList(result.summary || []);
+    return true;
+}
+
+async function moveImageProvider(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= imageProvidersData.length) return;
+    const [moved] = imageProvidersData.splice(index, 1);
+    imageProvidersData.splice(target, 0, moved);
+    if (await saveImageProvidersToServer()) showToast('Image provider order saved', 'success');
+}
+
+async function deleteImageProvider(index) {
+    const confirmed = await confirmAction(
+        'Delete Image Provider',
+        'Delete this image provider from the DM image fallback list?',
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
+    imageProvidersData.splice(index, 1);
+    if (await saveImageProvidersToServer()) showToast('Image provider deleted', 'success');
 }
 
 function setupDragAndDrop() {
@@ -1919,6 +2053,7 @@ async function saveProvidersToServer() {
         const existing = JSON.parse(jsonEditor.value || '{}');
         if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
         if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
+        if (existing.image_providers !== undefined) globalFields.image_providers = existing.image_providers;
     } catch (e) { /* ignore */ }
     const data = { providers: providersData, ...globalFields };
     const jsonStr = JSON.stringify(data, null, 2);
@@ -1979,6 +2114,33 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     showToast('Provider added', 'success');
 });
 
+document.getElementById('add-image-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('new-image-provider-name').value.trim();
+    const url = document.getElementById('new-image-provider-endpoint').value.trim();
+    const keyEnv = document.getElementById('new-image-provider-key-env').value.trim();
+    const apiKey = document.getElementById('new-image-provider-key').value.trim();
+    const model = document.getElementById('new-image-provider-model').value.trim();
+    const size = document.getElementById('new-image-provider-size').value.trim();
+    const quality = document.getElementById('new-image-provider-quality').value.trim();
+    const timeout = document.getElementById('new-image-provider-timeout').value.trim();
+    if (!name || !url || !model) {
+        showToast('Image provider needs a name, endpoint, and model', 'error');
+        return;
+    }
+    const provider = { name, url, model, size: size || '1024x1024' };
+    if (keyEnv) provider.key_env = keyEnv;
+    if (apiKey) provider.api_key = apiKey;
+    if (quality) provider.quality = quality;
+    if (timeout) provider.timeout = parseInt(timeout);
+    if (!imageProvidersData.length) await loadImageProviders();
+    imageProvidersData.push(provider);
+    if (await saveImageProvidersToServer()) {
+        document.getElementById('new-image-provider-key').value = '';
+        showToast('Image provider added', 'success');
+    }
+});
+
 document.querySelectorAll('.json-editor').forEach(textarea => {
     textarea.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
@@ -1995,6 +2157,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeConfigTabs();
     initializeLazyEditors();
     initializeScheduleEditors();
+    loadImageProviders();
 });
 </script>
 {% endblock %}

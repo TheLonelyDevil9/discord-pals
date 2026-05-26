@@ -76,11 +76,7 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "*hugs you*", "author": "Invoker", "user_id": 42, "message_id": 1234},
         ]
 
-        runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "allow_bot_mentions": False,
-        }
+        runtime_values = {"allow_bot_mentions": False}
         memories_mock = Mock(return_value="")
         build_system_prompt_mock = Mock(return_value="SYSTEM")
         build_chatroom_context_mock = Mock(return_value="CHATROOM")
@@ -134,7 +130,7 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(msg.get("content"), str)
         )
         self.assertIn("Invoker: *waves*", rendered_text)
-        self.assertNotIn("*waves back*", rendered_text)
+        self.assertIn("*waves back*", rendered_text)
         self.assertIn("Invoker: *hugs you*", rendered_text)
         self.assertNotIn("OtherUser", rendered_text)
         self.assertNotIn("Hi, OtherUser.", rendered_text)

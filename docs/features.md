@@ -139,7 +139,7 @@ Use `/stop` or the dashboard Bot Interactions toggle to pause bot-to-bot convers
 
 Multi-bot setups inject visible bot names into context so each bot knows not to write as another bot. The identity guard can block generated text that structurally speaks as another bot.
 
-User-only context mode mostly sends human messages, with stricter handling available through `strict_human_only_context`. This reduces personality bleed and context poisoning in busy channels.
+Conversation context keeps the normal history window, preserves the current bot's own assistant turns, and treats other bots as named user-style context so continuity is available without teaching one bot to speak as another.
 
 Response access settings can disable server replies, disable DM replies, enforce a server-channel whitelist, blacklist server channels, or blacklist users from DMs.
 

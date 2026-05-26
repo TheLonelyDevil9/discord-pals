@@ -19,11 +19,6 @@ from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
 import logger as log
 from scopes import dm_history_id
 
-try:
-    import runtime_config
-except Exception:
-    runtime_config = None
-
 # Re-export from response_sanitizer for backwards compatibility
 # These are used by other modules that import from discord_utils
 from response_sanitizer import (  # noqa: F401
@@ -565,22 +560,6 @@ def strip_character_prefix(content: str) -> str:
     return content
 
 
-def _runtime_bool(key: str, default: bool) -> bool:
-    """Read a runtime boolean without making history formatting depend on config startup."""
-    if runtime_config is None:
-        return default
-    try:
-        return bool(runtime_config.get(key, default))
-    except Exception:
-        return default
-
-
-def _neutral_bot_event(author: str, event: str = "sent a message") -> str:
-    """Return a prose-free marker for bot activity in model context."""
-    safe_author = " ".join(str(author or "another bot").split())
-    return f"[{safe_author} {event}]"
-
-
 def resolve_discord_formatting(
     content: str,
     guild=None,
@@ -961,98 +940,20 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
 
 
 def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5,
-                         current_bot_name: str = None,
-                         user_only: bool = False, context_count: int = 10) -> Tuple[List[dict], List[dict]]:
+                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
     """
     Split history into two parts for the context structure:
     - history: older messages (background context)
     - immediate: recent messages (placed after chatroom context for focused response)
 
-    When user_only=True (paper-backed mode):
-    - Only human user messages are included (all bot/assistant messages discarded)
-    - Returns ([], last N user messages) — no history split needed
-
-    When user_only=False (legacy mode):
-    - If current_bot_name is provided, other bots' messages will be tagged with their name
-      (like user messages) to prevent personality bleed.
+    If current_bot_name is provided, other bots' messages will be tagged with
+    their name (like user messages) to prevent personality bleed.
 
     Returns: (history_messages, immediate_messages)
     """
     all_history = get_history(channel_id)
 
-    if user_only:
-        strict_human_only = _runtime_bool("strict_human_only_context", True)
-
-        # Find the current bot's last 3 responses (for conversational anchoring)
-        bot_responses = []
-        if current_bot_name and not strict_human_only:
-            for i in range(len(all_history) - 1, -1, -1):
-                msg = all_history[i]
-                if msg.get("role") == "assistant":
-                    author = msg.get("author", "")
-                    if not author or (current_bot_name and author.lower() == current_bot_name.lower()):
-                        bot_responses.append((i, msg))
-                        if len(bot_responses) >= 3:
-                            break
-            bot_responses.reverse()
-
-        # Legacy-compatible mode may keep recent bot/app prose for cross-bot continuity.
-        other_bot_messages = []
-        if not strict_human_only:
-            bot_authors = {}
-            for i in range(len(all_history) - 1, -1, -1):
-                msg = all_history[i]
-                if msg.get("is_bot", False) and msg.get("role") == "user":
-                    author = msg.get("author", "")
-                    if author and (not current_bot_name or author.lower() != current_bot_name.lower()):
-                        if author not in bot_authors:
-                            bot_authors[author] = []
-                        if len(bot_authors[author]) < 5:
-                            bot_authors[author].append((i, msg))
-            for msgs in bot_authors.values():
-                other_bot_messages.extend(msgs)
-            other_bot_messages.sort(key=lambda x: x[0])
-
-        # Collect human user messages only
-        user_messages = [
-            (idx, msg) for idx, msg in enumerate(all_history)
-            if msg.get("role") == "user" and not msg.get("is_bot", False)
-        ]
-        recent_user = user_messages[-context_count:]
-
-        # Build unified timeline: human messages + current bot responses + other bots
-        all_entries = []
-
-        for idx, msg in recent_user:
-            author = msg.get("author", "Unknown")
-            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
-            content = f"{author}: {msg.get('content', '')}"
-            if gap_prefix:
-                content = f"{gap_prefix}{content}"
-            all_entries.append((idx, {"role": "user", "content": content}))
-
-        for idx, msg in bot_responses:
-            assistant_author = msg.get("author") or current_bot_name or "Assistant"
-            content = msg.get("content", "")
-            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
-            if gap_prefix:
-                content = f"{gap_prefix}{content}"
-            all_entries.append((idx, {"role": "assistant", "content": content, "author": assistant_author}))
-
-        for idx, msg in other_bot_messages:
-            author = msg.get("author", "Unknown")
-            gap_prefix = _get_time_gap_prefix(all_history[idx - 1] if idx > 0 else None, msg)
-            content = f"{author}: {msg.get('content', '')}"
-            if gap_prefix:
-                content = f"{gap_prefix}{content}"
-            all_entries.append((idx, {"role": "user", "content": content}))
-
-        all_entries.sort(key=lambda x: x[0])
-        formatted = [entry for _, entry in all_entries]
-
-        return [], formatted
-
-    # Legacy mode: include all messages with bot personality bleed prevention
+    # Include all messages with bot personality bleed prevention.
     all_history = all_history[-total_limit:]
 
     # Format all messages

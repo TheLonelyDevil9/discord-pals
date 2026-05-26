@@ -36,11 +36,7 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             guild=guild,
             mentions=[],
         )
-        runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "allow_bot_mentions": False,
-        }
+        runtime_values = {"allow_bot_mentions": False}
         memories_mock = Mock(return_value="")
 
         def build_request(target_id, target_name):
@@ -147,9 +143,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "CurrentUser: Who's he?"},
         ]
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
         }
@@ -258,9 +251,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
             "bot_reference_context_mode": "neutral",
@@ -353,8 +343,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         }
         build_chatroom_context_mock = Mock(return_value="CHATROOM")
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": True,
         }
@@ -970,9 +958,6 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "sticker_info": None,
         }
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
         }

@@ -39,7 +39,6 @@ class ReplyThreadContextTests(unittest.IsolatedAsyncioTestCase):
             bot_instance_module.runtime_config,
             "get",
             side_effect=lambda key, default=None: {
-                "user_only_context": True,
                 "bot_reference_context_mode": "neutral",
             }.get(key, default),
         ):
@@ -137,7 +136,6 @@ class ReplyThreadContextTests(unittest.IsolatedAsyncioTestCase):
             bot_instance_module.runtime_config,
             "get",
             side_effect=lambda key, default=None: {
-                "user_only_context": True,
                 "bot_reference_context_mode": "neutral",
             }.get(key, default),
         ):

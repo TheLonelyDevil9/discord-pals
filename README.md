@@ -29,7 +29,7 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 - Unified learned-memory and manual-lore stores with dashboard editing.
 - Durable reminders, user and bot timezones, and optional autonomous DM follow-ups.
 - Multi-bot mode from one process, with global request coordination and bot-to-bot fall-off.
-- Bot identity guardrails, user-only context mode, response access controls, mention handling, split replies, and user ignore commands.
+- Bot identity guardrails, response access controls, mention handling, split replies, and user ignore commands.
 - Built-in diagnostics, updater, setup scripts, quality checks, and production-friendly dashboard serving.
 
 ## Requirements
