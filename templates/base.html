@@ -195,6 +195,45 @@
             margin-left: 8px;
         }
 
+        .nav-update-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 40px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid color-mix(in oklch, var(--warning) 58%, var(--border));
+            background: color-mix(in oklch, var(--warning) 16%, var(--bg-secondary));
+            color: var(--warning);
+            text-decoration: none;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            box-shadow: 0 0 0 1px color-mix(in oklch, var(--warning) 16%, transparent);
+            transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+        }
+
+        .nav-update-status:hover {
+            background: color-mix(in oklch, var(--warning) 24%, var(--bg-secondary));
+            color: var(--text-primary);
+        }
+
+        .nav-update-status.restart-required {
+            border-color: color-mix(in oklch, var(--accent) 62%, var(--border));
+            background: color-mix(in oklch, var(--accent) 18%, var(--bg-secondary));
+            color: var(--accent);
+            box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent);
+        }
+
+        .nav-update-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 1.6s infinite;
+            flex: 0 0 auto;
+        }
+
         .update-btn-container {
             display: flex;
             align-items: center;
@@ -912,6 +951,10 @@
             <a href="/logs" class="nav-link {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}active{% endif %}" {% if request.path=='/logs' or request.path=='/stats' or request.path=='/context' %}aria-current="page"{% endif %}>Logs</a>
         </div>
         <div class="nav-right">
+            <a href="/#update-bot-control" id="nav-update-status" class="nav-update-status hidden" aria-live="polite">
+                <span class="nav-update-dot" aria-hidden="true"></span>
+                <span id="nav-update-label">Update available</span>
+            </a>
             {% if is_logged_in %}
             <span class="nav-user">admin</span>
             <a href="/logout" class="nav-link">Logout</a>
@@ -1107,6 +1150,95 @@
 
         // Update icon on load
         updateThemeIcon(document.documentElement.getAttribute('data-theme'));
+
+        function hideGlobalUpdateIndicator() {
+            var indicator = document.getElementById('nav-update-status');
+            if (!indicator) return;
+            indicator.classList.add('hidden');
+            indicator.classList.remove('update-available', 'restart-required');
+            indicator.removeAttribute('title');
+        }
+
+        function renderGlobalUpdateIndicator(data) {
+            var indicator = document.getElementById('nav-update-status');
+            var label = document.getElementById('nav-update-label');
+            if (!indicator || !label || !data || data.status !== 'ok') return;
+
+            var version = data.latest_version || data.file_version || data.github_version;
+            indicator.classList.remove('update-available', 'restart-required');
+
+            if (data.restart_required && version) {
+                label.textContent = 'Restart for v' + version;
+                indicator.href = '/#restart-bot-control';
+                indicator.title = 'Restart Discord Pals to run v' + version;
+                indicator.classList.add('restart-required');
+                indicator.classList.remove('hidden');
+                return;
+            }
+
+            if (data.update_available && version) {
+                label.textContent = 'Update to v' + version;
+                indicator.href = '/#update-bot-control';
+                indicator.title = 'A Discord Pals update is available on GitHub';
+                indicator.classList.add('update-available');
+                indicator.classList.remove('hidden');
+                return;
+            }
+
+            hideGlobalUpdateIndicator();
+        }
+
+        async function checkGlobalUpdateStatus(forceRefresh) {
+            if (!forceRefresh && document.hidden) {
+                return window.dashboardVersionState || null;
+            }
+            try {
+                var response = await fetch('/api/version', { headers: { 'Accept': 'application/json' } });
+                if (!response.ok) throw new Error('Version check failed: ' + response.status);
+                var data = await response.json();
+                window.dashboardVersionState = data;
+                renderGlobalUpdateIndicator(data);
+                document.dispatchEvent(new CustomEvent('dashboard-version-state', { detail: data }));
+                return data;
+            } catch (e) {
+                if (!window.dashboardVersionState) {
+                    hideGlobalUpdateIndicator();
+                }
+                return window.dashboardVersionState || null;
+            }
+        }
+
+        window.renderGlobalUpdateIndicator = renderGlobalUpdateIndicator;
+        window.hideGlobalUpdateIndicator = hideGlobalUpdateIndicator;
+        window.checkGlobalUpdateStatus = checkGlobalUpdateStatus;
+
+        (function initGlobalUpdateStatus() {
+            var updatePollInterval = null;
+
+            function startPolling() {
+                if (!updatePollInterval) {
+                    updatePollInterval = setInterval(function() { checkGlobalUpdateStatus(false); }, 30 * 60 * 1000);
+                }
+            }
+
+            function stopPolling() {
+                if (updatePollInterval) {
+                    clearInterval(updatePollInterval);
+                    updatePollInterval = null;
+                }
+            }
+
+            checkGlobalUpdateStatus(true);
+            startPolling();
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    stopPolling();
+                } else {
+                    checkGlobalUpdateStatus(true);
+                    startPolling();
+                }
+            });
+        })();
 
         (function initBrandPreview() {
             var brand = document.querySelector('.nav-brand');
