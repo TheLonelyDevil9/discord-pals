@@ -19,13 +19,14 @@ from provider_gateway import provider_gateway as provider_manager
 from character import character_manager, Character
 from identity_policy import IDENTITY_GUARD_RETRY_INSTRUCTION, IdentityPolicy
 from message_routing import InboundMessage, TriggerDecision
+from post_response_tasks import PostResponseTaskContext, PostResponseTasks
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split, dm_history_key,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
-    update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
+    update_history_on_edit, remove_assistant_from_history, remove_message_from_history,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
@@ -58,6 +59,8 @@ RE_ASSISTANT_RESPONSE_WRAPPER = re.compile(
     r"^\s*<assistant_response>\s*([\s\S]*?)\s*</assistant_response>\s*$",
     re.IGNORECASE,
 )
+
+SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
 def _is_same_character(bot_author_name: str, character_name: str) -> bool:
@@ -145,6 +148,7 @@ class BotInstance:
         # Per-bot state
         self.request_queue = RequestQueue()
         self.context_builder = ContextBuilder(self.name)
+        self.post_response_tasks = PostResponseTasks(self)
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
 
@@ -511,6 +515,14 @@ class BotInstance:
             request,
             message if message is not None else request.get("message"),
         )
+
+    def _post_response_tasks(self) -> PostResponseTasks:
+        """Return the post-response task runner, creating it lazily for tests."""
+        tasks = getattr(self, "post_response_tasks", None)
+        if not isinstance(tasks, PostResponseTasks) or tasks.bot is not self:
+            tasks = PostResponseTasks(self)
+            self.post_response_tasks = tasks
+        return tasks
 
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""
@@ -2554,55 +2566,26 @@ Return exactly one JSON object with this shape:
             return False
 
         delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
-        self._record_emoji_budget(channel_id, delivered_response)
-        self._remember_recent_response(channel_id, delivered_response)
-        self._reset_failures(channel_id)
-        self._record_response(channel_id)
-        self._update_mood(channel_id, content, delivered_response)
-        for record in sent_records:
-            sent_message = record["message"]
-            add_to_history(
-                channel_id, "assistant", record["content"],
-                author_name=self.character.name, guild=guild,
-                message_id=getattr(sent_message, "id", None),
-                timestamp=getattr(sent_message, "created_at", None),
+        self._post_response_tasks().run_after_confirmed_delivery(
+            PostResponseTaskContext(
+                channel_id=channel_id,
+                discord_channel_id=discord_channel_id,
+                guild_id=guild_id,
+                guild=guild,
+                is_dm=is_dm,
+                user_id=user_id,
+                user_name=user_name,
+                content=content,
+                delivered_response=delivered_response,
+                sent_records=tuple(sent_records),
+                reactions=tuple(reactions),
+                split_target=split_target,
+                context=context,
+                message=message,
+                request=request,
                 req_id=req_id,
             )
-
-        # Update activity
-        runtime_config.update_last_activity(self.name)
-        metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
-
-        # Store multipart response
-        if len(sent_records) > 1:
-            multipart_ids = [
-                msg_id for msg_id in
-                (getattr(record["message"], "id", None) for record in sent_records)
-                if msg_id is not None
-            ]
-            if len(multipart_ids) > 1:
-                store_multipart_response(channel_id, multipart_ids, delivered_response)
-        diagnostic_events.log_delivery_complete(
-            self.name,
-            req_id,
-            channel_id=channel_id,
-            user_id=user_id,
-            sent_records=sent_records,
-            delivered_response=delivered_response,
-            reactions=reactions,
-            split_target=split_target,
         )
-
-        # Send reactions
-        if reactions:
-            asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
-
-        # Auto-memory
-        memory_scope_id = memory_server_id(self.name, guild_id, is_dm=is_dm)
-        asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, memory_scope_id, user_id, content, user_name))
-
-        # Durable reminder capture
-        asyncio.create_task(self._maybe_handle_reminder_capture(context, message, request))
 
         return True
 
@@ -3363,4 +3346,20 @@ Return exactly one JSON object with this shape:
     
     async def close(self):
         """Close the bot connection."""
+        try:
+            drained = await self.request_queue.drain(timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
+            if not drained:
+                log.warn(
+                    "Request queue did not drain before bot close",
+                    self.name,
+                    component="shutdown",
+                    event="queue_drain_timeout",
+                )
+        except Exception as e:
+            log.warn(
+                f"Request queue drain failed during bot close: {e}",
+                self.name,
+                component="shutdown",
+                event="queue_drain_failed",
+            )
         await self.client.close()

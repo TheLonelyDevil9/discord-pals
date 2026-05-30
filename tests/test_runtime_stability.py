@@ -19,6 +19,11 @@ class _AsyncNoop:
         return False
 
 
+def _close_task(coro):
+    coro.close()
+    return None
+
+
 class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_request_context_allows_same_message_for_multiple_split_targets(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -763,10 +768,11 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("hello", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(bot_instance_module.log, "warn"):
@@ -813,9 +819,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=True), \
                 patch.object(bot_instance_module, "parse_reactions", side_effect=lambda value: (value, [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(bot_instance_module.log, "warn"):
@@ -859,12 +866,13 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("One.\n\nTwo.", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
-                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0), \
                 patch.object(bot_instance_module.log, "warn"), \
@@ -1232,22 +1240,18 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
                 return False
             return default
 
-        def close_task(coro):
-            coro.close()
-            return None
-
         with patch.object(bot_instance_module.runtime_config, "get", side_effect=runtime_get), \
                 patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)), \
                 patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(False, "dm_responses_disabled")), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("server reply", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(instance, "_maybe_auto_memory", new=AsyncMock()), \
                 patch.object(instance, "_maybe_handle_reminder_capture", new=AsyncMock()), \
-                patch.object(bot_instance_module.asyncio, "create_task", side_effect=close_task), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.log, "debug"):
             sent = await instance._send_and_finalize_response("server reply", context, message, request)
 
@@ -1256,6 +1260,33 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._send_organic_response_to_channel.assert_not_awaited()
         instance._send_organic_response.assert_awaited_once()
         self.assertEqual(add_history_mock.call_args.args[2], "server reply")
+
+
+class BotLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_drains_request_queue_before_client_close(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=True))
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+
+        await instance.close()
+
+        instance.request_queue.drain.assert_awaited_once_with(
+            timeout=bot_instance_module.SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+        )
+        instance.client.close.assert_awaited_once()
+
+    async def test_close_still_closes_client_when_queue_drain_times_out(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=False))
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+
+        with patch.object(bot_instance_module.log, "warn") as warn_mock:
+            await instance.close()
+
+        warn_mock.assert_called_once()
+        instance.client.close.assert_awaited_once()
 
 
 class NewRuntimeBehaviorTests(unittest.TestCase):

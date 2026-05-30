@@ -8,6 +8,7 @@ which text is safe to persist, and whether one safe retry is allowed.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -151,6 +152,19 @@ async def deliver_multipart_response(
                 retry_count=retry_count,
                 failed_part_index=failed_index,
                 error=str(exc) or exc.__class__.__name__,
+            )
+        except asyncio.CancelledError:
+            if not confirmed_parts:
+                raise
+
+            ambiguous_index = len(confirmed_parts)
+            return _build_outcome(
+                plan,
+                confirmed_parts,
+                _state_for_confirmed_parts(plan, confirmed_parts),
+                retry_count=retry_count,
+                ambiguous_part_index=ambiguous_index,
+                error="CancelledError",
             )
         except Exception as exc:
             ambiguous_index = len(confirmed_parts)

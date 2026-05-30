@@ -67,6 +67,19 @@ class RequestQueue:
     def set_processor(self, callback: Callable):
         """Set the callback function to process requests."""
         self.process_callback = callback
+
+    def has_pending_work(self) -> bool:
+        """Return True while any queued or active request remains."""
+        return any(self.queues.values()) or any(self.processing.values())
+
+    async def drain(self, *, timeout: float = 10.0, poll_interval: float = 0.05) -> bool:
+        """Wait for queued/in-flight requests to finish up to a bounded timeout."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self.has_pending_work():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval)
+        return True
     
     async def add_request(
         self,
