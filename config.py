@@ -70,6 +70,23 @@ def _validate_provider_value(value, expected_type, default, min_val=None, max_va
 
     return value
 
+
+def _validate_provider_bool(value, default, name="value"):
+    """Validate a provider boolean without treating arbitrary strings as true."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+    log.warn(f"Provider {name} expected boolean, using default")
+    return default
+
+
 def load_providers() -> tuple[dict, int, dict]:
     """Load providers from providers.json or use defaults.
 
@@ -115,14 +132,35 @@ def load_providers() -> tuple[dict, int, dict]:
             # Fallback for keyless providers (e.g., local llama.cpp)
             if not key:
                 key = "not-needed"
+            requires_key = _validate_provider_bool(p.get("requires_key"), True, name="requires_key")
 
             providers[tier] = {
                 "name": _validate_provider_value(p.get("name"), str, f"Provider {i+1}", name="name"),
                 "url": url,  # Use the resolved URL
                 "key": key,
+                "requires_key": requires_key,
+                "provider_protocol": _validate_provider_value(
+                    p.get("provider_protocol") or p.get("protocol"),
+                    str,
+                    "legacy-openai-compatible",
+                    name="provider_protocol",
+                ),
+                "endpoint_type": _validate_provider_value(
+                    p.get("endpoint_type") or p.get("endpoint"),
+                    str,
+                    "openai-chat",
+                    name="endpoint_type",
+                ),
+                "append_base_path": _validate_provider_bool(p.get("append_base_path"), True, name="append_base_path"),
                 "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
                 "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
                 "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
+                "supports_chat": _validate_provider_bool(p.get("supports_chat"), True, name="supports_chat"),
+                "supports_vision": _validate_provider_bool(p.get("supports_vision"), True, name="supports_vision"),
+                "supports_reasoning": _validate_provider_bool(p.get("supports_reasoning"), bool(p.get("reasoning_effort") or p.get("reasoning")), name="supports_reasoning"),
+                "supports_streaming": _validate_provider_bool(p.get("supports_streaming"), False, name="supports_streaming"),
+                "image_generation_modeled": _validate_provider_bool(p.get("image_generation_modeled"), False, name="image_generation_modeled"),
+                "image_generation_disabled": _validate_provider_bool(p.get("image_generation_disabled"), False, name="image_generation_disabled"),
                 "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
                 "reasoning_effort": _validate_provider_value(p.get("reasoning_effort") or p.get("effort"), str, "", name="reasoning_effort"),
                 "reasoning_format": _validate_provider_value(p.get("reasoning_format"), str, "auto", name="reasoning_format"),
@@ -169,7 +207,107 @@ def load_providers() -> tuple[dict, int, dict]:
     }, timeout, CharacterProviderMap()
 
 
+def load_image_providers() -> dict:
+    """Load OpenAI-compatible image generation providers from providers.json."""
+    config_path = os.path.join(os.path.dirname(__file__), "providers.json")
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            log.warn(f"Invalid providers.json image provider section: {e}")
+            return {}
+
+        image_provider_list = data.get("image_providers")
+        if image_provider_list is None:
+            key = os.getenv('OPENAI_API_KEY')
+            log.register_secret(key)
+            return {
+                "primary": {
+                    "name": "OpenAI Images",
+                    "url": "https://api.openai.com/v1",
+                    "key": key,
+                    "model": "gpt-image-1",
+                    "size": "1024x1024",
+                    "timeout": 120,
+                }
+            }
+        if not isinstance(image_provider_list, list):
+            log.warn("providers.json image_providers must be a list")
+            return {}
+
+        image_providers = {}
+        for i, provider in enumerate(image_provider_list):
+            if not isinstance(provider, dict):
+                log.warn(f"Image provider {i+1} is not an object, skipping")
+                continue
+
+            tier = ["primary", "secondary", "fallback"][i] if i < 3 else f"tier_{i}"
+            url = provider.get("url") or provider.get("base_url")
+            if not url:
+                log.warn(f"Image provider {i+1} missing 'url', skipping")
+                continue
+
+            key = None
+            if provider.get("api_key"):
+                key = provider["api_key"]
+            elif provider.get("key_env"):
+                key = os.getenv(provider["key_env"], "")
+            log.register_secret(key)
+            if not key:
+                key = "not-needed"
+
+            image_providers[tier] = {
+                "name": _validate_provider_value(provider.get("name"), str, f"Image Provider {i+1}", name="image_provider.name"),
+                "url": url,
+                "key": key,
+                "model": _validate_provider_value(provider.get("model"), str, "gpt-image-1", name="image_provider.model"),
+                "size": _validate_provider_value(provider.get("size"), str, "1024x1024", name="image_provider.size"),
+                "quality": _validate_provider_value(provider.get("quality"), str, "", name="image_provider.quality"),
+                "style": _validate_provider_value(provider.get("style"), str, "", name="image_provider.style"),
+                "response_format": _validate_provider_value(provider.get("response_format"), str, "", name="image_provider.response_format"),
+                "output_format": _validate_provider_value(provider.get("output_format"), str, "", name="image_provider.output_format"),
+                "background": _validate_provider_value(provider.get("background"), str, "", name="image_provider.background"),
+                "moderation": _validate_provider_value(provider.get("moderation"), str, "", name="image_provider.moderation"),
+                "timeout": _validate_provider_value(provider.get("timeout"), int, 120, min_val=5, max_val=3600, name="image_provider.timeout"),
+                "extra_body": _validate_provider_value(provider.get("extra_body"), dict, {}, name="image_provider.extra_body"),
+            }
+
+        return image_providers
+
+    key = os.getenv('OPENAI_API_KEY')
+    log.register_secret(key)
+    return {
+        "primary": {
+            "name": "OpenAI Images",
+            "url": "https://api.openai.com/v1",
+            "key": key,
+            "model": "gpt-image-1",
+            "size": "1024x1024",
+            "timeout": 120,
+        }
+    }
+
+
 PROVIDERS, API_TIMEOUT, CHARACTER_PROVIDERS = load_providers()
+IMAGE_PROVIDERS = load_image_providers()
+
+
+def reload_providers() -> tuple[dict, dict, dict]:
+    """Reload provider config in place so dashboard edits take effect without restart."""
+    global API_TIMEOUT
+    providers, timeout, character_providers = load_providers()
+    image_providers = load_image_providers()
+
+    PROVIDERS.clear()
+    PROVIDERS.update(providers)
+    IMAGE_PROVIDERS.clear()
+    IMAGE_PROVIDERS.update(image_providers)
+    CHARACTER_PROVIDERS.clear()
+    CHARACTER_PROVIDERS.update(character_providers)
+    API_TIMEOUT = timeout
+    return PROVIDERS, IMAGE_PROVIDERS, CHARACTER_PROVIDERS
 
 
 def reload_character_providers() -> dict:

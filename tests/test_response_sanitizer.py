@@ -107,3 +107,28 @@ class ResponseSanitizerTests(unittest.TestCase):
             discord_utils.conversation_history = original_history
             discord_utils._channel_last_activity = original_last_activity
             discord_utils._recent_message_hashes = original_recent_hashes
+
+    def test_add_to_history_includes_request_id_in_diagnostics(self):
+        channel_id = 883
+        original_history = discord_utils.conversation_history
+        original_last_activity = discord_utils._channel_last_activity
+        original_recent_hashes = discord_utils._recent_message_hashes
+        try:
+            discord_utils.conversation_history = {}
+            discord_utils._channel_last_activity = {}
+            discord_utils._recent_message_hashes = {}
+            with unittest.mock.patch.object(discord_utils, "save_history"):
+                with unittest.mock.patch.object(discord_utils.log, "diagnostic") as diagnostic_mock:
+                    discord_utils.add_to_history(
+                        channel_id,
+                        "assistant",
+                        "Hello",
+                        author_name="Firefly",
+                        req_id="req-history",
+                    )
+
+            self.assertEqual(diagnostic_mock.call_args.kwargs["req_id"], "req-history")
+        finally:
+            discord_utils.conversation_history = original_history
+            discord_utils._channel_last_activity = original_last_activity
+            discord_utils._recent_message_hashes = original_recent_hashes

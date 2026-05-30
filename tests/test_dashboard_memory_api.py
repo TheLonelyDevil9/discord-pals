@@ -174,9 +174,9 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         ]:
             self.manager.add_auto_memory(123, 456, fact)
 
-        fake_providers = types.ModuleType("providers")
-        fake_providers.provider_manager = types.SimpleNamespace(providers={})
-        with patch.dict(sys.modules, {"providers": fake_providers}):
+        fake_gateway = types.ModuleType("provider_gateway")
+        fake_gateway.provider_gateway = types.SimpleNamespace(providers={})
+        with patch.dict(sys.modules, {"provider_gateway": fake_gateway}):
             response = self.client.post(
                 "/api/v2/memories/auto/consolidate",
                 json={"user_ids": [456], "scope_mode": "all"},
@@ -194,9 +194,9 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         self.manager.add_auto_memory(123, 456, "Alice collects bookmarks", user_name="Alice")
         self.manager.add_auto_memory(123, 999, "Bob likes coffee", user_name="Bob")
 
-        fake_providers = types.ModuleType("providers")
-        fake_providers.provider_manager = types.SimpleNamespace(providers={})
-        with patch.dict(sys.modules, {"providers": fake_providers}):
+        fake_gateway = types.ModuleType("provider_gateway")
+        fake_gateway.provider_gateway = types.SimpleNamespace(providers={})
+        with patch.dict(sys.modules, {"provider_gateway": fake_gateway}):
             response = self.client.post(
                 "/api/v2/memories/auto/cleanup-waiting",
                 json={"scope_mode": "all"},
@@ -233,11 +233,11 @@ class DashboardMemoryApiTests(MemorySandboxMixin, unittest.TestCase):
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
-        fake_providers = types.ModuleType("providers")
-        fake_providers.provider_manager = DashboardEmbeddingProvider("Alice likes tea and collects bookmarks")
+        fake_gateway = types.ModuleType("provider_gateway")
+        fake_gateway.provider_gateway = DashboardEmbeddingProvider("Alice likes tea and collects bookmarks")
 
         try:
-            with patch.dict(sys.modules, {"providers": fake_providers}), patch.object(
+            with patch.dict(sys.modules, {"provider_gateway": fake_gateway}), patch.object(
                 dashboard_module,
                 "_get_live_bot_loop",
                 return_value=loop,

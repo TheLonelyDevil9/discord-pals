@@ -58,6 +58,11 @@ if "discord" not in sys.modules:
     class Attachment:
         pass
 
+    class File:
+        def __init__(self, fp=None, filename=None):
+            self.fp = fp
+            self.filename = filename
+
     class Emoji:
         pass
 
@@ -149,6 +154,7 @@ if "discord" not in sys.modules:
     discord.Message = Message
     discord.Interaction = Interaction
     discord.Attachment = Attachment
+    discord.File = File
     discord.Emoji = Emoji
     discord.Guild = Guild
     discord.DMChannel = DMChannel

@@ -7,6 +7,7 @@ import discord
 import logger as log
 import response_access
 from discord_utils import add_to_history, convert_emojis_in_text, store_multipart_response
+from runtime_delivery import deliver_channel_multipart
 
 
 async def send_scheduled_reminder(bot, reminder: dict, response: str) -> tuple[list, int | None]:
@@ -53,20 +54,23 @@ async def send_scheduled_reminder(bot, reminder: dict, response: str) -> tuple[l
     for channel_mode, channel in channels_to_try:
         if channel is None:
             continue
-        sent_messages = []
         try:
             rendered_response = convert_emojis_in_text(response, guild) if guild else response
             lines = bot._split_response_for_delivery(rendered_response)
-            for index, line in enumerate(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                if channel_mode == "primary" and source_type != "dm" and index == 0:
-                    line = f"<@{user_id}> {line}"
-                sent_messages.append(await channel.send(line))
+            lines = [line.strip() for line in lines if line and line.strip()]
+            if channel_mode == "primary" and source_type != "dm" and lines:
+                lines[0] = f"<@{user_id}> {lines[0]}"
+
+            batch = await deliver_channel_multipart(
+                bot_name=bot.name,
+                channel=channel,
+                lines=lines,
+                req_id=reminder.get("id"),
+            )
+            sent_messages = [record["message"] for record in batch.sent_records] if batch else []
 
             if sent_messages:
-                delivered = "\n\n".join(getattr(sent, "content", "") or "" for sent in sent_messages).strip()
+                delivered = batch.persistable_visible_text.strip()
                 add_to_history(
                     getattr(channel, "id", source_channel_id),
                     "assistant",

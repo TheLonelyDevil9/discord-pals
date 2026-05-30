@@ -9,6 +9,8 @@ from typing import Dict, List, Callable
 from collections import defaultdict, deque
 import discord
 import logger as log
+from request_envelope import RequestEnvelope
+from scopes import LocalScopeId, ScopeKey
 
 
 class RequestQueue:
@@ -16,11 +18,13 @@ class RequestQueue:
     
     def __init__(self):
         self.queues = defaultdict(deque)
-        self.processing: Dict[int, bool] = defaultdict(bool)
-        self.locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.processing: Dict[LocalScopeId, bool] = defaultdict(bool)
+        self.locks: Dict[LocalScopeId, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.pending_counts = defaultdict(lambda: defaultdict(int))
         self.pending_signatures = defaultdict(lambda: defaultdict(lambda: defaultdict(deque)))
-        self._next_request_id: Dict[int, int] = defaultdict(int)
+        self._next_request_id: Dict[LocalScopeId, int] = defaultdict(int)
+        self._processing_tasks: set[asyncio.Task] = set()
+        self._cancelling = False
         self.process_callback: Callable = None
 
     @staticmethod
@@ -36,7 +40,7 @@ class RequestQueue:
         while signature_timestamps and (current_time - signature_timestamps[0]) >= 3:
             signature_timestamps.popleft()
 
-    def _release_request_tracking(self, channel_id: int, request: dict):
+    def _release_request_tracking(self, channel_id: LocalScopeId, request: dict):
         """Release per-user counters and prune duplicate signatures after processing."""
         user_id = request.get("user_id")
         if user_id is None:
@@ -65,10 +69,53 @@ class RequestQueue:
     def set_processor(self, callback: Callable):
         """Set the callback function to process requests."""
         self.process_callback = callback
+
+    def has_pending_work(self) -> bool:
+        """Return True while any queued or active request remains."""
+        return (
+            any(self.queues.values())
+            or any(self.processing.values())
+            or any(not task.done() for task in self._processing_tasks)
+        )
+
+    async def drain(self, *, timeout: float = 10.0, poll_interval: float = 0.05) -> bool:
+        """Wait for queued/in-flight requests to finish up to a bounded timeout."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self.has_pending_work():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval)
+        return True
+
+    async def cancel_active(self) -> None:
+        """Cancel active processing tasks and drop queued requests during shutdown."""
+        self._cancelling = True
+        tasks = [task for task in self._processing_tasks if not task.done()]
+        try:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            for channel_id in list(self.queues.keys()):
+                async with self.locks[channel_id]:
+                    while self.queues[channel_id]:
+                        request = self.queues[channel_id].popleft()
+                        self._release_request_tracking(channel_id, request)
+                    self.processing[channel_id] = False
+        finally:
+            self._cancelling = False
+
+    def _start_processing(self, channel_id: LocalScopeId) -> None:
+        if self._cancelling:
+            return
+        task = asyncio.create_task(self._process_queue(channel_id))
+        self._processing_tasks.add(task)
+        task.add_done_callback(self._processing_tasks.discard)
     
     async def add_request(
         self,
-        channel_id: int,
+        channel_id: LocalScopeId,
         message: discord.Message,
         content: str,
         guild: discord.Guild,
@@ -86,18 +133,32 @@ class RequestQueue:
         is_autonomous: bool = False,
         dm_invite_requested: bool = False,
         route_req_id: str = None,
+        scope_key: ScopeKey | None = None,
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
-        async with self.locks[channel_id]:
+        queue_key = scope_key.history_id if scope_key is not None else channel_id
+
+        async with self.locks[queue_key]:
             current_time = time.time()
             req_id = route_req_id or log.new_request_id()
+            if self._cancelling:
+                log.diagnostic(
+                    "Request rejected during queue cancellation",
+                    component="queue",
+                    event="request_rejected",
+                    req_id=req_id,
+                    channel_id=queue_key,
+                    user_id=user_id,
+                    reason="queue_cancelling",
+                )
+                return False
 
             # Pre-compute stripped content once for comparisons
             content_stripped = content.strip()
             target_id = self._split_target_id(split_reply_target)
             request_signature = (content_stripped, target_id)
-            channel_signatures = self.pending_signatures[channel_id][user_id]
+            channel_signatures = self.pending_signatures[queue_key][user_id]
             signature_timestamps = channel_signatures[request_signature]
             self._prune_signature_timestamps(signature_timestamps, current_time)
 
@@ -108,81 +169,84 @@ class RequestQueue:
                     component="queue",
                     event="request_rejected",
                     req_id=req_id,
-                    channel_id=channel_id,
+                    channel_id=queue_key,
                     user_id=user_id,
                     reason="duplicate_signature",
-                    pending_count=self.pending_counts[channel_id][user_id],
+                    pending_count=self.pending_counts[queue_key][user_id],
                 )
                 return False
 
             # Limit pending requests per user
-            if self.pending_counts[channel_id][user_id] >= 3:
+            if self.pending_counts[queue_key][user_id] >= 3:
                 log.diagnostic(
                     "Request rejected by per-user pending limit",
                     component="queue",
                     event="request_rejected",
                     req_id=req_id,
-                    channel_id=channel_id,
+                    channel_id=queue_key,
                     user_id=user_id,
                     reason="pending_limit",
-                    pending_count=self.pending_counts[channel_id][user_id],
+                    pending_count=self.pending_counts[queue_key][user_id],
                 )
                 return False
 
             # Add request to queue
-            self._next_request_id[channel_id] += 1
-            request = {
-                'id': self._next_request_id[channel_id],
-                'req_id': req_id,
-                'timestamp': current_time,
-                'channel_id': channel_id,
-                'message': message,
-                'content': content,
-                'content_stripped': content_stripped,  # Pre-computed for duplicate checks
-                'request_signature': request_signature,
-                'guild': guild,
-                'attachments': list(attachments) if attachments else [],
-                'user_name': user_name,
-                'is_dm': is_dm,
-                'user_id': user_id,
-                'sticker_info': sticker_info,
-                'from_interact_command': from_interact_command,
-                'split_reply_target': split_reply_target,
-                'forced_target_user_id': forced_target_user_id,
-                'forced_target_user_name': forced_target_user_name,
-                'allow_auto_reminders': allow_auto_reminders,
-                'pending_reminder_clarification': dict(pending_reminder_clarification) if pending_reminder_clarification else None,
-                'is_autonomous': is_autonomous,
-                'dm_invite_requested': dm_invite_requested,
-            }
+            self._next_request_id[queue_key] += 1
+            envelope = RequestEnvelope(
+                id=self._next_request_id[queue_key],
+                correlation_id=req_id,
+                timestamp=current_time,
+                channel_id=queue_key,
+                scope_key=scope_key,
+                message=message,
+                content=content,
+                content_stripped=content_stripped,
+                request_signature=request_signature,
+                guild=guild,
+                attachments=tuple(attachments or ()),
+                user_name=user_name,
+                is_dm=is_dm,
+                user_id=user_id,
+                sticker_info=sticker_info,
+                from_interact_command=from_interact_command,
+                direct_target=split_reply_target,
+                forced_target_user_id=forced_target_user_id,
+                forced_target_user_name=forced_target_user_name,
+                allow_auto_reminders=allow_auto_reminders,
+                pending_reminder_clarification=dict(pending_reminder_clarification) if pending_reminder_clarification else None,
+                is_autonomous=is_autonomous,
+                dm_invite_requested=dm_invite_requested,
+            )
+            request = envelope.to_legacy_dict()
 
-            self.queues[channel_id].append(request)
-            self.pending_counts[channel_id][user_id] += 1
+            self.queues[queue_key].append(request)
+            self.pending_counts[queue_key][user_id] += 1
             signature_timestamps.append(current_time)
             log.diagnostic(
                 "Request queued",
                 component="queue",
                 event="request_queued",
                 req_id=req_id,
-                channel_id=channel_id,
+                channel_id=queue_key,
                 user_id=user_id,
-                queue_depth=len(self.queues[channel_id]),
-                pending_count=self.pending_counts[channel_id][user_id],
+                queue_depth=len(self.queues[queue_key]),
+                pending_count=self.pending_counts[queue_key][user_id],
                 is_dm=is_dm,
                 is_autonomous=is_autonomous,
                 from_interact_command=from_interact_command,
                 split_target_id=target_id,
+                scope_history_id=str(scope_key.history_id) if scope_key else None,
                 content_len=len(content_stripped),
                 attachments_count=len(attachments or []),
             )
 
             # Start processing if not already
-            if not self.processing[channel_id]:
-                asyncio.create_task(self._process_queue(channel_id))
+            if not self.processing[queue_key]:
+                self._start_processing(queue_key)
 
             return True
     
-    async def _process_queue(self, channel_id: int):
+    async def _process_queue(self, channel_id: LocalScopeId):
         """Process all requests in the queue for a channel."""
         
         async with self.locks[channel_id]:
@@ -194,7 +258,7 @@ class RequestQueue:
             while self.queues[channel_id]:
                 # Get next request
                 async with self.locks[channel_id]:
-                    if not self.queues[channel_id]:
+                    if self._cancelling or not self.queues[channel_id]:
                         break
                     request = self.queues[channel_id].popleft()
                     log.diagnostic(
@@ -215,6 +279,9 @@ class RequestQueue:
                 finally:
                     async with self.locks[channel_id]:
                         self._release_request_tracking(channel_id, request)
+
+                if self._cancelling:
+                    break
                 
                 # Small delay between requests
                 await asyncio.sleep(0.5)
@@ -224,5 +291,5 @@ class RequestQueue:
                 self.processing[channel_id] = False
                 # Check if new requests arrived while we were finishing up
                 # This fixes a race condition where requests could get stuck
-                if self.queues[channel_id]:
-                    asyncio.create_task(self._process_queue(channel_id))
+                if self.queues[channel_id] and not self._cancelling:
+                    self._start_processing(channel_id)

@@ -13,26 +13,32 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
-from config import ERROR_DELETE_AFTER, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, CHARACTER_PROVIDERS
-from providers import provider_manager
+from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
+from context_builder import ContextBuilder
+from provider_gateway import provider_gateway as provider_manager
+from provider_contracts import GenerationResult
 from character import character_manager, Character
+from identity_policy import IDENTITY_GUARD_RETRY_INSTRUCTION, IdentityPolicy
+from message_routing import InboundMessage, TriggerDecision
+from post_response_tasks import PostResponseTaskContext, PostResponseTasks
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split, dm_history_key,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
-    update_history_on_edit, remove_assistant_from_history, remove_message_from_history, store_multipart_response,
+    update_history_on_edit, remove_assistant_from_history, remove_message_from_history,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from response_delivery import format_response_for_delivery
+from runtime_delivery import RuntimeDeliveryBatch, deliver_channel_multipart, deliver_reply_multipart
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
 from stats import stats_manager
-import runtime_config
+import dm_images, runtime_config
 import response_access
 import logger as log
 import user_ignores
@@ -41,11 +47,10 @@ from reminders import reminder_manager
 from reminder_delivery import send_scheduled_reminder
 from scopes import (
     DeliveryTarget,
-    MemoryScope,
-    RequestContext,
-    channel_display_label,
+    ScopeKey,
     conversation_history_id,
     memory_server_id,
+    scope_lock_registry,
 )
 from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
 import diagnostic_events
@@ -55,6 +60,8 @@ RE_ASSISTANT_RESPONSE_WRAPPER = re.compile(
     r"^\s*<assistant_response>\s*([\s\S]*?)\s*</assistant_response>\s*$",
     re.IGNORECASE,
 )
+
+SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
 def _is_same_character(bot_author_name: str, character_name: str) -> bool:
@@ -81,12 +88,6 @@ RE_REMINDER_KEYWORD = re.compile(
     r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
     r")\b",
     re.IGNORECASE
-)
-
-IDENTITY_GUARD_RETRY_INSTRUCTION = (
-    "Your previous draft was blocked because it structurally attributed speech "
-    "or action to another bot. Reply only as the current character. Do not write "
-    "another bot's dialogue, name-prefixed turn, or roleplay action."
 )
 
 _FOLLOWUP_TOPIC_STOPWORDS = frozenset({
@@ -147,6 +148,8 @@ class BotInstance:
         
         # Per-bot state
         self.request_queue = RequestQueue()
+        self.context_builder = ContextBuilder(self.name)
+        self.post_response_tasks = PostResponseTasks(self)
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
 
@@ -162,6 +165,7 @@ class BotInstance:
 
         # DM follow-up state
         self._dm_followup_state: Dict[int, dict] = {}  # user_id -> {last_user_msg, followups_sent, last_followup, channel_id}
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Processed message tracking (prevents duplicate responses to queued messages)
         self._processed_message_ids: set = set()
@@ -492,6 +496,58 @@ class BotInstance:
         channel_id = getattr(channel, "id", channel)
         return conversation_history_id(self.name, channel_id, is_dm=is_dm, user_id=user_id)
 
+    def _context_builder(self) -> ContextBuilder:
+        """Return this bot's context identity builder, creating it lazily for tests."""
+        builder = getattr(self, "context_builder", None)
+        if not isinstance(builder, ContextBuilder) or builder.bot_name != self.name:
+            builder = ContextBuilder(self.name)
+            self.context_builder = builder
+        return builder
+
+    def _scope_key_for_message(self, message, *, is_dm: bool, user_id: int | None, guild=None) -> ScopeKey:
+        return self._context_builder().scope_key_for_message(
+            message,
+            is_dm=is_dm,
+            user_id=user_id,
+            guild=guild,
+        )
+
+    def _scope_key_for_request(self, request: dict, message=None) -> ScopeKey:
+        return self._context_builder().scope_key_for_request(
+            request,
+            message if message is not None else request.get("message"),
+        )
+
+    def _post_response_tasks(self) -> PostResponseTasks:
+        """Return the post-response task runner, creating it lazily for tests."""
+        tasks = getattr(self, "post_response_tasks", None)
+        if not isinstance(tasks, PostResponseTasks) or tasks.bot is not self:
+            tasks = PostResponseTasks(self)
+            self.post_response_tasks = tasks
+        return tasks
+
+    def _track_background_task(self, coro, *, name: str) -> asyncio.Task:
+        """Create and remember a background task so shutdown can cancel it."""
+        task = asyncio.create_task(coro, name=f"{self.name}:{name}")
+        background_tasks = getattr(self, "_background_tasks", None)
+        if background_tasks is None:
+            background_tasks = set()
+            self._background_tasks = background_tasks
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        return task
+
+    async def _cancel_background_tasks(self) -> None:
+        tasks = [
+            task for task in getattr(self, "_background_tasks", set())
+            if not task.done()
+        ]
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""
         return memory_server_id(self.name, None, is_dm=True)
@@ -605,25 +661,11 @@ class BotInstance:
         target_user_name: str | None = None,
         split_target_name: str | None = None,
     ) -> str:
-        """Return code-owned context that anchors who the bot is answering now."""
-        safe_speaker = " ".join(str(speaker_name or "Unknown").split())
-        safe_target = " ".join(str(target_user_name or safe_speaker).split())
-        safe_split_target = " ".join(str(split_target_name or "").split())
-        if speaker_is_bot:
-            return (
-                f"Current Discord event author: {safe_speaker} (bot/app). "
-                "Use this only as routing context unless explicitly instructed otherwise."
-            )
-        if safe_split_target and safe_split_target != safe_speaker:
-            return (
-                f"Current Discord message author: {safe_speaker}. "
-                f"This split reply is addressed to {safe_split_target}; address {safe_split_target} directly as \"you\". "
-                "Earlier third-person lines about the addressed user do not change who this split reply addresses."
-            )
-        return (
-            f"Current Discord message author: {safe_speaker}. "
-            f"The reply is addressed to {safe_target}; address {safe_target} directly as \"you\". "
-            "Earlier third-person lines about the addressed user do not change who this reply addresses."
+        return IdentityPolicy.current_speaker_context(
+            speaker_name=speaker_name,
+            speaker_is_bot=speaker_is_bot,
+            target_user_name=target_user_name,
+            direct_target_name=split_target_name,
         )
 
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
@@ -1251,21 +1293,12 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        user_only_context = runtime_config.get("user_only_context", True)
-        if user_only_context:
-            history_msgs, immediate = format_history_split(
-                source_channel_id,
-                user_only=True,
-                context_count=runtime_config.get("user_only_context_count", 20),
-                current_bot_name=self.character.name if self.character else None
-            )
-        else:
-            history_msgs, immediate = format_history_split(
-                source_channel_id,
-                total_limit=runtime_config.get("history_limit", 200),
-                immediate_count=runtime_config.get("immediate_message_count", 5),
-                current_bot_name=self.character.name if self.character else None
-            )
+        history_msgs, immediate = format_history_split(
+            source_channel_id,
+            total_limit=runtime_config.get("history_limit", 200),
+            immediate_count=runtime_config.get("immediate_message_count", 5),
+            current_bot_name=self.character.name if self.character else None
+        )
 
         reminder_local_display = utc_iso_to_local_display(
             reminder.get("due_at_utc"),
@@ -1416,17 +1449,20 @@ Return exactly one JSON object with this shape:
             register_bot(self)
 
             # Start periodic state cleanup task (every 5 minutes)
-            asyncio.create_task(self._periodic_state_cleanup())
+            self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
 
             # Start DM follow-up loop
-            asyncio.create_task(self._dm_followup_loop())
+            self._track_background_task(self._dm_followup_loop(), name="dm-followups")
 
             # Start durable reminder loop
-            asyncio.create_task(self._reminder_loop())
+            self._track_background_task(self._reminder_loop(), name="reminders")
 
             # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
             if getattr(provider_manager, "providers", None):
-                asyncio.create_task(memory_manager.retry_pending_auto_profiles(provider_manager))
+                self._track_background_task(
+                    memory_manager.retry_pending_auto_profiles(provider_manager),
+                    name="retry-pending-auto-profiles",
+                )
 
             # Initialize Prometheus metrics for this bot
             metrics_manager.update_bot_status(
@@ -1454,6 +1490,11 @@ Return exactly one JSON object with this shape:
             discord_channel_id = message.channel.id
             channel_id = self._conversation_key(message, message.author.id)
             guild = message.guild
+            inbound = InboundMessage.from_discord(
+                message,
+                correlation_id=route_req_id,
+                is_dm=is_dm,
+            )
             access_allowed, access_reason = response_access.message_access(is_dm, message.author.id, discord_channel_id)
             log.diagnostic(
                 "Discord message received",
@@ -1461,15 +1502,15 @@ Return exactly one JSON object with this shape:
                 component="routing",
                 event="message_received",
                 req_id=route_req_id,
-                channel_id=discord_channel_id,
-                guild_id=getattr(guild, "id", None),
-                user_id=getattr(message.author, "id", None),
-                message_id=getattr(message, "id", None),
-                is_dm=is_dm,
-                is_bot=is_other_bot,
-                content_len=len(message.content or ""),
-                attachment_count=len(getattr(message, "attachments", []) or []),
-                mention_count=len(getattr(message, "mentions", []) or []),
+                channel_id=inbound.channel_id,
+                guild_id=inbound.guild_id,
+                user_id=inbound.user_id,
+                message_id=inbound.message_id,
+                is_dm=inbound.is_dm,
+                is_bot=inbound.author_is_bot,
+                content_len=inbound.content_len,
+                attachment_count=inbound.attachment_count,
+                mention_count=inbound.mention_count,
             )
 
             if not access_allowed:
@@ -1536,13 +1577,14 @@ Return exactly one JSON object with this shape:
 
             # Detect all response triggers
             triggers = await self._detect_response_triggers(message, is_dm, is_other_bot, guild)
+            trigger_decision = TriggerDecision.from_legacy(triggers)
             if pending_reminder_clarification:
-                triggers["pending_reminder_clarification"] = True
-                triggers["should_respond"] = True
+                trigger_decision = trigger_decision.with_pending_reminder_clarification()
+            triggers = trigger_decision.to_legacy_dict()
 
             # Debug: log why this bot is responding
-            if triggers["should_respond"]:
-                reason = [k for k, v in triggers.items() if v and k != "should_respond"]
+            if trigger_decision.should_respond:
+                reason = trigger_decision.reason_keys
                 log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
             log.diagnostic(
                 "Trigger evaluation complete",
@@ -1553,10 +1595,10 @@ Return exactly one JSON object with this shape:
                 channel_id=discord_channel_id,
                 user_id=getattr(message.author, "id", None),
                 message_id=getattr(message, "id", None),
-                **{key: bool(value) for key, value in triggers.items()},
+                **triggers,
             )
 
-            if triggers["should_respond"]:
+            if trigger_decision.should_respond:
                 # Update bot conversation state
                 self._update_bot_conversation_state(channel_id, is_other_bot)
 
@@ -1568,12 +1610,18 @@ Return exactly one JSON object with this shape:
                 dm_invite_requested = (
                     not is_dm
                     and not is_other_bot
-                    and (triggers.get("mentioned") or triggers.get("is_reply_to_bot") or triggers.get("name_triggered"))
+                    and (trigger_decision.mentioned or trigger_decision.is_reply_to_bot or trigger_decision.name_triggered)
                     and self._detect_dm_invite(content)
                 )
 
                 # Check for split reply targets
                 split_targets = self._get_split_reply_targets(message, is_other_bot)
+                scope_key = self._scope_key_for_message(
+                    message,
+                    is_dm=is_dm,
+                    user_id=message.author.id,
+                    guild=guild,
+                )
 
                 if split_targets:
                     # Queue separate request for each target user
@@ -1591,9 +1639,10 @@ Return exactly one JSON object with this shape:
                             split_reply_target=target,
                             allow_auto_reminders=False,
                             pending_reminder_clarification=pending_reminder_clarification,
-                            is_autonomous=triggers.get("is_autonomous", False),
+                            is_autonomous=trigger_decision.is_autonomous,
                             dm_invite_requested=dm_invite_requested,
                             route_req_id=route_req_id,
+                            scope_key=scope_key,
                         )
                 else:
                     # Normal single request
@@ -1608,16 +1657,13 @@ Return exactly one JSON object with this shape:
                         user_id=message.author.id,
                         sticker_info=sticker_info,
                         allow_auto_reminders=(
-                            is_dm
-                            or triggers.get("mentioned", False)
-                            or triggers.get("is_reply_to_bot", False)
-                            or triggers.get("name_triggered", False)
-                            or triggers.get("pending_reminder_clarification", False)
+                            trigger_decision.allows_auto_reminders(is_dm=is_dm)
                         ),
                         pending_reminder_clarification=pending_reminder_clarification,
-                        is_autonomous=triggers.get("is_autonomous", False),
+                        is_autonomous=trigger_decision.is_autonomous,
                         dm_invite_requested=dm_invite_requested,
                         route_req_id=route_req_id,
+                        scope_key=scope_key,
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -1670,88 +1716,36 @@ Return exactly one JSON object with this shape:
         return format_response_for_delivery(response)
 
     async def _send_organic_response(self, message: discord.Message, response: str) -> list[dict]:
-        """Send response organically and return the sent Discord messages with their delivered content."""
+        """Legacy wrapper returning confirmed Discord messages with delivered content."""
+        batch = await self._deliver_organic_response(message, response)
+        return list(batch.sent_records) if batch else []
+
+    async def _deliver_organic_response(self, message: discord.Message, response: str) -> RuntimeDeliveryBatch | None:
+        """Send response organically and return the typed delivery outcome."""
         req_id = getattr(message, "_discord_pals_req_id", None)
         lines = self._split_response_for_delivery(response)
-        if not lines:
-            return []
-        diagnostic_events.log_delivery_split(self.name, req_id, getattr(message, "channel", None), lines)
-
-        sent_records = []
-        is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
-
-        for i, line in enumerate(lines):
-            if not line.strip():
-                continue
-            try:
-                started = time.perf_counter()
-                if i == 0:
-                    if is_synthetic:
-                        # Use interaction followup for synthetic messages from /interact
-                        sent_msg = await message._interaction.followup.send(line)
-                    else:
-                        sent_msg = await message.reply(line)
-                else:
-                    # Add delay between lines (0.5-1 second)
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    sent_msg = await message.channel.send(line)
-                sent_records.append({"message": sent_msg, "content": line})
-                diagnostic_events.log_discord_send(
-                    self.name,
-                    req_id,
-                    getattr(message, "channel", None),
-                    sent_msg,
-                    part=i + 1,
-                    total_parts=len(lines),
-                    content_len=len(line),
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                )
-            except discord.HTTPException as e:
-                diagnostic_events.log_discord_send_failed(
-                    self.name,
-                    req_id,
-                    getattr(message, "channel", None),
-                    e,
-                    part=i + 1,
-                    total_parts=len(lines),
-                )
-                break
-
-        return sent_records
+        return await deliver_reply_multipart(
+            bot_name=self.name,
+            message=message,
+            lines=lines,
+            req_id=req_id,
+        )
 
     async def _send_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> list[dict]:
+        """Legacy wrapper for direct channel delivery."""
+        batch = await self._deliver_organic_response_to_channel(channel, response, req_id=req_id)
+        return list(batch.sent_records) if batch else []
+
+    async def _deliver_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> RuntimeDeliveryBatch | None:
         """Send an organic response directly to a channel without replying to a source message."""
         lines = self._split_response_for_delivery(response)
-        if not lines:
-            return []
-        diagnostic_events.log_delivery_split(self.name, req_id, channel, lines, direct_channel=True)
+        return await deliver_channel_multipart(
+            bot_name=self.name,
+            channel=channel,
+            lines=lines,
+            req_id=req_id,
+        )
 
-        sent_records = []
-        for i, line in enumerate(lines):
-            if not line.strip():
-                continue
-            try:
-                started = time.perf_counter()
-                if i > 0:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                sent_msg = await channel.send(line)
-                sent_records.append({"message": sent_msg, "content": line})
-                diagnostic_events.log_discord_send(
-                    self.name,
-                    req_id,
-                    channel,
-                    sent_msg,
-                    part=i + 1,
-                    total_parts=len(lines),
-                    content_len=len(line),
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                    direct_channel=True,
-                )
-            except discord.HTTPException as e:
-                diagnostic_events.log_discord_send_failed(self.name, req_id, channel, e, part=i + 1, total_parts=len(lines))
-                break
-        return sent_records
-    
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
         for reaction in reactions:
@@ -1832,22 +1826,17 @@ Return exactly one JSON object with this shape:
     # === REQUEST PROCESSING HELPERS ===
 
     def _build_interact_history(self, channel_id: int, target_user_id: int,
-                                 target_user_name: str, user_only: bool,
-                                 context_count: int, total_limit: int,
+                                 target_user_name: str, total_limit: int,
                                  immediate_count: int) -> tuple[list[dict], list[dict]]:
         """Keep `/interact` focused on the invoking user instead of the active channel thread."""
         raw_history = get_history(channel_id)
         relevant_messages = []
         current_bot_name = self.character.name if self.character else None
         keep_following_assistant = False
-        strict_human_only = user_only and runtime_config.get("strict_human_only_context", True)
 
         for msg in raw_history:
             role = msg.get("role", "user")
             if role == "assistant":
-                if strict_human_only:
-                    continue
-
                 author = msg.get("author")
                 if (author and current_bot_name and author.lower() != current_bot_name.lower()) or not keep_following_assistant:
                     continue
@@ -1877,11 +1866,10 @@ Return exactly one JSON object with this shape:
             })
             keep_following_assistant = True
 
-        relevant_limit = context_count if user_only else total_limit
-        if relevant_limit > 0:
-            relevant_messages = relevant_messages[-relevant_limit:]
+        if total_limit > 0:
+            relevant_messages = relevant_messages[-total_limit:]
 
-        if user_only or len(relevant_messages) <= immediate_count:
+        if len(relevant_messages) <= immediate_count:
             return [], relevant_messages
 
         return relevant_messages[:-immediate_count], relevant_messages[-immediate_count:]
@@ -1904,44 +1892,24 @@ Return exactly one JSON object with this shape:
         is_dm = request['is_dm']
         user_id = request['user_id']
         from_interact_command = request.get('from_interact_command', False)
-        split_target = request.get('split_reply_target')
-        forced_target_user_id = request.get('forced_target_user_id')
-        forced_target_user_name = request.get('forced_target_user_name')
 
-        # `/interact` should always stay anchored to the invoking user, even if the
-        # channel is actively carrying another reply thread.
-        if forced_target_user_id is not None:
-            target_user_id = forced_target_user_id
-            target_user_name = forced_target_user_name or user_name
-            split_target = None
-        elif split_target:
-            target_user_name = get_user_display_name(split_target)
-            target_user_id = split_target.id
-        else:
-            target_user_name = user_name
-            target_user_id = user_id
-
-        channel_id = self._conversation_key(message, user_id)
-        discord_channel_id = message.channel.id
-        guild_id = guild.id if guild else None
-        request_scope = RequestContext(
-            bot_name=self.name,
-            user_id=target_user_id,
-            user_name=target_user_name,
-            discord_channel_id=discord_channel_id,
-            history_id=channel_id,
-            memory_scope=MemoryScope(
-                server_id=memory_server_id(self.name, guild_id, is_dm=is_dm),
-                user_id=target_user_id,
-            ),
-            display_label=channel_display_label(
-                getattr(message.channel, 'name', 'DM'),
-                getattr(guild, 'name', None),
-                is_dm=is_dm,
-            ),
-            is_dm=is_dm,
-            guild_id=guild_id,
+        context_builder = self._context_builder()
+        request_target = context_builder.resolve_target(
+            request,
+            display_name_for=get_user_display_name,
         )
+        target_user_id = request_target.target_user_id
+        target_user_name = request_target.target_user_name
+        split_target = request_target.direct_target
+        request_scope = context_builder.build_request_scope(
+            request=request,
+            message=message,
+            guild=guild,
+            target=request_target,
+        )
+        channel_id = request_scope.history_id
+        discord_channel_id = request_scope.discord_channel_id
+        guild_id = request_scope.guild_id
 
         # Check for duplicate message - only skip if THIS BOT already processed it
         history = get_history(channel_id)
@@ -1995,7 +1963,8 @@ Return exactly one JSON object with this shape:
                 channel_id, "user", content,
                 author_name=user_name, user_id=user_id, guild=guild, message_id=message_id,
                 is_bot=getattr(getattr(message, "author", None), "bot", False),
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                req_id=req_id,
             )
 
         # Store channel name for readable history display
@@ -2104,47 +2073,24 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        # Split history into older context and immediate messages
-        user_only_context = runtime_config.get('user_only_context', True)
-        if user_only_context:
-            context_count = runtime_config.get('user_only_context_count', 20)
-            if from_interact_command:
-                history_msgs, immediate = self._build_interact_history(
-                    channel_id,
-                    target_user_id=target_user_id,
-                    target_user_name=target_user_name,
-                    user_only=True,
-                    context_count=context_count,
-                    total_limit=0,
-                    immediate_count=context_count
-                )
-            else:
-                history_msgs, immediate = format_history_split(
-                    channel_id,
-                    user_only=True,
-                    context_count=context_count,
-                    current_bot_name=self.character.name
-                )
+        # Split history into older context and immediate messages.
+        total_limit = runtime_config.get('history_limit', 200)
+        immediate_count = runtime_config.get('immediate_message_count', 5)
+        if from_interact_command:
+            history_msgs, immediate = self._build_interact_history(
+                channel_id,
+                target_user_id=target_user_id,
+                target_user_name=target_user_name,
+                total_limit=total_limit,
+                immediate_count=immediate_count
+            )
         else:
-            total_limit = runtime_config.get('history_limit', 200)
-            immediate_count = runtime_config.get('immediate_message_count', 5)
-            if from_interact_command:
-                history_msgs, immediate = self._build_interact_history(
-                    channel_id,
-                    target_user_id=target_user_id,
-                    target_user_name=target_user_name,
-                    user_only=False,
-                    context_count=0,
-                    total_limit=total_limit,
-                    immediate_count=immediate_count
-                )
-            else:
-                history_msgs, immediate = format_history_split(
-                    channel_id,
-                    total_limit=total_limit,
-                    immediate_count=immediate_count,
-                    current_bot_name=self.character.name
-                )
+            history_msgs, immediate = format_history_split(
+                channel_id,
+                total_limit=total_limit,
+                immediate_count=immediate_count,
+                current_bot_name=self.character.name
+            )
 
         # Build chatroom context (use target user for split replies)
         other_bot_names = get_other_bot_names(channel_id, self.character.name)
@@ -2164,11 +2110,15 @@ Return exactly one JSON object with this shape:
             now=prompt_now
         )
 
-        # Build complete message list for API
+        # Build complete message list for API. Keep the current-turn anchor
+        # adjacent to the newest Discord line, not the whole recent transcript.
         messages_for_api = []
         messages_for_api.extend(history_msgs)
         if chatroom_context:
             messages_for_api.append({"role": "system", "content": chatroom_context, "kind": "chatroom_context"})
+        prior_immediate = immediate[:-1] if immediate else []
+        current_immediate = immediate[-1:] if immediate else []
+        messages_for_api.extend(prior_immediate)
         message_author = getattr(message, "author", None)
         current_message_is_bot = getattr(message_author, "bot", False)
         speaker_context = self._current_speaker_context(
@@ -2189,51 +2139,14 @@ Return exactly one JSON object with this shape:
         )
         if current_bot_reply_anchor:
             messages_for_api.append(current_bot_reply_anchor)
-        messages_for_api.extend(immediate)
+        messages_for_api.extend(current_immediate)
 
-        strict_human_only = (
-            user_only_context
-            and runtime_config.get("strict_human_only_context", True)
-        )
         bot_event_context = None
-        if current_message_is_bot and strict_human_only:
+        if current_message_is_bot:
             bot_event_context = neutral_bot_event(user_name)
             if content.startswith("[Replying to "):
                 reply_marker = content.split("]", 1)[0] + "]"
                 bot_event_context = f"{reply_marker} {bot_event_context}"
-
-        # Synthetic first-turn fallback for user_only mode
-        # If user_only is enabled and there are no assistant turns, inject one from example_dialogue
-        use_user_only = runtime_config.get("user_only_context", False)
-        if use_user_only and not any(m.get("role") == "assistant" for m in messages_for_api):
-            if self.character.example_dialogue:
-                # Parse first assistant line from example_dialogue
-                # Look for patterns like "{{char}}:" or character name followed by colon
-                example_lines = self.character.example_dialogue.strip().split('\n')
-                synthetic_turn = None
-
-                for line in example_lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Match "{{char}}:" or "CharacterName:" at start of line
-                    if line.startswith("{{char}}:") or line.startswith(f"{self.character.name}:"):
-                        # Extract content after the prefix
-                        synthetic_turn = line.split(':', 1)[1].strip()
-                        break
-
-                if synthetic_turn:
-                    # Insert at the beginning of messages_for_api (after system messages)
-                    # Find the first non-system message position
-                    insert_pos = len(messages_for_api)
-                    for i, msg in enumerate(messages_for_api):
-                        if msg.get("role") != "system":
-                            insert_pos = i
-                            break
-                    messages_for_api.insert(
-                        insert_pos,
-                        {"role": "assistant", "content": synthetic_turn, "author": self.character.name}
-                    )
 
         if bot_event_context:
             messages_for_api.append({
@@ -2300,8 +2213,6 @@ Return exactly one JSON object with this shape:
             active_users_count=len(active_users or []),
             mentionable_users_count=len(mentionable_users or []),
             mentionable_bots_count=len(mentionable_bots or []),
-            user_only_context=user_only_context,
-            strict_human_only=strict_human_only,
             from_interact_command=from_interact_command,
             split_target_id=getattr(split_target, "id", None),
             has_attachments=bool(attachment_content),
@@ -2388,7 +2299,7 @@ Return exactly one JSON object with this shape:
                 bot_name=self.name,
                 success=bool(response),
                 duration_seconds=response_time_ms / 1000.0,
-                provider_tier=preferred_tier or 'default'
+                provider_tier=context.get("provider_tier") or preferred_tier or 'default'
             )
 
         if not response:
@@ -2417,7 +2328,7 @@ Return exactly one JSON object with this shape:
         last_violation = None
 
         for attempt in range(max_attempts):
-            response = await provider_manager.generate(
+            generation_result = await provider_manager.generate_result(
                 messages=attempt_messages,
                 system_prompt=system_prompt,
                 temperature=None,
@@ -2427,9 +2338,29 @@ Return exactly one JSON object with this shape:
                 req_id=req_id,
             )
 
-            if not response:
+            if not generation_result:
                 return None
 
+            if not isinstance(generation_result, GenerationResult):
+                generation_result = GenerationResult(text=str(generation_result or ""))
+
+            context["provider_tier"] = generation_result.tier or preferred_tier or "default"
+            context["provider_name"] = generation_result.provider_name or generation_result.tier or ""
+            context["provider_model"] = generation_result.model or ""
+            context["provider_has_reasoning"] = generation_result.has_reasoning
+            log.diagnostic(
+                "Provider result received",
+                self.name,
+                component="provider",
+                event="generation_result",
+                req_id=req_id,
+                provider_tier=context["provider_tier"],
+                provider_name=context["provider_name"],
+                model=context["provider_model"],
+                has_reasoning=generation_result.has_reasoning,
+            )
+
+            response = generation_result.deliverable_text
             response = sanitize_response(response, self.character.name)
             response = await self._polish_response(response)
             response = sanitize_response(response, self.character.name)
@@ -2462,30 +2393,9 @@ Return exactly one JSON object with this shape:
         return None
 
     def _detect_identity_violation(self, response: str, other_bot_names: list[str]) -> dict | None:
-        """Detect structural attempts to speak as another bot using exact names only."""
-        if not runtime_config.get("identity_guard_enabled", True):
-            return None
-        if not response or not other_bot_names:
-            return None
-
-        for raw_name in other_bot_names:
-            name = str(raw_name or "").strip()
-            if not name:
-                continue
-            escaped = re.escape(name)
-            patterns = (
-                ("speaker_prefix", rf"(?im)^\s*(?:\[{escaped}\]|\*?{escaped}\*?)\s*:"),
-                ("roleplay_speech", rf"(?im)^\s*\*+\s*\b{escaped}\b\s+(?:says?|whispers?|replies?|responds?|asks?|shouts?|murmurs?|mutters?)\b[^\n]*\*+\s*$"),
-            )
-            for pattern_name, pattern in patterns:
-                match = re.search(pattern, response)
-                if match:
-                    return {
-                        "name": name,
-                        "pattern": pattern_name,
-                        "preview": response[:160],
-                    }
-        return None
+        return IdentityPolicy(
+            enabled=runtime_config.get("identity_guard_enabled", True)
+        ).detect_violation(response, other_bot_names)
 
     async def _send_and_finalize_response(self, response: str, context: dict,
                                            message, request: dict) -> bool:
@@ -2565,7 +2475,7 @@ Return exactly one JSON object with this shape:
                 return False
 
         # Send first so failed Discord sends do not leak phantom assistant turns into history.
-        sent_records = None
+        sent_batch = None
         if request.get("dm_invite_requested"):
             if response_access.log_if_dm_blocked(
                 self.name,
@@ -2580,7 +2490,7 @@ Return exactly one JSON object with this shape:
                 target_channel = await self._resolve_user_dm_channel(user_id)
                 if target_channel:
                     response = f"Hey, you asked me to DM you from the server. {response}"
-                    sent_records = await self._send_organic_response_to_channel(target_channel, response, req_id=req_id)
+                    sent_batch = await self._deliver_organic_response_to_channel(target_channel, response, req_id=req_id)
                 else:
                     log.warn(
                         f"Could not open requested DM for user {user_id}",
@@ -2591,62 +2501,35 @@ Return exactly one JSON object with this shape:
                         user_id=user_id,
                     )
 
-        if sent_records is None:
-            sent_records = await self._send_organic_response(message, response)
-        if not sent_records:
+        if sent_batch is None:
+            sent_batch = await self._deliver_organic_response(message, response)
+        if sent_batch is None or not sent_batch.sent_records:
             log.warn("Response send failed before any content was delivered", self.name, component="delivery", event="delivery_failed", req_id=req_id, channel_id=channel_id)
             self._record_failure(channel_id)
             return False
 
-        delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
-        self._record_emoji_budget(channel_id, delivered_response)
-        self._remember_recent_response(channel_id, delivered_response)
-        self._reset_failures(channel_id)
-        self._record_response(channel_id)
-        self._update_mood(channel_id, content, delivered_response)
-        for record in sent_records:
-            sent_message = record["message"]
-            add_to_history(
-                channel_id, "assistant", record["content"],
-                author_name=self.character.name, guild=guild,
-                message_id=getattr(sent_message, "id", None),
-                timestamp=getattr(sent_message, "created_at", None)
+        delivered_response = sent_batch.persistable_visible_text.strip()
+        self._post_response_tasks().run_after_confirmed_delivery(
+            PostResponseTaskContext(
+                channel_id=channel_id,
+                discord_channel_id=discord_channel_id,
+                guild_id=guild_id,
+                guild=guild,
+                is_dm=is_dm,
+                user_id=user_id,
+                user_name=user_name,
+                content=content,
+                delivered_response=delivered_response,
+                sent_records=sent_batch.sent_records,
+                reactions=tuple(reactions),
+                split_target=split_target,
+                context=context,
+                message=message,
+                request=request,
+                req_id=req_id,
+                delivery_outcome=sent_batch.outcome,
             )
-
-        # Update activity
-        runtime_config.update_last_activity(self.name)
-        metrics_manager.update_last_activity(bot_name=self.name, timestamp=time.time())
-
-        # Store multipart response
-        if len(sent_records) > 1:
-            multipart_ids = [
-                msg_id for msg_id in
-                (getattr(record["message"], "id", None) for record in sent_records)
-                if msg_id is not None
-            ]
-            if len(multipart_ids) > 1:
-                store_multipart_response(channel_id, multipart_ids, delivered_response)
-        diagnostic_events.log_delivery_complete(
-            self.name,
-            req_id,
-            channel_id=channel_id,
-            user_id=user_id,
-            sent_records=sent_records,
-            delivered_response=delivered_response,
-            reactions=reactions,
-            split_target=split_target,
         )
-
-        # Send reactions
-        if reactions:
-            asyncio.create_task(self._send_staggered_reactions(message, reactions, guild))
-
-        # Auto-memory
-        memory_scope_id = memory_server_id(self.name, guild_id, is_dm=is_dm)
-        asyncio.create_task(self._maybe_auto_memory(channel_id, is_dm, memory_scope_id, user_id, content, user_name))
-
-        # Durable reminder capture
-        asyncio.create_task(self._maybe_handle_reminder_capture(context, message, request))
 
         return True
 
@@ -2698,52 +2581,66 @@ Return exactly one JSON object with this shape:
             log.warn("Request skipped - no character loaded", self.name, component="request", event="request_skipped", req_id=req_id, reason="no_character")
             return
 
-        try:
-            # Build context (handles duplicate detection, history, memories)
-            context = await self._build_request_context(request)
-            if context is None:
-                log.diagnostic("Request skipped during context build", self.name, component="request", event="request_skipped", req_id=req_id, reason="context_none")
-                return  # Duplicate or should skip
+        scope_key = self._scope_key_for_request(request, message)
+        scope_lock = await scope_lock_registry.lock_for(scope_key)
+        log.diagnostic(
+            "Scope lock ready",
+            self.name,
+            component="scope",
+            event="scope_lock_ready",
+            req_id=req_id,
+            channel_id=scope_key.discord_channel_id,
+            history_id=str(scope_key.history_id),
+            is_dm=scope_key.is_dm,
+        )
 
-            # Acquire global coordinator slot (limits concurrent AI requests across all bots)
-            await coordinator.acquire_slot(self.name, message_id)
-            log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
-
+        async with scope_lock:
             try:
-                # Generate AI response (handles provider call, sanitization)
-                response = await self._generate_ai_response(context, message)
-                if response is None:
-                    if context.get("identity_guard_blocked"):
-                        log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
+                # Build context (handles duplicate detection, history, memories)
+                context = await self._build_request_context(request)
+                if context is None:
+                    log.diagnostic("Request skipped during context build", self.name, component="request", event="request_skipped", req_id=req_id, reason="context_none")
+                    return  # Duplicate or should skip
+
+                # Acquire global coordinator slot (limits concurrent AI requests across all bots)
+                coordinator_slot = await coordinator.acquire_slot(self.name, message_id)
+                log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
+
+                try:
+                    # Generate AI response (handles provider call, sanitization)
+                    response = await self._generate_ai_response(context, message)
+                    if response is None:
+                        if context.get("identity_guard_blocked"):
+                            log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
+                            return
+                        await message.channel.send(
+                            "Something went wrong - all providers failed.",
+                            delete_after=ERROR_DELETE_AFTER
+                        )
                         return
-                    await message.channel.send(
-                        "Something went wrong - all providers failed.",
-                        delete_after=ERROR_DELETE_AFTER
-                    )
-                    return
 
-                # Get stagger delay for multi-bot responses (prevents simultaneous sends)
-                stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
-                if stagger_delay > 0:
-                    log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name, component="coordinator", event="stagger_delay", req_id=req_id, delay_s=stagger_delay)
-                    await asyncio.sleep(stagger_delay)
+                    # Get stagger delay for multi-bot responses (prevents simultaneous sends)
+                    stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
+                    if stagger_delay > 0:
+                        log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name, component="coordinator", event="stagger_delay", req_id=req_id, delay_s=stagger_delay)
+                        await asyncio.sleep(stagger_delay)
 
-                # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
-                await self._send_and_finalize_response(response, context, message, request)
-            finally:
-                # Always release the slot, even on error
-                coordinator.release_slot(self.name, message_id)
-                log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
+                    # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
+                    await self._send_and_finalize_response(response, context, message, request)
+                finally:
+                    # Always release the slot, even on error
+                    coordinator.release_slot(coordinator_slot)
+                    log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
 
-        except asyncio.TimeoutError:
-            log.warn("Request timed out", self.name, component="request", event="request_timeout", req_id=req_id)
-            await self._send_user_error(message.channel, "timeout")
-        except discord.HTTPException as e:
-            log.error(f"Discord API error: {e}", self.name, component="request", event="discord_api_error", req_id=req_id)
-            await self._send_user_error(message.channel, "provider_error")
-        except Exception as e:
-            log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
-            await self._send_user_error(message.channel, "default")
+            except asyncio.TimeoutError:
+                log.warn("Request timed out", self.name, component="request", event="request_timeout", req_id=req_id)
+                await self._send_user_error(message.channel, "timeout")
+            except discord.HTTPException as e:
+                log.error(f"Discord API error: {e}", self.name, component="request", event="discord_api_error", req_id=req_id)
+                await self._send_user_error(message.channel, "provider_error")
+            except Exception as e:
+                log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
+                await self._send_user_error(message.channel, "default")
 
     async def _send_user_error(self, channel, error_type: str):
         """Send a user-friendly error message."""
@@ -3223,6 +3120,9 @@ Return exactly one JSON object with this shape:
                     idle_seconds=max(0.0, now - last_msg),
                     timeout_mins=timeout_mins,
                 )
+                if dm_images.should_send_dm_image_followup():
+                    sent_count += await dm_images.generate_and_send_dm_image_followup(bot_name=self.name, channel=channel, user_id=user_id, user_name=state.get("user_name", ""), character_name=char_name, state=state, history=history, history_id=delivery_target.history_id, followups_sent=followups_sent, max_followups=max_followups, now=now)
+                    continue
 
                 response = await provider_manager.generate(
                     messages=[{"role": "user", "content": prompt}],
@@ -3390,4 +3290,24 @@ Return exactly one JSON object with this shape:
     
     async def close(self):
         """Close the bot connection."""
+        drained = False
+        try:
+            drained = await self.request_queue.drain(timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
+            if not drained:
+                log.warn(
+                    "Request queue did not drain before bot close",
+                    self.name,
+                    component="shutdown",
+                    event="queue_drain_timeout",
+                )
+        except Exception as e:
+            log.warn(
+                f"Request queue drain failed during bot close: {e}",
+                self.name,
+                component="shutdown",
+                event="queue_drain_failed",
+            )
+        if not drained and hasattr(self.request_queue, "cancel_active"):
+            await self.request_queue.cancel_active()
+        await self._cancel_background_tasks()
         await self.client.close()

@@ -92,9 +92,33 @@
       "max_tokens": 4096,
       "temperature": 1.0,
       "include_headers": "X-Custom-Auth: bearer-token-here\nX-Request-Source: discord-pals"
+    },
+    {
+      "name": "NewAPI Responses Example",
+      "url": "https://newapi.example",
+      "key_env": "NEWAPI_API_KEY",
+      "provider_protocol": "newapi",
+      "endpoint_type": "openai-responses",
+      "model": "gpt-5.5",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "supports_vision": true,
+      "supports_reasoning": true,
+      "reasoning_effort": "high",
+      "reasoning_format": "openai_responses"
     }
   ],
   "timeout": 60,
+  "image_providers": [
+    {
+      "name": "OpenAI Images",
+      "url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-1",
+      "size": "1024x1024",
+      "timeout": 120
+    }
+  ],
   "character_providers": {
     "example_character": "primary"
   }

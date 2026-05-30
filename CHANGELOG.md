@@ -4,6 +4,48 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.6] - 2026-05-26
+
+Reverted the prompt-heavy attribution context boundary from v2.3.5 and replaced it with a narrower current-turn context ordering fix.
+
+### Fixed
+
+- Removed the extra `current_turn_boundary` system prompt and diagnostic trace that caused attribution artifacts in live Discord replies.
+- Kept the existing current-speaker anchor, but moved it directly next to the newest Discord turn so prior recent messages remain visible without being treated as the current user's words.
+- Added regression coverage for the screenshot-shaped attribution case where another user's time estimate/work appears immediately before a new user's turn.
+
+## [v2.3.5] - 2026-05-26
+
+Fixed Discord attribution context so recent work, time estimates, and accomplishments stay attached to the correct speaker when another user takes the next turn.
+
+### Notes
+
+- This release brings together release automation, runtime hardening, documentation updates, and regression coverage.
+- The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.
+- Related work is grouped together so the history stays readable without turning into a transcript.
+
+## [v2.3.4] - 2026-05-26
+
+Removed failed user-only context mode and added dashboard image-provider/access-target controls.
+
+### Notes
+
+- This release brings together release automation, runtime hardening, documentation updates, and regression coverage.
+- The notes stay intentionally high level and focus on the release outcome rather than individual commit subjects.
+- Related work is grouped together so the history stays readable without turning into a transcript.
+
+## [v2.3.3] - 2026-05-26
+
+### Added
+
+- Added autonomous DM image follow-ups so configured bots can generate and send image follow-up messages in private conversations.
+- Added dashboard/runtime controls for DM follow-up image generation provider, prompt, timing, cooldown, and per-bot behavior.
+- Added provider and documentation support for the DM image generation path.
+
+### Tests
+
+- Added regression coverage for autonomous DM image follow-up scheduling, prompt propagation, and provider handling.
+
 ## [v2.3.2] - 2026-05-13
 
 ### Changed

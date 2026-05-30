@@ -1,3 +1,4 @@
+import asyncio
 import types
 import unittest
 from datetime import datetime
@@ -7,6 +8,8 @@ from unittest.mock import AsyncMock, Mock, call, patch
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import runtime_config
+from delivery_pipeline import ConfirmedDeliveryPart, DeliveryOutcome, DeliveryState
+from scopes import ScopeLockRegistry
 
 
 class _AsyncNoop:
@@ -15,6 +18,36 @@ class _AsyncNoop:
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
+
+
+def _close_task(coro):
+    coro.close()
+    return None
+
+
+def _delivery_batch(records, *, persistable_visible_text=None):
+    records = tuple(records)
+    confirmed_parts = tuple(
+        ConfirmedDeliveryPart(
+            part_index=index,
+            visible_text=record["content"],
+            message_id=str(getattr(record["message"], "id", index)),
+        )
+        for index, record in enumerate(records)
+    )
+    text = persistable_visible_text
+    if text is None:
+        text = "\n\n".join(record["content"] for record in records)
+    return bot_instance_module.RuntimeDeliveryBatch(
+        outcome=DeliveryOutcome(
+            state=DeliveryState.SUCCESS if records else DeliveryState.FAILED,
+            correlation_id="req-test",
+            idempotency_key="idem-test",
+            confirmed_parts=confirmed_parts,
+            persistable_visible_text=text,
+        ),
+        sent_records=records,
+    )
 
 
 class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -36,11 +69,7 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             guild=guild,
             mentions=[],
         )
-        runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "allow_bot_mentions": False,
-        }
+        runtime_values = {"allow_bot_mentions": False}
         memories_mock = Mock(return_value="")
 
         def build_request(target_id, target_name):
@@ -147,9 +176,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "CurrentUser: Who's he?"},
         ]
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
         }
@@ -198,8 +224,98 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Earlier third-person lines about the addressed user", speaker_context[0]["content"])
         speaker_index = rendered_messages.index(speaker_context[0])
         self.assertGreater(speaker_index, 0)
-        self.assertEqual(rendered_messages[speaker_index - 1]["kind"], "chatroom_context")
-        self.assertEqual(rendered_messages[speaker_index + 1]["content"], "Friend: CurrentUser is drunk")
+        self.assertEqual(rendered_messages[speaker_index - 1]["content"], "CurrentUser: I'm drunk sorry")
+        self.assertEqual(rendered_messages[speaker_index + 1]["content"], "CurrentUser: Who's he?")
+
+    async def test_build_request_context_places_speaker_anchor_next_to_current_turn(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Kaveh"
+        instance.character_name = "kaveh"
+        instance.character = types.SimpleNamespace(name="Kaveh", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+
+        channel = types.SimpleNamespace(id=77, name="hangout-general")
+        guild = types.SimpleNamespace(id=5, name="WaWa")
+        author = types.SimpleNamespace(id=43, bot=False)
+        message = types.SimpleNamespace(
+            id=4004,
+            content='kaveh, haitham, wanna see my "Chub"?',
+            author=author,
+            channel=channel,
+            guild=guild,
+            mentions=[],
+        )
+        request = {
+            "message": message,
+            "content": 'kaveh, haitham, wanna see my "Chub"?',
+            "guild": guild,
+            "attachments": [],
+            "user_name": "Kris",
+            "is_dm": False,
+            "user_id": 43,
+            "sticker_info": None,
+        }
+        immediate_history = [
+            {"role": "user", "content": "TheLonelyWaWa: About 3 hours"},
+            {
+                "role": "user",
+                "content": (
+                    "Fly: Three hours to build an entire dashboard that replaces a broken API? "
+                    "That's genuinely impressive."
+                ),
+            },
+            {"role": "user", "content": 'Kris: kaveh, haitham, wanna see my "Chub"?'},
+        ]
+        runtime_values = {
+            "allow_bot_mentions": False,
+            "time_passage_context_enabled": False,
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module, "get_guild_emojis", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_server_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", Mock(return_value="")))
+            stack.enter_context(patch.object(bot_instance_module, "get_active_users", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: runtime_values.get(key, default)
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], immediate_history))
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "warn"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+
+            context = await instance._build_request_context(request)
+
+        self.assertIsNotNone(context)
+        rendered_messages = context["messages_for_api"]
+        self.assertNotIn("current_turn_boundary", [msg.get("kind") for msg in rendered_messages])
+        speaker_context = [
+            msg for msg in rendered_messages
+            if msg.get("kind") == "current_speaker_context"
+        ]
+        self.assertEqual(len(speaker_context), 1)
+        speaker_index = rendered_messages.index(speaker_context[0])
+        self.assertEqual(rendered_messages[speaker_index - 1]["content"], immediate_history[1]["content"])
+        self.assertEqual(rendered_messages[speaker_index + 1]["content"], immediate_history[2]["content"])
 
     async def test_build_request_context_anchors_reply_to_current_bot_previous_message(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -258,9 +374,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
             "bot_reference_context_mode": "neutral",
@@ -353,8 +466,6 @@ class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
         }
         build_chatroom_context_mock = Mock(return_value="CHATROOM")
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": True,
         }
@@ -661,10 +772,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=11, created_at="t1"), "content": "One."},
             {"message": types.SimpleNamespace(id=12, created_at="t2"), "content": "Two."},
-        ])
+        ]))
 
         context = {
             "channel_id": 1,
@@ -683,10 +794,11 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("hello", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(bot_instance_module.log, "warn"):
@@ -712,9 +824,9 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "<@555> hello"},
-        ])
+        ]))
 
         context = {
             "channel_id": 1,
@@ -733,16 +845,17 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=True), \
                 patch.object(bot_instance_module, "parse_reactions", side_effect=lambda value: (value, [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(bot_instance_module.log, "warn"):
             sent = await instance._send_and_finalize_response("hello", context, message, request)
 
         self.assertTrue(sent)
-        instance._send_organic_response.assert_awaited_once_with(message, "<@555> hello")
+        instance._deliver_organic_response.assert_awaited_once_with(message, "<@555> hello")
         self.assertEqual(add_history_mock.call_args.args[2], "<@555> hello")
 
     async def test_send_and_finalize_avoids_phantom_history_after_later_send_failure(self):
@@ -779,12 +892,13 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_instance_module.runtime_config, "get", return_value=False), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("One.\n\nTwo.", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
-                patch.object(bot_instance_module, "store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.store_multipart_response") as multipart_mock, \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.asyncio, "sleep", AsyncMock()), \
                 patch.object(bot_instance_module.random, "uniform", return_value=0.0), \
                 patch.object(bot_instance_module.log, "warn"), \
@@ -808,7 +922,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[])
+        instance._deliver_organic_response = AsyncMock(return_value=None)
 
         context = {
             "channel_id": 1,
@@ -860,7 +974,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "*Firefly says \"Sure.\"*",
         ])
 
-        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=generate_mock), \
                 patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
                     "identity_guard_enabled": True,
                     "identity_guard_policy": "regenerate_then_drop",
@@ -898,7 +1012,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "I can help with that from here.",
         ])
 
-        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=generate_mock), \
                 patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
                     "identity_guard_enabled": True,
                     "identity_guard_policy": "regenerate_then_drop",
@@ -917,6 +1031,52 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(context["identity_guard_blocked"])
         self.assertEqual(generate_mock.await_count, 2)
 
+    async def test_generate_ai_response_records_typed_provider_metadata_without_reasoning_text(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        context = {
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Alice: hi"}],
+            "chatroom_context": "",
+            "other_bot_names": [],
+        }
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+        message.channel.typing = lambda: _AsyncNoop()
+        generation = bot_instance_module.GenerationResult(
+            text="Visible reply.",
+            reasoning_text="Private reasoning must stay private.",
+            provider_name="NewAPI",
+            tier="primary",
+            model="gpt-5.5",
+        )
+
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=AsyncMock(return_value=generation)), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "identity_guard_enabled": True,
+                    "identity_guard_policy": "regenerate_then_drop",
+                    "use_single_user": False,
+                    "prose_polisher_enabled": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "store_last_context"), \
+                patch.object(bot_instance_module.stats_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_response") as metrics_response, \
+                patch.object(bot_instance_module.metrics_manager, "record_error"), \
+                patch.object(bot_instance_module.log, "diagnostic") as diagnostic_mock:
+            response = await instance._generate_ai_response(context, message)
+
+        self.assertEqual(response, "Visible reply.")
+        self.assertEqual(context["provider_tier"], "primary")
+        self.assertEqual(context["provider_name"], "NewAPI")
+        self.assertEqual(context["provider_model"], "gpt-5.5")
+        self.assertIs(context["provider_has_reasoning"], True)
+        self.assertEqual(metrics_response.call_args.kwargs["provider_tier"], "primary")
+        diagnostic_payload = str(diagnostic_mock.call_args_list)
+        self.assertIn("has_reasoning", diagnostic_payload)
+        self.assertNotIn("Private reasoning must stay private.", diagnostic_payload)
+
     async def test_generate_ai_response_strips_bracketed_emote_leak_before_delivery(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Firefly"
@@ -931,11 +1091,14 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         }
         message = types.SimpleNamespace(channel=types.SimpleNamespace())
         message.channel.typing = lambda: _AsyncNoop()
+        generation = bot_instance_module.GenerationResult(
+            text="[pleased] It is. A hot brew has its uses.",
+        )
 
         with patch.object(
                 bot_instance_module.provider_manager,
-                "generate",
-                new=AsyncMock(return_value="[pleased] It is. A hot brew has its uses.")), \
+                "generate_result",
+                new=AsyncMock(return_value=generation)), \
                 patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
                     "identity_guard_enabled": True,
                     "identity_guard_policy": "regenerate_then_drop",
@@ -1005,9 +1168,6 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "sticker_info": None,
         }
         runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "strict_human_only_context": True,
             "allow_bot_mentions": False,
             "time_passage_context_enabled": False,
         }
@@ -1074,6 +1234,84 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         build_mock.assert_not_awaited()
         generate_mock.assert_not_awaited()
 
+    async def test_process_request_serializes_same_scope_across_bot_instances(self):
+        guild = types.SimpleNamespace(id=5)
+        channel = types.SimpleNamespace(id=77, send=AsyncMock())
+        first_message = types.SimpleNamespace(id=1001, channel=channel, guild=guild)
+        second_message = types.SimpleNamespace(id=1002, channel=channel, guild=guild)
+        first = object.__new__(bot_instance_module.BotInstance)
+        second = object.__new__(bot_instance_module.BotInstance)
+        first.name = "Nahida"
+        second.name = "Nilou"
+        first.character = types.SimpleNamespace(name="Nahida")
+        second.character = types.SimpleNamespace(name="Nilou")
+        order = []
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def build_first(request):
+            order.append("first:build:start")
+            first_started.set()
+            await release_first.wait()
+            order.append("first:build:end")
+            return {"channel_id": 77, "identity_guard_blocked": False}
+
+        async def build_second(request):
+            order.append("second:build:start")
+            return {"channel_id": 77, "identity_guard_blocked": False}
+
+        first._build_request_context = AsyncMock(side_effect=build_first)
+        second._build_request_context = AsyncMock(side_effect=build_second)
+        first._generate_ai_response = AsyncMock(return_value="first response")
+        second._generate_ai_response = AsyncMock(return_value="second response")
+        first._send_and_finalize_response = AsyncMock(return_value=True)
+        second._send_and_finalize_response = AsyncMock(return_value=True)
+        first_request = {
+            "req_id": "req-first",
+            "message": first_message,
+            "channel_id": 77,
+            "guild": guild,
+            "user_id": 42,
+            "is_dm": False,
+            "is_autonomous": False,
+        }
+        second_request = {
+            "req_id": "req-second",
+            "message": second_message,
+            "channel_id": 77,
+            "guild": guild,
+            "user_id": 43,
+            "is_dm": False,
+            "is_autonomous": False,
+        }
+
+        with patch.object(bot_instance_module, "scope_lock_registry", ScopeLockRegistry()), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "global_paused": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.response_access, "request_access", return_value=(True, None, 77, 42)), \
+                patch("coordinator.coordinator.acquire_slot", new=AsyncMock(return_value=object())), \
+                patch("coordinator.coordinator.get_stagger_delay", new=AsyncMock(return_value=0.0)), \
+                patch("coordinator.coordinator.release_slot", new=Mock()), \
+                patch.object(bot_instance_module.log, "diagnostic"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            first_task = asyncio.create_task(first._process_request(first_request))
+            await first_started.wait()
+            second_task = asyncio.create_task(second._process_request(second_request))
+            await asyncio.sleep(0)
+            self.assertNotIn("second:build:start", order)
+
+            release_first.set()
+            await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(order, [
+            "first:build:start",
+            "first:build:end",
+            "second:build:start",
+        ])
+
     async def test_send_and_finalize_skips_dm_invite_when_dms_disabled(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
@@ -1081,10 +1319,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._check_rate_limit = Mock(return_value=False)
         instance._check_circuit_breaker = Mock(return_value=False)
         instance._is_duplicate_response = Mock(return_value=False)
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "server reply"},
-        ])
-        instance._send_organic_response_to_channel = AsyncMock()
+        ]))
+        instance._deliver_organic_response_to_channel = AsyncMock()
         instance._resolve_user_dm_channel = AsyncMock()
         instance._remember_recent_response = Mock()
         instance._reset_failures = Mock()
@@ -1112,30 +1350,77 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
                 return False
             return default
 
-        def close_task(coro):
-            coro.close()
-            return None
-
         with patch.object(bot_instance_module.runtime_config, "get", side_effect=runtime_get), \
                 patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)), \
                 patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(False, "dm_responses_disabled")), \
                 patch.object(bot_instance_module, "parse_reactions", return_value=("server reply", [])), \
-                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
-                patch.object(bot_instance_module.runtime_config, "update_last_activity"), \
-                patch.object(bot_instance_module.metrics_manager, "update_last_activity"), \
+                patch("post_response_tasks.add_to_history") as add_history_mock, \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
                 patch.object(bot_instance_module.metrics_manager, "record_rate_limit_hit"), \
                 patch.object(bot_instance_module.metrics_manager, "record_circuit_breaker_trip"), \
                 patch.object(instance, "_maybe_auto_memory", new=AsyncMock()), \
                 patch.object(instance, "_maybe_handle_reminder_capture", new=AsyncMock()), \
-                patch.object(bot_instance_module.asyncio, "create_task", side_effect=close_task), \
+                patch("post_response_tasks.asyncio.create_task", side_effect=_close_task), \
                 patch.object(bot_instance_module.log, "debug"):
             sent = await instance._send_and_finalize_response("server reply", context, message, request)
 
         self.assertTrue(sent)
         instance._resolve_user_dm_channel.assert_not_awaited()
-        instance._send_organic_response_to_channel.assert_not_awaited()
-        instance._send_organic_response.assert_awaited_once()
+        instance._deliver_organic_response_to_channel.assert_not_awaited()
+        instance._deliver_organic_response.assert_awaited_once()
         self.assertEqual(add_history_mock.call_args.args[2], "server reply")
+
+
+class BotLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_drains_request_queue_before_client_close(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=True))
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+
+        await instance.close()
+
+        instance.request_queue.drain.assert_awaited_once_with(
+            timeout=bot_instance_module.SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+        )
+        instance.client.close.assert_awaited_once()
+
+    async def test_close_still_closes_client_when_queue_drain_times_out(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(
+            drain=AsyncMock(return_value=False),
+            cancel_active=AsyncMock(),
+        )
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+
+        with patch.object(bot_instance_module.log, "warn") as warn_mock:
+            await instance.close()
+
+        warn_mock.assert_called_once()
+        instance.request_queue.cancel_active.assert_awaited_once()
+        instance.client.close.assert_awaited_once()
+
+    async def test_close_cancels_tracked_background_tasks_before_client_close(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=True))
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+        started = asyncio.Event()
+
+        async def background_loop():
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(background_loop())
+        instance._background_tasks = {task}
+        await started.wait()
+
+        await instance.close()
+
+        self.assertTrue(task.cancelled())
+        instance.client.close.assert_awaited_once()
 
 
 class NewRuntimeBehaviorTests(unittest.TestCase):

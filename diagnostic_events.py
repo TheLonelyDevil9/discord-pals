@@ -104,8 +104,18 @@ def log_delivery_complete(
     delivered_response: str,
     reactions: list,
     split_target,
+    delivery_outcome=None,
 ) -> None:
     """Record successful delivery after history-safe Discord sends."""
+    outcome_fields = {}
+    if delivery_outcome is not None:
+        outcome_fields = {
+            "delivery_state": getattr(delivery_outcome.state, "value", delivery_outcome.state),
+            "retry_count": delivery_outcome.retry_count,
+            "failed_part_index": delivery_outcome.failed_part_index,
+            "ambiguous_part_index": delivery_outcome.ambiguous_part_index,
+            "confirmed_message_ids": list(delivery_outcome.confirmed_message_ids),
+        }
     log.diagnostic(
         "Response delivery complete",
         bot_name,
@@ -118,4 +128,5 @@ def log_delivery_complete(
         delivered_len=len(delivered_response),
         reaction_count=len(reactions),
         split_target_id=getattr(split_target, "id", None),
+        **outcome_fields,
     )

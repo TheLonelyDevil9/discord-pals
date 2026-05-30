@@ -18,7 +18,7 @@ Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider def
 }
 ```
 
-The bot tries providers in list order until one succeeds. You can reorder providers from the dashboard Config page.
+The bot tries providers in list order until one succeeds. You can add, reorder, and edit chat and image providers from the dashboard Config page.
 
 Common provider fields:
 
@@ -131,6 +131,75 @@ Providers are assumed to support image input unless configured otherwise. For te
 When a user sends an image, vision providers receive multimodal content. Text-only providers receive the text plus an omission note. If a provider is marked vision-capable but rejects image input, the bot retries that request as text-only and treats that provider tier as text-only for the rest of the process.
 
 Emoji and shortcode context remains text-only.
+
+## NewAPI Provider Lane
+
+NewAPI providers are opt-in. Existing providers keep the legacy OpenAI-compatible Chat Completions path unless `provider_protocol` is set to `newapi`.
+
+```json
+{
+  "providers": [
+    {
+      "name": "NewAPI Responses",
+      "url": "https://newapi.example",
+      "key_env": "NEWAPI_API_KEY",
+      "provider_protocol": "newapi",
+      "endpoint_type": "openai-responses",
+      "model": "gpt-5.5",
+      "supports_reasoning": true,
+      "supports_vision": true,
+      "reasoning_effort": "high",
+      "reasoning_format": "openai_responses"
+    }
+  ]
+}
+```
+
+Supported `endpoint_type` values are `openai-chat`, `openai-responses`, `anthropic-messages`, and `gemini`.
+
+NewAPI endpoint defaults:
+
+| Endpoint type | URL policy | Auth header |
+| --- | --- | --- |
+| `openai-chat` | Appends `/v1`, then posts `/chat/completions`. | `Authorization: Bearer ...` |
+| `openai-responses` | Appends `/v1`, then posts `/responses`. | `Authorization: Bearer ...` |
+| `anthropic-messages` | Does not append a base version; posts `/v1/messages` unless the base already ends in `/v1`. | `x-api-key` |
+| `gemini` | Appends `/v1beta`, then posts `/models/{model}:generateContent`. | `x-goog-api-key` |
+
+Set `append_base_path` to `false` when `url` is already the exact base path the adapter should use. Set `requires_key` to `false` for local NewAPI gateways that do not need authentication.
+
+## Image Generation Providers
+
+Autonomous DM images use a separate `image_providers` list in `providers.json`. Entries are OpenAI-compatible image-generation clients, tried in order unless `dm_image_generation_preferred_tier` selects a tier from the dashboard. The dashboard Providers tab can manage this list directly; raw JSON is only the advanced fallback.
+
+```json
+{
+  "image_providers": [
+    {
+      "name": "OpenAI Images",
+      "url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-1",
+      "size": "1024x1024",
+      "timeout": 120
+    }
+  ]
+}
+```
+
+Common image provider fields:
+
+| Field | Use |
+| --- | --- |
+| `name` | Friendly dashboard/log name. |
+| `url` | OpenAI-compatible base URL. `base_url` is also accepted. |
+| `key_env` | Environment variable containing the API key. |
+| `model` | Image model name. Defaults to `gpt-image-1`. |
+| `size` | Image size, such as `1024x1024`. |
+| `quality`, `style`, `output_format`, `background`, `moderation` | Optional provider-specific image parameters. |
+| `response_format` | Optional response format for providers that need it. GPT image models return base64 by default. |
+| `extra_body` | Extra JSON passed through to the image generation call. |
+| `timeout` | Per-image timeout in seconds. |
 
 ## Provider-Specific Bodies
 
