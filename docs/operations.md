@@ -19,7 +19,7 @@ Dashboard write routes use CSRF tokens. If a custom script calls dashboard APIs,
 
 ## Updates And Recovery
 
-The dashboard updater is the normal update path. It checks GitHub releases and remote tags, backs up local state, installs dependencies, and requests a restart when new code is staged.
+The dashboard updater is the normal update path. It checks GitHub releases and remote tags, backs up local state, installs dependencies, and requests a restart when new code is staged. Its branch selector defaults to **Current**, which preserves the historical current checkout/upstream and release-tag behavior for existing installs. Choosing **Main** or **Staging** explicitly updates from that remote branch and skips the release-tag override for that run.
 
 If the dashboard updater is too old or reports that it is current while a newer badge is visible, run:
 

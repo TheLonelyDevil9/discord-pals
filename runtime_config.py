@@ -49,6 +49,7 @@ DEFAULTS = {
     "diagnostic_logging": False,  # Print high-volume structured diagnostics to terminal
     "file_logging_enabled": True,  # Persist local JSONL logs in bot_data/logs
     "log_file_max_mb": 10,  # Max size of one JSONL log file before rotation
+    "update_branch": "",  # Dashboard updater branch override: "" preserves current checkout/upstream behavior
     "bot_timezones": {},  # Per-bot IANA timezone overrides
     "bot_schedules": {},  # Per-bot availability schedules
     # Bot-on-bot conversation fall-off settings
@@ -111,6 +112,7 @@ CONFIG_FIELDS = {
     "diagnostic_logging": ConfigField(bool, DEFAULTS["diagnostic_logging"]),
     "file_logging_enabled": ConfigField(bool, DEFAULTS["file_logging_enabled"]),
     "log_file_max_mb": ConfigField(int, DEFAULTS["log_file_max_mb"], 1, 100),
+    "update_branch": ConfigField(str, DEFAULTS["update_branch"], choices=("", "main", "staging")),
     "bot_timezones": ConfigField(dict, DEFAULTS["bot_timezones"]),
     "bot_schedules": ConfigField(dict, DEFAULTS["bot_schedules"]),
     "bot_falloff_enabled": ConfigField(bool, DEFAULTS["bot_falloff_enabled"]),
@@ -218,6 +220,9 @@ def _coerce_config_value(key: str, value):
 
     if value is None and field.default is None:
         return None
+
+    if key == "update_branch" and value is not None:
+        value = str(value).strip().lower()
 
     if field.value_type is bool:
         return _coerce_bool(value, field.default)

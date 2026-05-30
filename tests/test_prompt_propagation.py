@@ -465,6 +465,14 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertNotIn('id="strict_human_only_context"', page)
         self.assertNotIn('id="user_only_context_count"', page)
 
+    def test_dashboard_exposes_update_branch_selector(self):
+        page = self.client.get("/").get_data(as_text=True)
+
+        self.assertIn('id="update-branch-select"', page)
+        self.assertIn('<option value="" selected>Current</option>', page)
+        self.assertIn('<option value="main"', page)
+        self.assertIn('<option value="staging"', page)
+
     def test_config_page_groups_context_prompting_and_provider_controls(self):
         page = self.client.get("/config").get_data(as_text=True)
 
@@ -835,6 +843,7 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "bot_timezones": "not-a-dict",
                 "identity_guard_policy": "send_anyway",
                 "bot_reference_context_mode": "quote",
+                "update_branch": "feature",
                 "dm_image_generation_chance": "3",
                 "dm_image_generation_caption_chance": "nan",
                 "response_channel_whitelist": "channel 777, <#888>",
@@ -854,11 +863,22 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["bot_timezones"], {})
         self.assertEqual(config["identity_guard_policy"], "regenerate_then_drop")
         self.assertEqual(config["bot_reference_context_mode"], "neutral")
+        self.assertEqual(config["update_branch"], "")
         self.assertEqual(config["dm_image_generation_chance"], 1.0)
         self.assertEqual(config["dm_image_generation_caption_chance"], 0.85)
         self.assertEqual(config["response_channel_whitelist"], ["777", "888"])
         self.assertEqual(config["dm_user_blacklist"], ["999"])
         self.assertNotIn("unknown_extension", config)
+
+        response = self.client.post(
+            "/api/config",
+            json={"update_branch": " Staging "},
+            headers=self.csrf_headers()
+        )
+        config = self.client.get("/api/config").get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(config["update_branch"], "staging")
 
     def test_runtime_response_access_helpers_apply_allow_and_deny_lists(self):
         config = {

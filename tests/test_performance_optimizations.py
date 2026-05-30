@@ -546,6 +546,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             "last_context": dict(runtime_config_module._last_context),
             "context_revision": runtime_config_module._last_context_revision,
             "last_activity": dict(runtime_config_module._last_activity),
+            "DATA_DIR": runtime_config_module.DATA_DIR,
+            "RUNTIME_CONFIG_FILE": runtime_config_module.RUNTIME_CONFIG_FILE,
         }
 
         dashboard_module._topology_cache["built_at"] = 0.0
@@ -557,6 +559,9 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module._last_context = {}
         runtime_config_module._last_context_revision = 0
         runtime_config_module._last_activity = {}
+        runtime_config_module.DATA_DIR = str(self.data_dir)
+        runtime_config_module.RUNTIME_CONFIG_FILE = str(self.data_dir / "runtime_config.json")
+        runtime_config_module.invalidate_cache()
 
         shared_channel = FakeChannel(10, "shared")
         solo_channel = FakeChannel(20, "solo")
@@ -588,6 +593,9 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module._last_context = self._runtime_originals["last_context"]
         runtime_config_module._last_context_revision = self._runtime_originals["context_revision"]
         runtime_config_module._last_activity = self._runtime_originals["last_activity"]
+        runtime_config_module.DATA_DIR = self._runtime_originals["DATA_DIR"]
+        runtime_config_module.RUNTIME_CONFIG_FILE = self._runtime_originals["RUNTIME_CONFIG_FILE"]
+        runtime_config_module.invalidate_cache()
         self.tearDownMemorySandbox()
 
     def test_api_channels_returns_deduped_channels_across_bots(self):
@@ -692,6 +700,96 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(third["github_version"], "1.2.0")
         self.assertEqual(fetch_mock.call_count, 2)
         self.assertEqual(update["status"], "ok")
+
+    def test_version_api_reports_saved_update_branch(self):
+        runtime_config_module.set("update_branch", "staging")
+
+        with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+            data = self.client.get("/api/version").get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["update_branch"], "staging")
+
+    def test_update_endpoint_passes_posted_update_branch(self):
+        git_update = {
+            "updated": False,
+            "output": "Already up to date",
+            "warnings": [],
+            "before_head": "abc123",
+            "after_head": "abc123",
+            "upstream": "origin/staging",
+            "update_branch": "staging",
+        }
+        dependencies = {"status": "skipped", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.2.0"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update) as perform_update, \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_get_file_version", return_value="1.2.0"):
+            response = self.client.post(
+                "/api/update",
+                json={"update_branch": "staging"},
+                headers=self.csrf_headers(),
+            )
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["update_branch"], "staging")
+        perform_update.assert_called_once_with(
+            "repo",
+            expected_version="1.2.0",
+            update_branch="staging",
+        )
+
+    def test_update_endpoint_uses_saved_update_branch_when_body_omitted(self):
+        runtime_config_module.set("update_branch", "staging")
+        git_update = {
+            "updated": False,
+            "output": "Already up to date",
+            "warnings": [],
+            "before_head": "abc123",
+            "after_head": "abc123",
+            "upstream": "origin/staging",
+            "update_branch": "staging",
+        }
+        dependencies = {"status": "skipped", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.2.0"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update) as perform_update, \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_get_file_version", return_value="1.2.0"):
+            response = self.client.post("/api/update", headers=self.csrf_headers())
+
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["update_branch"], "staging")
+        perform_update.assert_called_once_with(
+            "repo",
+            expected_version="1.2.0",
+            update_branch="staging",
+        )
+
+    def test_update_endpoint_rejects_invalid_update_branch(self):
+        with patch.object(dashboard_module, "_repo_root") as repo_root, \
+                patch.object(dashboard_module, "_check_github_latest_version") as check_version, \
+                patch.object(dashboard_module, "_perform_git_update") as perform_update:
+            response = self.client.post(
+                "/api/update",
+                json={"update_branch": "feature"},
+                headers=self.csrf_headers(),
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["message"], "Update branch must be main or staging")
+        repo_root.assert_not_called()
+        check_version.assert_not_called()
+        perform_update.assert_not_called()
 
     def test_update_endpoint_returns_warnings_without_failing_successful_update(self):
         git_update = {
@@ -974,6 +1072,53 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertEqual(result["target_ref"], "origin/main")
+
+    def test_git_update_explicit_branch_bypasses_release_tag(self):
+        refs = {
+            "HEAD": "aaa111",
+            "origin/main": "aaa111",
+            "origin/staging": "ccc333",
+            "refs/tags/v1.2.0": "bbb222",
+        }
+        commands = []
+
+        def fake_run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            commands.append(args)
+            if args[0] == "fetch":
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args == ["remote"]:
+                return types.SimpleNamespace(returncode=0, stdout="origin\n", stderr="")
+            if args[:3] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return types.SimpleNamespace(returncode=0, stdout="main\n", stderr="")
+            if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+                return types.SimpleNamespace(returncode=0 if args[3] in refs else 1, stdout="", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                ref = args[2].removesuffix("^{commit}")
+                return types.SimpleNamespace(returncode=0, stdout=f"{refs[ref]}\n", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=no"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:3] == ["status", "--porcelain", "--untracked-files=all"]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:2] == ["merge-base", "--is-ancestor"]:
+                return types.SimpleNamespace(returncode=0 if args[2] == "aaa111" and args[3] == "ccc333" else 1, stdout="", stderr="")
+            if args[:2] == ["merge", "--ff-only"]:
+                refs["HEAD"] = refs[args[2]]
+                return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
+            raise AssertionError(f"Unexpected git command: {args}")
+
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+            result = dashboard_module._perform_git_update(
+                "repo",
+                expected_version="1.2.0",
+                update_branch="staging",
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["upstream"], "origin/staging")
+        self.assertEqual(result["branch_upstream"], "origin/staging")
+        self.assertEqual(result["target_ref"], "origin/staging")
+        self.assertEqual(result["update_branch"], "staging")
+        self.assertFalse(any(command[:2] == ["show", "refs/tags/v1.2.0:version.py"] for command in commands))
 
     def test_stash_local_changes_does_not_include_untracked(self):
         calls = []
