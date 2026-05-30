@@ -14,8 +14,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
+from context_builder import ContextBuilder
 from provider_gateway import provider_gateway as provider_manager
 from character import character_manager, Character
+from identity_policy import IDENTITY_GUARD_RETRY_INSTRUCTION, IdentityPolicy
+from message_routing import InboundMessage, TriggerDecision
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split, dm_history_key,
@@ -42,11 +45,10 @@ from reminders import reminder_manager
 from reminder_delivery import send_scheduled_reminder
 from scopes import (
     DeliveryTarget,
-    MemoryScope,
-    RequestContext,
-    channel_display_label,
+    ScopeKey,
     conversation_history_id,
     memory_server_id,
+    scope_lock_registry,
 )
 from time_utils import get_context_now, get_timezone_context, local_naive_iso_to_utc, utc_iso_to_local_display
 import diagnostic_events
@@ -82,12 +84,6 @@ RE_REMINDER_KEYWORD = re.compile(
     r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
     r")\b",
     re.IGNORECASE
-)
-
-IDENTITY_GUARD_RETRY_INSTRUCTION = (
-    "Your previous draft was blocked because it structurally attributed speech "
-    "or action to another bot. Reply only as the current character. Do not write "
-    "another bot's dialogue, name-prefixed turn, or roleplay action."
 )
 
 _FOLLOWUP_TOPIC_STOPWORDS = frozenset({
@@ -148,6 +144,7 @@ class BotInstance:
         
         # Per-bot state
         self.request_queue = RequestQueue()
+        self.context_builder = ContextBuilder(self.name)
         self._last_bot_response: Dict[int, float] = {}  # channel_id -> timestamp
         self._channel_mood: Dict[int, float] = {}  # channel_id -> mood score (-1 to 1)
 
@@ -493,6 +490,28 @@ class BotInstance:
         channel_id = getattr(channel, "id", channel)
         return conversation_history_id(self.name, channel_id, is_dm=is_dm, user_id=user_id)
 
+    def _context_builder(self) -> ContextBuilder:
+        """Return this bot's context identity builder, creating it lazily for tests."""
+        builder = getattr(self, "context_builder", None)
+        if not isinstance(builder, ContextBuilder) or builder.bot_name != self.name:
+            builder = ContextBuilder(self.name)
+            self.context_builder = builder
+        return builder
+
+    def _scope_key_for_message(self, message, *, is_dm: bool, user_id: int | None, guild=None) -> ScopeKey:
+        return self._context_builder().scope_key_for_message(
+            message,
+            is_dm=is_dm,
+            user_id=user_id,
+            guild=guild,
+        )
+
+    def _scope_key_for_request(self, request: dict, message=None) -> ScopeKey:
+        return self._context_builder().scope_key_for_request(
+            request,
+            message if message is not None else request.get("message"),
+        )
+
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""
         return memory_server_id(self.name, None, is_dm=True)
@@ -606,25 +625,11 @@ class BotInstance:
         target_user_name: str | None = None,
         split_target_name: str | None = None,
     ) -> str:
-        """Return code-owned context that anchors who the bot is answering now."""
-        safe_speaker = " ".join(str(speaker_name or "Unknown").split())
-        safe_target = " ".join(str(target_user_name or safe_speaker).split())
-        safe_split_target = " ".join(str(split_target_name or "").split())
-        if speaker_is_bot:
-            return (
-                f"Current Discord event author: {safe_speaker} (bot/app). "
-                "Use this only as routing context unless explicitly instructed otherwise."
-            )
-        if safe_split_target and safe_split_target != safe_speaker:
-            return (
-                f"Current Discord message author: {safe_speaker}. "
-                f"This split reply is addressed to {safe_split_target}; address {safe_split_target} directly as \"you\". "
-                "Earlier third-person lines about the addressed user do not change who this split reply addresses."
-            )
-        return (
-            f"Current Discord message author: {safe_speaker}. "
-            f"The reply is addressed to {safe_target}; address {safe_target} directly as \"you\". "
-            "Earlier third-person lines about the addressed user do not change who this reply addresses."
+        return IdentityPolicy.current_speaker_context(
+            speaker_name=speaker_name,
+            speaker_is_bot=speaker_is_bot,
+            target_user_name=target_user_name,
+            direct_target_name=split_target_name,
         )
 
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
@@ -1446,6 +1451,11 @@ Return exactly one JSON object with this shape:
             discord_channel_id = message.channel.id
             channel_id = self._conversation_key(message, message.author.id)
             guild = message.guild
+            inbound = InboundMessage.from_discord(
+                message,
+                correlation_id=route_req_id,
+                is_dm=is_dm,
+            )
             access_allowed, access_reason = response_access.message_access(is_dm, message.author.id, discord_channel_id)
             log.diagnostic(
                 "Discord message received",
@@ -1453,15 +1463,15 @@ Return exactly one JSON object with this shape:
                 component="routing",
                 event="message_received",
                 req_id=route_req_id,
-                channel_id=discord_channel_id,
-                guild_id=getattr(guild, "id", None),
-                user_id=getattr(message.author, "id", None),
-                message_id=getattr(message, "id", None),
-                is_dm=is_dm,
-                is_bot=is_other_bot,
-                content_len=len(message.content or ""),
-                attachment_count=len(getattr(message, "attachments", []) or []),
-                mention_count=len(getattr(message, "mentions", []) or []),
+                channel_id=inbound.channel_id,
+                guild_id=inbound.guild_id,
+                user_id=inbound.user_id,
+                message_id=inbound.message_id,
+                is_dm=inbound.is_dm,
+                is_bot=inbound.author_is_bot,
+                content_len=inbound.content_len,
+                attachment_count=inbound.attachment_count,
+                mention_count=inbound.mention_count,
             )
 
             if not access_allowed:
@@ -1528,13 +1538,14 @@ Return exactly one JSON object with this shape:
 
             # Detect all response triggers
             triggers = await self._detect_response_triggers(message, is_dm, is_other_bot, guild)
+            trigger_decision = TriggerDecision.from_legacy(triggers)
             if pending_reminder_clarification:
-                triggers["pending_reminder_clarification"] = True
-                triggers["should_respond"] = True
+                trigger_decision = trigger_decision.with_pending_reminder_clarification()
+            triggers = trigger_decision.to_legacy_dict()
 
             # Debug: log why this bot is responding
-            if triggers["should_respond"]:
-                reason = [k for k, v in triggers.items() if v and k != "should_respond"]
+            if trigger_decision.should_respond:
+                reason = trigger_decision.reason_keys
                 log.debug(f"Responding to '{message.content[:50]}...' - reason: {', '.join(reason)}", self.name)
             log.diagnostic(
                 "Trigger evaluation complete",
@@ -1545,10 +1556,10 @@ Return exactly one JSON object with this shape:
                 channel_id=discord_channel_id,
                 user_id=getattr(message.author, "id", None),
                 message_id=getattr(message, "id", None),
-                **{key: bool(value) for key, value in triggers.items()},
+                **triggers,
             )
 
-            if triggers["should_respond"]:
+            if trigger_decision.should_respond:
                 # Update bot conversation state
                 self._update_bot_conversation_state(channel_id, is_other_bot)
 
@@ -1560,12 +1571,18 @@ Return exactly one JSON object with this shape:
                 dm_invite_requested = (
                     not is_dm
                     and not is_other_bot
-                    and (triggers.get("mentioned") or triggers.get("is_reply_to_bot") or triggers.get("name_triggered"))
+                    and (trigger_decision.mentioned or trigger_decision.is_reply_to_bot or trigger_decision.name_triggered)
                     and self._detect_dm_invite(content)
                 )
 
                 # Check for split reply targets
                 split_targets = self._get_split_reply_targets(message, is_other_bot)
+                scope_key = self._scope_key_for_message(
+                    message,
+                    is_dm=is_dm,
+                    user_id=message.author.id,
+                    guild=guild,
+                )
 
                 if split_targets:
                     # Queue separate request for each target user
@@ -1583,9 +1600,10 @@ Return exactly one JSON object with this shape:
                             split_reply_target=target,
                             allow_auto_reminders=False,
                             pending_reminder_clarification=pending_reminder_clarification,
-                            is_autonomous=triggers.get("is_autonomous", False),
+                            is_autonomous=trigger_decision.is_autonomous,
                             dm_invite_requested=dm_invite_requested,
                             route_req_id=route_req_id,
+                            scope_key=scope_key,
                         )
                 else:
                     # Normal single request
@@ -1600,16 +1618,13 @@ Return exactly one JSON object with this shape:
                         user_id=message.author.id,
                         sticker_info=sticker_info,
                         allow_auto_reminders=(
-                            is_dm
-                            or triggers.get("mentioned", False)
-                            or triggers.get("is_reply_to_bot", False)
-                            or triggers.get("name_triggered", False)
-                            or triggers.get("pending_reminder_clarification", False)
+                            trigger_decision.allows_auto_reminders(is_dm=is_dm)
                         ),
                         pending_reminder_clarification=pending_reminder_clarification,
-                        is_autonomous=triggers.get("is_autonomous", False),
+                        is_autonomous=trigger_decision.is_autonomous,
                         dm_invite_requested=dm_invite_requested,
                         route_req_id=route_req_id,
+                        scope_key=scope_key,
                     )
             else:
                 # Only passively collect history for channels with autonomous mode enabled
@@ -1942,44 +1957,24 @@ Return exactly one JSON object with this shape:
         is_dm = request['is_dm']
         user_id = request['user_id']
         from_interact_command = request.get('from_interact_command', False)
-        split_target = request.get('split_reply_target')
-        forced_target_user_id = request.get('forced_target_user_id')
-        forced_target_user_name = request.get('forced_target_user_name')
 
-        # `/interact` should always stay anchored to the invoking user, even if the
-        # channel is actively carrying another reply thread.
-        if forced_target_user_id is not None:
-            target_user_id = forced_target_user_id
-            target_user_name = forced_target_user_name or user_name
-            split_target = None
-        elif split_target:
-            target_user_name = get_user_display_name(split_target)
-            target_user_id = split_target.id
-        else:
-            target_user_name = user_name
-            target_user_id = user_id
-
-        channel_id = self._conversation_key(message, user_id)
-        discord_channel_id = message.channel.id
-        guild_id = guild.id if guild else None
-        request_scope = RequestContext(
-            bot_name=self.name,
-            user_id=target_user_id,
-            user_name=target_user_name,
-            discord_channel_id=discord_channel_id,
-            history_id=channel_id,
-            memory_scope=MemoryScope(
-                server_id=memory_server_id(self.name, guild_id, is_dm=is_dm),
-                user_id=target_user_id,
-            ),
-            display_label=channel_display_label(
-                getattr(message.channel, 'name', 'DM'),
-                getattr(guild, 'name', None),
-                is_dm=is_dm,
-            ),
-            is_dm=is_dm,
-            guild_id=guild_id,
+        context_builder = self._context_builder()
+        request_target = context_builder.resolve_target(
+            request,
+            display_name_for=get_user_display_name,
         )
+        target_user_id = request_target.target_user_id
+        target_user_name = request_target.target_user_name
+        split_target = request_target.direct_target
+        request_scope = context_builder.build_request_scope(
+            request=request,
+            message=message,
+            guild=guild,
+            target=request_target,
+        )
+        channel_id = request_scope.history_id
+        discord_channel_id = request_scope.discord_channel_id
+        guild_id = request_scope.guild_id
 
         # Check for duplicate message - only skip if THIS BOT already processed it
         history = get_history(channel_id)
@@ -2443,30 +2438,9 @@ Return exactly one JSON object with this shape:
         return None
 
     def _detect_identity_violation(self, response: str, other_bot_names: list[str]) -> dict | None:
-        """Detect structural attempts to speak as another bot using exact names only."""
-        if not runtime_config.get("identity_guard_enabled", True):
-            return None
-        if not response or not other_bot_names:
-            return None
-
-        for raw_name in other_bot_names:
-            name = str(raw_name or "").strip()
-            if not name:
-                continue
-            escaped = re.escape(name)
-            patterns = (
-                ("speaker_prefix", rf"(?im)^\s*(?:\[{escaped}\]|\*?{escaped}\*?)\s*:"),
-                ("roleplay_speech", rf"(?im)^\s*\*+\s*\b{escaped}\b\s+(?:says?|whispers?|replies?|responds?|asks?|shouts?|murmurs?|mutters?)\b[^\n]*\*+\s*$"),
-            )
-            for pattern_name, pattern in patterns:
-                match = re.search(pattern, response)
-                if match:
-                    return {
-                        "name": name,
-                        "pattern": pattern_name,
-                        "preview": response[:160],
-                    }
-        return None
+        return IdentityPolicy(
+            enabled=runtime_config.get("identity_guard_enabled", True)
+        ).detect_violation(response, other_bot_names)
 
     async def _send_and_finalize_response(self, response: str, context: dict,
                                            message, request: dict) -> bool:
@@ -2680,52 +2654,66 @@ Return exactly one JSON object with this shape:
             log.warn("Request skipped - no character loaded", self.name, component="request", event="request_skipped", req_id=req_id, reason="no_character")
             return
 
-        try:
-            # Build context (handles duplicate detection, history, memories)
-            context = await self._build_request_context(request)
-            if context is None:
-                log.diagnostic("Request skipped during context build", self.name, component="request", event="request_skipped", req_id=req_id, reason="context_none")
-                return  # Duplicate or should skip
+        scope_key = self._scope_key_for_request(request, message)
+        scope_lock = await scope_lock_registry.lock_for(scope_key)
+        log.diagnostic(
+            "Scope lock ready",
+            self.name,
+            component="scope",
+            event="scope_lock_ready",
+            req_id=req_id,
+            channel_id=scope_key.discord_channel_id,
+            history_id=str(scope_key.history_id),
+            is_dm=scope_key.is_dm,
+        )
 
-            # Acquire global coordinator slot (limits concurrent AI requests across all bots)
-            coordinator_slot = await coordinator.acquire_slot(self.name, message_id)
-            log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
-
+        async with scope_lock:
             try:
-                # Generate AI response (handles provider call, sanitization)
-                response = await self._generate_ai_response(context, message)
-                if response is None:
-                    if context.get("identity_guard_blocked"):
-                        log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
+                # Build context (handles duplicate detection, history, memories)
+                context = await self._build_request_context(request)
+                if context is None:
+                    log.diagnostic("Request skipped during context build", self.name, component="request", event="request_skipped", req_id=req_id, reason="context_none")
+                    return  # Duplicate or should skip
+
+                # Acquire global coordinator slot (limits concurrent AI requests across all bots)
+                coordinator_slot = await coordinator.acquire_slot(self.name, message_id)
+                log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
+
+                try:
+                    # Generate AI response (handles provider call, sanitization)
+                    response = await self._generate_ai_response(context, message)
+                    if response is None:
+                        if context.get("identity_guard_blocked"):
+                            log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
+                            return
+                        await message.channel.send(
+                            "Something went wrong - all providers failed.",
+                            delete_after=ERROR_DELETE_AFTER
+                        )
                         return
-                    await message.channel.send(
-                        "Something went wrong - all providers failed.",
-                        delete_after=ERROR_DELETE_AFTER
-                    )
-                    return
 
-                # Get stagger delay for multi-bot responses (prevents simultaneous sends)
-                stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
-                if stagger_delay > 0:
-                    log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name, component="coordinator", event="stagger_delay", req_id=req_id, delay_s=stagger_delay)
-                    await asyncio.sleep(stagger_delay)
+                    # Get stagger delay for multi-bot responses (prevents simultaneous sends)
+                    stagger_delay = await coordinator.get_stagger_delay(self.name, message_id)
+                    if stagger_delay > 0:
+                        log.debug(f"Staggering response by {stagger_delay:.1f}s", self.name, component="coordinator", event="stagger_delay", req_id=req_id, delay_s=stagger_delay)
+                        await asyncio.sleep(stagger_delay)
 
-                # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
-                await self._send_and_finalize_response(response, context, message, request)
-            finally:
-                # Always release the slot, even on error
-                coordinator.release_slot(coordinator_slot)
-                log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
+                    # Send and finalize (handles anti-looping, sending, reactions, auto-memory)
+                    await self._send_and_finalize_response(response, context, message, request)
+                finally:
+                    # Always release the slot, even on error
+                    coordinator.release_slot(coordinator_slot)
+                    log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
 
-        except asyncio.TimeoutError:
-            log.warn("Request timed out", self.name, component="request", event="request_timeout", req_id=req_id)
-            await self._send_user_error(message.channel, "timeout")
-        except discord.HTTPException as e:
-            log.error(f"Discord API error: {e}", self.name, component="request", event="discord_api_error", req_id=req_id)
-            await self._send_user_error(message.channel, "provider_error")
-        except Exception as e:
-            log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
-            await self._send_user_error(message.channel, "default")
+            except asyncio.TimeoutError:
+                log.warn("Request timed out", self.name, component="request", event="request_timeout", req_id=req_id)
+                await self._send_user_error(message.channel, "timeout")
+            except discord.HTTPException as e:
+                log.error(f"Discord API error: {e}", self.name, component="request", event="discord_api_error", req_id=req_id)
+                await self._send_user_error(message.channel, "provider_error")
+            except Exception as e:
+                log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
+                await self._send_user_error(message.channel, "default")
 
     async def _send_user_error(self, channel, error_type: str):
         """Send a user-friendly error message."""

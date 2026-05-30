@@ -3,6 +3,7 @@ import unittest
 
 import module_stubs  # noqa: F401
 from request_envelope import RequestEnvelope
+from scopes import ScopeKey
 
 
 class RequestEnvelopeTests(unittest.TestCase):
@@ -72,6 +73,33 @@ class RequestEnvelopeTests(unittest.TestCase):
 
         self.assertEqual(envelope.attachments, (attachment,))
         self.assertEqual(envelope.pending_reminder_clarification, {"kind": "time"})
+
+    def test_dm_history_id_round_trips_without_numeric_coercion(self):
+        scope_key = ScopeKey.for_dm(bot_name="Nahida", channel_id=777, user_id=42)
+        request = {
+            "id": 1,
+            "req_id": "req-1",
+            "timestamp": 10.5,
+            "channel_id": "dm:Nahida:user:42",
+            "scope_key": scope_key,
+            "message": types.SimpleNamespace(id=123),
+            "content": "Hello",
+            "content_stripped": "Hello",
+            "request_signature": ("Hello", None),
+            "guild": None,
+            "attachments": [],
+            "user_name": "Alice",
+            "is_dm": True,
+            "user_id": 42,
+        }
+
+        envelope = RequestEnvelope.from_legacy_dict(request)
+        legacy = envelope.to_legacy_dict()
+
+        self.assertEqual(envelope.channel_id, "dm:Nahida:user:42")
+        self.assertIs(envelope.scope_key, scope_key)
+        self.assertEqual(legacy["channel_id"], "dm:Nahida:user:42")
+        self.assertIs(legacy["scope_key"], scope_key)
 
 
 if __name__ == "__main__":

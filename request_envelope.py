@@ -5,6 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from scopes import LocalScopeId, ScopeKey
+
+
+def _coerce_local_scope_id(value: Any) -> LocalScopeId:
+    """Preserve DM history strings while keeping numeric channel ids numeric."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit():
+            return int(stripped)
+        return stripped
+    return int(value)
+
 
 @dataclass(frozen=True)
 class RequestEnvelope:
@@ -13,7 +27,7 @@ class RequestEnvelope:
     id: int
     correlation_id: str
     timestamp: float
-    channel_id: int
+    channel_id: LocalScopeId
     message: Any
     content: str
     content_stripped: str
@@ -23,6 +37,7 @@ class RequestEnvelope:
     user_name: str
     is_dm: bool
     user_id: int
+    scope_key: ScopeKey | None = None
     sticker_info: str | None = None
     from_interact_command: bool = False
     direct_target: Any = None
@@ -44,7 +59,8 @@ class RequestEnvelope:
             id=int(request["id"]),
             correlation_id=str(request["req_id"]),
             timestamp=float(request["timestamp"]),
-            channel_id=int(request["channel_id"]),
+            channel_id=_coerce_local_scope_id(request["channel_id"]),
+            scope_key=request.get("scope_key") if isinstance(request.get("scope_key"), ScopeKey) else None,
             message=request["message"],
             content=str(request.get("content") or ""),
             content_stripped=str(request.get("content_stripped") or ""),
@@ -76,6 +92,7 @@ class RequestEnvelope:
             "req_id": self.correlation_id,
             "timestamp": self.timestamp,
             "channel_id": self.channel_id,
+            "scope_key": self.scope_key,
             "message": self.message,
             "content": self.content,
             "content_stripped": self.content_stripped,
