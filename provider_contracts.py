@@ -27,6 +27,7 @@ UNSET = _UnsetType()
 class ProviderProtocol(Enum):
     """Provider wire protocol families understood by the gateway contract."""
 
+    LEGACY_OPENAI_COMPATIBLE = "legacy-openai-compatible"
     OPENAI = "openai"
     OPENAI_COMPATIBLE = "openai_compatible"
     OPENAI_LIKE = "openai_compatible"
@@ -43,6 +44,9 @@ class ProviderProtocol(Enum):
 
         normalized = _normalize_token(value)
         aliases = {
+            "legacy_openai_compatible": cls.LEGACY_OPENAI_COMPATIBLE,
+            "legacy_openai": cls.LEGACY_OPENAI_COMPATIBLE,
+            "legacy": cls.LEGACY_OPENAI_COMPATIBLE,
             "openai": cls.OPENAI,
             "openai_compatible": cls.OPENAI_COMPATIBLE,
             "openai_compat": cls.OPENAI_COMPATIBLE,
@@ -65,6 +69,7 @@ class ProviderProtocol(Enum):
     @property
     def is_openai_like(self) -> bool:
         return self in {
+            ProviderProtocol.LEGACY_OPENAI_COMPATIBLE,
             ProviderProtocol.OPENAI,
             ProviderProtocol.OPENAI_COMPATIBLE,
             ProviderProtocol.NEWAPI,
@@ -96,6 +101,7 @@ class EndpointType(Enum):
             "chat_completion": cls.CHAT_COMPLETIONS,
             "chat_completions": cls.CHAT_COMPLETIONS,
             "openai_chat": cls.CHAT_COMPLETIONS,
+            "openai_compatible_chat": cls.CHAT_COMPLETIONS,
             "completions": cls.CHAT_COMPLETIONS,
             "v1_chat_completions": cls.CHAT_COMPLETIONS,
             "responses": cls.RESPONSES,
@@ -115,6 +121,7 @@ class EndpointType(Enum):
             "image": cls.IMAGE_GENERATIONS,
             "image_generation": cls.IMAGE_GENERATIONS,
             "image_generations": cls.IMAGE_GENERATIONS,
+            "image_generation_disabled": cls.IMAGE_GENERATIONS,
             "images_generations": cls.IMAGE_GENERATIONS,
             "v1_images_generations": cls.IMAGE_GENERATIONS,
             "embeddings": cls.EMBEDDINGS,
@@ -367,6 +374,8 @@ def select_newapi_auth_headers(
 
     resolved_protocol = ProviderProtocol.parse(protocol)
     key = "" if api_key is UNSET or api_key is None else str(api_key)
+    if not requires_key and key.strip().lower() == "not-needed":
+        key = ""
     if not key and not requires_key:
         return AuthHeaderSelection(
             headers={},
@@ -402,6 +411,24 @@ def select_newapi_auth_headers(
             "header_value": "[REDACTED]" if key else "",
         },
     )
+
+
+def select_newapi_auth_headers_for_endpoint(
+    api_key: str | _UnsetType | None,
+    endpoint_type: EndpointType | str | None = EndpointType.CHAT_COMPLETIONS,
+    *,
+    requires_key: bool = True,
+) -> AuthHeaderSelection:
+    """Select NewAPI auth headers using explicit endpoint family defaults."""
+
+    endpoint = EndpointType.parse(endpoint_type)
+    protocol_by_endpoint = {
+        EndpointType.GEMINI: ProviderProtocol.GEMINI,
+        EndpointType.ANTHROPIC_MESSAGES: ProviderProtocol.ANTHROPIC,
+        EndpointType.MESSAGES: ProviderProtocol.ANTHROPIC,
+    }
+    protocol = protocol_by_endpoint.get(endpoint, ProviderProtocol.OPENAI_COMPATIBLE)
+    return select_newapi_auth_headers(api_key, protocol, requires_key=requires_key)
 
 
 def reject_image_generation_disabled(
@@ -483,4 +510,5 @@ __all__ = [
     "provider_bodies_equal",
     "reject_image_generation_disabled",
     "select_newapi_auth_headers",
+    "select_newapi_auth_headers_for_endpoint",
 ]

@@ -70,6 +70,23 @@ def _validate_provider_value(value, expected_type, default, min_val=None, max_va
 
     return value
 
+
+def _validate_provider_bool(value, default, name="value"):
+    """Validate a provider boolean without treating arbitrary strings as true."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+    log.warn(f"Provider {name} expected boolean, using default")
+    return default
+
+
 def load_providers() -> tuple[dict, int, dict]:
     """Load providers from providers.json or use defaults.
 
@@ -115,14 +132,35 @@ def load_providers() -> tuple[dict, int, dict]:
             # Fallback for keyless providers (e.g., local llama.cpp)
             if not key:
                 key = "not-needed"
+            requires_key = _validate_provider_bool(p.get("requires_key"), True, name="requires_key")
 
             providers[tier] = {
                 "name": _validate_provider_value(p.get("name"), str, f"Provider {i+1}", name="name"),
                 "url": url,  # Use the resolved URL
                 "key": key,
+                "requires_key": requires_key,
+                "provider_protocol": _validate_provider_value(
+                    p.get("provider_protocol") or p.get("protocol"),
+                    str,
+                    "legacy-openai-compatible",
+                    name="provider_protocol",
+                ),
+                "endpoint_type": _validate_provider_value(
+                    p.get("endpoint_type") or p.get("endpoint"),
+                    str,
+                    "openai-chat",
+                    name="endpoint_type",
+                ),
+                "append_base_path": _validate_provider_bool(p.get("append_base_path"), True, name="append_base_path"),
                 "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
                 "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
                 "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
+                "supports_chat": _validate_provider_bool(p.get("supports_chat"), True, name="supports_chat"),
+                "supports_vision": _validate_provider_bool(p.get("supports_vision"), True, name="supports_vision"),
+                "supports_reasoning": _validate_provider_bool(p.get("supports_reasoning"), bool(p.get("reasoning_effort") or p.get("reasoning")), name="supports_reasoning"),
+                "supports_streaming": _validate_provider_bool(p.get("supports_streaming"), False, name="supports_streaming"),
+                "image_generation_modeled": _validate_provider_bool(p.get("image_generation_modeled"), False, name="image_generation_modeled"),
+                "image_generation_disabled": _validate_provider_bool(p.get("image_generation_disabled"), False, name="image_generation_disabled"),
                 "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
                 "reasoning_effort": _validate_provider_value(p.get("reasoning_effort") or p.get("effort"), str, "", name="reasoning_effort"),
                 "reasoning_format": _validate_provider_value(p.get("reasoning_format"), str, "auto", name="reasoning_format"),
