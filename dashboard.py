@@ -52,6 +52,7 @@ _UPDATE_BACKUP_ROOT = DATA_DIR / "update_backups"
 _UPDATE_LOG_FILE = DATA_DIR / "update_log.json"
 _UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
 _UPDATE_BACKUP_DIRS = ("bot_data", "characters", "prompts")
+_UPDATE_BRANCH_CHOICES = ("main", "staging")
 UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
 # Initialize secret key securely
@@ -563,6 +564,7 @@ def _build_status_payload() -> dict:
         "global_paused": runtime_config.get("global_paused", False),
         "bot_interactions_paused": runtime_config.get("bot_interactions_paused", False),
         "use_single_user": runtime_config.get("use_single_user", True),
+        "update_branch": runtime_config.get("update_branch", ""),
     }
 
 
@@ -661,6 +663,7 @@ def dashboard():
         global_paused=status_payload["global_paused"],
         bot_interactions_paused=status_payload["bot_interactions_paused"],
         use_single_user=status_payload["use_single_user"],
+        update_branch=status_payload["update_branch"],
         status_etag=_build_status_etag(status_payload)
     )
 
@@ -3133,6 +3136,7 @@ def _update_payload_base(
     file_version: str,
     git_result: dict | None = None,
     dependency_result: dict | None = None,
+    update_branch: str = "",
     warnings: list[str] | None = None,
 ) -> dict:
     if not isinstance(git_result, dict):
@@ -3147,6 +3151,7 @@ def _update_payload_base(
         'target_version': git_result.get("target_version") or expected_version,
         'target_ref': git_result.get("target_ref"),
         'upstream': git_result.get("upstream"),
+        'update_branch': _normalize_update_branch(git_result.get("update_branch") or update_branch),
         'before_head': git_result.get("before_head"),
         'after_head': git_result.get("after_head"),
         'backup_path': git_result.get("backup_path"),
@@ -3159,6 +3164,8 @@ def _update_payload_base(
 @requires_auth
 def api_version():
     """Get version information including GitHub latest version."""
+    import runtime_config
+
     file_version = _get_file_version()
     github_version = _check_github_latest_version()
 
@@ -3182,6 +3189,7 @@ def api_version():
         'file_version': file_version,
         'github_version': github_version,
         'latest_version': latest_version,
+        'update_branch': runtime_config.get("update_branch", ""),
         'update_available': update_available,
         'restart_required': restart_required
     })
@@ -3331,6 +3339,12 @@ def _current_git_branch(repo_dir: str) -> str | None:
     return branch if branch and branch != "HEAD" else None
 
 
+def _normalize_update_branch(branch: str | None) -> str:
+    """Return a supported dashboard update branch override, or empty for legacy behavior."""
+    normalized = str(branch or "").strip().lower()
+    return normalized if normalized in _UPDATE_BRANCH_CHOICES else ""
+
+
 def _list_git_remotes(repo_dir: str) -> list[str]:
     result = _run_git(["remote"], repo_dir, timeout=30)
     _require_git_success(result, "Reading Git remotes")
@@ -3372,7 +3386,15 @@ def _git_is_ancestor(repo_dir: str, ancestor: str, descendant: str) -> bool:
     return False
 
 
-def _update_upstream_ref(repo_dir: str, current_branch: str | None) -> str:
+def _update_upstream_ref(repo_dir: str, current_branch: str | None, update_branch: str = "") -> str:
+    selected_branch = _normalize_update_branch(update_branch)
+    if selected_branch:
+        remote = _select_git_remote(repo_dir)
+        selected_ref = f"{remote}/{selected_branch}"
+        if _git_ref_exists(repo_dir, selected_ref):
+            return selected_ref
+        raise RuntimeError(f"Selected update branch '{selected_branch}' was not found on remote '{remote}'")
+
     if current_branch:
         result = _run_git(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3574,9 +3596,10 @@ def _create_update_backup_branch(repo_dir: str) -> str:
     raise RuntimeError("Could not create a unique backup branch before update reset")
 
 
-def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> dict:
+def _perform_git_update(repo_dir: str, expected_version: str | None = None, update_branch: str = "") -> dict:
     """Fetch and update the checkout while preserving user changes where possible."""
     warnings = []
+    selected_branch = _normalize_update_branch(update_branch)
     backup_path = _create_update_state_backup(repo_dir)
 
     fetch = _fetch_all_with_tag_recovery(repo_dir)
@@ -3586,8 +3609,8 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> d
         warnings.append("Recovered from stale local release tags by forcing tag refresh.")
 
     current_branch = _current_git_branch(repo_dir)
-    branch_upstream = _update_upstream_ref(repo_dir, current_branch)
-    tag_ref = _version_tag_ref(repo_dir, expected_version)
+    branch_upstream = _update_upstream_ref(repo_dir, current_branch, selected_branch)
+    tag_ref = None if selected_branch else _version_tag_ref(repo_dir, expected_version)
     upstream = tag_ref or branch_upstream
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
@@ -3639,6 +3662,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None) -> d
         "after_head": after_head,
         "upstream": upstream,
         "branch_upstream": branch_upstream,
+        "update_branch": selected_branch,
         "target_version": expected_version,
         "target_ref": upstream,
         "backup_path": backup_path,
@@ -3713,6 +3737,7 @@ def _install_update_dependencies(repo_dir: str) -> dict:
 def api_update():
     """Pull latest changes from git repository and install dependencies."""
     import subprocess
+    import runtime_config
 
     log.info("Git update requested via dashboard")
 
@@ -3727,6 +3752,16 @@ def api_update():
         bot_dir = os.path.dirname(os.path.abspath(__file__))
         repo_dir = _repo_root(bot_dir)
         expected_version = _check_github_latest_version(force_refresh=True)
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            data = {}
+        raw_update_branch = data.get("update_branch", runtime_config.get("update_branch", ""))
+        update_branch = _normalize_update_branch(raw_update_branch)
+        if raw_update_branch and not update_branch:
+            return jsonify({
+                'status': 'error',
+                'message': 'Update branch must be main or staging'
+            }), 400
 
         file_version_before = _get_file_version()
         if (
@@ -3736,6 +3771,7 @@ def api_update():
             payload = _update_payload_base(
                 expected_version=expected_version,
                 file_version=file_version_before,
+                update_branch=update_branch,
             )
             payload.update({
                 'status': 'ok',
@@ -3750,10 +3786,15 @@ def api_update():
                 "from_version": VERSION,
                 "file_version": file_version_before,
                 "expected_version": expected_version,
+                "update_branch": update_branch,
             })
             return jsonify(payload)
 
-        git_result = _perform_git_update(repo_dir, expected_version=expected_version)
+        git_result = _perform_git_update(
+            repo_dir,
+            expected_version=expected_version,
+            update_branch=update_branch,
+        )
         dependency_result = _install_update_dependencies(repo_dir)
 
         new_version = _get_file_version()
@@ -3772,6 +3813,7 @@ def api_update():
                 "from_version": VERSION,
                 "file_version": new_version,
                 "expected_version": expected_version,
+                "update_branch": update_branch,
                 "target_ref": git_result.get("target_ref"),
                 "before_head": git_result.get("before_head"),
                 "after_head": git_result.get("after_head"),
@@ -3812,6 +3854,7 @@ def api_update():
             "from_version": VERSION,
             "file_version": new_version,
             "expected_version": expected_version,
+            "update_branch": update_branch,
             "target_ref": git_result.get("target_ref"),
             "updated": git_result["updated"],
             "before_head": git_result.get("before_head"),
@@ -3825,6 +3868,7 @@ def api_update():
             file_version=new_version,
             git_result=git_result,
             dependency_result=dependency_result,
+            update_branch=update_branch,
             warnings=warnings,
         )
         payload.update({

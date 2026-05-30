@@ -35,6 +35,7 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `diagnostic_logging` | false | Enables high-volume structured diagnostics. |
 | `file_logging_enabled` | true | Writes local JSONL logs under `bot_data/logs`. |
 | `log_file_max_mb` | 10 | Max JSONL log size before rotation. |
+| `update_branch` | "" | Dashboard updater branch override. Empty preserves the current checkout/upstream/release-tag behavior; explicit values are `main` or `staging`. |
 | `bot_timezones` | {} | Per-bot timezone fallback map. |
 | `bot_schedules` | {} | Per-bot unavailable-window schedules. |
 | `bot_falloff_enabled` | true | Enables bot-to-bot probability decay. |
