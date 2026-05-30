@@ -9,6 +9,7 @@ from typing import Dict, List, Callable
 from collections import defaultdict, deque
 import discord
 import logger as log
+from request_envelope import RequestEnvelope
 
 
 class RequestQueue:
@@ -131,30 +132,31 @@ class RequestQueue:
 
             # Add request to queue
             self._next_request_id[channel_id] += 1
-            request = {
-                'id': self._next_request_id[channel_id],
-                'req_id': req_id,
-                'timestamp': current_time,
-                'channel_id': channel_id,
-                'message': message,
-                'content': content,
-                'content_stripped': content_stripped,  # Pre-computed for duplicate checks
-                'request_signature': request_signature,
-                'guild': guild,
-                'attachments': list(attachments) if attachments else [],
-                'user_name': user_name,
-                'is_dm': is_dm,
-                'user_id': user_id,
-                'sticker_info': sticker_info,
-                'from_interact_command': from_interact_command,
-                'split_reply_target': split_reply_target,
-                'forced_target_user_id': forced_target_user_id,
-                'forced_target_user_name': forced_target_user_name,
-                'allow_auto_reminders': allow_auto_reminders,
-                'pending_reminder_clarification': dict(pending_reminder_clarification) if pending_reminder_clarification else None,
-                'is_autonomous': is_autonomous,
-                'dm_invite_requested': dm_invite_requested,
-            }
+            envelope = RequestEnvelope(
+                id=self._next_request_id[channel_id],
+                correlation_id=req_id,
+                timestamp=current_time,
+                channel_id=channel_id,
+                message=message,
+                content=content,
+                content_stripped=content_stripped,
+                request_signature=request_signature,
+                guild=guild,
+                attachments=tuple(attachments or ()),
+                user_name=user_name,
+                is_dm=is_dm,
+                user_id=user_id,
+                sticker_info=sticker_info,
+                from_interact_command=from_interact_command,
+                direct_target=split_reply_target,
+                forced_target_user_id=forced_target_user_id,
+                forced_target_user_name=forced_target_user_name,
+                allow_auto_reminders=allow_auto_reminders,
+                pending_reminder_clarification=dict(pending_reminder_clarification) if pending_reminder_clarification else None,
+                is_autonomous=is_autonomous,
+                dm_invite_requested=dm_invite_requested,
+            )
+            request = envelope.to_legacy_dict()
 
             self.queues[channel_id].append(request)
             self.pending_counts[channel_id][user_id] += 1

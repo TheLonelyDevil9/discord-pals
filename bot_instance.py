@@ -29,6 +29,7 @@ from discord_utils import (
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from response_delivery import format_response_for_delivery
+from delivery_pipeline import DeliveryPlan, DeliveryState, deliver_multipart_response
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -1668,12 +1669,12 @@ Return exactly one JSON object with this shape:
             return []
         diagnostic_events.log_delivery_split(self.name, req_id, getattr(message, "channel", None), lines)
 
-        sent_records = []
+        sent_messages = {}
         is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
 
-        for i, line in enumerate(lines):
-            if not line.strip():
-                continue
+        async def send_part(part):
+            i = part.part_index
+            line = part.visible_text
             try:
                 started = time.perf_counter()
                 if i == 0:
@@ -1686,7 +1687,7 @@ Return exactly one JSON object with this shape:
                     # Add delay between lines (0.5-1 second)
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                     sent_msg = await message.channel.send(line)
-                sent_records.append({"message": sent_msg, "content": line})
+                sent_messages[i] = sent_msg
                 diagnostic_events.log_discord_send(
                     self.name,
                     req_id,
@@ -1697,6 +1698,8 @@ Return exactly one JSON object with this shape:
                     content_len=len(line),
                     latency_ms=int((time.perf_counter() - started) * 1000),
                 )
+                message_id = getattr(sent_msg, "id", None)
+                return str(message_id) if message_id is not None else ""
             except discord.HTTPException as e:
                 diagnostic_events.log_discord_send_failed(
                     self.name,
@@ -1706,9 +1709,32 @@ Return exactly one JSON object with this shape:
                     part=i + 1,
                     total_parts=len(lines),
                 )
-                break
+                raise
 
-        return sent_records
+        plan = DeliveryPlan.from_parts(
+            lines,
+            correlation_id=req_id or log.new_request_id(),
+            idempotency_key=f"{self.name}:{getattr(message, 'id', 'unknown')}:{req_id or 'no-req'}",
+        )
+        outcome = await deliver_multipart_response(plan, send_part)
+        if outcome.state != DeliveryState.SUCCESS:
+            log.warn(
+                "Response delivery completed without all parts confirmed",
+                self.name,
+                component="delivery",
+                event="delivery_partial" if outcome.confirmed_parts else "delivery_failed",
+                req_id=req_id,
+                state=outcome.state.value,
+                confirmed_parts=len(outcome.confirmed_parts),
+                failed_part_index=outcome.failed_part_index,
+                ambiguous_part_index=outcome.ambiguous_part_index,
+            )
+
+        return [
+            {"message": sent_messages[part.part_index], "content": part.visible_text}
+            for part in outcome.confirmed_parts
+            if part.part_index in sent_messages
+        ]
 
     async def _send_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> list[dict]:
         """Send an organic response directly to a channel without replying to a source message."""
@@ -1717,16 +1743,17 @@ Return exactly one JSON object with this shape:
             return []
         diagnostic_events.log_delivery_split(self.name, req_id, channel, lines, direct_channel=True)
 
-        sent_records = []
-        for i, line in enumerate(lines):
-            if not line.strip():
-                continue
+        sent_messages = {}
+
+        async def send_part(part):
+            i = part.part_index
+            line = part.visible_text
             try:
                 started = time.perf_counter()
                 if i > 0:
                     await asyncio.sleep(random.uniform(0.5, 1.0))
                 sent_msg = await channel.send(line)
-                sent_records.append({"message": sent_msg, "content": line})
+                sent_messages[i] = sent_msg
                 diagnostic_events.log_discord_send(
                     self.name,
                     req_id,
@@ -1738,10 +1765,36 @@ Return exactly one JSON object with this shape:
                     latency_ms=int((time.perf_counter() - started) * 1000),
                     direct_channel=True,
                 )
+                message_id = getattr(sent_msg, "id", None)
+                return str(message_id) if message_id is not None else ""
             except discord.HTTPException as e:
                 diagnostic_events.log_discord_send_failed(self.name, req_id, channel, e, part=i + 1, total_parts=len(lines))
-                break
-        return sent_records
+                raise
+
+        plan = DeliveryPlan.from_parts(
+            lines,
+            correlation_id=req_id or log.new_request_id(),
+            idempotency_key=f"{self.name}:{getattr(channel, 'id', 'direct')}:{req_id or 'no-req'}",
+        )
+        outcome = await deliver_multipart_response(plan, send_part)
+        if outcome.state != DeliveryState.SUCCESS:
+            log.warn(
+                "Direct channel delivery completed without all parts confirmed",
+                self.name,
+                component="delivery",
+                event="delivery_partial" if outcome.confirmed_parts else "delivery_failed",
+                req_id=req_id,
+                state=outcome.state.value,
+                confirmed_parts=len(outcome.confirmed_parts),
+                failed_part_index=outcome.failed_part_index,
+                ambiguous_part_index=outcome.ambiguous_part_index,
+            )
+
+        return [
+            {"message": sent_messages[part.part_index], "content": part.visible_text}
+            for part in outcome.confirmed_parts
+            if part.part_index in sent_messages
+        ]
 
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
@@ -1980,7 +2033,8 @@ Return exactly one JSON object with this shape:
                 channel_id, "user", content,
                 author_name=user_name, user_id=user_id, guild=guild, message_id=message_id,
                 is_bot=getattr(getattr(message, "author", None), "bot", False),
-                timestamp=getattr(message, "created_at", None)
+                timestamp=getattr(message, "created_at", None),
+                req_id=req_id,
             )
 
         # Store channel name for readable history display
@@ -2537,7 +2591,8 @@ Return exactly one JSON object with this shape:
                 channel_id, "assistant", record["content"],
                 author_name=self.character.name, guild=guild,
                 message_id=getattr(sent_message, "id", None),
-                timestamp=getattr(sent_message, "created_at", None)
+                timestamp=getattr(sent_message, "created_at", None),
+                req_id=req_id,
             )
 
         # Update activity
@@ -2633,7 +2688,7 @@ Return exactly one JSON object with this shape:
                 return  # Duplicate or should skip
 
             # Acquire global coordinator slot (limits concurrent AI requests across all bots)
-            await coordinator.acquire_slot(self.name, message_id)
+            coordinator_slot = await coordinator.acquire_slot(self.name, message_id)
             log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
 
             try:
@@ -2659,7 +2714,7 @@ Return exactly one JSON object with this shape:
                 await self._send_and_finalize_response(response, context, message, request)
             finally:
                 # Always release the slot, even on error
-                coordinator.release_slot(self.name, message_id)
+                coordinator.release_slot(coordinator_slot)
                 log.diagnostic("Coordinator slot released", self.name, component="coordinator", event="coordinator_release", req_id=req_id, message_id=message_id)
 
         except asyncio.TimeoutError:

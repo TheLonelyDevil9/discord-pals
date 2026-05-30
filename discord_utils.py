@@ -704,7 +704,7 @@ def sanitize_discord_syntax_fallback(content: str) -> str:
 def add_to_history(channel_id: int, role: str, content: str, author_name: str = None,
                    user_id: int = None, guild=None, message_id: int = None,
                    is_bot: bool = False, timestamp=None, mentioned_users=None,
-                   mentioned_channels=None, mentioned_roles=None):
+                   mentioned_channels=None, mentioned_roles=None, req_id: str | None = None):
     """Add a message to conversation history.
 
     Args:
@@ -776,6 +776,7 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
         "History entry added",
         component="history",
         event="history_add",
+        req_id=req_id,
         channel_id=channel_id,
         user_id=user_id,
         message_id=message_id,

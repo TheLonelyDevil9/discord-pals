@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -7,6 +8,8 @@ import memory
 from scopes import (
     MemoryScope,
     RequestContext,
+    ScopeKey,
+    ScopeLockRegistry,
     auto_memory_key,
     channel_display_label,
     conversation_history_id,
@@ -58,6 +61,68 @@ class ScopeHelperTests(unittest.TestCase):
         self.assertEqual(context.history_id, "dm:Alpha-Bot:user:42")
         self.assertEqual(context.memory_scope.auto_key, "dm:bot:Alpha-Bot:user:42")
         self.assertEqual(context.display_label, "DM")
+
+    def test_scope_key_keeps_channel_and_dm_identities_distinct(self):
+        channel_scope = ScopeKey.for_channel(
+            bot_name="Alpha Bot",
+            channel_id=777,
+            guild_id=456,
+        )
+        dm_scope = ScopeKey.for_dm(
+            bot_name="Alpha Bot",
+            channel_id=777,
+            user_id=42,
+        )
+
+        self.assertEqual(channel_scope.history_id, 777)
+        self.assertEqual(channel_scope.discord_channel_id, 777)
+        self.assertEqual(channel_scope.memory_server_id, 456)
+        self.assertFalse(channel_scope.is_dm)
+
+        self.assertEqual(dm_scope.history_id, "dm:Alpha-Bot:user:42")
+        self.assertEqual(dm_scope.discord_channel_id, 777)
+        self.assertEqual(dm_scope.memory_server_id, "dm:bot:Alpha-Bot")
+        self.assertTrue(dm_scope.is_dm)
+        self.assertNotEqual(channel_scope, dm_scope)
+
+    def test_scope_key_requires_guild_for_server_memory_scope(self):
+        scope = ScopeKey.for_channel(bot_name="Alpha Bot", channel_id=777)
+
+        with self.assertRaises(ValueError):
+            _ = scope.memory_server_id
+
+
+class ScopeLockRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scope_locks_are_reused_per_history_identity(self):
+        registry = ScopeLockRegistry()
+        first = ScopeKey.for_dm(bot_name="Alpha Bot", channel_id=1, user_id=42)
+        same_history = ScopeKey.for_dm(bot_name="Alpha Bot", channel_id=2, user_id=42)
+        other = ScopeKey.for_dm(bot_name="Alpha Bot", channel_id=1, user_id=99)
+
+        self.assertIs(await registry.lock_for(first), await registry.lock_for(same_history))
+        self.assertIsNot(await registry.lock_for(first), await registry.lock_for(other))
+
+    async def test_scope_lock_serializes_work_for_one_scope(self):
+        registry = ScopeLockRegistry()
+        scope = ScopeKey.for_dm(bot_name="Alpha Bot", channel_id=1, user_id=42)
+        lock = await registry.lock_for(scope)
+        order = []
+
+        async def worker(label):
+            async with lock:
+                order.append(f"{label}:start")
+                await asyncio.sleep(0)
+                order.append(f"{label}:end")
+
+        await asyncio.gather(worker("a"), worker("b"))
+
+        self.assertIn(
+            order,
+            (
+                ["a:start", "a:end", "b:start", "b:end"],
+                ["b:start", "b:end", "a:start", "a:end"],
+            ),
+        )
 
 
 class BotInstanceScopeTests(unittest.TestCase):
