@@ -258,7 +258,7 @@ class RequestQueue:
             while self.queues[channel_id]:
                 # Get next request
                 async with self.locks[channel_id]:
-                    if not self.queues[channel_id]:
+                    if self._cancelling or not self.queues[channel_id]:
                         break
                     request = self.queues[channel_id].popleft()
                     log.diagnostic(
@@ -279,6 +279,9 @@ class RequestQueue:
                 finally:
                     async with self.locks[channel_id]:
                         self._release_request_tracking(channel_id, request)
+
+                if self._cancelling:
+                    break
                 
                 # Small delay between requests
                 await asyncio.sleep(0.5)

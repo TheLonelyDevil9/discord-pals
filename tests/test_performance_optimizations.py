@@ -460,6 +460,52 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.pending_counts[208].get(123, 0), 0)
         self.assertFalse(any(not task.done() for task in queue._processing_tasks))
 
+    async def test_cancel_active_does_not_dequeue_next_request_when_current_persists_partial(self):
+        queue = request_queue_module.RequestQueue()
+        started = asyncio.Event()
+        processed = []
+
+        async def processor(request):
+            processed.append(request["content"])
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return
+
+        queue.set_processor(processor)
+        first = await queue.add_request(
+            channel_id=209,
+            message=types.SimpleNamespace(),
+            content="First",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+        await started.wait()
+        second = await queue.add_request(
+            channel_id=209,
+            message=types.SimpleNamespace(),
+            content="Second",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+
+        with patch.object(request_queue_module.asyncio, "sleep", new=async_noop):
+            await queue.cancel_active()
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(processed, ["First"])
+        self.assertFalse(queue.processing[209])
+        self.assertEqual(len(queue.queues[209]), 0)
+        self.assertEqual(queue.pending_counts[209].get(123, 0), 0)
+
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
     def setUp(self):

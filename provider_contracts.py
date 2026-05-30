@@ -336,10 +336,10 @@ def provider_error_code_from_exception(error: BaseException) -> ProviderErrorCod
         return ProviderErrorCode.TIMEOUT
     if "authentication" in type_name or "permissiondenied" in type_name:
         return ProviderErrorCode.AUTH
-    if "badrequest" in type_name:
-        return ProviderErrorCode.BAD_REQUEST
     if "contentfilter" in type_name or _looks_like_content_filter(body_text):
         return ProviderErrorCode.CONTENT_FILTER
+    if "badrequest" in type_name:
+        return ProviderErrorCode.BAD_REQUEST
     if "connection" in type_name or "network" in type_name or isinstance(error, (ConnectionError, OSError)):
         return ProviderErrorCode.NETWORK
 

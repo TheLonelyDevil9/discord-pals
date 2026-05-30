@@ -300,8 +300,8 @@ def build_legacy_chat_request_kwargs(
                             headers.update({str(k): str(v) for k, v in item.items()})
                     if headers:
                         request_kwargs["extra_headers"] = headers
-            except Exception as e:
-                include_headers_error = str(e)
+            except Exception:
+                include_headers_error = "parse_error"
         else:
             include_headers_error = "PyYAML not installed"
 
@@ -726,7 +726,14 @@ class AIProviderManager:
                     elif built_request.include_headers_error == "PyYAML not installed":
                         log.warn(f"[{tier}] include_headers configured but PyYAML not installed", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
                     elif built_request.include_headers_error:
-                        log.warn(f"[{tier}] Failed to parse include_headers YAML: {built_request.include_headers_error}", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
+                        log.warn(
+                            f"[{tier}] Failed to parse include_headers YAML",
+                            component="provider",
+                            event="provider_headers_error",
+                            req_id=req_id,
+                            tier=tier,
+                            reason=built_request.include_headers_error,
+                        )
                 
                 log.diagnostic(
                     f"[{tier}] Provider request",

@@ -112,6 +112,21 @@ X-Mode: fast
         self.assertEqual(dict_headers.extra_header_keys, ("X-Trace", "X-Mode"))
         self.assertEqual(list_headers.extra_header_keys, ("X-Trace", "X-Mode"))
 
+    def test_include_headers_parse_error_does_not_echo_header_secret(self):
+        built = providers.build_legacy_chat_request_kwargs(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            temperature=1.0,
+            max_tokens=512,
+            include_headers="""
+Authorization: [Bearer sk-secret-value
+""",
+        )
+
+        self.assertEqual(built.include_headers_error, "parse_error")
+        self.assertNotIn("sk-secret-value", built.include_headers_error)
+        self.assertNotIn("Authorization", built.include_headers_error)
+
     def test_include_body_extra_body_is_sent_without_changing_legacy_extra_body_logs(self):
         messages = [{"role": "user", "content": "hello"}]
 

@@ -287,6 +287,25 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.provider_error.code, "rate_limit")
         self.assertTrue(raised.exception.provider_error.retryable)
 
+    async def test_http_400_safety_errors_map_to_content_filter(self):
+        adapter = newapi_adapters.NewAPIProviderAdapter(
+            post_json=_PostRecorder(newapi_adapters.NewAPIHTTPStatusError(400, "blocked by safety policy"))
+        )
+
+        with self.assertRaises(newapi_adapters.NewAPIAdapterError) as raised:
+            await adapter.generate(
+                descriptor=_descriptor(contracts.EndpointType.CHAT_COMPLETIONS),
+                request=contracts.ProviderRequest(
+                    endpoint_type=contracts.EndpointType.CHAT_COMPLETIONS,
+                    model="chat-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                ),
+                api_key="sk-test",
+                timeout=20,
+            )
+
+        self.assertEqual(raised.exception.provider_error.code, "content_filter")
+
 
 class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_generate_routes_explicit_newapi_provider_without_legacy_sdk_client(self):

@@ -195,6 +195,15 @@ class ProviderContractTests(unittest.TestCase):
         self.assertNotIn("sk-secret-value", error.message)
         self.assertNotIn("prompt text", str(error.diagnostics))
 
+    def test_provider_exception_classifies_safety_bad_request_as_content_filter(self):
+        class FakeBadRequest(Exception):
+            status_code = 400
+            body = "blocked by safety policy"
+
+        error = contracts.provider_error_from_exception(FakeBadRequest())
+
+        self.assertEqual(error.code, "content_filter")
+
     def test_provider_exception_classification_respects_cancel_and_rate_limit_policy(self):
         class FakeRateLimitError(Exception):
             pass

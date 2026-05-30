@@ -523,8 +523,11 @@ def _provider_error_from_status(
     body: str = "",
 ) -> ProviderError:
     lowered = (body or "").lower()
-    if status in (401, 403):
-        code = "content_filter" if any(token in lowered for token in ("content filter", "safety", "blocked")) else "auth"
+    is_content_filter = any(token in lowered for token in ("content filter", "safety", "blocked"))
+    if is_content_filter:
+        code = "content_filter"
+    elif status in (401, 403):
+        code = "auth"
     elif status == 429:
         code = "rate_limit"
     elif status == 408:
