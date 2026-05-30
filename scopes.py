@@ -5,6 +5,7 @@ Centralizes local identifiers used for histories, memories, stats, and
 cross-runtime request context so bot/user/channel boundaries stay explicit.
 """
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 import re
@@ -12,6 +13,76 @@ from typing import Optional
 
 
 LocalScopeId = int | str
+
+
+@dataclass(frozen=True)
+class ScopeKey:
+    """Typed conversation identity for history/context ordering."""
+
+    bot_name: str | None
+    history_id: LocalScopeId
+    discord_channel_id: int
+    is_dm: bool = False
+    user_id: int | None = None
+    guild_id: int | None = None
+
+    @classmethod
+    def for_channel(
+        cls,
+        *,
+        bot_name: str | None,
+        channel_id: int | str,
+        guild_id: int | str | None = None,
+    ) -> "ScopeKey":
+        """Build a server/thread/channel scope from its Discord channel id."""
+        normalized_channel_id = int(channel_id)
+        normalized_guild_id = int(guild_id) if guild_id is not None else None
+        return cls(
+            bot_name=bot_name,
+            history_id=channel_history_id(normalized_channel_id),
+            discord_channel_id=normalized_channel_id,
+            is_dm=False,
+            guild_id=normalized_guild_id,
+        )
+
+    @classmethod
+    def for_dm(
+        cls,
+        *,
+        bot_name: str | None,
+        channel_id: int | str,
+        user_id: int | str,
+    ) -> "ScopeKey":
+        """Build a bot/user-isolated DM scope."""
+        normalized_channel_id = int(channel_id)
+        normalized_user_id = int(user_id)
+        return cls(
+            bot_name=bot_name,
+            history_id=dm_history_id(bot_name, normalized_user_id),
+            discord_channel_id=normalized_channel_id,
+            is_dm=True,
+            user_id=normalized_user_id,
+        )
+
+    @property
+    def memory_server_id(self) -> LocalScopeId:
+        return memory_server_id(self.bot_name, self.guild_id, is_dm=self.is_dm)
+
+
+class ScopeLockRegistry:
+    """Owns async locks for serialized work inside one conversation scope."""
+
+    def __init__(self):
+        self._locks: dict[LocalScopeId, asyncio.Lock] = {}
+        self._registry_lock = asyncio.Lock()
+
+    async def lock_for(self, scope_key: ScopeKey) -> asyncio.Lock:
+        async with self._registry_lock:
+            lock = self._locks.get(scope_key.history_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[scope_key.history_id] = lock
+            return lock
 
 
 def safe_scope_part(value: object, *, default: str = "default", limit: int = 48) -> str:

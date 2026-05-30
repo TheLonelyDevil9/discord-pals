@@ -27,7 +27,7 @@ class _FakeDMChannel:
     async def send(self, content=None, file=None):
         self.sent_messages.append(content)
         self.sent_files.append(file)
-        return types.SimpleNamespace(created_at=None)
+        return types.SimpleNamespace(id=len(self.sent_messages), created_at=None)
 
 
 class _FakeUser:

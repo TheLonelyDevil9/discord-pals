@@ -5,17 +5,28 @@ Manages cross-bot coordination for concurrent AI requests.
 
 import asyncio
 import time
-from typing import Dict, Set, Optional
-from collections import defaultdict
+from dataclasses import dataclass
+from typing import Deque, Dict, Optional, Set, Tuple, Union
+from collections import defaultdict, deque
 import runtime_config
 import logger as log
+
+
+@dataclass
+class CoordinatorSlot:
+    """Release-once token for a coordinator capacity slot."""
+
+    bot_name: str
+    message_id: int
+    token_id: int
+    released: bool = False
 
 
 class GlobalCoordinator:
     """Singleton coordinator for cross-bot request management.
 
     Prevents crashes when multiple bots are tagged simultaneously by:
-    1. Limiting concurrent AI requests via semaphore
+    1. Limiting concurrent AI requests via release-once slot tokens
     2. Staggering responses when multiple bots respond to the same message
     """
 
@@ -32,9 +43,13 @@ class GlobalCoordinator:
             return
         self._initialized = True
 
-        # Global semaphore for AI request limiting (created lazily)
-        self._semaphore: Optional[asyncio.Semaphore] = None
-        self._semaphore_limit: int = 0
+        # Global capacity tracking for AI request limiting.
+        self._slot_limit: int = 0
+        self._active_slots: Dict[int, CoordinatorSlot] = {}
+        self._legacy_slot_ids: Dict[Tuple[str, int], Deque[int]] = defaultdict(deque)
+        self._next_slot_id: int = 0
+        self._slot_event: Optional[asyncio.Event] = None
+        self._RESIZE_POLL_INTERVAL = 0.05
 
         # Track which bots are processing which messages
         # message_id -> set of bot_names currently processing
@@ -58,19 +73,84 @@ class GlobalCoordinator:
             self._request_lock = asyncio.Lock()
         return self._request_lock
 
-    def _get_semaphore(self) -> asyncio.Semaphore:
-        """Get or create the global semaphore with current limit."""
-        limit = runtime_config.get("concurrency_limit", 4)
+    def _get_slot_event(self) -> asyncio.Event:
+        """Get or create the slot wake event (lazy initialization for event loop safety)."""
+        if self._slot_event is None:
+            self._slot_event = asyncio.Event()
+        return self._slot_event
 
-        # Recreate if limit changed or not yet created
-        if self._semaphore is None or self._semaphore_limit != limit:
-            self._semaphore = asyncio.Semaphore(limit)
-            self._semaphore_limit = limit
-            log.info(f"Global coordinator: semaphore set to {limit} concurrent requests")
+    def _configured_limit(self) -> int:
+        """Read and normalize the configured concurrency limit."""
+        try:
+            limit = int(runtime_config.get("concurrency_limit", 4))
+        except (TypeError, ValueError):
+            limit = 4
+        return max(1, limit)
 
-        return self._semaphore
+    def _refresh_slot_limit(self) -> int:
+        """Refresh the capacity limit without replacing active slot state."""
+        limit = self._configured_limit()
+        previous_limit = self._slot_limit
+        if previous_limit != limit:
+            self._slot_limit = limit
+            log.info(f"Global coordinator: capacity set to {limit} concurrent requests")
+            if previous_limit and limit > previous_limit and self._slot_event is not None:
+                self._slot_event.set()
+        return self._slot_limit
 
-    async def acquire_slot(self, bot_name: str, message_id: int) -> bool:
+    def _issue_slot(self, bot_name: str, message_id: int) -> CoordinatorSlot:
+        """Create and track a release-once slot token."""
+        self._next_slot_id += 1
+        token = CoordinatorSlot(bot_name=bot_name, message_id=message_id, token_id=self._next_slot_id)
+        self._active_slots[token.token_id] = token
+        self._legacy_slot_ids[(bot_name, message_id)].append(token.token_id)
+        self._active_requests[message_id].add(bot_name)
+        return token
+
+    def _resolve_release_token(
+        self,
+        slot_or_bot_name: Union[CoordinatorSlot, str],
+        message_id: Optional[int],
+    ) -> Optional[CoordinatorSlot]:
+        """Resolve either the new token path or legacy bot/message release path."""
+        if isinstance(slot_or_bot_name, CoordinatorSlot):
+            token = self._active_slots.get(slot_or_bot_name.token_id)
+            if token is slot_or_bot_name and not token.released:
+                return token
+            return None
+
+        if message_id is None:
+            return None
+
+        key = (slot_or_bot_name, message_id)
+        token_ids = self._legacy_slot_ids.get(key)
+        while token_ids:
+            token_id = token_ids.popleft()
+            token = self._active_slots.get(token_id)
+            if token is not None and not token.released:
+                return token
+
+        self._legacy_slot_ids.pop(key, None)
+        return None
+
+    def _forget_legacy_slot(self, token: CoordinatorSlot):
+        """Remove a token ID from the legacy release lookup."""
+        key = (token.bot_name, token.message_id)
+        token_ids = self._legacy_slot_ids.get(key)
+        if not token_ids:
+            return
+
+        remaining = deque(
+            token_id
+            for token_id in token_ids
+            if token_id != token.token_id and token_id in self._active_slots
+        )
+        if remaining:
+            self._legacy_slot_ids[key] = remaining
+        else:
+            self._legacy_slot_ids.pop(key, None)
+
+    async def acquire_slot(self, bot_name: str, message_id: int) -> CoordinatorSlot:
         """Acquire a slot for AI request. Blocks if at concurrency limit.
 
         Args:
@@ -78,49 +158,65 @@ class GlobalCoordinator:
             message_id: Discord message ID being processed
 
         Returns:
-            True when slot is acquired
+            CoordinatorSlot token to pass to release_slot()
         """
         try:
-            semaphore = self._get_semaphore()
-            lock = self._get_lock()
+            # Queue for staggered response when the request enters the coordinator.
+            self._response_queue[message_id].append((bot_name, time.time()))
 
-            async with lock:
-                # Register this bot as processing this message
-                self._active_requests[message_id].add(bot_name)
+            while True:
+                limit = self._refresh_slot_limit()
+                if len(self._active_slots) < limit:
+                    token = self._issue_slot(bot_name, message_id)
+                    log.debug(f"[{bot_name}] Acquired AI slot for message {message_id}")
+                    return token
 
-                # Queue for staggered response
-                self._response_queue[message_id].append((bot_name, time.time()))
-
-            # Acquire semaphore (blocks if at limit)
-            await semaphore.acquire()
-            log.debug(f"[{bot_name}] Acquired AI slot for message {message_id}")
-            return True
+                slot_event = self._get_slot_event()
+                slot_event.clear()
+                try:
+                    await asyncio.wait_for(slot_event.wait(), timeout=self._RESIZE_POLL_INTERVAL)
+                except asyncio.TimeoutError:
+                    pass
         except Exception as e:
             log.error(f"[{bot_name}] Failed to acquire slot: {e}")
-            return True  # Continue anyway to not block the bot
+            # Continue anyway to not block the bot; releasing this token is a no-op.
+            return CoordinatorSlot(bot_name=bot_name, message_id=message_id, token_id=-1, released=True)
 
-    def release_slot(self, bot_name: str, message_id: int):
+    def release_slot(
+        self,
+        slot_or_bot_name: Union[CoordinatorSlot, str],
+        message_id: Optional[int] = None,
+    ):
         """Release the AI request slot.
 
         Args:
-            bot_name: Name of the bot releasing the slot
-            message_id: Discord message ID that was processed
+            slot_or_bot_name: CoordinatorSlot token, or legacy bot name
+            message_id: Legacy Discord message ID that was processed
         """
         try:
-            semaphore = self._get_semaphore()
-            semaphore.release()
+            token = self._resolve_release_token(slot_or_bot_name, message_id)
+            if token is None:
+                return
+
+            token.released = True
+            self._active_slots.pop(token.token_id, None)
+            self._forget_legacy_slot(token)
 
             # Clean up tracking
-            if message_id in self._active_requests:
-                self._active_requests[message_id].discard(bot_name)
-                if not self._active_requests[message_id]:
-                    del self._active_requests[message_id]
+            if token.message_id in self._active_requests:
+                self._active_requests[token.message_id].discard(token.bot_name)
+                if not self._active_requests[token.message_id]:
+                    del self._active_requests[token.message_id]
 
-            log.debug(f"[{bot_name}] Released AI slot for message {message_id}")
+            log.debug(f"[{token.bot_name}] Released AI slot for message {token.message_id}")
+
+            if self._slot_event is not None:
+                self._slot_event.set()
 
             # Periodic cleanup
             self._maybe_cleanup()
         except Exception as e:
+            bot_name = getattr(slot_or_bot_name, "bot_name", slot_or_bot_name)
             log.error(f"[{bot_name}] Failed to release slot: {e}")
 
     async def get_stagger_delay(self, bot_name: str, message_id: int) -> float:
@@ -179,7 +275,8 @@ class GlobalCoordinator:
 
         for msg_id in stale_messages:
             del self._response_queue[msg_id]
-            self._active_requests.pop(msg_id, None)
+            if not any(slot.message_id == msg_id for slot in self._active_slots.values()):
+                self._active_requests.pop(msg_id, None)
 
         if stale_messages:
             log.debug(f"Coordinator cleanup: removed {len(stale_messages)} stale entries")
