@@ -872,7 +872,7 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
         response = self.client.post(
             "/api/config",
-            json={"update_branch": "staging"},
+            json={"update_branch": " Staging "},
             headers=self.csrf_headers()
         )
         config = self.client.get("/api/config").get_json()

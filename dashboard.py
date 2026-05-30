@@ -3748,10 +3748,6 @@ def api_update():
         }), 409
 
     try:
-        # Get the directory where the bot is running
-        bot_dir = os.path.dirname(os.path.abspath(__file__))
-        repo_dir = _repo_root(bot_dir)
-        expected_version = _check_github_latest_version(force_refresh=True)
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             data = {}
@@ -3762,6 +3758,11 @@ def api_update():
                 'status': 'error',
                 'message': 'Update branch must be main or staging'
             }), 400
+
+        # Get the directory where the bot is running
+        bot_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_dir = _repo_root(bot_dir)
+        expected_version = _check_github_latest_version(force_refresh=True)
 
         file_version_before = _get_file_version()
         if (

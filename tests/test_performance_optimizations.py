@@ -776,8 +776,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         )
 
     def test_update_endpoint_rejects_invalid_update_branch(self):
-        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
-                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.2.0"), \
+        with patch.object(dashboard_module, "_repo_root") as repo_root, \
+                patch.object(dashboard_module, "_check_github_latest_version") as check_version, \
                 patch.object(dashboard_module, "_perform_git_update") as perform_update:
             response = self.client.post(
                 "/api/update",
@@ -787,6 +787,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["message"], "Update branch must be main or staging")
+        repo_root.assert_not_called()
+        check_version.assert_not_called()
         perform_update.assert_not_called()
 
     def test_update_endpoint_returns_warnings_without_failing_successful_update(self):

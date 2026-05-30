@@ -221,6 +221,9 @@ def _coerce_config_value(key: str, value):
     if value is None and field.default is None:
         return None
 
+    if key == "update_branch" and value is not None:
+        value = str(value).strip().lower()
+
     if field.value_type is bool:
         return _coerce_bool(value, field.default)
 
