@@ -4,7 +4,7 @@ import types
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, mock_open, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -480,6 +480,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("moveProvider(", page)
         self.assertIn('id="prose_polisher_enabled"', page)
         self.assertIn('id="new-provider-reasoning-effort"', page)
+        self.assertIn('id="new-provider-protocol"', page)
+        self.assertIn('id="new-provider-endpoint-type"', page)
+        self.assertIn('id="new-provider-key-env"', page)
+        self.assertIn('id="new-provider-supports-vision"', page)
+        self.assertIn('id="edit-provider-protocol"', page)
+        self.assertIn('providerCapabilityBadges', page)
         self.assertIn('id="response-access-form"', page)
         self.assertIn('id="server_responses_enabled"', page)
         self.assertIn('id="dm_responses_enabled"', page)
@@ -603,6 +609,56 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
             "extra_body": {"seed": 4},
         })
         self.assertEqual(invalid_response.status_code, 400)
+
+    def test_newapi_provider_health_check_validates_config_without_prompt_data(self):
+        providers_payload = {
+            "providers": [{
+                "name": "NewAPI Responses",
+                "url": "https://newapi.example",
+                "key_env": "NEWAPI_API_KEY",
+                "provider_protocol": "newapi",
+                "endpoint_type": "openai-responses",
+                "model": "gpt-5.5",
+                "supports_reasoning": True,
+                "supports_vision": True,
+            }]
+        }
+        fake_path = types.SimpleNamespace(exists=lambda: True)
+
+        with patch.object(dashboard_module, "Path", return_value=fake_path), \
+                patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
+                patch.dict(dashboard_module.os.environ, {"NEWAPI_API_KEY": "sk-test"}):
+            response = self.client.get("/api/test-provider/0")
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(body["endpoint_type"], "responses")
+        self.assertEqual(body["auth_header"], "Authorization")
+        self.assertNotIn("sk-test", json.dumps(body))
+
+    def test_newapi_provider_health_check_reports_missing_key(self):
+        providers_payload = {
+            "providers": [{
+                "name": "NewAPI Responses",
+                "url": "https://newapi.example",
+                "key_env": "MISSING_NEWAPI_KEY",
+                "provider_protocol": "newapi",
+                "endpoint_type": "openai-responses",
+                "model": "gpt-5.5",
+            }]
+        }
+        fake_path = types.SimpleNamespace(exists=lambda: True)
+
+        with patch.object(dashboard_module, "Path", return_value=fake_path), \
+                patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
+                patch.dict(dashboard_module.os.environ, {}, clear=True):
+            response = self.client.get("/api/test-provider/0")
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(body["success"])
+        self.assertIn("API key", body["error"])
 
     def test_known_access_targets_include_channels_and_human_aliases(self):
         original_history = discord_utils_module.conversation_history

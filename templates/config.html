@@ -832,14 +832,32 @@
                                 <select id="new-provider-type" required onchange="updateProviderDefaults()">
                                     <option value="">Select type...</option>
                                     <option value="openai">OpenAI</option>
+                                    <option value="newapi">NewAPI</option>
                                     <option value="anthropic">Anthropic</option>
                                     <option value="google">Google (Gemini)</option>
                                     <option value="openrouter">OpenRouter</option>
                                     <option value="local">Local / Custom</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="new-provider-protocol">Provider Protocol</label>
+                                <select id="new-provider-protocol">
+                                    <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
+                                    <option value="newapi">NewAPI</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-endpoint-type">Endpoint Type</label>
+                                <select id="new-provider-endpoint-type">
+                                    <option value="openai-chat">OpenAI Chat</option>
+                                    <option value="openai-responses">OpenAI Responses</option>
+                                    <option value="anthropic-messages">Anthropic Messages</option>
+                                    <option value="gemini">Gemini</option>
+                                </select>
+                            </div>
                             <div class="form-group"><label for="new-provider-name">Display Name</label><input type="text" id="new-provider-name" required></div>
                             <div class="form-group"><label for="new-provider-endpoint">API Endpoint</label><input type="text" id="new-provider-endpoint"></div>
+                            <div class="form-group"><label for="new-provider-key-env">API Key Env Var</label><input type="text" id="new-provider-key-env" placeholder="OPENAI_API_KEY"></div>
                             <div class="form-group"><label for="new-provider-key">API Key</label><input type="password" id="new-provider-key"></div>
                             <div class="form-group"><label for="new-provider-model">Model</label><input type="text" id="new-provider-model"></div>
                             <div class="form-group"><label for="new-provider-temp">Temperature</label><input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7"></div>
@@ -868,6 +886,19 @@
                                 </select>
                             </div>
                             <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
+                            <div class="form-group">
+                                <label>Provider Capabilities</label>
+                                <div class="provider-toggle-grid">
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-requires-key" checked><span>Requires Key</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-append-base-path" checked><span>Append Base Path</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-chat" checked><span>Text</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-vision" checked><span>Vision</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-reasoning"><span>Reasoning</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-streaming"><span>Streaming</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-image-modeled"><span>Image Modeled</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-image-disabled"><span>Image Disabled</span></label>
+                                </div>
+                            </div>
                             <div class="form-group" id="new-openrouter-group" style="display:none;">
                                 <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
                                 <textarea id="new-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
@@ -1065,7 +1096,24 @@
             <input type="hidden" id="edit-provider-index">
             <div class="settings-grid">
                 <div class="form-group"><label for="edit-provider-name">Display Name</label><input type="text" id="edit-provider-name" required></div>
+                <div class="form-group">
+                    <label for="edit-provider-protocol">Provider Protocol</label>
+                    <select id="edit-provider-protocol">
+                        <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
+                        <option value="newapi">NewAPI</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-endpoint-type">Endpoint Type</label>
+                    <select id="edit-provider-endpoint-type">
+                        <option value="openai-chat">OpenAI Chat</option>
+                        <option value="openai-responses">OpenAI Responses</option>
+                        <option value="anthropic-messages">Anthropic Messages</option>
+                        <option value="gemini">Gemini</option>
+                    </select>
+                </div>
                 <div class="form-group"><label for="edit-provider-endpoint">API Endpoint</label><input type="text" id="edit-provider-endpoint"></div>
+                <div class="form-group"><label for="edit-provider-key-env">API Key Env Var</label><input type="text" id="edit-provider-key-env" placeholder="OPENAI_API_KEY"></div>
                 <div class="form-group"><label for="edit-provider-key">API Key</label><input type="password" id="edit-provider-key" placeholder="Leave blank to keep current"></div>
                 <div class="form-group"><label for="edit-provider-model">Model</label><input type="text" id="edit-provider-model"></div>
                 <div class="form-group"><label for="edit-provider-temp">Temperature</label><input type="number" id="edit-provider-temp" min="0" max="2" step="0.1"></div>
@@ -1095,6 +1143,19 @@
                     </select>
                 </div>
                 <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
+                <div class="form-group">
+                    <label>Provider Capabilities</label>
+                    <div class="provider-toggle-grid">
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-requires-key" checked><span>Requires Key</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-append-base-path" checked><span>Append Base Path</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-chat" checked><span>Text</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-vision" checked><span>Vision</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-reasoning"><span>Reasoning</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-streaming"><span>Streaming</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-image-modeled"><span>Image Modeled</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-image-disabled"><span>Image Disabled</span></label>
+                    </div>
+                </div>
                 <div class="form-group" id="edit-openrouter-group" style="display:none;">
                     <label for="edit-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
                     <textarea id="edit-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
@@ -1288,16 +1349,20 @@ label.toggle-switch {
 .provider-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .provider-name { font-weight: 500; color: var(--text-primary); }
 .provider-tier, .provider-model { font-size: 0.75rem; color: var(--text-muted); }
+.provider-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.provider-badge { border: 1px solid var(--border-subtle); color: var(--text-muted); border-radius: 6px; padding: 2px 6px; font-size: 0.6875rem; }
 .provider-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .btn-icon { padding: 8px 10px; min-height: 40px; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 6px; font: inherit; }
 .btn-icon:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
 .modal-overlay { display: none; position: fixed; inset: 0; background: var(--scrim); z-index: 1000; align-items: center; justify-content: center; padding: 16px; }
 .modal-overlay.active { display: flex; }
-.modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
+.modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 720px; width: 90%; max-height: 90vh; overflow-y: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-header h3 { margin: 0; }
 .modal-close { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font: inherit; min-height: 36px; padding: 6px 10px; }
+.provider-toggle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; }
+.provider-toggle-grid .checkbox-label { min-height: 36px; }
 @media (max-width: 768px) {
     .section-grid, .settings-grid { grid-template-columns: 1fr; }
     .bot-row, .schedule-bot-header { flex-wrap: wrap; }
@@ -1810,6 +1875,24 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function providerProtocol(provider) {
+    return provider.provider_protocol || provider.protocol || 'legacy-openai-compatible';
+}
+
+function providerEndpointType(provider) {
+    return provider.endpoint_type || provider.endpoint || 'openai-chat';
+}
+
+function providerCapabilityBadges(provider) {
+    const badges = [providerProtocol(provider), providerEndpointType(provider)];
+    if (provider.supports_vision === false) badges.push('text-only');
+    if (provider.supports_reasoning === true) badges.push('reasoning');
+    if (provider.requires_key === false) badges.push('no-auth');
+    if (provider.append_base_path === false) badges.push('full-url');
+    if (provider.image_generation_modeled === true) badges.push(provider.image_generation_disabled === true ? 'image-disabled' : 'image-modeled');
+    return badges.map(badge => `<span class="provider-badge">${escapeHtml(badge)}</span>`).join('');
+}
+
 function renderProviderList() {
     const list = document.getElementById('provider-list');
     if (!list) return;
@@ -1823,6 +1906,7 @@ function renderProviderList() {
             <div class="provider-info">
                 <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${getTierName(i)})</span></span>
                 <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.url || 'Default endpoint')}</span>
+                <span class="provider-badges">${providerCapabilityBadges(p)}</span>
             </div>
             <div class="provider-actions">
                 <button type="button" class="btn-icon" onclick="moveProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up" aria-label="Move ${escapeHtml(p.name || 'provider')} up">Up</button>
@@ -1976,7 +2060,59 @@ async function testProvider(index) {
     showToast('Testing provider...', 'success');
     const response = await fetch(`/api/test-provider/${index}`, { headers: { 'X-CSRF-Token': '{{ csrf_token() }}' } });
     const result = await response.json();
-    showToast(result.success ? 'Provider is working' : 'Provider test failed: ' + (result.error || 'Unknown error'), result.success ? 'success' : 'error');
+    showToast(result.success ? (result.message || 'Provider is working') : 'Provider test failed: ' + (result.error || 'Unknown error'), result.success ? 'success' : 'error');
+}
+
+function setProviderFormValues(prefix, provider) {
+    document.getElementById(`${prefix}-provider-protocol`).value = providerProtocol(provider);
+    document.getElementById(`${prefix}-provider-endpoint-type`).value = providerEndpointType(provider);
+    document.getElementById(`${prefix}-provider-key-env`).value = provider.key_env || '';
+    document.getElementById(`${prefix}-provider-requires-key`).checked = provider.requires_key !== false;
+    document.getElementById(`${prefix}-provider-append-base-path`).checked = provider.append_base_path !== false;
+    document.getElementById(`${prefix}-provider-supports-chat`).checked = provider.supports_chat !== false;
+    document.getElementById(`${prefix}-provider-supports-vision`).checked = provider.supports_vision !== false;
+    document.getElementById(`${prefix}-provider-supports-reasoning`).checked = provider.supports_reasoning === true;
+    document.getElementById(`${prefix}-provider-supports-streaming`).checked = provider.supports_streaming === true;
+    document.getElementById(`${prefix}-provider-image-modeled`).checked = provider.image_generation_modeled === true;
+    document.getElementById(`${prefix}-provider-image-disabled`).checked = provider.image_generation_disabled === true;
+}
+
+function applyProviderFormValues(prefix, provider) {
+    const protocol = document.getElementById(`${prefix}-provider-protocol`).value;
+    if (protocol && protocol !== 'legacy-openai-compatible') provider.provider_protocol = protocol; else delete provider.provider_protocol;
+    delete provider.protocol;
+
+    const endpointType = document.getElementById(`${prefix}-provider-endpoint-type`).value;
+    if (protocol === 'newapi' || (endpointType && endpointType !== 'openai-chat')) provider.endpoint_type = endpointType; else delete provider.endpoint_type;
+    delete provider.endpoint;
+
+    const keyEnv = document.getElementById(`${prefix}-provider-key-env`).value.trim();
+    if (keyEnv) provider.key_env = keyEnv; else delete provider.key_env;
+
+    const booleanDefaults = {
+        requires_key: true,
+        append_base_path: true,
+        supports_chat: true,
+        supports_vision: true,
+        supports_reasoning: false,
+        supports_streaming: false,
+        image_generation_modeled: false,
+        image_generation_disabled: false
+    };
+    const fields = {
+        requires_key: `${prefix}-provider-requires-key`,
+        append_base_path: `${prefix}-provider-append-base-path`,
+        supports_chat: `${prefix}-provider-supports-chat`,
+        supports_vision: `${prefix}-provider-supports-vision`,
+        supports_reasoning: `${prefix}-provider-supports-reasoning`,
+        supports_streaming: `${prefix}-provider-supports-streaming`,
+        image_generation_modeled: `${prefix}-provider-image-modeled`,
+        image_generation_disabled: `${prefix}-provider-image-disabled`
+    };
+    Object.entries(fields).forEach(([field, id]) => {
+        const checked = document.getElementById(id).checked;
+        if (checked !== booleanDefaults[field]) provider[field] = checked; else delete provider[field];
+    });
 }
 
 function editProvider(index) {
@@ -1984,6 +2120,7 @@ function editProvider(index) {
     if (!provider) return;
     document.getElementById('edit-provider-index').value = index;
     document.getElementById('edit-provider-name').value = provider.name || '';
+    setProviderFormValues('edit', provider);
     document.getElementById('edit-provider-endpoint').value = provider.url || '';
     document.getElementById('edit-provider-key').value = '';
     document.getElementById('edit-provider-model').value = provider.model || '';
@@ -2016,6 +2153,7 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
     provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;
     provider.model = document.getElementById('edit-provider-model').value.trim();
     provider.temperature = parseFloat(document.getElementById('edit-provider-temp').value) || 0.7;
+    applyProviderFormValues('edit', provider);
     const newKey = document.getElementById('edit-provider-key').value.trim();
     if (newKey) provider.api_key = newKey;
     const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
@@ -2068,18 +2206,21 @@ async function saveProvidersToServer() {
 }
 
 const providerDefaults = {
-    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
-    google: { url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-pro' },
-    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o' },
-    local: { url: 'http://localhost:5000/v1', model: 'local-model' }
+    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
+    newapi: { url: 'https://newapi.example', model: 'gpt-5.5', provider_protocol: 'newapi', endpoint_type: 'openai-responses', supports_reasoning: true },
+    anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514', provider_protocol: 'newapi', endpoint_type: 'anthropic-messages', supports_reasoning: true },
+    google: { url: 'https://generativelanguage.googleapis.com', model: 'gemini-1.5-pro', provider_protocol: 'newapi', endpoint_type: 'gemini', supports_vision: true },
+    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
+    local: { url: 'http://localhost:5000/v1', model: 'local-model', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat', requires_key: false }
 };
 
 function updateProviderDefaults() {
     const type = document.getElementById('new-provider-type').value;
     if (type && providerDefaults[type]) {
-        document.getElementById('new-provider-endpoint').value = providerDefaults[type].url;
-        document.getElementById('new-provider-model').value = providerDefaults[type].model;
+        const defaults = providerDefaults[type];
+        document.getElementById('new-provider-endpoint').value = defaults.url;
+        document.getElementById('new-provider-model').value = defaults.model;
+        setProviderFormValues('new', defaults);
     }
     document.getElementById('new-openrouter-group').style.display = type === 'openrouter' ? '' : 'none';
 }
@@ -2089,13 +2230,16 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     ensureProvidersLoaded();
     const name = document.getElementById('new-provider-name').value.trim();
     const url = document.getElementById('new-provider-endpoint').value.trim();
+    const key_env = document.getElementById('new-provider-key-env').value.trim();
     const api_key = document.getElementById('new-provider-key').value.trim();
     const model = document.getElementById('new-provider-model').value.trim();
     const temperature = parseFloat(document.getElementById('new-provider-temp').value) || 0.7;
     if (!name) { showToast('Provider name is required', 'error'); return; }
     const newProvider = { name, model, temperature };
     if (url) newProvider.url = url;
+    if (key_env) newProvider.key_env = key_env;
     if (api_key) newProvider.api_key = api_key;
+    applyProviderFormValues('new', newProvider);
     const newReasoningEffort = document.getElementById('new-provider-reasoning-effort').value;
     if (newReasoningEffort) newProvider.reasoning_effort = newReasoningEffort;
     const newReasoningFormat = document.getElementById('new-provider-reasoning-format').value;
