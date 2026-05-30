@@ -10,7 +10,7 @@ import runtime_config
 import diagnostic_events
 import logger as log
 from discord_utils import add_to_history
-from providers import provider_manager
+from provider_gateway import provider_gateway as provider_manager
 from response_sanitizer import sanitize_response
 
 

@@ -131,7 +131,7 @@ def setup_core_commands(bot_instance) -> None:
     @tree.command(name="status", description="Check bot status")
     @maintenance_visibility()
     async def cmd_status(interaction: discord.Interaction) -> None:
-        from providers import provider_manager
+        from provider_gateway import provider_gateway as provider_manager
         char_name = bot_instance.character.name if bot_instance.character else "None"
         provider_status = provider_manager.get_status()
         msg = f"**Bot:** {bot_instance.name}\n**Character:** {char_name}\n\n{provider_status}"

@@ -5,7 +5,8 @@ Discord Pals - AI Providers
 
 from openai import AsyncOpenAI, RateLimitError, APIError
 import base64
-from typing import List, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, List, Dict, Optional
 from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 import asyncio
@@ -23,6 +24,18 @@ except ImportError:
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
+
+SDK_PASSTHROUGH_KEYS = {
+    "thinking",
+    "tools",
+    "tool_choice",
+    "response_format",
+    "chat_template_kwargs",
+    "reasoning",
+    "reasoning_effort",
+    "output_config",
+    "effort",
+}
 
 
 REASONING_EFFORT_ALIASES = {
@@ -210,6 +223,86 @@ def build_reasoning_extra_body(provider_cfg: dict) -> dict:
         deep_merge_dict(extra_body, provider_extra_body)
 
     return extra_body
+
+
+@dataclass(frozen=True)
+class LegacyChatRequestBuild:
+    """Built legacy OpenAI-compatible Chat Completions request and diagnostics."""
+
+    kwargs: Dict[str, Any]
+    passthrough_keys: tuple[str, ...] = ()
+    extra_body_keys: tuple[str, ...] = ()
+    extra_header_keys: tuple[str, ...] = ()
+    include_headers_error: str = ""
+
+
+def build_legacy_chat_request_kwargs(
+    *,
+    model: str,
+    messages: List[dict],
+    temperature: float,
+    max_tokens: int,
+    extra_body: Optional[dict] = None,
+    include_body: str = "",
+    exclude_body: str = "",
+    include_headers: str = "",
+) -> LegacyChatRequestBuild:
+    """Build the exact legacy SDK kwargs used for chat completions."""
+
+    request_kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    if include_body:
+        merge_yaml_to_dict(request_kwargs, include_body)
+
+    if exclude_body:
+        exclude_keys_by_yaml(request_kwargs, exclude_body)
+
+    passthrough_params = {}
+    for key in list(request_kwargs.keys()):
+        if key in SDK_PASSTHROUGH_KEYS:
+            passthrough_params[key] = request_kwargs.pop(key)
+
+    effective_extra_body = extra_body
+    if passthrough_params:
+        if effective_extra_body:
+            effective_extra_body = {**effective_extra_body, **passthrough_params}
+        else:
+            effective_extra_body = passthrough_params
+
+    if effective_extra_body:
+        request_kwargs["extra_body"] = effective_extra_body
+
+    include_headers_error = ""
+    if include_headers and include_headers.strip():
+        if YAML_AVAILABLE:
+            try:
+                parsed = yaml.safe_load(include_headers)
+                if isinstance(parsed, dict):
+                    request_kwargs["extra_headers"] = {str(k): str(v) for k, v in parsed.items()}
+                elif isinstance(parsed, list):
+                    headers = {}
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            headers.update({str(k): str(v) for k, v in item.items()})
+                    if headers:
+                        request_kwargs["extra_headers"] = headers
+            except Exception as e:
+                include_headers_error = str(e)
+        else:
+            include_headers_error = "PyYAML not installed"
+
+    return LegacyChatRequestBuild(
+        kwargs=request_kwargs,
+        passthrough_keys=tuple(passthrough_params.keys()),
+        extra_body_keys=tuple((effective_extra_body or {}).keys()),
+        extra_header_keys=tuple((request_kwargs.get("extra_headers") or {}).keys()),
+        include_headers_error=include_headers_error,
+    )
 
 
 def is_multimodal_content(content) -> bool:
@@ -584,74 +677,43 @@ class AIProviderManager:
         for attempt in range(MAX_RETRIES):
             attempt_started = time.perf_counter()
             try:
-                # Build request kwargs
-                request_kwargs = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens
-                }
-                
-                # Apply SillyTavern-style YAML parameters (preferred)
+                built_request = build_legacy_chat_request_kwargs(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    extra_body=extra_body,
+                    include_body=include_body,
+                    exclude_body=exclude_body,
+                    include_headers=include_headers,
+                )
+                request_kwargs = built_request.kwargs
+
                 if include_body:
-                    merge_yaml_to_dict(request_kwargs, include_body)
                     log.debug(f"[{tier}] Applied include_body YAML", component="provider", event="provider_include_body", req_id=req_id, tier=tier)
 
-                # Remove keys specified in exclude_body
                 if exclude_body:
-                    exclude_keys_by_yaml(request_kwargs, exclude_body)
                     log.debug(f"[{tier}] Applied exclude_body YAML", component="provider", event="provider_exclude_body", req_id=req_id, tier=tier)
 
-                # Move SDK-passthrough keys from request_kwargs to extra_body
-                # These are provider-specific params that OpenAI SDK doesn't recognize
-                SDK_PASSTHROUGH_KEYS = {
-                    'thinking', 'tools', 'tool_choice', 'response_format', 'chat_template_kwargs',
-                    'reasoning', 'reasoning_effort', 'output_config', 'effort'
-                }
-                passthrough_params = {}
-                for key in list(request_kwargs.keys()):
-                    if key in SDK_PASSTHROUGH_KEYS:
-                        passthrough_params[key] = request_kwargs.pop(key)
+                if built_request.passthrough_keys:
+                    log.debug(f"[{tier}] Moved to extra_body: {list(built_request.passthrough_keys)}", component="provider", event="provider_extra_body", req_id=req_id, tier=tier)
 
-                # Merge passthrough params into extra_body
-                if passthrough_params:
-                    if extra_body:
-                        extra_body = {**extra_body, **passthrough_params}
-                    else:
-                        extra_body = passthrough_params
-                    log.debug(f"[{tier}] Moved to extra_body: {list(passthrough_params.keys())}", component="provider", event="provider_extra_body", req_id=req_id, tier=tier)
-
-                # Pass extra_body as SDK parameter (bypasses validation)
-                if extra_body:
-                    request_kwargs["extra_body"] = extra_body
+                if built_request.extra_body_keys:
                     log.debug(
-                        f"[{tier}] Using extra_body keys: {list(extra_body.keys())}",
+                        f"[{tier}] Using extra_body keys: {list(built_request.extra_body_keys)}",
                         component="provider",
                         event="provider_extra_body",
                         req_id=req_id,
                         tier=tier,
                     )
 
-                # Parse and pass custom headers (YAML string -> dict)
                 if include_headers and include_headers.strip():
-                    if YAML_AVAILABLE:
-                        try:
-                            parsed = yaml.safe_load(include_headers)
-                            if isinstance(parsed, dict):
-                                request_kwargs["extra_headers"] = {str(k): str(v) for k, v in parsed.items()}
-                                log.debug(f"[{tier}] Using extra_headers: {list(request_kwargs['extra_headers'].keys())}", component="provider", event="provider_headers", req_id=req_id, tier=tier)
-                            elif isinstance(parsed, list):
-                                headers = {}
-                                for item in parsed:
-                                    if isinstance(item, dict):
-                                        headers.update({str(k): str(v) for k, v in item.items()})
-                                if headers:
-                                    request_kwargs["extra_headers"] = headers
-                                    log.debug(f"[{tier}] Using extra_headers: {list(headers.keys())}", component="provider", event="provider_headers", req_id=req_id, tier=tier)
-                        except Exception as e:
-                            log.warn(f"[{tier}] Failed to parse include_headers YAML: {e}", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
-                    else:
+                    if built_request.extra_header_keys:
+                        log.debug(f"[{tier}] Using extra_headers: {list(built_request.extra_header_keys)}", component="provider", event="provider_headers", req_id=req_id, tier=tier)
+                    elif built_request.include_headers_error == "PyYAML not installed":
                         log.warn(f"[{tier}] include_headers configured but PyYAML not installed", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
+                    elif built_request.include_headers_error:
+                        log.warn(f"[{tier}] Failed to parse include_headers YAML: {built_request.include_headers_error}", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
                 
                 log.diagnostic(
                     f"[{tier}] Provider request",
@@ -665,7 +727,7 @@ class AIProviderManager:
                     message_count=len(messages),
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    has_extra_body=bool(extra_body),
+                    has_extra_body=bool(built_request.extra_body_keys),
                     include_body=bool(include_body),
                     exclude_body=bool(exclude_body),
                     include_headers=bool(include_headers),
@@ -714,9 +776,9 @@ class AIProviderManager:
                                 req_id=req_id,
                                 tier=tier,
                             )
-                        if extra_body:
+                        if built_request.extra_body_keys:
                             log.warn(
-                                f"[{tier}] extra_body keys were: {list(extra_body.keys())}",
+                                f"[{tier}] extra_body keys were: {list(built_request.extra_body_keys)}",
                                 component="provider",
                                 event="provider_extra_body",
                                 req_id=req_id,

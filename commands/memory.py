@@ -8,7 +8,7 @@ from discord import app_commands
 from typing import Optional
 
 from memory import memory_manager
-from providers import provider_manager
+from provider_gateway import provider_gateway as provider_manager
 from scopes import memory_server_id
 from .registry import maintenance_visibility, register_command_metadata
 
