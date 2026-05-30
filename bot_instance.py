@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
-from providers import provider_manager
+from provider_gateway import provider_gateway as provider_manager
 from character import character_manager, Character
 from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
