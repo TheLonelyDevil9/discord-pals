@@ -12,6 +12,7 @@ import discord_utils as discord_utils_module
 import logger as logger_module
 import request_queue as request_queue_module
 import runtime_config as runtime_config_module
+from scopes import ScopeKey
 
 from test_support import MemorySandboxMixin
 
@@ -300,6 +301,27 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queued_log["channel_id"], channel_id)
         self.assertEqual(rejected_log["req_id"], "route456")
         self.assertEqual(rejected_log["channel_id"], channel_id)
+
+    async def test_scope_key_is_preserved_in_queued_request(self):
+        queue = request_queue_module.RequestQueue()
+        channel_id = 204
+        queue.processing[channel_id] = True
+        scope_key = ScopeKey.for_channel(bot_name="Nahida", channel_id=channel_id, guild_id=5)
+
+        added = await queue.add_request(
+            channel_id=channel_id,
+            message=types.SimpleNamespace(),
+            content="Hello there",
+            guild=types.SimpleNamespace(id=5),
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+            scope_key=scope_key,
+        )
+
+        self.assertTrue(added)
+        self.assertIs(queue.queues[channel_id][0]["scope_key"], scope_key)
 
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):

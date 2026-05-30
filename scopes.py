@@ -85,6 +85,9 @@ class ScopeLockRegistry:
             return lock
 
 
+scope_lock_registry = ScopeLockRegistry()
+
+
 def safe_scope_part(value: object, *, default: str = "default", limit: int = 48) -> str:
     """Return a compact JSON/file-key-safe scope segment."""
     raw = str(value or default).strip()

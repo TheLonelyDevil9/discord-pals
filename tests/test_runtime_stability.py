@@ -1,3 +1,4 @@
+import asyncio
 import types
 import unittest
 from datetime import datetime
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import runtime_config
+from scopes import ScopeLockRegistry
 
 
 class _AsyncNoop:
@@ -1113,6 +1115,84 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         build_mock.assert_not_awaited()
         generate_mock.assert_not_awaited()
+
+    async def test_process_request_serializes_same_scope_across_bot_instances(self):
+        guild = types.SimpleNamespace(id=5)
+        channel = types.SimpleNamespace(id=77, send=AsyncMock())
+        first_message = types.SimpleNamespace(id=1001, channel=channel, guild=guild)
+        second_message = types.SimpleNamespace(id=1002, channel=channel, guild=guild)
+        first = object.__new__(bot_instance_module.BotInstance)
+        second = object.__new__(bot_instance_module.BotInstance)
+        first.name = "Nahida"
+        second.name = "Nilou"
+        first.character = types.SimpleNamespace(name="Nahida")
+        second.character = types.SimpleNamespace(name="Nilou")
+        order = []
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def build_first(request):
+            order.append("first:build:start")
+            first_started.set()
+            await release_first.wait()
+            order.append("first:build:end")
+            return {"channel_id": 77, "identity_guard_blocked": False}
+
+        async def build_second(request):
+            order.append("second:build:start")
+            return {"channel_id": 77, "identity_guard_blocked": False}
+
+        first._build_request_context = AsyncMock(side_effect=build_first)
+        second._build_request_context = AsyncMock(side_effect=build_second)
+        first._generate_ai_response = AsyncMock(return_value="first response")
+        second._generate_ai_response = AsyncMock(return_value="second response")
+        first._send_and_finalize_response = AsyncMock(return_value=True)
+        second._send_and_finalize_response = AsyncMock(return_value=True)
+        first_request = {
+            "req_id": "req-first",
+            "message": first_message,
+            "channel_id": 77,
+            "guild": guild,
+            "user_id": 42,
+            "is_dm": False,
+            "is_autonomous": False,
+        }
+        second_request = {
+            "req_id": "req-second",
+            "message": second_message,
+            "channel_id": 77,
+            "guild": guild,
+            "user_id": 43,
+            "is_dm": False,
+            "is_autonomous": False,
+        }
+
+        with patch.object(bot_instance_module, "scope_lock_registry", ScopeLockRegistry()), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "global_paused": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.response_access, "request_access", return_value=(True, None, 77, 42)), \
+                patch("coordinator.coordinator.acquire_slot", new=AsyncMock(return_value=object())), \
+                patch("coordinator.coordinator.get_stagger_delay", new=AsyncMock(return_value=0.0)), \
+                patch("coordinator.coordinator.release_slot", new=Mock()), \
+                patch.object(bot_instance_module.log, "diagnostic"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "error"):
+            first_task = asyncio.create_task(first._process_request(first_request))
+            await first_started.wait()
+            second_task = asyncio.create_task(second._process_request(second_request))
+            await asyncio.sleep(0)
+            self.assertNotIn("second:build:start", order)
+
+            release_first.set()
+            await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(order, [
+            "first:build:start",
+            "first:build:end",
+            "second:build:start",
+        ])
 
     async def test_send_and_finalize_skips_dm_invite_when_dms_disabled(self):
         instance = object.__new__(bot_instance_module.BotInstance)

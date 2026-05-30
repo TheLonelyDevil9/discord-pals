@@ -10,6 +10,7 @@ from collections import defaultdict, deque
 import discord
 import logger as log
 from request_envelope import RequestEnvelope
+from scopes import LocalScopeId, ScopeKey
 
 
 class RequestQueue:
@@ -17,11 +18,11 @@ class RequestQueue:
     
     def __init__(self):
         self.queues = defaultdict(deque)
-        self.processing: Dict[int, bool] = defaultdict(bool)
-        self.locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.processing: Dict[LocalScopeId, bool] = defaultdict(bool)
+        self.locks: Dict[LocalScopeId, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.pending_counts = defaultdict(lambda: defaultdict(int))
         self.pending_signatures = defaultdict(lambda: defaultdict(lambda: defaultdict(deque)))
-        self._next_request_id: Dict[int, int] = defaultdict(int)
+        self._next_request_id: Dict[LocalScopeId, int] = defaultdict(int)
         self.process_callback: Callable = None
 
     @staticmethod
@@ -37,7 +38,7 @@ class RequestQueue:
         while signature_timestamps and (current_time - signature_timestamps[0]) >= 3:
             signature_timestamps.popleft()
 
-    def _release_request_tracking(self, channel_id: int, request: dict):
+    def _release_request_tracking(self, channel_id: LocalScopeId, request: dict):
         """Release per-user counters and prune duplicate signatures after processing."""
         user_id = request.get("user_id")
         if user_id is None:
@@ -69,7 +70,7 @@ class RequestQueue:
     
     async def add_request(
         self,
-        channel_id: int,
+        channel_id: LocalScopeId,
         message: discord.Message,
         content: str,
         guild: discord.Guild,
@@ -87,6 +88,7 @@ class RequestQueue:
         is_autonomous: bool = False,
         dm_invite_requested: bool = False,
         route_req_id: str = None,
+        scope_key: ScopeKey | None = None,
     ) -> bool:
         """Add a request to the queue. Returns True if added, False if spam."""
 
@@ -137,6 +139,7 @@ class RequestQueue:
                 correlation_id=req_id,
                 timestamp=current_time,
                 channel_id=channel_id,
+                scope_key=scope_key,
                 message=message,
                 content=content,
                 content_stripped=content_stripped,
@@ -174,6 +177,7 @@ class RequestQueue:
                 is_autonomous=is_autonomous,
                 from_interact_command=from_interact_command,
                 split_target_id=target_id,
+                scope_history_id=str(scope_key.history_id) if scope_key else None,
                 content_len=len(content_stripped),
                 attachments_count=len(attachments or []),
             )
@@ -184,7 +188,7 @@ class RequestQueue:
 
             return True
     
-    async def _process_queue(self, channel_id: int):
+    async def _process_queue(self, channel_id: LocalScopeId):
         """Process all requests in the queue for a channel."""
         
         async with self.locks[channel_id]:
