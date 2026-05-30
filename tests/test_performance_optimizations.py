@@ -719,6 +719,24 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["update_branch"], "staging")
 
+    def test_version_api_includes_status_for_dashboard_update_state(self):
+        with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+            data = self.client.get("/api/version").get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertIn("update_available", data)
+        self.assertIn("restart_required", data)
+
+    def test_dashboard_renders_saved_update_branch_selector(self):
+        runtime_config_module.set("update_branch", "staging")
+
+        response = self.client.get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<option value="staging" selected>Staging</option>', html)
+
     def test_update_endpoint_passes_posted_update_branch(self):
         git_update = {
             "updated": False,
