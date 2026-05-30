@@ -323,6 +323,21 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(added)
         self.assertIs(queue.queues[channel_id][0]["scope_key"], scope_key)
 
+    async def test_drain_returns_true_when_queue_has_no_pending_work(self):
+        queue = request_queue_module.RequestQueue()
+
+        drained = await queue.drain(timeout=0.01, poll_interval=0)
+
+        self.assertTrue(drained)
+
+    async def test_drain_returns_false_after_timeout_with_active_work(self):
+        queue = request_queue_module.RequestQueue()
+        queue.processing[205] = True
+
+        drained = await queue.drain(timeout=0.01, poll_interval=0)
+
+        self.assertFalse(drained)
+
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
     def setUp(self):

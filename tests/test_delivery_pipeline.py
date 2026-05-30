@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 
 from delivery_pipeline import (
@@ -17,7 +18,7 @@ class ScriptedSender:
     async def __call__(self, request: DeliverySendRequest) -> str:
         self.requests.append(request)
         outcome = self.outcomes.pop(0)
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             raise outcome
         return outcome
 
@@ -119,6 +120,36 @@ class DeliveryPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.confirmed_message_ids, ("msg-1",))
         self.assertEqual(outcome.ambiguous_part_index, 1)
         self.assertEqual(outcome.retry_count, 0)
+        self.assertEqual(sender.calls, [(0, 0), (1, 0)])
+
+    async def test_cancellation_before_first_confirmed_propagates_without_persist_text(self):
+        plan = DeliveryPlan.from_parts(
+            ["one", "two"],
+            correlation_id="corr-cancel-1",
+            idempotency_key="idem-cancel-1",
+        )
+        sender = ScriptedSender([asyncio.CancelledError()])
+
+        with self.assertRaises(asyncio.CancelledError):
+            await deliver_multipart_response(plan, sender)
+
+        self.assertEqual(sender.calls, [(0, 0)])
+
+    async def test_cancellation_after_confirmed_part_returns_partial_outcome(self):
+        plan = DeliveryPlan.from_parts(
+            ["one", "two"],
+            correlation_id="corr-cancel-2",
+            idempotency_key="idem-cancel-2",
+        )
+        sender = ScriptedSender(["msg-1", asyncio.CancelledError()])
+
+        outcome = await deliver_multipart_response(plan, sender)
+
+        self.assertEqual(outcome.state, DeliveryState.PARTIAL)
+        self.assertEqual(outcome.persistable_visible_text, "one")
+        self.assertEqual(outcome.confirmed_message_ids, ("msg-1",))
+        self.assertEqual(outcome.ambiguous_part_index, 1)
+        self.assertEqual(outcome.error, "CancelledError")
         self.assertEqual(sender.calls, [(0, 0), (1, 0)])
 
     async def test_outcome_and_requests_preserve_correlation_and_idempotency_fields(self):
