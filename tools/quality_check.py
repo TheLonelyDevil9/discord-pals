@@ -19,7 +19,7 @@ DOCS_REQUIRED = (
 )
 TRACKED_LARGE_MODULES = {
     "bot_instance.py": 3146,
-    "dashboard.py": 4041,  # PR #16 branch selector/updater robustness baseline
+    "dashboard.py": 4041,  # branch selector/updater robustness baseline
     "memory.py": 1938,
     "discord_utils.py": 1777,
 }
