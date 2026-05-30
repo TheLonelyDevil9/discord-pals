@@ -1756,8 +1756,6 @@ def _sanitize_error_message(error: Exception) -> str:
 @app.route('/api/test-provider/<int:index>')
 def api_test_provider(index):
     """Test connection to a specific provider."""
-    from openai import OpenAI  # Use sync client to avoid blocking issues
-
     providers_file = Path("providers.json")
     if not providers_file.exists():
         return jsonify({'success': False, 'error': 'providers.json not found'})
@@ -1770,6 +1768,9 @@ def api_test_provider(index):
             return jsonify({'success': False, 'error': 'Provider index out of range'})
 
         p = providers[index]
+        from dashboard_provider_health import test_newapi_provider_config
+        if (newapi_result := test_newapi_provider_config(p)).get('handled'):
+            return jsonify({key: value for key, value in newapi_result.items() if key != 'handled'})
 
         # Support both 'url' and 'base_url' for backwards compatibility
         url = p.get('url') or p.get('base_url')
@@ -1785,8 +1786,7 @@ def api_test_provider(index):
 
         if not key:
             key = 'not-needed'  # For local LLMs that don't require auth
-
-        # Use sync client instead of asyncio.run() which can block Flask
+        from openai import OpenAI  # Use sync client to avoid blocking issues
         client = OpenAI(base_url=url, api_key=key, timeout=10)
         client.models.list()
         return jsonify({'success': True})
