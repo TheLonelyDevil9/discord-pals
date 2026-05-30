@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 from commands.fun import handle_interact_command
+from scopes import ScopeKey
 
 
 class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -20,7 +21,12 @@ class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         bot_instance = types.SimpleNamespace(
             character=types.SimpleNamespace(name="Nahida"),
-            request_queue=types.SimpleNamespace(add_request=AsyncMock())
+            request_queue=types.SimpleNamespace(add_request=AsyncMock()),
+            _scope_key_for_message=Mock(return_value=ScopeKey.for_channel(
+                bot_name="Nahida",
+                channel_id=77,
+                guild_id=None,
+            )),
         )
 
         with patch("commands.fun.get_user_display_name", return_value="Invoker"):
@@ -31,6 +37,8 @@ class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["forced_target_user_id"], 42)
         self.assertEqual(kwargs["forced_target_user_name"], "Invoker")
         self.assertEqual(kwargs["content"], "*hugs you*")
+        self.assertEqual(kwargs["channel_id"], 77)
+        self.assertIsInstance(kwargs["scope_key"], ScopeKey)
 
 
 class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
@@ -76,11 +84,7 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "*hugs you*", "author": "Invoker", "user_id": 42, "message_id": 1234},
         ]
 
-        runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "allow_bot_mentions": False,
-        }
+        runtime_values = {"allow_bot_mentions": False}
         memories_mock = Mock(return_value="")
         build_system_prompt_mock = Mock(return_value="SYSTEM")
         build_chatroom_context_mock = Mock(return_value="CHATROOM")
@@ -134,7 +138,7 @@ class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(msg.get("content"), str)
         )
         self.assertIn("Invoker: *waves*", rendered_text)
-        self.assertNotIn("*waves back*", rendered_text)
+        self.assertIn("*waves back*", rendered_text)
         self.assertIn("Invoker: *hugs you*", rendered_text)
         self.assertNotIn("OtherUser", rendered_text)
         self.assertNotIn("Hi, OtherUser.", rendered_text)

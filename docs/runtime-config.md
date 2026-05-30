@@ -35,6 +35,7 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `diagnostic_logging` | false | Enables high-volume structured diagnostics. |
 | `file_logging_enabled` | true | Writes local JSONL logs under `bot_data/logs`. |
 | `log_file_max_mb` | 10 | Max JSONL log size before rotation. |
+| `update_branch` | "" | Dashboard updater branch override. Empty preserves the current checkout/upstream/release-tag behavior; explicit values are `main` or `staging`. |
 | `bot_timezones` | {} | Per-bot timezone fallback map. |
 | `bot_schedules` | {} | Per-bot unavailable-window schedules. |
 | `bot_falloff_enabled` | true | Enables bot-to-bot probability decay. |
@@ -48,9 +49,6 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `allow_bot_mentions` | true | Lets bots mention users in replies. |
 | `allow_bot_to_bot_mentions` | false | Lets bots mention other bots. Use carefully. |
 | `mention_context_limit` | 10 | Max mention candidates shown to the model. |
-| `user_only_context` | false | Mostly sends human messages to reduce bot voice bleed. |
-| `user_only_context_count` | 20 | Human-message count for user-only mode. |
-| `strict_human_only_context` | true | Excludes bot/assistant prose from model history in user-only mode. |
 | `identity_guard_enabled` | true | Blocks generated text that structurally speaks as another bot. |
 | `identity_guard_policy` | `regenerate_then_drop` | Either regenerate once then drop, or drop immediately. |
 | `bot_reference_context_mode` | `neutral` | Uses neutral metadata for referenced bot prose. `legacy` preserves older behavior. |
@@ -59,6 +57,11 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `dm_followup_timeout_minutes` | 120 | Silence period before a DM follow-up. |
 | `dm_followup_max_count` | 1 | Max follow-ups before stopping. |
 | `dm_followup_cooldown_hours` | 24 | Cooldown for the same user. |
+| `dm_image_generation_enabled` | false | Allows eligible DM follow-ups to send generated images. |
+| `dm_image_generation_chance` | 0.25 | Probability that an eligible DM follow-up sends an image instead of text. |
+| `dm_image_generation_caption_chance` | 0.85 | Probability that generated images get a short in-character caption. |
+| `dm_image_generation_preferred_tier` | "" | Optional preferred image provider tier. |
+| `dm_image_generation_prompt` | weird meme prompt | Stable image style goal mixed with recent DM context. |
 
 ## Practical Adjustments
 
@@ -82,9 +85,9 @@ Too many responses:
 
 Bot voice bleed:
 
-- Enable `user_only_context`.
-- Keep `strict_human_only_context` enabled.
 - Keep `identity_guard_enabled` enabled in multi-bot channels.
+- Keep `bot_reference_context_mode` set to `neutral` unless you intentionally want referenced bot prose quoted into context.
+- Lower `history_limit` or clear/import history when a channel has old cross-bot context you no longer want used.
 
 Debugging:
 

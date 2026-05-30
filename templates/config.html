@@ -68,38 +68,6 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="user_only_context">User-Only Context</label>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="user_only_context" name="user_only_context"
-                                        {% if config.user_only_context %}checked{% endif %}>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <p class="form-hint">Sends human messages as the practical conversation window. Use strict mode to keep bot prose out of model context.</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="strict_human_only_context">Strict Human-Only Context</label>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="strict_human_only_context" name="strict_human_only_context"
-                                        {% if config.strict_human_only_context is not defined or config.strict_human_only_context %}checked{% endif %}>
-                                    <span class="toggle-slider"></span>
-                                </label>
-                                <p class="form-hint">User-only mode excludes bot and assistant prose from model history. Turn off only for legacy cross-bot continuity.</p>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="user_only_context_count">User-Only Message Count</label>
-                                <div class="slider-row">
-                                    <input type="range" id="user_only_context_count" name="user_only_context_count" min="5" max="20"
-                                        step="1" value="{{ config.user_only_context_count or 20 }}"
-                                        oninput="document.getElementById('context_count_val').textContent = this.value"
-                                        title="Number of recent user messages to include">
-                                    <span class="slider-val" id="context_count_val">{{ config.user_only_context_count or 20 }}</span>
-                                </div>
-                                <p class="form-hint">User-only mode only. This is the practical history size when User-Only Context is enabled.</p>
-                            </div>
-
-                            <div class="form-group">
                                 <label for="bot_reference_context_mode">Bot Reply References</label>
                                 <select id="bot_reference_context_mode" name="bot_reference_context_mode" title="Bot reply reference context mode">
                                     <option value="neutral" {% if config.bot_reference_context_mode != 'legacy' %}selected{% endif %}>Neutral metadata</option>
@@ -399,6 +367,64 @@
 
             <div class="card span-full">
                 <div class="card-header">
+                    <span class="card-title">DM Random Images</span>
+                    <span class="impact-pill">Image provider calls</span>
+                </div>
+                <div class="card-body">
+                    <form id="dm-image-form">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="dm_image_generation_enabled">Enable DM Images</label>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="dm_image_generation_enabled" name="dm_image_generation_enabled"
+                                        {% if config.dm_image_generation_enabled %}checked{% endif %}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <p class="form-hint">When a DM follow-up is due, the bot can send a random generated image instead of text.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_chance">Image Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_image_generation_chance" min="0" max="100" step="5"
+                                        value="{{ ((config.dm_image_generation_chance or 0) * 100) | int }}"
+                                        oninput="document.getElementById('dm_image_chance_val').textContent = this.value + '%'"
+                                        title="Chance that an eligible DM follow-up sends an image">
+                                    <span class="slider-val" id="dm_image_chance_val">{{ ((config.dm_image_generation_chance or 0) * 100) | int }}%</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_caption_chance">Caption Chance</label>
+                                <div class="slider-row">
+                                    <input type="range" id="dm_image_generation_caption_chance" min="0" max="100" step="5"
+                                        value="{{ ((config.dm_image_generation_caption_chance or 0) * 100) | int }}"
+                                        oninput="document.getElementById('dm_image_caption_val').textContent = this.value + '%'"
+                                        title="Chance to generate a short in-character caption">
+                                    <span class="slider-val" id="dm_image_caption_val">{{ ((config.dm_image_generation_caption_chance or 0) * 100) | int }}%</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="dm_image_generation_preferred_tier">Preferred Image Provider</label>
+                                <select id="dm_image_generation_preferred_tier" name="dm_image_generation_preferred_tier" title="Preferred image provider tier">
+                                    <option value="">Default order</option>
+                                    {% for tier in image_provider_tiers %}
+                                    <option value="{{ tier }}" {% if config.dm_image_generation_preferred_tier==tier %}selected{% endif %}>{{ tier|capitalize }} ({{ image_providers_dict.get(tier, {}).get('name', tier) }})</option>
+                                    {% endfor %}
+                                </select>
+                                <p class="form-hint">Manage image providers in the Providers tab. This selects the first image tier to try.</p>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="dm_image_generation_prompt">Image Style Prompt</label>
+                            <textarea id="dm_image_generation_prompt" name="dm_image_generation_prompt" rows="4" spellcheck="true" placeholder="A strange generated meme image...">{{ config.dm_image_generation_prompt }}</textarea>
+                            <p class="form-hint">Used as the stable style goal. Recent DM context is added automatically at send time.</p>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save DM Image Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card span-full">
+                <div class="card-header">
                     <span class="card-title">Bot Availability Schedules</span>
                     <span class="impact-pill">Changes when bots act</span>
                 </div>
@@ -511,16 +537,34 @@
                                 <label for="response_channel_whitelist">Server Channel Whitelist</label>
                                 <textarea id="response_channel_whitelist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_whitelist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">One valid Discord channel ID per line, comma-separated also works. Used only when whitelist-only mode is on; the blacklist still wins.</p>
+                                <select class="known-target-select" data-target-textarea="response_channel_whitelist" title="Known channel for whitelist">
+                                    <option value="">Add known channel...</option>
+                                    {% for channel in known_access_targets.channels %}
+                                    <option value="{{ channel.id }}">#{{ channel.name }}{% if channel.guild_name %} ({{ channel.guild_name }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="response_channel_blacklist">Server Channel Blacklist</label>
                                 <textarea id="response_channel_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.response_channel_blacklist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">Blocks server replies in these channels even when the bot is mentioned or whitelist-only would otherwise allow them.</p>
+                                <select class="known-target-select" data-target-textarea="response_channel_blacklist" title="Known channel for blacklist">
+                                    <option value="">Add known channel...</option>
+                                    {% for channel in known_access_targets.channels %}
+                                    <option value="{{ channel.id }}">#{{ channel.name }}{% if channel.guild_name %} ({{ channel.guild_name }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="dm_user_blacklist">DM User Blacklist</label>
                                 <textarea id="dm_user_blacklist" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.dm_user_blacklist or []) | join('\n') }}</textarea>
                                 <p class="form-hint">Blocks direct DM replies, DM follow-ups, and DM handoffs for these valid Discord user IDs.</p>
+                                <select class="known-target-select" data-target-textarea="dm_user_blacklist" title="Known user for DM blacklist">
+                                    <option value="">Add known user...</option>
+                                    {% for user in known_access_targets.users %}
+                                    <option value="{{ user.id }}">{{ user.name }}{% if user.aliases %} ({{ user.aliases | join(', ') }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Response Access</button>
@@ -694,6 +738,52 @@
                 </div>
             </div>
 
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Image Providers</span>
+                    <span class="impact-pill">DM images</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-hint" style="margin-bottom: 16px;">Configure OpenAI-compatible image generation providers here. The DM Random Images panel uses these tiers.</p>
+                    <div id="image-provider-list" class="provider-list" data-initial='{{ image_providers_raw | tojson }}'>
+                        {% if image_providers_raw %}
+                        {% for provider in image_providers_raw %}
+                        <div class="provider-item">
+                            <div class="provider-info">
+                                <span class="provider-name">{{ provider.name }} <span class="provider-tier">({{ provider.tier }})</span></span>
+                                <span class="provider-model">{{ provider.model }} &bull; {{ provider.size }} &bull; {{ provider.url }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>
+                        {% endif %}
+                    </div>
+                    <form id="add-image-provider-form" class="provider-form" style="margin-top: 16px;">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group"><label for="new-image-provider-name">Display Name</label><input type="text" id="new-image-provider-name" value="OpenAI Images" required></div>
+                            <div class="form-group"><label for="new-image-provider-endpoint">API Endpoint</label><input type="text" id="new-image-provider-endpoint" value="https://api.openai.com/v1" required></div>
+                            <div class="form-group"><label for="new-image-provider-key-env">API Key Env Var</label><input type="text" id="new-image-provider-key-env" value="OPENAI_API_KEY" placeholder="OPENAI_API_KEY"></div>
+                            <div class="form-group"><label for="new-image-provider-key">Direct API Key</label><input type="password" id="new-image-provider-key" placeholder="Prefer env vars when possible"></div>
+                            <div class="form-group"><label for="new-image-provider-model">Model</label><input type="text" id="new-image-provider-model" value="gpt-image-1" required></div>
+                            <div class="form-group"><label for="new-image-provider-size">Size</label><input type="text" id="new-image-provider-size" value="1024x1024"></div>
+                            <div class="form-group"><label for="new-image-provider-quality">Quality</label><input type="text" id="new-image-provider-quality" placeholder="auto, high, medium, low"></div>
+                            <div class="form-group"><label for="new-image-provider-style">Style</label><input type="text" id="new-image-provider-style" placeholder="vivid, natural"></div>
+                            <div class="form-group"><label for="new-image-provider-response-format">Response Format</label><input type="text" id="new-image-provider-response-format" placeholder="b64_json, url"></div>
+                            <div class="form-group"><label for="new-image-provider-output-format">Output Format</label><input type="text" id="new-image-provider-output-format" placeholder="png, jpeg, webp"></div>
+                            <div class="form-group"><label for="new-image-provider-background">Background</label><input type="text" id="new-image-provider-background" placeholder="auto, transparent, opaque"></div>
+                            <div class="form-group"><label for="new-image-provider-moderation">Moderation</label><input type="text" id="new-image-provider-moderation" placeholder="auto, low"></div>
+                            <div class="form-group"><label for="new-image-provider-timeout">Timeout (seconds)</label><input type="number" id="new-image-provider-timeout" min="5" max="3600" value="120"></div>
+                            <div class="form-group span-full">
+                                <label for="new-image-provider-extra-body">Extra Body (JSON)</label>
+                                <textarea id="new-image-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"seed": 4}'></textarea>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Image Provider</button>
+                    </form>
+                </div>
+            </div>
+
             {% if providers %}
             <div class="card">
                 <div class="card-header">
@@ -751,14 +841,32 @@
                                 <select id="new-provider-type" required onchange="updateProviderDefaults()">
                                     <option value="">Select type...</option>
                                     <option value="openai">OpenAI</option>
+                                    <option value="newapi">NewAPI</option>
                                     <option value="anthropic">Anthropic</option>
                                     <option value="google">Google (Gemini)</option>
                                     <option value="openrouter">OpenRouter</option>
                                     <option value="local">Local / Custom</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="new-provider-protocol">Provider Protocol</label>
+                                <select id="new-provider-protocol">
+                                    <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
+                                    <option value="newapi">NewAPI</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-endpoint-type">Endpoint Type</label>
+                                <select id="new-provider-endpoint-type">
+                                    <option value="openai-chat">OpenAI Chat</option>
+                                    <option value="openai-responses">OpenAI Responses</option>
+                                    <option value="anthropic-messages">Anthropic Messages</option>
+                                    <option value="gemini">Gemini</option>
+                                </select>
+                            </div>
                             <div class="form-group"><label for="new-provider-name">Display Name</label><input type="text" id="new-provider-name" required></div>
                             <div class="form-group"><label for="new-provider-endpoint">API Endpoint</label><input type="text" id="new-provider-endpoint"></div>
+                            <div class="form-group"><label for="new-provider-key-env">API Key Env Var</label><input type="text" id="new-provider-key-env" placeholder="OPENAI_API_KEY"></div>
                             <div class="form-group"><label for="new-provider-key">API Key</label><input type="password" id="new-provider-key"></div>
                             <div class="form-group"><label for="new-provider-model">Model</label><input type="text" id="new-provider-model"></div>
                             <div class="form-group"><label for="new-provider-temp">Temperature</label><input type="number" id="new-provider-temp" min="0" max="2" step="0.1" value="0.7"></div>
@@ -787,6 +895,47 @@
                                 </select>
                             </div>
                             <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
+                            <div class="form-group">
+                                <label for="new-provider-extra-body">Extra Body (JSON)</label>
+                                <textarea id="new-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-include-body">Include Body (YAML)</label>
+                                <textarea id="new-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-exclude-body">Exclude Body (YAML)</label>
+                                <textarea id="new-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-include-headers">Include Headers (YAML)</label>
+                                <textarea id="new-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-reasoning">Reasoning (JSON)</label>
+                                <textarea id="new-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-output-config">Output Config (JSON)</label>
+                                <textarea id="new-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-thinking">Thinking (JSON)</label>
+                                <textarea id="new-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Provider Capabilities</label>
+                                <div class="provider-toggle-grid">
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-requires-key" checked><span>Requires Key</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-append-base-path" checked><span>Append Base Path</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-chat" checked><span>Text</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-vision" checked><span>Vision</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-reasoning"><span>Reasoning</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-supports-streaming"><span>Streaming</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-image-modeled"><span>Image Modeled</span></label>
+                                    <label class="checkbox-label"><input type="checkbox" id="new-provider-image-disabled"><span>Image Disabled</span></label>
+                                </div>
+                            </div>
                             <div class="form-group" id="new-openrouter-group" style="display:none;">
                                 <label for="new-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
                                 <textarea id="new-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
@@ -984,7 +1133,24 @@
             <input type="hidden" id="edit-provider-index">
             <div class="settings-grid">
                 <div class="form-group"><label for="edit-provider-name">Display Name</label><input type="text" id="edit-provider-name" required></div>
+                <div class="form-group">
+                    <label for="edit-provider-protocol">Provider Protocol</label>
+                    <select id="edit-provider-protocol">
+                        <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
+                        <option value="newapi">NewAPI</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-endpoint-type">Endpoint Type</label>
+                    <select id="edit-provider-endpoint-type">
+                        <option value="openai-chat">OpenAI Chat</option>
+                        <option value="openai-responses">OpenAI Responses</option>
+                        <option value="anthropic-messages">Anthropic Messages</option>
+                        <option value="gemini">Gemini</option>
+                    </select>
+                </div>
                 <div class="form-group"><label for="edit-provider-endpoint">API Endpoint</label><input type="text" id="edit-provider-endpoint"></div>
+                <div class="form-group"><label for="edit-provider-key-env">API Key Env Var</label><input type="text" id="edit-provider-key-env" placeholder="OPENAI_API_KEY"></div>
                 <div class="form-group"><label for="edit-provider-key">API Key</label><input type="password" id="edit-provider-key" placeholder="Leave blank to keep current"></div>
                 <div class="form-group"><label for="edit-provider-model">Model</label><input type="text" id="edit-provider-model"></div>
                 <div class="form-group"><label for="edit-provider-temp">Temperature</label><input type="number" id="edit-provider-temp" min="0" max="2" step="0.1"></div>
@@ -1014,6 +1180,47 @@
                     </select>
                 </div>
                 <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
+                <div class="form-group">
+                    <label for="edit-provider-extra-body">Extra Body (JSON)</label>
+                    <textarea id="edit-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-include-body">Include Body (YAML)</label>
+                    <textarea id="edit-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-exclude-body">Exclude Body (YAML)</label>
+                    <textarea id="edit-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-include-headers">Include Headers (YAML)</label>
+                    <textarea id="edit-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-reasoning">Reasoning (JSON)</label>
+                    <textarea id="edit-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-output-config">Output Config (JSON)</label>
+                    <textarea id="edit-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-thinking">Thinking (JSON)</label>
+                    <textarea id="edit-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Provider Capabilities</label>
+                    <div class="provider-toggle-grid">
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-requires-key" checked><span>Requires Key</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-append-base-path" checked><span>Append Base Path</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-chat" checked><span>Text</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-vision" checked><span>Vision</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-reasoning"><span>Reasoning</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-supports-streaming"><span>Streaming</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-image-modeled"><span>Image Modeled</span></label>
+                        <label class="checkbox-label"><input type="checkbox" id="edit-provider-image-disabled"><span>Image Disabled</span></label>
+                    </div>
+                </div>
                 <div class="form-group" id="edit-openrouter-group" style="display:none;">
                     <label for="edit-provider-openrouter">OpenRouter Settings (JSON, optional)</label>
                     <textarea id="edit-provider-openrouter" rows="4" class="small-code-textarea" placeholder='{"provider": {"order": ["anthropic"]}}'></textarea>
@@ -1022,6 +1229,41 @@
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
                 <button type="button" class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="edit-image-provider-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-image-provider-title">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="edit-image-provider-title">Edit Image Provider</h3>
+            <button type="button" class="modal-close" onclick="closeEditImageProviderModal()" aria-label="Close image provider editor">Close</button>
+        </div>
+        <form id="edit-image-provider-form" class="provider-form">
+            <input type="hidden" id="edit-image-provider-index">
+            <div class="settings-grid">
+                <div class="form-group"><label for="edit-image-provider-name">Display Name</label><input type="text" id="edit-image-provider-name" required></div>
+                <div class="form-group"><label for="edit-image-provider-endpoint">API Endpoint</label><input type="text" id="edit-image-provider-endpoint" required></div>
+                <div class="form-group"><label for="edit-image-provider-key-env">API Key Env Var</label><input type="text" id="edit-image-provider-key-env" placeholder="OPENAI_API_KEY"></div>
+                <div class="form-group"><label for="edit-image-provider-key">Direct API Key</label><input type="password" id="edit-image-provider-key" placeholder="Leave blank to keep current"></div>
+                <div class="form-group"><label for="edit-image-provider-model">Model</label><input type="text" id="edit-image-provider-model" required></div>
+                <div class="form-group"><label for="edit-image-provider-size">Size</label><input type="text" id="edit-image-provider-size"></div>
+                <div class="form-group"><label for="edit-image-provider-quality">Quality</label><input type="text" id="edit-image-provider-quality" placeholder="auto, high, medium, low"></div>
+                <div class="form-group"><label for="edit-image-provider-style">Style</label><input type="text" id="edit-image-provider-style" placeholder="vivid, natural"></div>
+                <div class="form-group"><label for="edit-image-provider-response-format">Response Format</label><input type="text" id="edit-image-provider-response-format" placeholder="b64_json, url"></div>
+                <div class="form-group"><label for="edit-image-provider-output-format">Output Format</label><input type="text" id="edit-image-provider-output-format" placeholder="png, jpeg, webp"></div>
+                <div class="form-group"><label for="edit-image-provider-background">Background</label><input type="text" id="edit-image-provider-background" placeholder="auto, transparent, opaque"></div>
+                <div class="form-group"><label for="edit-image-provider-moderation">Moderation</label><input type="text" id="edit-image-provider-moderation" placeholder="auto, low"></div>
+                <div class="form-group"><label for="edit-image-provider-timeout">Timeout (seconds)</label><input type="number" id="edit-image-provider-timeout" min="5" max="3600"></div>
+                <div class="form-group span-full">
+                    <label for="edit-image-provider-extra-body">Extra Body (JSON)</label>
+                    <textarea id="edit-image-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"seed": 4}'></textarea>
+                </div>
+            </div>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" class="btn btn-ghost" onclick="closeEditImageProviderModal()">Cancel</button>
             </div>
         </form>
     </div>
@@ -1074,6 +1316,7 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
     font-size: 0.875rem;
 }
 select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+.known-target-select { width: 100%; margin-top: 8px; background: var(--bg-secondary); }
 .checkbox-label { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; min-height: 40px; }
 .checkbox-label input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 24px; accent-color: var(--accent); }
 .checkbox-label span { font-weight: 500; color: var(--text-primary); }
@@ -1206,16 +1449,20 @@ label.toggle-switch {
 .provider-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .provider-name { font-weight: 500; color: var(--text-primary); }
 .provider-tier, .provider-model { font-size: 0.75rem; color: var(--text-muted); }
+.provider-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.provider-badge { border: 1px solid var(--border-subtle); color: var(--text-muted); border-radius: 6px; padding: 2px 6px; font-size: 0.6875rem; }
 .provider-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .btn-icon { padding: 8px 10px; min-height: 40px; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); cursor: pointer; border-radius: 6px; font: inherit; }
 .btn-icon:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
 .modal-overlay { display: none; position: fixed; inset: 0; background: var(--scrim); z-index: 1000; align-items: center; justify-content: center; padding: 16px; }
 .modal-overlay.active { display: flex; }
-.modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 90vh; overflow-y: auto; }
+.modal-content { background: var(--bg-secondary); border-radius: 8px; padding: 24px; max-width: 720px; width: 90%; max-height: 90vh; overflow-y: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-header h3 { margin: 0; }
 .modal-close { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font: inherit; min-height: 36px; padding: 6px 10px; }
+.provider-toggle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; }
+.provider-toggle-grid .checkbox-label { min-height: 36px; }
 @media (max-width: 768px) {
     .section-grid, .settings-grid { grid-template-columns: 1fr; }
     .bot-row, .schedule-bot-header { flex-wrap: wrap; }
@@ -1230,6 +1477,9 @@ let timezoneOptions = null;
 let timezoneOptionsPromise = null;
 let providersData = [];
 let providersLoaded = false;
+let imageProvidersData = [];
+let imageProvidersLoaded = false;
+let imageProvidersTouched = false;
 let sortableLoaded = false;
 
 function csrfHeaders() {
@@ -1261,7 +1511,7 @@ function switchConfigTab(tabName) {
 
 function initializeConfigTabs() {
     const saved = localStorage.getItem('config.activeTab');
-    const target = saved && document.querySelector(`[data-config-tab="${saved}"]`) ? saved : 'context';
+    const target = saved && document.querySelector(`[data-config-tab="${saved}"]`) ? saved : 'prompting';
     switchConfigTab(target);
 }
 
@@ -1307,9 +1557,6 @@ document.getElementById('context-settings-form')?.addEventListener('submit', asy
     await postConfig({
         history_limit: parseInt(document.getElementById('history_limit').value),
         immediate_message_count: parseInt(document.getElementById('immediate_message_count').value),
-        user_only_context: document.getElementById('user_only_context').checked,
-        user_only_context_count: parseInt(document.getElementById('user_only_context_count').value),
-        strict_human_only_context: document.getElementById('strict_human_only_context').checked,
         identity_guard_enabled: document.getElementById('identity_guard_enabled').checked,
         identity_guard_policy: document.getElementById('identity_guard_policy').value,
         bot_reference_context_mode: document.getElementById('bot_reference_context_mode').value,
@@ -1337,6 +1584,17 @@ document.getElementById('dm-followup-form')?.addEventListener('submit', async (e
     }, 'DM follow-up settings saved');
 });
 
+document.getElementById('dm-image-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postConfig({
+        dm_image_generation_enabled: document.getElementById('dm_image_generation_enabled').checked,
+        dm_image_generation_chance: parseInt(document.getElementById('dm_image_generation_chance').value) / 100,
+        dm_image_generation_caption_chance: parseInt(document.getElementById('dm_image_generation_caption_chance').value) / 100,
+        dm_image_generation_preferred_tier: document.getElementById('dm_image_generation_preferred_tier').value,
+        dm_image_generation_prompt: document.getElementById('dm_image_generation_prompt').value
+    }, 'DM image settings saved');
+});
+
 function parseIdList(elementId) {
     const textarea = document.getElementById(elementId);
     if (!textarea) return [];
@@ -1351,6 +1609,26 @@ function parseIdList(elementId) {
     textarea.value = ids.join('\n');
     return ids;
 }
+
+function appendIdToTextarea(textareaId, value) {
+    const textarea = document.getElementById(textareaId);
+    const normalized = String(value || '').replace(/\D+/g, '');
+    if (!textarea || !normalized) return false;
+    const ids = parseIdList(textareaId);
+    if (ids.includes(normalized)) return false;
+    ids.push(normalized);
+    textarea.value = ids.join('\n');
+    return true;
+}
+
+document.querySelectorAll('.known-target-select').forEach(select => {
+    select.addEventListener('change', () => {
+        if (!select.value) return;
+        const added = appendIdToTextarea(select.dataset.targetTextarea, select.value);
+        showToast(added ? 'ID added to list' : 'ID is already in that list', added ? 'success' : 'error');
+        select.value = '';
+    });
+});
 
 document.getElementById('response-access-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1665,6 +1943,10 @@ function ensureProvidersLoaded() {
     try {
         const data = JSON.parse(editor?.value || '{}');
         providersData = data.providers || [];
+        if (!imageProvidersData.length && Array.isArray(data.image_providers)) {
+            imageProvidersData = data.image_providers;
+            imageProvidersLoaded = true;
+        }
     } catch (e) {
         providersData = [];
         showToast('Could not parse providers.json', 'error');
@@ -1696,6 +1978,128 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function providerProtocol(provider) {
+    return provider.provider_protocol || provider.protocol || 'legacy-openai-compatible';
+}
+
+function providerEndpointType(provider) {
+    return provider.endpoint_type || provider.endpoint || 'openai-chat';
+}
+
+const providerJsonObjectFields = ['extra_body', 'reasoning', 'output_config', 'thinking'];
+const providerYamlTextFields = ['include_body', 'exclude_body', 'include_headers'];
+const imageProviderOptionalStringFields = ['quality', 'style', 'response_format', 'output_format', 'background', 'moderation'];
+
+function fieldIdSuffix(field) {
+    return field.replace(/_/g, '-');
+}
+
+function optionalJsonObjectText(value) {
+    if (value === undefined || value === null) return '';
+    return JSON.stringify(value, null, 2);
+}
+
+function parseOptionalJsonObject(raw, label) {
+    const text = (raw || '').trim();
+    if (!text) return { ok: true, value: undefined };
+    try {
+        const value = JSON.parse(text);
+        if (!value || Array.isArray(value) || typeof value !== 'object') {
+            return { ok: false, message: `${label} must be a JSON object` };
+        }
+        return { ok: true, value };
+    } catch (err) {
+        return { ok: false, message: `Invalid ${label} JSON: ${err.message}` };
+    }
+}
+
+function textareaValue(id, fallback = '') {
+    const el = document.getElementById(id);
+    return el ? el.value : fallback;
+}
+
+function setTextareaValue(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? '';
+}
+
+function providerFieldId(prefix, field) {
+    return `${prefix}-provider-${fieldIdSuffix(field)}`;
+}
+
+function setProviderCustomFieldValues(prefix, provider) {
+    providerJsonObjectFields.forEach(field => {
+        setTextareaValue(providerFieldId(prefix, field), provider[field] === undefined ? '' : optionalJsonObjectText(provider[field]));
+    });
+    providerYamlTextFields.forEach(field => {
+        setTextareaValue(providerFieldId(prefix, field), provider[field] || '');
+    });
+}
+
+function collectProviderJsonObjectValues(prefix) {
+    const values = {};
+    for (const field of providerJsonObjectFields) {
+        const parsed = parseOptionalJsonObject(textareaValue(providerFieldId(prefix, field)), field);
+        if (!parsed.ok) {
+            showToast(parsed.message, 'error');
+            return null;
+        }
+        values[field] = parsed.value;
+    }
+    return values;
+}
+
+function applyProviderCustomFieldValues(prefix, provider, jsonValues) {
+    providerJsonObjectFields.forEach(field => {
+        if (jsonValues[field] !== undefined) provider[field] = jsonValues[field]; else delete provider[field];
+    });
+    providerYamlTextFields.forEach(field => {
+        const value = textareaValue(providerFieldId(prefix, field));
+        if (value.trim()) provider[field] = value; else delete provider[field];
+    });
+}
+
+function imageProviderFieldId(prefix, field) {
+    return `${prefix}-image-provider-${fieldIdSuffix(field)}`;
+}
+
+function setImageProviderCustomFieldValues(prefix, provider) {
+    imageProviderOptionalStringFields.forEach(field => {
+        const el = document.getElementById(imageProviderFieldId(prefix, field));
+        if (el) el.value = provider[field] || '';
+    });
+    setTextareaValue(imageProviderFieldId(prefix, 'extra_body'), provider.extra_body === undefined ? '' : optionalJsonObjectText(provider.extra_body));
+}
+
+function collectImageProviderExtraBody(prefix) {
+    const parsed = parseOptionalJsonObject(textareaValue(imageProviderFieldId(prefix, 'extra_body')), 'image extra_body');
+    if (!parsed.ok) {
+        showToast(parsed.message, 'error');
+        return null;
+    }
+    return parsed;
+}
+
+function applyImageProviderCustomFieldValues(prefix, provider, parsedExtraBody) {
+    imageProviderOptionalStringFields.forEach(field => {
+        const el = document.getElementById(imageProviderFieldId(prefix, field));
+        if (!el) return;
+        const value = el.value.trim();
+        if (value) provider[field] = value; else delete provider[field];
+    });
+    if (parsedExtraBody.value !== undefined) provider.extra_body = parsedExtraBody.value; else delete provider.extra_body;
+}
+
+function providerCapabilityBadges(provider) {
+    const badges = [providerProtocol(provider), providerEndpointType(provider)];
+    if (provider.supports_vision === false) badges.push('text-only');
+    if (provider.supports_reasoning === true) badges.push('reasoning');
+    if (provider.requires_key === false) badges.push('no-auth');
+    if (provider.append_base_path === false) badges.push('full-url');
+    if (provider.image_generation_modeled === true) badges.push(provider.image_generation_disabled === true ? 'image-disabled' : 'image-modeled');
+    return badges.map(badge => `<span class="provider-badge">${escapeHtml(badge)}</span>`).join('');
+}
+
 function renderProviderList() {
     const list = document.getElementById('provider-list');
     if (!list) return;
@@ -1709,6 +2113,7 @@ function renderProviderList() {
             <div class="provider-info">
                 <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${getTierName(i)})</span></span>
                 <span class="provider-model">${escapeHtml(p.model || 'No model')} &bull; ${escapeHtml(p.url || 'Default endpoint')}</span>
+                <span class="provider-badges">${providerCapabilityBadges(p)}</span>
             </div>
             <div class="provider-actions">
                 <button type="button" class="btn-icon" onclick="moveProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''} title="Move up" aria-label="Move ${escapeHtml(p.name || 'provider')} up">Up</button>
@@ -1721,6 +2126,151 @@ function renderProviderList() {
     `).join('');
     setupDragAndDrop();
 }
+
+function getInitialImageProviders() {
+    const list = document.getElementById('image-provider-list');
+    if (!list || !list.dataset.initial) return [];
+    try {
+        return JSON.parse(list.dataset.initial) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function loadImageProviders() {
+    try {
+        const response = await fetch('/api/image-providers', { headers: { 'X-CSRF-Token': '{{ csrf_token() }}' } });
+        const result = await response.json();
+        if (result.status === 'ok') {
+            imageProvidersData = result.image_providers || [];
+            imageProvidersLoaded = true;
+            renderImageProviderList(result.summary || []);
+            return;
+        }
+    } catch (e) { /* fall back to server-rendered summary */ }
+    if (!imageProvidersData.length) {
+        const editor = document.getElementById('providers-json-editor');
+        try {
+            const data = JSON.parse(editor?.dataset.raw || editor?.value || '{}');
+            if (Array.isArray(data.image_providers)) {
+                imageProvidersData = data.image_providers;
+                imageProvidersLoaded = true;
+            }
+        } catch (e) { /* keep empty fallback */ }
+    }
+    imageProvidersLoaded = true;
+    renderImageProviderList(getInitialImageProviders());
+}
+
+function renderImageProviderList(summary) {
+    const list = document.getElementById('image-provider-list');
+    if (!list) return;
+    const providers = summary || [];
+    if (!providers.length) {
+        list.innerHTML = '<p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>';
+        return;
+    }
+    list.innerHTML = providers.map((p, i) => `
+        <div class="provider-item" data-index="${i}">
+            <div class="provider-info">
+                <span class="provider-name">${escapeHtml(p.name || 'Unnamed')} <span class="provider-tier">(${escapeHtml(p.tier || getTierName(i))})</span></span>
+                <span class="provider-model">${escapeHtml(p.model || 'gpt-image-1')} &bull; ${escapeHtml(p.size || '1024x1024')} &bull; ${escapeHtml(p.url || 'No endpoint')}</span>
+            </div>
+            <div class="provider-actions">
+                <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''}>Up</button>
+                <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, 1)" ${i === providers.length - 1 ? 'disabled' : ''}>Down</button>
+                <button type="button" class="btn-icon" onclick="editImageProvider(${i})">Edit</button>
+                <button type="button" class="btn-icon" onclick="deleteImageProvider(${i})">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function saveImageProvidersToServer() {
+    const response = await fetch('/api/image-providers', {
+        method: 'POST',
+        headers: csrfHeaders(),
+        body: JSON.stringify({ image_providers: imageProvidersData })
+    });
+    const result = await response.json();
+    if (result.status !== 'ok') {
+        showToast(result.message || 'Failed to save image providers', 'error');
+        return false;
+    }
+    imageProvidersData = result.image_providers || imageProvidersData;
+    imageProvidersLoaded = true;
+    imageProvidersTouched = true;
+    renderImageProviderList(result.summary || []);
+    return true;
+}
+
+async function moveImageProvider(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= imageProvidersData.length) return;
+    const [moved] = imageProvidersData.splice(index, 1);
+    imageProvidersData.splice(target, 0, moved);
+    if (await saveImageProvidersToServer()) showToast('Image provider order saved', 'success');
+}
+
+async function deleteImageProvider(index) {
+    const confirmed = await confirmAction(
+        'Delete Image Provider',
+        'Delete this image provider from the DM image fallback list?',
+        { confirmText: 'Delete' }
+    );
+    if (!confirmed) return;
+    imageProvidersData.splice(index, 1);
+    if (await saveImageProvidersToServer()) showToast('Image provider deleted', 'success');
+}
+
+function editImageProvider(index) {
+    const provider = imageProvidersData[index];
+    if (!provider) return;
+    document.getElementById('edit-image-provider-index').value = index;
+    document.getElementById('edit-image-provider-name').value = provider.name || '';
+    document.getElementById('edit-image-provider-endpoint').value = provider.url || provider.base_url || '';
+    document.getElementById('edit-image-provider-key-env').value = provider.key_env || '';
+    document.getElementById('edit-image-provider-key').value = '';
+    document.getElementById('edit-image-provider-model').value = provider.model || 'gpt-image-1';
+    document.getElementById('edit-image-provider-size').value = provider.size || '1024x1024';
+    document.getElementById('edit-image-provider-timeout').value = provider.timeout || '';
+    setImageProviderCustomFieldValues('edit', provider);
+    document.getElementById('edit-image-provider-modal').classList.add('active');
+}
+
+function closeEditImageProviderModal() {
+    document.getElementById('edit-image-provider-modal').classList.remove('active');
+}
+
+document.getElementById('edit-image-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const parsedExtraBody = collectImageProviderExtraBody('edit');
+    if (!parsedExtraBody) return;
+
+    const index = parseInt(document.getElementById('edit-image-provider-index').value);
+    const provider = imageProvidersData[index];
+    if (!provider) return;
+    provider.name = document.getElementById('edit-image-provider-name').value.trim();
+    provider.url = document.getElementById('edit-image-provider-endpoint').value.trim();
+    delete provider.base_url;
+    provider.key_env = document.getElementById('edit-image-provider-key-env').value.trim();
+    if (!provider.key_env) delete provider.key_env;
+    const newKey = document.getElementById('edit-image-provider-key').value.trim();
+    if (newKey) provider.api_key = newKey;
+    provider.model = document.getElementById('edit-image-provider-model').value.trim();
+    provider.size = document.getElementById('edit-image-provider-size').value.trim() || '1024x1024';
+    const timeout = document.getElementById('edit-image-provider-timeout').value.trim();
+    if (timeout) provider.timeout = parseInt(timeout); else delete provider.timeout;
+    applyImageProviderCustomFieldValues('edit', provider, parsedExtraBody);
+    if (await saveImageProvidersToServer()) {
+        closeEditImageProviderModal();
+        showToast('Image provider updated', 'success');
+    }
+});
+
+document.getElementById('edit-image-provider-modal')?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) closeEditImageProviderModal();
+});
 
 function setupDragAndDrop() {
     const list = document.getElementById('provider-list');
@@ -1773,7 +2323,65 @@ async function testProvider(index) {
     showToast('Testing provider...', 'success');
     const response = await fetch(`/api/test-provider/${index}`, { headers: { 'X-CSRF-Token': '{{ csrf_token() }}' } });
     const result = await response.json();
-    showToast(result.success ? 'Provider is working' : 'Provider test failed: ' + (result.error || 'Unknown error'), result.success ? 'success' : 'error');
+    showToast(result.success ? (result.message || 'Provider is working') : 'Provider test failed: ' + (result.error || 'Unknown error'), result.success ? 'success' : 'error');
+}
+
+function setProviderFormValues(prefix, provider) {
+    document.getElementById(`${prefix}-provider-protocol`).value = providerProtocol(provider);
+    document.getElementById(`${prefix}-provider-endpoint-type`).value = providerEndpointType(provider);
+    document.getElementById(`${prefix}-provider-key-env`).value = provider.key_env || '';
+    document.getElementById(`${prefix}-provider-requires-key`).checked = provider.requires_key !== false;
+    document.getElementById(`${prefix}-provider-append-base-path`).checked = provider.append_base_path !== false;
+    document.getElementById(`${prefix}-provider-supports-chat`).checked = provider.supports_chat !== false;
+    document.getElementById(`${prefix}-provider-supports-vision`).checked = provider.supports_vision !== false;
+    document.getElementById(`${prefix}-provider-supports-reasoning`).checked = provider.supports_reasoning === true;
+    document.getElementById(`${prefix}-provider-supports-streaming`).checked = provider.supports_streaming === true;
+    document.getElementById(`${prefix}-provider-image-modeled`).checked = provider.image_generation_modeled === true;
+    document.getElementById(`${prefix}-provider-image-disabled`).checked = provider.image_generation_disabled === true;
+    setProviderCustomFieldValues(prefix, provider);
+}
+
+function applyProviderFormValues(prefix, provider, jsonValues = null) {
+    jsonValues = jsonValues || collectProviderJsonObjectValues(prefix);
+    if (!jsonValues) return false;
+
+    const protocol = document.getElementById(`${prefix}-provider-protocol`).value;
+    if (protocol && protocol !== 'legacy-openai-compatible') provider.provider_protocol = protocol; else delete provider.provider_protocol;
+    delete provider.protocol;
+
+    const endpointType = document.getElementById(`${prefix}-provider-endpoint-type`).value;
+    if (protocol === 'newapi' || (endpointType && endpointType !== 'openai-chat')) provider.endpoint_type = endpointType; else delete provider.endpoint_type;
+    delete provider.endpoint;
+
+    const keyEnv = document.getElementById(`${prefix}-provider-key-env`).value.trim();
+    if (keyEnv) provider.key_env = keyEnv; else delete provider.key_env;
+
+    const booleanDefaults = {
+        requires_key: true,
+        append_base_path: true,
+        supports_chat: true,
+        supports_vision: true,
+        supports_reasoning: false,
+        supports_streaming: false,
+        image_generation_modeled: false,
+        image_generation_disabled: false
+    };
+    const fields = {
+        requires_key: `${prefix}-provider-requires-key`,
+        append_base_path: `${prefix}-provider-append-base-path`,
+        supports_chat: `${prefix}-provider-supports-chat`,
+        supports_vision: `${prefix}-provider-supports-vision`,
+        supports_reasoning: `${prefix}-provider-supports-reasoning`,
+        supports_streaming: `${prefix}-provider-supports-streaming`,
+        image_generation_modeled: `${prefix}-provider-image-modeled`,
+        image_generation_disabled: `${prefix}-provider-image-disabled`
+    };
+    Object.entries(fields).forEach(([field, id]) => {
+        const checked = document.getElementById(id).checked;
+        if (checked !== booleanDefaults[field]) provider[field] = checked; else delete provider[field];
+    });
+    applyProviderCustomFieldValues(prefix, provider, jsonValues);
+    return true;
 }
 
 function editProvider(index) {
@@ -1781,6 +2389,7 @@ function editProvider(index) {
     if (!provider) return;
     document.getElementById('edit-provider-index').value = index;
     document.getElementById('edit-provider-name').value = provider.name || '';
+    setProviderFormValues('edit', provider);
     document.getElementById('edit-provider-endpoint').value = provider.url || '';
     document.getElementById('edit-provider-key').value = '';
     document.getElementById('edit-provider-model').value = provider.model || '';
@@ -1806,6 +2415,9 @@ document.getElementById('edit-provider-endpoint')?.addEventListener('input', (e)
 
 document.getElementById('edit-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const parsedJsonFields = collectProviderJsonObjectValues('edit');
+    if (!parsedJsonFields) return;
+
     const index = parseInt(document.getElementById('edit-provider-index').value);
     const provider = providersData[index];
     if (!provider) return;
@@ -1813,6 +2425,7 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
     provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;
     provider.model = document.getElementById('edit-provider-model').value.trim();
     provider.temperature = parseFloat(document.getElementById('edit-provider-temp').value) || 0.7;
+    if (!applyProviderFormValues('edit', provider, parsedJsonFields)) return;
     const newKey = document.getElementById('edit-provider-key').value.trim();
     if (newKey) provider.api_key = newKey;
     const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
@@ -1850,6 +2463,8 @@ async function saveProvidersToServer() {
         const existing = JSON.parse(jsonEditor.value || '{}');
         if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
         if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
+        if (imageProvidersTouched) globalFields.image_providers = imageProvidersData;
+        else if (existing.image_providers !== undefined) globalFields.image_providers = existing.image_providers;
     } catch (e) { /* ignore */ }
     const data = { providers: providersData, ...globalFields };
     const jsonStr = JSON.stringify(data, null, 2);
@@ -1864,34 +2479,43 @@ async function saveProvidersToServer() {
 }
 
 const providerDefaults = {
-    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o' },
-    anthropic: { url: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514' },
-    google: { url: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-pro' },
-    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o' },
-    local: { url: 'http://localhost:5000/v1', model: 'local-model' }
+    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
+    newapi: { url: 'https://newapi.example', model: 'gpt-5.5', provider_protocol: 'newapi', endpoint_type: 'openai-responses', supports_reasoning: true },
+    anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514', provider_protocol: 'newapi', endpoint_type: 'anthropic-messages', supports_reasoning: true },
+    google: { url: 'https://generativelanguage.googleapis.com', model: 'gemini-1.5-pro', provider_protocol: 'newapi', endpoint_type: 'gemini', supports_vision: true },
+    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
+    local: { url: 'http://localhost:5000/v1', model: 'local-model', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat', requires_key: false }
 };
 
 function updateProviderDefaults() {
     const type = document.getElementById('new-provider-type').value;
     if (type && providerDefaults[type]) {
-        document.getElementById('new-provider-endpoint').value = providerDefaults[type].url;
-        document.getElementById('new-provider-model').value = providerDefaults[type].model;
+        const defaults = providerDefaults[type];
+        document.getElementById('new-provider-endpoint').value = defaults.url;
+        document.getElementById('new-provider-model').value = defaults.model;
+        setProviderFormValues('new', defaults);
     }
     document.getElementById('new-openrouter-group').style.display = type === 'openrouter' ? '' : 'none';
 }
 
 document.getElementById('add-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const parsedJsonFields = collectProviderJsonObjectValues('new');
+    if (!parsedJsonFields) return;
+
     ensureProvidersLoaded();
     const name = document.getElementById('new-provider-name').value.trim();
     const url = document.getElementById('new-provider-endpoint').value.trim();
+    const key_env = document.getElementById('new-provider-key-env').value.trim();
     const api_key = document.getElementById('new-provider-key').value.trim();
     const model = document.getElementById('new-provider-model').value.trim();
     const temperature = parseFloat(document.getElementById('new-provider-temp').value) || 0.7;
     if (!name) { showToast('Provider name is required', 'error'); return; }
     const newProvider = { name, model, temperature };
     if (url) newProvider.url = url;
+    if (key_env) newProvider.key_env = key_env;
     if (api_key) newProvider.api_key = api_key;
+    if (!applyProviderFormValues('new', newProvider, parsedJsonFields)) return;
     const newReasoningEffort = document.getElementById('new-provider-reasoning-effort').value;
     if (newReasoningEffort) newProvider.reasoning_effort = newReasoningEffort;
     const newReasoningFormat = document.getElementById('new-provider-reasoning-format').value;
@@ -1910,6 +2534,35 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     showToast('Provider added', 'success');
 });
 
+document.getElementById('add-image-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const parsedExtraBody = collectImageProviderExtraBody('new');
+    if (!parsedExtraBody) return;
+
+    const name = document.getElementById('new-image-provider-name').value.trim();
+    const url = document.getElementById('new-image-provider-endpoint').value.trim();
+    const keyEnv = document.getElementById('new-image-provider-key-env').value.trim();
+    const apiKey = document.getElementById('new-image-provider-key').value.trim();
+    const model = document.getElementById('new-image-provider-model').value.trim();
+    const size = document.getElementById('new-image-provider-size').value.trim();
+    const timeout = document.getElementById('new-image-provider-timeout').value.trim();
+    if (!name || !url || !model) {
+        showToast('Image provider needs a name, endpoint, and model', 'error');
+        return;
+    }
+    const provider = { name, url, model, size: size || '1024x1024' };
+    if (keyEnv) provider.key_env = keyEnv;
+    if (apiKey) provider.api_key = apiKey;
+    if (timeout) provider.timeout = parseInt(timeout);
+    applyImageProviderCustomFieldValues('new', provider, parsedExtraBody);
+    if (!imageProvidersData.length) await loadImageProviders();
+    imageProvidersData.push(provider);
+    if (await saveImageProvidersToServer()) {
+        document.getElementById('new-image-provider-key').value = '';
+        showToast('Image provider added', 'success');
+    }
+});
+
 document.querySelectorAll('.json-editor').forEach(textarea => {
     textarea.addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
@@ -1926,6 +2579,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeConfigTabs();
     initializeLazyEditors();
     initializeScheduleEditors();
+    loadImageProviders();
 });
 </script>
 {% endblock %}

@@ -61,21 +61,29 @@ async def handle_interact_command(bot_instance, interaction: discord.Interaction
 
     # Create a synthetic message for the request queue
     synthetic_message = SyntheticMessage(interaction, formatted_action)
+    is_dm = isinstance(channel, discord.DMChannel)
+    scope_key = bot_instance._scope_key_for_message(
+        synthetic_message,
+        is_dm=is_dm,
+        user_id=user.id,
+        guild=guild,
+    )
 
     # Process through the normal pipeline (includes memory generation)
     await bot_instance.request_queue.add_request(
-        channel_id=channel.id,
+        channel_id=scope_key.history_id,
         message=synthetic_message,
         content=formatted_action,
         guild=guild,
         attachments=[],
         user_name=user_name,
-        is_dm=isinstance(channel, discord.DMChannel),
+        is_dm=is_dm,
         user_id=user.id,
         sticker_info=None,
         from_interact_command=True,
         forced_target_user_id=user.id,
-        forced_target_user_name=user_name
+        forced_target_user_name=user_name,
+        scope_key=scope_key,
     )
 
 

@@ -39,11 +39,7 @@ class MessageVisualContextTests(unittest.IsolatedAsyncioTestCase):
             "user_id": 42,
             "sticker_info": None,
         }
-        runtime_values = {
-            "user_only_context": True,
-            "user_only_context_count": 20,
-            "allow_bot_mentions": False,
-        }
+        runtime_values = {"allow_bot_mentions": False}
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))

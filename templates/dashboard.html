@@ -80,10 +80,15 @@
                 <div class="control-info">
                     <div>
                         <div class="control-label">Update Bot</div>
-                        <div class="control-desc" id="update-desc">Pull latest from GitHub</div>
+                        <div class="control-desc" id="update-desc">{% if update_branch %}Pull latest from {{ update_branch }}{% else %}Pull latest from GitHub{% endif %}</div>
                     </div>
                 </div>
                 <div class="update-btn-container">
+                    <select id="update-branch-select" class="update-branch-select" aria-label="Update branch" onchange="saveUpdateBranch()">
+                        <option value="" {% if not update_branch %}selected{% endif %}>Current</option>
+                        <option value="main" {% if update_branch == 'main' %}selected{% endif %}>Main</option>
+                        <option value="staging" {% if update_branch == 'staging' %}selected{% endif %}>Staging</option>
+                    </select>
                     <button type="button" id="update-btn" class="btn btn-secondary" onclick="updateBot()">
                         <span class="toggle-status">Update</span>
                     </button>
@@ -282,6 +287,28 @@
     color: var(--text-muted);
     font-size: 0.75rem;
     margin-top: 2px;
+}
+
+.update-branch-select {
+    min-width: 104px;
+    height: 36px;
+    padding: 0 28px 0 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.8125rem;
+}
+
+.update-btn-container {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.update-branch-select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .control-help {
@@ -620,18 +647,59 @@ function showNewVersionBadge(version, restartOnly = false) {
     }
 }
 
+function selectedUpdateBranch() {
+    const select = document.getElementById('update-branch-select');
+    return select ? select.value : '';
+}
+
+function setSelectedUpdateBranch(branch) {
+    const select = document.getElementById('update-branch-select');
+    if (!select) return;
+    const normalized = ['main', 'staging'].includes(branch) ? branch : '';
+    select.value = normalized;
+}
+
+function updateUpdateDesc() {
+    const desc = document.getElementById('update-desc');
+    if (!desc) return;
+    const branch = selectedUpdateBranch();
+    desc.textContent = branch ? ('Pull latest from ' + branch) : 'Pull latest from GitHub';
+}
+
+async function saveUpdateBranch() {
+    const branch = selectedUpdateBranch();
+    updateUpdateDesc();
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({ update_branch: branch })
+        });
+        const data = await response.json();
+        if (data.status !== 'ok') {
+            showToast(data.message || 'Update branch was not saved', 'error');
+        }
+    } catch (e) {
+        showToast('Update branch was not saved', 'error');
+    }
+}
+
 // Hide new version badge
 function hideNewVersionBadge() {
     const badge = document.getElementById('new-version-badge');
     const desc = document.getElementById('update-desc');
     const updateBtn = document.getElementById('update-btn');
     if (badge) badge.classList.add('hidden');
-    if (desc) desc.textContent = 'Pull latest from GitHub';
+    if (desc) updateUpdateDesc();
     if (updateBtn) updateBtn.classList.remove('hidden');
 }
 
 function applyPendingUpdateState(data) {
     if (!data || data.status !== 'ok') return;
+    setSelectedUpdateBranch(data.update_branch);
     if (data.update_available) {
         showNewVersionBadge(data.latest_version, false);
     } else if (data.restart_required) {
@@ -643,9 +711,17 @@ function applyPendingUpdateState(data) {
 
 // Check for pending version update on page load (checks GitHub for latest version)
 async function checkPendingUpdate() {
-    if (typeof window.checkGlobalUpdateStatus === 'function') {
-        const data = await window.checkGlobalUpdateStatus(true);
-        if (data) applyPendingUpdateState(data);
+    try {
+        if (typeof window.checkGlobalUpdateStatus === 'function') {
+            const data = await window.checkGlobalUpdateStatus(true);
+            if (data) applyPendingUpdateState(data);
+            return;
+        }
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        applyPendingUpdateState(data);
+    } catch (e) {
+        // Silently ignore version check errors
     }
 }
 
@@ -662,7 +738,8 @@ async function updateBot() {
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRF-Token': '{{ csrf_token() }}'
-            }
+            },
+            body: JSON.stringify({ update_branch: selectedUpdateBranch() })
         });
         const data = await response.json();
 

@@ -4,7 +4,7 @@ import types
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, mock_open, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -34,7 +34,7 @@ class PromptPropagationTests(unittest.TestCase):
         discord_utils_module.channel_names = self._history_originals["channel_names"]
         discord_utils_module._channel_last_activity = self._history_originals["channel_last_activity"]
 
-    def test_format_history_split_user_only_defaults_to_human_only_context(self):
+    def test_format_history_split_uses_normal_context_and_rewrites_other_bots(self):
         channel_id = 123
         discord_utils_module.conversation_history[channel_id] = [
             {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
@@ -44,40 +44,10 @@ class PromptPropagationTests(unittest.TestCase):
 
         history, immediate = discord_utils_module.format_history_split(
             channel_id,
-            user_only=True,
-            context_count=5,
+            total_limit=5,
+            immediate_count=5,
             current_bot_name="Nahida"
         )
-
-        self.assertEqual(history, [])
-        self.assertEqual(
-            immediate,
-            [
-                {"role": "user", "content": "Alice: Hi"},
-            ]
-        )
-        self.assertFalse(any("Hello there" in msg["content"] for msg in immediate))
-        self.assertFalse(any("I can help too" in msg["content"] for msg in immediate))
-
-    def test_format_history_split_user_only_legacy_context_keeps_bot_prose(self):
-        channel_id = 124
-        discord_utils_module.conversation_history[channel_id] = [
-            {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
-            {"role": "assistant", "content": "Hello there", "author": "Nahida"},
-            {"role": "user", "content": "I can help too", "author": "Nilou", "is_bot": True},
-        ]
-
-        with patch.object(
-            discord_utils_module.runtime_config,
-            "get",
-            side_effect=lambda key, default=None: False if key == "strict_human_only_context" else default,
-        ):
-            history, immediate = discord_utils_module.format_history_split(
-                channel_id,
-                user_only=True,
-                context_count=5,
-                current_bot_name="Nahida"
-            )
 
         self.assertEqual(history, [])
         self.assertEqual(
@@ -89,7 +59,7 @@ class PromptPropagationTests(unittest.TestCase):
             ]
         )
 
-    def test_format_history_split_preserves_current_bot_author_in_legacy_mode(self):
+    def test_format_history_split_preserves_current_bot_author_in_normal_context(self):
         channel_id = 456
         discord_utils_module.conversation_history[channel_id] = [
             {"role": "user", "content": "Hi", "author": "Alice", "is_bot": False},
@@ -464,27 +434,44 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module.invalidate_cache()
         self.tearDownMemorySandbox()
 
-    def test_runtime_config_migrates_legacy_context_message_count(self):
-        legacy_path = self.data_dir / "runtime_config.json"
-        legacy_path.write_text(
-            json.dumps({"context_message_count": 7, "user_only_context": True}, indent=2),
+    def test_runtime_config_drops_removed_context_keys(self):
+        config_path = self.data_dir / "runtime_config.json"
+        config_path.write_text(
+            json.dumps({
+                "history_limit": 37,
+                "context_message_count": 7,
+                "user_only_context": True,
+                "user_only_context_count": 9,
+                "strict_human_only_context": True,
+            }, indent=2),
             encoding="utf-8"
         )
 
         config = runtime_config_module.get_all()
 
-        self.assertEqual(config["user_only_context_count"], 7)
-        self.assertNotIn("context_message_count", config)
+        self.assertEqual(config["history_limit"], 37)
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, config)
 
         runtime_config_module.save_config(config)
-        saved = json.loads(legacy_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["user_only_context_count"], 7)
-        self.assertNotIn("context_message_count", saved)
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, saved)
 
-    def test_config_ui_and_api_use_user_only_context_count(self):
+    def test_config_ui_omits_removed_context_controls(self):
         page = self.client.get("/config").get_data(as_text=True)
-        self.assertIn('id="user_only_context_count"', page)
         self.assertNotIn('id="context_message_count"', page)
+        self.assertNotIn('id="user_only_context"', page)
+        self.assertNotIn('id="strict_human_only_context"', page)
+        self.assertNotIn('id="user_only_context_count"', page)
+
+    def test_dashboard_exposes_update_branch_selector(self):
+        page = self.client.get("/").get_data(as_text=True)
+
+        self.assertIn('id="update-branch-select"', page)
+        self.assertIn('<option value="" selected>Current</option>', page)
+        self.assertIn('<option value="main"', page)
+        self.assertIn('<option value="staging"', page)
 
     def test_config_page_groups_context_prompting_and_provider_controls(self):
         page = self.client.get("/config").get_data(as_text=True)
@@ -493,7 +480,6 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('data-config-tab="prompting"', page)
         self.assertIn('data-config-tab="providers"', page)
         self.assertIn('id="time_passage_context_enabled"', page)
-        self.assertIn('id="strict_human_only_context"', page)
         self.assertIn('id="identity_guard_enabled"', page)
         self.assertIn('id="identity_guard_policy"', page)
         self.assertIn('id="bot_reference_context_mode"', page)
@@ -502,6 +488,46 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("moveProvider(", page)
         self.assertIn('id="prose_polisher_enabled"', page)
         self.assertIn('id="new-provider-reasoning-effort"', page)
+        self.assertIn('id="new-provider-protocol"', page)
+        self.assertIn('id="new-provider-endpoint-type"', page)
+        self.assertIn('id="new-provider-key-env"', page)
+        self.assertIn('id="new-provider-supports-vision"', page)
+        self.assertIn('id="edit-provider-protocol"', page)
+        for field_id in (
+            "new-provider-extra-body",
+            "new-provider-include-body",
+            "new-provider-exclude-body",
+            "new-provider-include-headers",
+            "new-provider-reasoning",
+            "new-provider-output-config",
+            "new-provider-thinking",
+            "edit-provider-extra-body",
+            "edit-provider-include-body",
+            "edit-provider-exclude-body",
+            "edit-provider-include-headers",
+            "edit-provider-reasoning",
+            "edit-provider-output-config",
+            "edit-provider-thinking",
+            "new-image-provider-style",
+            "new-image-provider-response-format",
+            "new-image-provider-output-format",
+            "new-image-provider-background",
+            "new-image-provider-moderation",
+            "new-image-provider-extra-body",
+            "edit-image-provider-style",
+            "edit-image-provider-response-format",
+            "edit-image-provider-output-format",
+            "edit-image-provider-background",
+            "edit-image-provider-moderation",
+            "edit-image-provider-extra-body",
+        ):
+            self.assertIn(f'id="{field_id}"', page)
+        self.assertIn("providerJsonObjectFields", page)
+        self.assertIn("parseOptionalJsonObject", page)
+        self.assertIn("collectProviderJsonObjectValues", page)
+        self.assertIn("if (imageProvidersTouched) globalFields.image_providers = imageProvidersData", page)
+        self.assertIn("editImageProvider(", page)
+        self.assertIn('providerCapabilityBadges', page)
         self.assertIn('id="response-access-form"', page)
         self.assertIn('id="server_responses_enabled"', page)
         self.assertIn('id="dm_responses_enabled"', page)
@@ -509,11 +535,18 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('id="response_channel_whitelist"', page)
         self.assertIn('id="response_channel_blacklist"', page)
         self.assertIn('id="dm_user_blacklist"', page)
+        self.assertIn('class="known-target-select"', page)
+        self.assertIn('id="image-provider-list"', page)
+        self.assertIn('id="add-image-provider-form"', page)
+        self.assertIn("existing.image_providers", page)
 
         response = self.client.post(
             "/api/config",
             json={
                 "context_message_count": 9,
+                "user_only_context": True,
+                "user_only_context_count": 9,
+                "strict_human_only_context": True,
                 "prose_polisher_enabled": "true",
                 "prose_polisher_max_tokens": "9000",
                 "identity_guard_enabled": "false",
@@ -524,6 +557,11 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "log_file_max_mb": "5000",
                 "server_responses_enabled": "false",
                 "dm_responses_enabled": "false",
+                "dm_image_generation_enabled": "true",
+                "dm_image_generation_chance": "0.4",
+                "dm_image_generation_caption_chance": "0.6",
+                "dm_image_generation_preferred_tier": "primary",
+                "dm_image_generation_prompt": "Tiny incomprehensible raccoon meme.",
                 "response_channel_whitelist_only": "true",
                 "response_channel_whitelist": ["123456789012345678", "123456789012345678"],
                 "response_channel_blacklist": "222222222222222222, 333333333333333333",
@@ -536,7 +574,6 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(config_response.status_code, 200)
-        self.assertEqual(config["user_only_context_count"], 9)
         self.assertIs(config["prose_polisher_enabled"], True)
         self.assertEqual(config["prose_polisher_max_tokens"], 9000)
         self.assertIs(config["identity_guard_enabled"], False)
@@ -547,11 +584,252 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["log_file_max_mb"], 100)
         self.assertIs(config["server_responses_enabled"], False)
         self.assertIs(config["dm_responses_enabled"], False)
+        self.assertIs(config["dm_image_generation_enabled"], True)
+        self.assertEqual(config["dm_image_generation_chance"], 0.4)
+        self.assertEqual(config["dm_image_generation_caption_chance"], 0.6)
+        self.assertEqual(config["dm_image_generation_preferred_tier"], "primary")
+        self.assertEqual(config["dm_image_generation_prompt"], "Tiny incomprehensible raccoon meme.")
         self.assertIs(config["response_channel_whitelist_only"], True)
         self.assertEqual(config["response_channel_whitelist"], ["123456789012345678"])
         self.assertEqual(config["response_channel_blacklist"], ["222222222222222222", "333333333333333333"])
         self.assertEqual(config["dm_user_blacklist"], ["444444444444444444"])
-        self.assertNotIn("context_message_count", config)
+        for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
+            self.assertNotIn(removed_key, config)
+
+    def test_provider_save_api_preserves_passthrough_payload_shape(self):
+        saved_payloads = []
+        payload = {
+            "timeout": 60,
+            "character_providers": {"nahida": "primary"},
+            "image_providers": [{"name": "Images", "url": "https://images.invalid/v1", "model": "gpt-image-1"}],
+            "providers": [{
+                "name": "Shape Test",
+                "url": "https://api.example.invalid/v1",
+                "model": "shape-model",
+                "extra_body": {"top_k": 20, "nested": {"enabled": True}},
+                "include_body": "thinking:\n  type: disabled",
+                "exclude_body": "- frequency_penalty\n- presence_penalty",
+                "include_headers": "X-Provider-Route: primary",
+                "reasoning": {"effort": "high"},
+                "output_config": {"effort": "medium"},
+                "thinking": {"type": "adaptive", "effort": "low"},
+            }],
+        }
+
+        with patch.object(dashboard_module, "_save_providers_json", side_effect=lambda data: saved_payloads.append(data)):
+            response = self.client.post(
+                "/api/providers/save",
+                json={"content": json.dumps(payload)},
+                headers=self.csrf_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        saved = saved_payloads[-1]
+        self.assertEqual(saved["character_providers"], {"nahida": "primary"})
+        self.assertEqual(saved["image_providers"], payload["image_providers"])
+        provider = saved["providers"][0]
+        self.assertEqual(provider["extra_body"], {"top_k": 20, "nested": {"enabled": True}})
+        self.assertEqual(provider["include_body"], "thinking:\n  type: disabled")
+        self.assertEqual(provider["exclude_body"], "- frequency_penalty\n- presence_penalty")
+        self.assertEqual(provider["include_headers"], "X-Provider-Route: primary")
+        self.assertEqual(provider["reasoning"], {"effort": "high"})
+        self.assertEqual(provider["output_config"], {"effort": "medium"})
+        self.assertEqual(provider["thinking"], {"type": "adaptive", "effort": "low"})
+
+    def test_provider_save_api_rejects_malformed_provider_payloads(self):
+        malformed_payloads = [
+            {"providers": "primary"},
+            {"providers": [{"name": "Bad", "url": "", "model": "model"}]},
+            {"providers": [{"name": "Bad", "url": "https://api.invalid/v1", "model": "model", "extra_body": []}]},
+            {"providers": [{"name": "Bad", "url": "https://api.invalid/v1", "model": "model", "supports_vision": "sometimes"}]},
+        ]
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    "/api/providers/save",
+                    json={"content": json.dumps(payload)},
+                    headers=self.csrf_headers(),
+                )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["status"], "error")
+
+    def test_image_provider_api_validates_cleans_and_saves(self):
+        saved_payloads = []
+
+        def load_providers():
+            return {
+                "providers": [],
+                "timeout": 60,
+                "image_providers": [
+                    {"name": "Existing", "url": "https://images.invalid/v1", "model": "old-image"}
+                ],
+            }
+
+        with patch.object(dashboard_module, "_load_providers_json", side_effect=load_providers), \
+                patch.object(dashboard_module, "_save_providers_json", side_effect=lambda data: saved_payloads.append(data)):
+            get_response = self.client.get("/api/image-providers")
+            post_response = self.client.post(
+                "/api/image-providers",
+                json={
+                    "image_providers": [
+                        {
+                            "name": " New Images ",
+                            "base_url": " https://example.invalid/v1 ",
+                            "model": " gpt-image-1 ",
+                            "size": "1024x1024",
+                            "quality": " high ",
+                            "style": " vivid ",
+                            "response_format": " b64_json ",
+                            "output_format": " png ",
+                            "background": " transparent ",
+                            "moderation": " low ",
+                            "timeout": "2",
+                            "extra_body": {"seed": 4},
+                            "ignored": "value",
+                        }
+                    ]
+                },
+                headers=self.csrf_headers(),
+            )
+            invalid_response = self.client.post(
+                "/api/image-providers",
+                json={"image_providers": [{"name": "Bad", "url": ""}]},
+                headers=self.csrf_headers(),
+            )
+
+        get_body = get_response.get_json()
+        post_body = post_response.get_json()
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_body["summary"][0]["tier"], "primary")
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(post_body["summary"][0]["name"], "New Images")
+        self.assertEqual(saved_payloads[-1]["image_providers"][0], {
+            "name": "New Images",
+            "url": "https://example.invalid/v1",
+            "model": "gpt-image-1",
+            "size": "1024x1024",
+            "quality": "high",
+            "style": "vivid",
+            "response_format": "b64_json",
+            "output_format": "png",
+            "background": "transparent",
+            "moderation": "low",
+            "timeout": 5,
+            "extra_body": {"seed": 4},
+        })
+        self.assertEqual(invalid_response.status_code, 400)
+
+    def test_newapi_provider_health_check_validates_config_without_prompt_data(self):
+        providers_payload = {
+            "providers": [{
+                "name": "NewAPI Responses",
+                "url": "https://newapi.example",
+                "key_env": "NEWAPI_API_KEY",
+                "provider_protocol": "newapi",
+                "endpoint_type": "openai-responses",
+                "model": "gpt-5.5",
+                "supports_reasoning": True,
+                "supports_vision": True,
+            }]
+        }
+        fake_path = types.SimpleNamespace(exists=lambda: True)
+
+        with patch.object(dashboard_module, "Path", return_value=fake_path), \
+                patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
+                patch.dict(dashboard_module.os.environ, {"NEWAPI_API_KEY": "sk-test"}):
+            response = self.client.get("/api/test-provider/0")
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(body["endpoint_type"], "responses")
+        self.assertEqual(body["auth_header"], "Authorization")
+        self.assertNotIn("sk-test", json.dumps(body))
+
+    def test_newapi_provider_health_check_reports_missing_key(self):
+        providers_payload = {
+            "providers": [{
+                "name": "NewAPI Responses",
+                "url": "https://newapi.example",
+                "key_env": "MISSING_NEWAPI_KEY",
+                "provider_protocol": "newapi",
+                "endpoint_type": "openai-responses",
+                "model": "gpt-5.5",
+            }]
+        }
+        fake_path = types.SimpleNamespace(exists=lambda: True)
+
+        with patch.object(dashboard_module, "Path", return_value=fake_path), \
+                patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
+                patch.dict(dashboard_module.os.environ, {}, clear=True):
+            response = self.client.get("/api/test-provider/0")
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(body["success"])
+        self.assertIn("API key", body["error"])
+
+    def test_known_access_targets_include_channels_and_human_aliases(self):
+        original_history = discord_utils_module.conversation_history
+        original_channel_names = discord_utils_module.channel_names
+        original_bots = dashboard_module.bot_instances
+        try:
+            discord_utils_module.conversation_history = {
+                77: [
+                    {"role": "user", "content": "hi", "author": "Bob", "user_id": "123", "is_bot": False},
+                    {"role": "user", "content": "beep", "author": "Botty", "user_id": "222", "is_bot": True},
+                ]
+            }
+            discord_utils_module.channel_names = {88: "seen-room"}
+            guild = types.SimpleNamespace(
+                name="Sumeru",
+                members=[
+                    types.SimpleNamespace(
+                        id=42,
+                        bot=False,
+                        display_name="Alice Bloom",
+                        global_name="Alice",
+                        name="alice_dev",
+                    ),
+                    types.SimpleNamespace(id=222, bot=True, display_name="Botty", name="Botty"),
+                ],
+            )
+            dashboard_module.bot_instances = [types.SimpleNamespace(client=types.SimpleNamespace(guilds=[guild]))]
+
+            targets = dashboard_module._build_known_access_targets({
+                "channels": [{"id": 99, "name": "general", "guild_name": "Sumeru"}]
+            })
+        finally:
+            discord_utils_module.conversation_history = original_history
+            discord_utils_module.channel_names = original_channel_names
+            dashboard_module.bot_instances = original_bots
+
+        self.assertEqual({channel["id"] for channel in targets["channels"]}, {88, 99})
+        users_by_id = {user["id"]: user for user in targets["users"]}
+        self.assertIn(42, users_by_id)
+        self.assertIn("Alice", users_by_id[42]["aliases"])
+        self.assertIn("alice_dev", users_by_id[42]["aliases"])
+        self.assertIn(123, users_by_id)
+        self.assertNotIn(222, users_by_id)
+
+    def test_config_page_exposes_dm_image_controls_when_bots_loaded(self):
+        dashboard_module.bot_instances = [
+            types.SimpleNamespace(
+                name="Firefly",
+                character=types.SimpleNamespace(name="Firefly"),
+                character_name="firefly",
+                nicknames="",
+                client=types.SimpleNamespace(is_ready=lambda: False),
+            )
+        ]
+
+        page = self.client.get("/config").get_data(as_text=True)
+
+        self.assertIn('id="dm_image_generation_enabled"', page)
+        self.assertIn('id="dm_image_generation_prompt"', page)
+        self.assertIn('id="dm_image_generation_preferred_tier"', page)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
         response = self.client.post(
@@ -565,6 +843,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                 "bot_timezones": "not-a-dict",
                 "identity_guard_policy": "send_anyway",
                 "bot_reference_context_mode": "quote",
+                "update_branch": "feature",
+                "dm_image_generation_chance": "3",
+                "dm_image_generation_caption_chance": "nan",
                 "response_channel_whitelist": "channel 777, <#888>",
                 "dm_user_blacklist": ["<@999>", "999", "0"],
                 "unknown_extension": "ignored",
@@ -582,9 +863,22 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(config["bot_timezones"], {})
         self.assertEqual(config["identity_guard_policy"], "regenerate_then_drop")
         self.assertEqual(config["bot_reference_context_mode"], "neutral")
+        self.assertEqual(config["update_branch"], "")
+        self.assertEqual(config["dm_image_generation_chance"], 1.0)
+        self.assertEqual(config["dm_image_generation_caption_chance"], 0.85)
         self.assertEqual(config["response_channel_whitelist"], ["777", "888"])
         self.assertEqual(config["dm_user_blacklist"], ["999"])
         self.assertNotIn("unknown_extension", config)
+
+        response = self.client.post(
+            "/api/config",
+            json={"update_branch": " Staging "},
+            headers=self.csrf_headers()
+        )
+        config = self.client.get("/api/config").get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(config["update_branch"], "staging")
 
     def test_runtime_response_access_helpers_apply_allow_and_deny_lists(self):
         config = {
@@ -636,6 +930,45 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
 
 class ProviderVisionSupportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_image_generation_uses_configured_provider_and_decodes_base64(self):
+        captured_kwargs = {}
+
+        class FakeImages:
+            async def generate(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                image = types.SimpleNamespace(b64_json="ZmFrZS1wbmc=", revised_prompt="revised")
+                return types.SimpleNamespace(data=[image])
+
+        manager = object.__new__(providers_module.AIProviderManager)
+        manager.image_providers = {"primary": types.SimpleNamespace(images=FakeImages())}
+        manager.image_status = {}
+        manager._build_image_tier_order = lambda preferred_tier="": [preferred_tier or "primary"]
+
+        image_cfg = {
+            "primary": {
+                "name": "Image Test",
+                "url": "https://example.invalid/v1",
+                "key": "not-needed",
+                "model": "gpt-image-1",
+                "size": "1024x1024",
+                "quality": "medium",
+                "timeout": 30,
+                "extra_body": {"seed": 4},
+            }
+        }
+
+        with patch.dict(providers_module.IMAGE_PROVIDERS, image_cfg, clear=True), \
+                patch.object(providers_module.log, "ok"), \
+                patch.object(providers_module.log, "error"):
+            result = await manager.generate_image("make meme", preferred_tier="primary")
+
+        self.assertEqual(result["bytes"], b"fake-png")
+        self.assertEqual(result["revised_prompt"], "revised")
+        self.assertEqual(captured_kwargs["model"], "gpt-image-1")
+        self.assertEqual(captured_kwargs["prompt"], "make meme")
+        self.assertEqual(captured_kwargs["quality"], "medium")
+        self.assertEqual(captured_kwargs["extra_body"], {"seed": 4})
+
     async def test_prose_polisher_rewrites_enabled_response(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
