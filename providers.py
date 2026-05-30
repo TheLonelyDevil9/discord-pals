@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any, List, Dict, Optional
 from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
+from newapi_adapters import NewAPIAdapterError, NewAPIProviderAdapter, is_newapi_provider_config
+from provider_contracts import ProviderDescriptor, ProviderProtocol, ProviderRequest
 import asyncio
 import copy
 import time
@@ -471,10 +473,14 @@ class AIProviderManager:
         self.status: Dict[str, str] = {tier: "unknown" for tier in PROVIDERS}
         self.image_status: Dict[str, str] = {tier: "unknown" for tier in IMAGE_PROVIDERS}
         self._vision_support_overrides: Dict[str, bool] = {}
+        self._newapi_adapter = NewAPIProviderAdapter()
         
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
             if key:
+                if is_newapi_provider_config(cfg):
+                    self.providers[tier] = self._newapi_adapter
+                    continue
                 # Auto-detect OpenRouter and inject recommended headers
                 default_headers = {}
                 if "openrouter.ai" in cfg.get("url", ""):
@@ -871,8 +877,174 @@ class AIProviderManager:
                     await asyncio.sleep(delay)
                 else:
                     raise
-        
+
         return None
+
+    async def _try_generate_newapi(
+        self,
+        provider_cfg: dict,
+        model: str,
+        messages: List[dict],
+        temperature: float,
+        max_tokens: int,
+        tier: str,
+        timeout: int = None,
+        extra_body: Optional[dict] = None,
+        include_body: str = "",
+        exclude_body: str = "",
+        include_headers: str = "",
+        req_id: str | None = None,
+        cycle: int = 0,
+    ) -> str | None:
+        """Generate through the explicit NewAPI adapter lane."""
+
+        descriptor = ProviderDescriptor.from_config(
+            provider_cfg,
+            tier=tier,
+            default_protocol=ProviderProtocol.NEWAPI,
+        )
+        request = ProviderRequest(
+            endpoint_type=descriptor.endpoint_type,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body or {},
+        )
+        effective_timeout = timeout or API_TIMEOUT
+
+        for attempt in range(MAX_RETRIES):
+            attempt_started = time.perf_counter()
+            try:
+                log.diagnostic(
+                    f"[{tier}] NewAPI provider request",
+                    component="provider",
+                    event="newapi_provider_request",
+                    req_id=req_id,
+                    tier=tier,
+                    model=model,
+                    endpoint_type=descriptor.endpoint_type.value,
+                    cycle=cycle,
+                    attempt=attempt + 1,
+                    message_count=len(messages),
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    has_extra_body=bool(extra_body),
+                    include_body=bool(include_body),
+                    exclude_body=bool(exclude_body),
+                    include_headers=bool(include_headers),
+                    timeout=effective_timeout,
+                )
+                result = await asyncio.wait_for(
+                    self._newapi_adapter.generate(
+                        descriptor=descriptor,
+                        request=request,
+                        api_key="" if not provider_cfg.get("requires_key", True) and provider_cfg.get("key") == "not-needed" else provider_cfg.get("key") or "",
+                        timeout=effective_timeout,
+                        requires_key=provider_cfg.get("requires_key", True),
+                        include_body=include_body,
+                        exclude_body=exclude_body,
+                        include_headers=include_headers,
+                    ),
+                    timeout=effective_timeout,
+                )
+                latency_ms = int((time.perf_counter() - attempt_started) * 1000)
+                content = result.deliverable_text
+                if not content or content.strip() == "":
+                    log.warn(
+                        f"[{tier}] Empty content from NewAPI {model}",
+                        component="provider",
+                        event="newapi_provider_empty",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        endpoint_type=descriptor.endpoint_type.value,
+                        latency_ms=latency_ms,
+                    )
+                    return None
+
+                log.ok(
+                    f"[{tier}] Got {len(content)} chars from NewAPI {model}",
+                    component="provider",
+                    event="newapi_provider_response",
+                    req_id=req_id,
+                    tier=tier,
+                    model=model,
+                    endpoint_type=descriptor.endpoint_type.value,
+                    content_len=len(content),
+                    latency_ms=latency_ms,
+                    has_reasoning=result.has_reasoning,
+                )
+                return remove_thinking_tags(content)
+            except NewAPIAdapterError as e:
+                error = e.provider_error
+                if error.code == "rate_limit" and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAYS[attempt]
+                    log.warn(
+                        f"[{tier}] NewAPI rate limited, retrying in {delay}s...",
+                        component="provider",
+                        event="newapi_provider_retry",
+                        req_id=req_id,
+                        tier=tier,
+                        attempt=attempt + 1,
+                        delay_s=delay,
+                        reason="rate_limit",
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+        return None
+
+    async def _try_generate_for_provider(
+        self,
+        client,
+        provider_cfg: dict,
+        model: str,
+        messages: List[dict],
+        temperature: float,
+        max_tokens: int,
+        tier: str,
+        timeout: int = None,
+        extra_body: Optional[dict] = None,
+        include_body: str = "",
+        exclude_body: str = "",
+        include_headers: str = "",
+        req_id: str | None = None,
+        cycle: int = 0,
+    ) -> str | None:
+        if is_newapi_provider_config(provider_cfg):
+            return await self._try_generate_newapi(
+                provider_cfg,
+                model,
+                messages,
+                temperature,
+                max_tokens,
+                tier,
+                timeout=timeout,
+                extra_body=extra_body,
+                include_body=include_body,
+                exclude_body=exclude_body,
+                include_headers=include_headers,
+                req_id=req_id,
+                cycle=cycle,
+            )
+
+        return await self._try_generate(
+            client,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            tier,
+            timeout=timeout,
+            extra_body=extra_body,
+            include_body=include_body,
+            exclude_body=exclude_body,
+            include_headers=include_headers,
+            req_id=req_id,
+            cycle=cycle,
+        )
     
     async def generate(
         self,
@@ -983,8 +1155,8 @@ class AIProviderManager:
 
                 try:
                     client = self.providers[tier]
-                    result = await self._try_generate(
-                        client, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
+                    result = await self._try_generate_for_provider(
+                        client, provider_cfg, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
                         timeout=effective_timeout,
                         extra_body=extra_body if extra_body else None,
                         include_body=include_body,
@@ -1008,13 +1180,28 @@ class AIProviderManager:
                 except RateLimitError:
                     self.status[tier] = "rate limited"
                     continue
+                except NewAPIAdapterError as e:
+                    error = e.provider_error
+                    self.status[tier] = "rate limited" if error.code == "rate_limit" else "error"
+                    log.error(
+                        f"[{tier}] NewAPI {error.code}",
+                        component="provider",
+                        event="newapi_provider_error",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        endpoint_type=error.endpoint_type.value if error.endpoint_type else None,
+                        error_code=error.code,
+                        retryable=error.retryable,
+                    )
+                    continue
                 except APIError as e:
                     if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
-                            result = await self._try_generate(
-                                client, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
+                            result = await self._try_generate_for_provider(
+                                client, provider_cfg, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
                                 timeout=effective_timeout,
                                 extra_body=extra_body if extra_body else None,
                                 include_body=include_body,
@@ -1041,8 +1228,8 @@ class AIProviderManager:
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
-                            result = await self._try_generate(
-                                client, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
+                            result = await self._try_generate_for_provider(
+                                client, provider_cfg, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
                                 timeout=effective_timeout,
                                 extra_body=extra_body if extra_body else None,
                                 include_body=include_body,
@@ -1099,6 +1286,8 @@ class AIProviderManager:
 
             # Check if provider has embedding support configured
             provider_cfg = PROVIDERS.get(tier, {})
+            if is_newapi_provider_config(provider_cfg):
+                continue
             embedding_model = provider_cfg.get("embedding_model", "text-embedding-3-small")
 
             # Skip if provider explicitly disabled embeddings

@@ -132,6 +132,42 @@ When a user sends an image, vision providers receive multimodal content. Text-on
 
 Emoji and shortcode context remains text-only.
 
+## NewAPI Provider Lane
+
+NewAPI providers are opt-in. Existing providers keep the legacy OpenAI-compatible Chat Completions path unless `provider_protocol` is set to `newapi`.
+
+```json
+{
+  "providers": [
+    {
+      "name": "NewAPI Responses",
+      "url": "https://newapi.example",
+      "key_env": "NEWAPI_API_KEY",
+      "provider_protocol": "newapi",
+      "endpoint_type": "openai-responses",
+      "model": "gpt-5.5",
+      "supports_reasoning": true,
+      "supports_vision": true,
+      "reasoning_effort": "high",
+      "reasoning_format": "openai_responses"
+    }
+  ]
+}
+```
+
+Supported `endpoint_type` values are `openai-chat`, `openai-responses`, `anthropic-messages`, and `gemini`.
+
+NewAPI endpoint defaults:
+
+| Endpoint type | URL policy | Auth header |
+| --- | --- | --- |
+| `openai-chat` | Appends `/v1`, then posts `/chat/completions`. | `Authorization: Bearer ...` |
+| `openai-responses` | Appends `/v1`, then posts `/responses`. | `Authorization: Bearer ...` |
+| `anthropic-messages` | Does not append a base version; posts `/v1/messages` unless the base already ends in `/v1`. | `x-api-key` |
+| `gemini` | Appends `/v1beta`, then posts `/models/{model}:generateContent`. | `x-goog-api-key` |
+
+Set `append_base_path` to `false` when `url` is already the exact base path the adapter should use. Set `requires_key` to `false` for local NewAPI gateways that do not need authentication.
+
 ## Image Generation Providers
 
 Autonomous DM images use a separate `image_providers` list in `providers.json`. Entries are OpenAI-compatible image-generation clients, tried in order unless `dm_image_generation_preferred_tier` selects a tier from the dashboard. The dashboard Providers tab can manage this list directly; raw JSON is only the advanced fallback.

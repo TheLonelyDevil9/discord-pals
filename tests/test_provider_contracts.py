@@ -8,6 +8,10 @@ class ProviderContractTests(unittest.TestCase):
         self.assertIs(contracts.parse_endpoint_type(None), contracts.EndpointType.CHAT_COMPLETIONS)
         self.assertIs(contracts.parse_endpoint_type(""), contracts.EndpointType.CHAT_COMPLETIONS)
         self.assertIs(
+            contracts.parse_endpoint_type("openai-chat"),
+            contracts.EndpointType.CHAT_COMPLETIONS,
+        )
+        self.assertIs(
             contracts.parse_endpoint_type("responses"),
             contracts.EndpointType.RESPONSES,
         )
@@ -21,6 +25,10 @@ class ProviderContractTests(unittest.TestCase):
         )
         self.assertIs(
             contracts.parse_endpoint_type("/v1/images/generations"),
+            contracts.EndpointType.IMAGE_GENERATIONS,
+        )
+        self.assertIs(
+            contracts.parse_endpoint_type("image-generation-disabled"),
             contracts.EndpointType.IMAGE_GENERATIONS,
         )
         self.assertIs(
@@ -118,6 +126,21 @@ class ProviderContractTests(unittest.TestCase):
 
         self.assertTrue(capabilities.image_generation_modeled)
         self.assertFalse(capabilities.image_generation)
+
+    def test_newapi_endpoint_auth_defaults(self):
+        secret = "sk-test-secret-value"
+        responses_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "openai-responses")
+        anthropic_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "anthropic-messages")
+        gemini_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "gemini")
+        no_key_auth = contracts.select_newapi_auth_headers_for_endpoint("", "openai-chat", requires_key=False)
+        not_needed_auth = contracts.select_newapi_auth_headers_for_endpoint("not-needed", "openai-chat", requires_key=False)
+
+        self.assertEqual(responses_auth.headers, {"Authorization": f"Bearer {secret}"})
+        self.assertEqual(anthropic_auth.headers, {"x-api-key": secret})
+        self.assertEqual(gemini_auth.headers, {"x-goog-api-key": secret})
+        self.assertEqual(no_key_auth.headers, {})
+        self.assertEqual(not_needed_auth.headers, {})
+        self.assertNotIn(secret, repr(responses_auth))
 
     def test_image_generation_supported_does_not_reject(self):
         descriptor = contracts.ProviderDescriptor(
