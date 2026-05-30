@@ -4,6 +4,27 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.7] - 2026-05-30
+
+Ships the staging messaging robustness refactor to main under a new release tag so normal dashboard and standalone updates can discover it.
+
+### Added
+
+- Added typed provider, delivery, queue, context, routing, scope, and identity-policy seams around the Discord messaging lifecycle.
+- Added NewAPI provider support with explicit endpoint/capability modeling, reasoning separation, provider health checks, and dashboard provider controls.
+- Added the dashboard update branch selector while keeping `Current` as the legacy-compatible default update path.
+
+### Changed
+
+- Preserved existing provider and Discord delivery behavior behind narrower gateway/pipeline modules for safer future hardening.
+- Kept normal updates tag-based for existing installs, with explicit `Main` and `Staging` branch updates available as opt-in controls.
+
+### Fixed
+
+- Ensured provider reasoning text stays out of delivered Discord replies and diagnostics.
+- Kept bracketed emote state markers from leaking into delivered responses.
+- Added regression coverage for update-state dashboard rendering so the global update indicator and branch selector stay synchronized.
+
 ## [v2.3.6] - 2026-05-26
 
 Reverted the prompt-heavy attribution context boundary from v2.3.5 and replaced it with a narrower current-turn context ordering fix.
