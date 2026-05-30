@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 from commands.fun import handle_interact_command
+from scopes import ScopeKey
 
 
 class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -20,7 +21,12 @@ class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         bot_instance = types.SimpleNamespace(
             character=types.SimpleNamespace(name="Nahida"),
-            request_queue=types.SimpleNamespace(add_request=AsyncMock())
+            request_queue=types.SimpleNamespace(add_request=AsyncMock()),
+            _scope_key_for_message=Mock(return_value=ScopeKey.for_channel(
+                bot_name="Nahida",
+                channel_id=77,
+                guild_id=None,
+            )),
         )
 
         with patch("commands.fun.get_user_display_name", return_value="Invoker"):
@@ -31,6 +37,8 @@ class InteractCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["forced_target_user_id"], 42)
         self.assertEqual(kwargs["forced_target_user_name"], "Invoker")
         self.assertEqual(kwargs["content"], "*hugs you*")
+        self.assertEqual(kwargs["channel_id"], 77)
+        self.assertIsInstance(kwargs["scope_key"], ScopeKey)
 
 
 class InteractContextIsolationTests(unittest.IsolatedAsyncioTestCase):

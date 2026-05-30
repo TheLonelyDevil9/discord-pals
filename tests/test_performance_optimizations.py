@@ -323,6 +323,28 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(added)
         self.assertIs(queue.queues[channel_id][0]["scope_key"], scope_key)
 
+    async def test_scope_key_history_identity_becomes_queue_key(self):
+        queue = request_queue_module.RequestQueue()
+        raw_channel_id = 999
+        scope_key = ScopeKey.for_dm(bot_name="Nahida", channel_id=raw_channel_id, user_id=123)
+        queue.processing[scope_key.history_id] = True
+
+        added = await queue.add_request(
+            channel_id=raw_channel_id,
+            message=types.SimpleNamespace(),
+            content="Hello in DM",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=True,
+            user_id=123,
+            scope_key=scope_key,
+        )
+
+        self.assertTrue(added)
+        self.assertEqual(queue.queues[scope_key.history_id][0]["channel_id"], scope_key.history_id)
+        self.assertEqual(len(queue.queues[raw_channel_id]), 0)
+
     async def test_drain_returns_true_when_queue_has_no_pending_work(self):
         queue = request_queue_module.RequestQueue()
 
@@ -337,6 +359,106 @@ class RequestQueueTests(unittest.IsolatedAsyncioTestCase):
         drained = await queue.drain(timeout=0.01, poll_interval=0)
 
         self.assertFalse(drained)
+
+    async def test_drain_waits_until_active_processor_finishes(self):
+        queue = request_queue_module.RequestQueue()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def processor(request):
+            started.set()
+            await release.wait()
+
+        queue.set_processor(processor)
+        added = await queue.add_request(
+            channel_id=206,
+            message=types.SimpleNamespace(),
+            content="Hello",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+        self.assertTrue(added)
+        await started.wait()
+
+        drain_task = asyncio.create_task(queue.drain(timeout=1.0, poll_interval=0.01))
+        await asyncio.sleep(0)
+        self.assertFalse(drain_task.done())
+        release.set()
+
+        self.assertTrue(await drain_task)
+
+    async def test_cancel_active_cancels_processing_task_and_releases_tracking(self):
+        queue = request_queue_module.RequestQueue()
+        started = asyncio.Event()
+
+        async def processor(request):
+            started.set()
+            await asyncio.Event().wait()
+
+        queue.set_processor(processor)
+        added = await queue.add_request(
+            channel_id=207,
+            message=types.SimpleNamespace(),
+            content="Hello",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+        self.assertTrue(added)
+        await started.wait()
+
+        await queue.cancel_active()
+
+        self.assertFalse(queue.processing[207])
+        self.assertEqual(queue.pending_counts[207].get(123, 0), 0)
+
+    async def test_cancel_active_drops_queued_requests_without_restarting_processor(self):
+        queue = request_queue_module.RequestQueue()
+        started = asyncio.Event()
+        processed = []
+
+        async def processor(request):
+            processed.append(request["content"])
+            started.set()
+            await asyncio.Event().wait()
+
+        queue.set_processor(processor)
+        first = await queue.add_request(
+            channel_id=208,
+            message=types.SimpleNamespace(),
+            content="First",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+        await started.wait()
+        second = await queue.add_request(
+            channel_id=208,
+            message=types.SimpleNamespace(),
+            content="Second",
+            guild=None,
+            attachments=[],
+            user_name="Alice",
+            is_dm=False,
+            user_id=123,
+        )
+
+        await queue.cancel_active()
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(processed, ["First"])
+        self.assertFalse(queue.processing[208])
+        self.assertEqual(len(queue.queues[208]), 0)
+        self.assertEqual(queue.pending_counts[208].get(123, 0), 0)
+        self.assertFalse(any(not task.done() for task in queue._processing_tasks))
 
 
 class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):

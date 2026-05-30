@@ -485,6 +485,40 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('id="new-provider-key-env"', page)
         self.assertIn('id="new-provider-supports-vision"', page)
         self.assertIn('id="edit-provider-protocol"', page)
+        for field_id in (
+            "new-provider-extra-body",
+            "new-provider-include-body",
+            "new-provider-exclude-body",
+            "new-provider-include-headers",
+            "new-provider-reasoning",
+            "new-provider-output-config",
+            "new-provider-thinking",
+            "edit-provider-extra-body",
+            "edit-provider-include-body",
+            "edit-provider-exclude-body",
+            "edit-provider-include-headers",
+            "edit-provider-reasoning",
+            "edit-provider-output-config",
+            "edit-provider-thinking",
+            "new-image-provider-style",
+            "new-image-provider-response-format",
+            "new-image-provider-output-format",
+            "new-image-provider-background",
+            "new-image-provider-moderation",
+            "new-image-provider-extra-body",
+            "edit-image-provider-style",
+            "edit-image-provider-response-format",
+            "edit-image-provider-output-format",
+            "edit-image-provider-background",
+            "edit-image-provider-moderation",
+            "edit-image-provider-extra-body",
+        ):
+            self.assertIn(f'id="{field_id}"', page)
+        self.assertIn("providerJsonObjectFields", page)
+        self.assertIn("parseOptionalJsonObject", page)
+        self.assertIn("collectProviderJsonObjectValues", page)
+        self.assertIn("if (imageProvidersTouched) globalFields.image_providers = imageProvidersData", page)
+        self.assertIn("editImageProvider(", page)
         self.assertIn('providerCapabilityBadges', page)
         self.assertIn('id="response-access-form"', page)
         self.assertIn('id="server_responses_enabled"', page)
@@ -554,6 +588,65 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
             self.assertNotIn(removed_key, config)
 
+    def test_provider_save_api_preserves_passthrough_payload_shape(self):
+        saved_payloads = []
+        payload = {
+            "timeout": 60,
+            "character_providers": {"nahida": "primary"},
+            "image_providers": [{"name": "Images", "url": "https://images.invalid/v1", "model": "gpt-image-1"}],
+            "providers": [{
+                "name": "Shape Test",
+                "url": "https://api.example.invalid/v1",
+                "model": "shape-model",
+                "extra_body": {"top_k": 20, "nested": {"enabled": True}},
+                "include_body": "thinking:\n  type: disabled",
+                "exclude_body": "- frequency_penalty\n- presence_penalty",
+                "include_headers": "X-Provider-Route: primary",
+                "reasoning": {"effort": "high"},
+                "output_config": {"effort": "medium"},
+                "thinking": {"type": "adaptive", "effort": "low"},
+            }],
+        }
+
+        with patch.object(dashboard_module, "_save_providers_json", side_effect=lambda data: saved_payloads.append(data)):
+            response = self.client.post(
+                "/api/providers/save",
+                json={"content": json.dumps(payload)},
+                headers=self.csrf_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        saved = saved_payloads[-1]
+        self.assertEqual(saved["character_providers"], {"nahida": "primary"})
+        self.assertEqual(saved["image_providers"], payload["image_providers"])
+        provider = saved["providers"][0]
+        self.assertEqual(provider["extra_body"], {"top_k": 20, "nested": {"enabled": True}})
+        self.assertEqual(provider["include_body"], "thinking:\n  type: disabled")
+        self.assertEqual(provider["exclude_body"], "- frequency_penalty\n- presence_penalty")
+        self.assertEqual(provider["include_headers"], "X-Provider-Route: primary")
+        self.assertEqual(provider["reasoning"], {"effort": "high"})
+        self.assertEqual(provider["output_config"], {"effort": "medium"})
+        self.assertEqual(provider["thinking"], {"type": "adaptive", "effort": "low"})
+
+    def test_provider_save_api_rejects_malformed_provider_payloads(self):
+        malformed_payloads = [
+            {"providers": "primary"},
+            {"providers": [{"name": "Bad", "url": "", "model": "model"}]},
+            {"providers": [{"name": "Bad", "url": "https://api.invalid/v1", "model": "model", "extra_body": []}]},
+            {"providers": [{"name": "Bad", "url": "https://api.invalid/v1", "model": "model", "supports_vision": "sometimes"}]},
+        ]
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post(
+                    "/api/providers/save",
+                    json={"content": json.dumps(payload)},
+                    headers=self.csrf_headers(),
+                )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["status"], "error")
+
     def test_image_provider_api_validates_cleans_and_saves(self):
         saved_payloads = []
 
@@ -579,6 +672,11 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
                             "model": " gpt-image-1 ",
                             "size": "1024x1024",
                             "quality": " high ",
+                            "style": " vivid ",
+                            "response_format": " b64_json ",
+                            "output_format": " png ",
+                            "background": " transparent ",
+                            "moderation": " low ",
                             "timeout": "2",
                             "extra_body": {"seed": 4},
                             "ignored": "value",
@@ -605,6 +703,11 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
             "model": "gpt-image-1",
             "size": "1024x1024",
             "quality": "high",
+            "style": "vivid",
+            "response_format": "b64_json",
+            "output_format": "png",
+            "background": "transparent",
+            "moderation": "low",
             "timeout": 5,
             "extra_body": {"seed": 4},
         })

@@ -13,6 +13,7 @@ from providers import (
     build_legacy_chat_request_kwargs,
     provider_manager as legacy_provider_manager,
 )
+from provider_contracts import GenerationResult
 
 
 class ProviderGateway:
@@ -25,6 +26,25 @@ class ProviderGateway:
 
     def __init__(self, legacy_manager=None):
         self.legacy_manager = legacy_manager or legacy_provider_manager
+
+    @property
+    def providers(self):
+        return getattr(self.legacy_manager, "providers", {})
+
+    @property
+    def image_providers(self):
+        return getattr(self.legacy_manager, "image_providers", {})
+
+    @property
+    def status(self):
+        return getattr(self.legacy_manager, "status", {})
+
+    @property
+    def image_status(self):
+        return getattr(self.legacy_manager, "image_status", {})
+
+    def has_text_providers(self) -> bool:
+        return bool(self.providers)
 
     @staticmethod
     def build_chat_completion_kwargs(**kwargs):
@@ -49,6 +69,40 @@ class ProviderGateway:
             preferred_tier=preferred_tier,
             req_id=req_id,
         )
+
+    async def generate_result(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        temperature: float = None,
+        max_tokens: int = None,
+        use_single_user: bool = True,
+        preferred_tier: str = "",
+        req_id: str | None = None,
+    ) -> GenerationResult | None:
+        if hasattr(self.legacy_manager, "generate_result"):
+            return await self.legacy_manager.generate_result(
+                messages=messages,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                use_single_user=use_single_user,
+                preferred_tier=preferred_tier,
+                req_id=req_id,
+            )
+
+        text = await self.generate(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_single_user=use_single_user,
+            preferred_tier=preferred_tier,
+            req_id=req_id,
+        )
+        if not text:
+            return None
+        return GenerationResult(text=text, tier=preferred_tier)
 
     async def generate_text(self, *args, **kwargs) -> str | None:
         return await self.generate(*args, **kwargs)

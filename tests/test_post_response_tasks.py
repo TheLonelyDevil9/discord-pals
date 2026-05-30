@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import module_stubs  # noqa: F401
+from delivery_pipeline import ConfirmedDeliveryPart, DeliveryOutcome, DeliveryState
 from post_response_tasks import PostResponseTaskContext, PostResponseTasks
 
 
@@ -67,6 +68,65 @@ class PostResponseTasksTests(unittest.TestCase):
         multipart_mock.assert_called_once_with(77, [101, 102], "one\n\ntwo")
         diagnostic_mock.assert_called_once()
         self.assertEqual(create_task_mock.call_count, 3)
+
+    def test_uses_delivery_outcome_persistable_text_for_response_side_effects(self):
+        bot = types.SimpleNamespace(
+            name="Nahida",
+            character=types.SimpleNamespace(name="Nahida"),
+            _record_emoji_budget=Mock(),
+            _remember_recent_response=Mock(),
+            _reset_failures=Mock(),
+            _record_response=Mock(),
+            _update_mood=Mock(),
+            _send_staggered_reactions=AsyncMock(),
+            _maybe_auto_memory=AsyncMock(),
+            _maybe_handle_reminder_capture=AsyncMock(),
+        )
+        outcome = DeliveryOutcome(
+            state=DeliveryState.PARTIAL,
+            correlation_id="req-1",
+            idempotency_key="idem-1",
+            confirmed_parts=(
+                ConfirmedDeliveryPart(part_index=0, visible_text="confirmed", message_id="101"),
+            ),
+            persistable_visible_text="confirmed",
+        )
+        task_context = PostResponseTaskContext(
+            channel_id=77,
+            discord_channel_id=77,
+            guild_id=5,
+            guild=types.SimpleNamespace(id=5),
+            is_dm=False,
+            user_id=42,
+            user_name="Alice",
+            content="hello",
+            delivered_response="raw provider text that must not drive side effects",
+            sent_records=(
+                {"message": types.SimpleNamespace(id=101, created_at="t1"), "content": "confirmed"},
+            ),
+            reactions=(),
+            split_target=None,
+            context={"channel_id": 77},
+            message=types.SimpleNamespace(id=999),
+            request={"guild": None},
+            req_id="req-1",
+            delivery_outcome=outcome,
+        )
+
+        def close_task(coro):
+            coro.close()
+            return None
+
+        with patch("post_response_tasks.add_to_history"), \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.diagnostic_events.log_delivery_complete") as diagnostic_mock, \
+                patch("post_response_tasks.asyncio.create_task", side_effect=close_task):
+            PostResponseTasks(bot).run_after_confirmed_delivery(task_context)
+
+        bot._remember_recent_response.assert_called_once_with(77, "confirmed")
+        bot._update_mood.assert_called_once_with(77, "hello", "confirmed")
+        self.assertIs(diagnostic_mock.call_args.kwargs["delivery_outcome"], outcome)
 
 
 if __name__ == "__main__":

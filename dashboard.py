@@ -27,6 +27,7 @@ from security import (
 from constants import ALLOWED_IMPORT_FILES
 import config as app_config
 from config import AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
+from dashboard_provider_validation import summarize_image_providers, validate_providers_json_payload
 from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
@@ -383,27 +384,6 @@ def _save_providers_json(data: dict) -> None:
         provider_manager.reload()
     except Exception as e:
         log.warn(f"Providers saved but live provider reload failed: {e}")
-
-
-def _provider_tier_name(index: int) -> str:
-    names = ["primary", "secondary", "fallback"]
-    return names[index] if index < len(names) else f"tier_{index}"
-
-
-def _summarize_image_providers(provider_list: list) -> list[dict]:
-    providers = []
-    for index, provider in enumerate(provider_list if isinstance(provider_list, list) else []):
-        if not isinstance(provider, dict):
-            continue
-        providers.append({
-            "index": index,
-            "tier": _provider_tier_name(index),
-            "name": provider.get("name") or f"Image Provider {index + 1}",
-            "model": provider.get("model") or "gpt-image-1",
-            "url": provider.get("url") or provider.get("base_url") or "",
-            "size": provider.get("size") or "1024x1024",
-        })
-    return providers
 
 
 def _build_known_access_targets(topology: dict) -> dict:
@@ -919,6 +899,9 @@ def save_providers():
         data = json.loads(content)  # Validate JSON
         if not isinstance(data, dict):
             raise ValueError("providers.json must be a JSON object")
+        validation_error = validate_providers_json_payload(data)
+        if validation_error:
+            raise ValueError(validation_error)
         _save_providers_json(data)
         return redirect(url_for('config_page', message='Providers saved successfully'))
     except json.JSONDecodeError as e:
@@ -941,6 +924,9 @@ def api_save_providers():
         providers_data = json.loads(content)  # Validate JSON
         if not isinstance(providers_data, dict):
             return jsonify({'status': 'error', 'message': 'providers.json must be a JSON object'}), 400
+        validation_error = validate_providers_json_payload(providers_data)
+        if validation_error:
+            return jsonify({'status': 'error', 'message': validation_error}), 400
         _save_providers_json(providers_data)
         return jsonify({'status': 'ok'})
     except json.JSONDecodeError as e:
@@ -963,7 +949,7 @@ def api_image_providers():
         return jsonify({
             'status': 'ok',
             'image_providers': image_providers,
-            'summary': _summarize_image_providers(image_providers),
+            'summary': summarize_image_providers(image_providers),
         })
 
     data = request.json
@@ -1016,7 +1002,7 @@ def api_image_providers():
     return jsonify({
         'status': 'ok',
         'image_providers': cleaned,
-        'summary': _summarize_image_providers(cleaned),
+        'summary': summarize_image_providers(cleaned),
         'image_provider_tiers': list(app_config.IMAGE_PROVIDERS.keys()),
     })
 
@@ -1302,7 +1288,7 @@ def config_page():
         provider_tiers=list(app_config.PROVIDERS.keys()),
         image_provider_tiers=list(app_config.IMAGE_PROVIDERS.keys()),
         image_providers_dict=app_config.IMAGE_PROVIDERS,
-        image_providers_raw=_summarize_image_providers(providers_data.get("image_providers", [])),
+        image_providers_raw=summarize_image_providers(providers_data.get("image_providers", [])),
         known_access_targets=_build_known_access_targets(topology),
         providers_dict=app_config.PROVIDERS,
         character_providers=app_config.CHARACTER_PROVIDERS,
@@ -1743,7 +1729,7 @@ def api_preview(name):
 
 def _sanitize_error_message(error: Exception) -> str:
     """Sanitize error message to avoid leaking sensitive info."""
-    msg = str(error)
+    msg = log.redact(str(error))
     # Remove file paths
     import re
     msg = re.sub(r'[A-Za-z]:\\[^\s]+', '[path]', msg)  # Windows paths
@@ -2621,7 +2607,7 @@ def api_v2_auto_bulk_delete():
 def _run_auto_memory_consolidation(data: dict, *, action_label: str = 'Manual consolidation'):
     """Run auto-memory consolidation for an already-validated dashboard payload."""
     from memory import memory_manager
-    from providers import provider_manager
+    from provider_gateway import provider_gateway as provider_manager
 
     data = data or {}
     raw_keys = data.get('keys')

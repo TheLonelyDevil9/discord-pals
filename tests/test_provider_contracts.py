@@ -163,6 +163,50 @@ class ProviderContractTests(unittest.TestCase):
         self.assertNotIn(result.reasoning_text, result.deliverable_text)
         self.assertTrue(result.has_reasoning)
 
+    def test_provider_fallback_policy_table_matches_locked_decisions(self):
+        self.assertTrue(
+            contracts.provider_error_policy(contracts.ProviderErrorCode.RATE_LIMIT).retry_current_provider
+        )
+        self.assertTrue(contracts.provider_error_policy("rate_limit").fallback_eligible)
+        self.assertFalse(contracts.provider_error_policy("timeout").retry_current_provider)
+        self.assertTrue(contracts.provider_error_policy("timeout").fallback_eligible)
+        self.assertFalse(contracts.provider_error_policy("cancelled").fallback_eligible)
+        self.assertTrue(contracts.provider_error_policy("unknown").fallback_eligible)
+
+    def test_provider_exception_classification_is_typed_and_redacted(self):
+        class FakeAPIError(Exception):
+            status_code = 503
+
+            def __str__(self):
+                return "server failed with bearer sk-secret-value and prompt text"
+
+        error = contracts.provider_error_from_exception(
+            FakeAPIError(),
+            provider_name="Primary",
+            tier="primary",
+            endpoint_type="openai-chat",
+        )
+
+        self.assertEqual(error.code, "server_5xx")
+        self.assertEqual(error.provider_name, "Primary")
+        self.assertEqual(error.tier, "primary")
+        self.assertIs(error.endpoint_type, contracts.EndpointType.CHAT_COMPLETIONS)
+        self.assertEqual(error.diagnostics["status_class"], "5xx")
+        self.assertNotIn("sk-secret-value", error.message)
+        self.assertNotIn("prompt text", str(error.diagnostics))
+
+    def test_provider_exception_classification_respects_cancel_and_rate_limit_policy(self):
+        class FakeRateLimitError(Exception):
+            pass
+
+        rate_limit = contracts.provider_error_from_exception(FakeRateLimitError())
+        cancelled = contracts.provider_error_from_exception(__import__("asyncio").CancelledError())
+
+        self.assertEqual(rate_limit.code, "rate_limit")
+        self.assertTrue(rate_limit.retryable)
+        self.assertEqual(cancelled.code, "cancelled")
+        self.assertFalse(cancelled.retryable)
+
     def test_unset_differs_from_explicit_none(self):
         omitted = contracts.ProviderRequest(temperature=contracts.UNSET)
         explicit_null = contracts.ProviderRequest(temperature=None)

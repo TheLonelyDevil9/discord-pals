@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 
 import logger as logger_module
+import dashboard_provider_health
+import diagnostic_events
+from delivery_pipeline import ConfirmedDeliveryPart, DeliveryOutcome, DeliveryState
 
 
 class LoggingDiagnosticsTests(unittest.TestCase):
@@ -94,6 +97,49 @@ class LoggingDiagnosticsTests(unittest.TestCase):
         self.assertEqual([entry["message"] for entry in provider], ["Provider"])
         self.assertEqual([entry["message"] for entry in req1], ["Routing"])
         self.assertEqual([entry["message"] for entry in tier], ["Provider"])
+
+    def test_provider_health_error_sanitizer_uses_registered_redaction(self):
+        logger_module.register_secret("sk-live-secret")
+
+        sanitized = dashboard_provider_health.sanitize_error_message(
+            RuntimeError("Failed with Bearer sk-live-secret at C:\\Users\\dev\\providers.json")
+        )
+
+        self.assertNotIn("sk-live-secret", sanitized)
+        self.assertIn("[REDACTED]", sanitized)
+        self.assertIn("[path]", sanitized)
+
+    def test_delivery_complete_logs_typed_outcome_without_visible_text(self):
+        outcome = DeliveryOutcome(
+            state=DeliveryState.PARTIAL,
+            correlation_id="req-1",
+            idempotency_key="idem-1",
+            confirmed_parts=(
+                ConfirmedDeliveryPart(part_index=0, visible_text="secret visible text", message_id="101"),
+            ),
+            persistable_visible_text="secret visible text",
+            retry_count=1,
+            ambiguous_part_index=1,
+        )
+
+        diagnostic_events.log_delivery_complete(
+            "Nahida",
+            "req-1",
+            channel_id=77,
+            user_id=42,
+            sent_records=[{"message": object(), "content": "secret visible text"}],
+            delivered_response="secret visible text",
+            reactions=[],
+            split_target=None,
+            delivery_outcome=outcome,
+        )
+
+        entry = logger_module.get_logs_after(0)["entries"][0]
+        self.assertEqual(entry["fields"]["delivery_state"], "partial")
+        self.assertEqual(entry["fields"]["retry_count"], 1)
+        self.assertEqual(entry["fields"]["ambiguous_part_index"], 1)
+        self.assertEqual(entry["fields"]["confirmed_message_ids"], ["101"])
+        self.assertNotIn("secret visible text", json.dumps(entry))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from typing import Optional, Dict
 from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
 from context_builder import ContextBuilder
 from provider_gateway import provider_gateway as provider_manager
+from provider_contracts import GenerationResult
 from character import character_manager, Character
 from identity_policy import IDENTITY_GUARD_RETRY_INSTRUCTION, IdentityPolicy
 from message_routing import InboundMessage, TriggerDecision
@@ -33,7 +34,7 @@ from discord_utils import (
 )
 from response_sanitizer import remove_thinking_tags, clean_bot_name_prefix, clean_em_dashes, sanitize_response
 from response_delivery import format_response_for_delivery
-from delivery_pipeline import DeliveryPlan, DeliveryState, deliver_multipart_response
+from runtime_delivery import RuntimeDeliveryBatch, deliver_channel_multipart, deliver_reply_multipart
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
 from stats import stats_manager
@@ -164,6 +165,7 @@ class BotInstance:
 
         # DM follow-up state
         self._dm_followup_state: Dict[int, dict] = {}  # user_id -> {last_user_msg, followups_sent, last_followup, channel_id}
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Processed message tracking (prevents duplicate responses to queued messages)
         self._processed_message_ids: set = set()
@@ -523,6 +525,28 @@ class BotInstance:
             tasks = PostResponseTasks(self)
             self.post_response_tasks = tasks
         return tasks
+
+    def _track_background_task(self, coro, *, name: str) -> asyncio.Task:
+        """Create and remember a background task so shutdown can cancel it."""
+        task = asyncio.create_task(coro, name=f"{self.name}:{name}")
+        background_tasks = getattr(self, "_background_tasks", None)
+        if background_tasks is None:
+            background_tasks = set()
+            self._background_tasks = background_tasks
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        return task
+
+    async def _cancel_background_tasks(self) -> None:
+        tasks = [
+            task for task in getattr(self, "_background_tasks", set())
+            if not task.done()
+        ]
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""
@@ -1425,17 +1449,20 @@ Return exactly one JSON object with this shape:
             register_bot(self)
 
             # Start periodic state cleanup task (every 5 minutes)
-            asyncio.create_task(self._periodic_state_cleanup())
+            self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
 
             # Start DM follow-up loop
-            asyncio.create_task(self._dm_followup_loop())
+            self._track_background_task(self._dm_followup_loop(), name="dm-followups")
 
             # Start durable reminder loop
-            asyncio.create_task(self._reminder_loop())
+            self._track_background_task(self._reminder_loop(), name="reminders")
 
             # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
             if getattr(provider_manager, "providers", None):
-                asyncio.create_task(memory_manager.retry_pending_auto_profiles(provider_manager))
+                self._track_background_task(
+                    memory_manager.retry_pending_auto_profiles(provider_manager),
+                    name="retry-pending-auto-profiles",
+                )
 
             # Initialize Prometheus metrics for this bot
             metrics_manager.update_bot_status(
@@ -1689,139 +1716,35 @@ Return exactly one JSON object with this shape:
         return format_response_for_delivery(response)
 
     async def _send_organic_response(self, message: discord.Message, response: str) -> list[dict]:
-        """Send response organically and return the sent Discord messages with their delivered content."""
+        """Legacy wrapper returning confirmed Discord messages with delivered content."""
+        batch = await self._deliver_organic_response(message, response)
+        return list(batch.sent_records) if batch else []
+
+    async def _deliver_organic_response(self, message: discord.Message, response: str) -> RuntimeDeliveryBatch | None:
+        """Send response organically and return the typed delivery outcome."""
         req_id = getattr(message, "_discord_pals_req_id", None)
         lines = self._split_response_for_delivery(response)
-        if not lines:
-            return []
-        diagnostic_events.log_delivery_split(self.name, req_id, getattr(message, "channel", None), lines)
-
-        sent_messages = {}
-        is_synthetic = hasattr(message, '_interaction') and message._interaction is not None
-
-        async def send_part(part):
-            i = part.part_index
-            line = part.visible_text
-            try:
-                started = time.perf_counter()
-                if i == 0:
-                    if is_synthetic:
-                        # Use interaction followup for synthetic messages from /interact
-                        sent_msg = await message._interaction.followup.send(line)
-                    else:
-                        sent_msg = await message.reply(line)
-                else:
-                    # Add delay between lines (0.5-1 second)
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                    sent_msg = await message.channel.send(line)
-                sent_messages[i] = sent_msg
-                diagnostic_events.log_discord_send(
-                    self.name,
-                    req_id,
-                    getattr(message, "channel", None),
-                    sent_msg,
-                    part=i + 1,
-                    total_parts=len(lines),
-                    content_len=len(line),
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                )
-                message_id = getattr(sent_msg, "id", None)
-                return str(message_id) if message_id is not None else ""
-            except discord.HTTPException as e:
-                diagnostic_events.log_discord_send_failed(
-                    self.name,
-                    req_id,
-                    getattr(message, "channel", None),
-                    e,
-                    part=i + 1,
-                    total_parts=len(lines),
-                )
-                raise
-
-        plan = DeliveryPlan.from_parts(
-            lines,
-            correlation_id=req_id or log.new_request_id(),
-            idempotency_key=f"{self.name}:{getattr(message, 'id', 'unknown')}:{req_id or 'no-req'}",
+        return await deliver_reply_multipart(
+            bot_name=self.name,
+            message=message,
+            lines=lines,
+            req_id=req_id,
         )
-        outcome = await deliver_multipart_response(plan, send_part)
-        if outcome.state != DeliveryState.SUCCESS:
-            log.warn(
-                "Response delivery completed without all parts confirmed",
-                self.name,
-                component="delivery",
-                event="delivery_partial" if outcome.confirmed_parts else "delivery_failed",
-                req_id=req_id,
-                state=outcome.state.value,
-                confirmed_parts=len(outcome.confirmed_parts),
-                failed_part_index=outcome.failed_part_index,
-                ambiguous_part_index=outcome.ambiguous_part_index,
-            )
-
-        return [
-            {"message": sent_messages[part.part_index], "content": part.visible_text}
-            for part in outcome.confirmed_parts
-            if part.part_index in sent_messages
-        ]
 
     async def _send_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> list[dict]:
+        """Legacy wrapper for direct channel delivery."""
+        batch = await self._deliver_organic_response_to_channel(channel, response, req_id=req_id)
+        return list(batch.sent_records) if batch else []
+
+    async def _deliver_organic_response_to_channel(self, channel, response: str, req_id: str | None = None) -> RuntimeDeliveryBatch | None:
         """Send an organic response directly to a channel without replying to a source message."""
         lines = self._split_response_for_delivery(response)
-        if not lines:
-            return []
-        diagnostic_events.log_delivery_split(self.name, req_id, channel, lines, direct_channel=True)
-
-        sent_messages = {}
-
-        async def send_part(part):
-            i = part.part_index
-            line = part.visible_text
-            try:
-                started = time.perf_counter()
-                if i > 0:
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
-                sent_msg = await channel.send(line)
-                sent_messages[i] = sent_msg
-                diagnostic_events.log_discord_send(
-                    self.name,
-                    req_id,
-                    channel,
-                    sent_msg,
-                    part=i + 1,
-                    total_parts=len(lines),
-                    content_len=len(line),
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                    direct_channel=True,
-                )
-                message_id = getattr(sent_msg, "id", None)
-                return str(message_id) if message_id is not None else ""
-            except discord.HTTPException as e:
-                diagnostic_events.log_discord_send_failed(self.name, req_id, channel, e, part=i + 1, total_parts=len(lines))
-                raise
-
-        plan = DeliveryPlan.from_parts(
-            lines,
-            correlation_id=req_id or log.new_request_id(),
-            idempotency_key=f"{self.name}:{getattr(channel, 'id', 'direct')}:{req_id or 'no-req'}",
+        return await deliver_channel_multipart(
+            bot_name=self.name,
+            channel=channel,
+            lines=lines,
+            req_id=req_id,
         )
-        outcome = await deliver_multipart_response(plan, send_part)
-        if outcome.state != DeliveryState.SUCCESS:
-            log.warn(
-                "Direct channel delivery completed without all parts confirmed",
-                self.name,
-                component="delivery",
-                event="delivery_partial" if outcome.confirmed_parts else "delivery_failed",
-                req_id=req_id,
-                state=outcome.state.value,
-                confirmed_parts=len(outcome.confirmed_parts),
-                failed_part_index=outcome.failed_part_index,
-                ambiguous_part_index=outcome.ambiguous_part_index,
-            )
-
-        return [
-            {"message": sent_messages[part.part_index], "content": part.visible_text}
-            for part in outcome.confirmed_parts
-            if part.part_index in sent_messages
-        ]
 
     async def _send_staggered_reactions(self, message: discord.Message, reactions: list, guild: discord.Guild):
         """Send reactions to message."""
@@ -2376,7 +2299,7 @@ Return exactly one JSON object with this shape:
                 bot_name=self.name,
                 success=bool(response),
                 duration_seconds=response_time_ms / 1000.0,
-                provider_tier=preferred_tier or 'default'
+                provider_tier=context.get("provider_tier") or preferred_tier or 'default'
             )
 
         if not response:
@@ -2405,7 +2328,7 @@ Return exactly one JSON object with this shape:
         last_violation = None
 
         for attempt in range(max_attempts):
-            response = await provider_manager.generate(
+            generation_result = await provider_manager.generate_result(
                 messages=attempt_messages,
                 system_prompt=system_prompt,
                 temperature=None,
@@ -2415,9 +2338,29 @@ Return exactly one JSON object with this shape:
                 req_id=req_id,
             )
 
-            if not response:
+            if not generation_result:
                 return None
 
+            if not isinstance(generation_result, GenerationResult):
+                generation_result = GenerationResult(text=str(generation_result or ""))
+
+            context["provider_tier"] = generation_result.tier or preferred_tier or "default"
+            context["provider_name"] = generation_result.provider_name or generation_result.tier or ""
+            context["provider_model"] = generation_result.model or ""
+            context["provider_has_reasoning"] = generation_result.has_reasoning
+            log.diagnostic(
+                "Provider result received",
+                self.name,
+                component="provider",
+                event="generation_result",
+                req_id=req_id,
+                provider_tier=context["provider_tier"],
+                provider_name=context["provider_name"],
+                model=context["provider_model"],
+                has_reasoning=generation_result.has_reasoning,
+            )
+
+            response = generation_result.deliverable_text
             response = sanitize_response(response, self.character.name)
             response = await self._polish_response(response)
             response = sanitize_response(response, self.character.name)
@@ -2532,7 +2475,7 @@ Return exactly one JSON object with this shape:
                 return False
 
         # Send first so failed Discord sends do not leak phantom assistant turns into history.
-        sent_records = None
+        sent_batch = None
         if request.get("dm_invite_requested"):
             if response_access.log_if_dm_blocked(
                 self.name,
@@ -2547,7 +2490,7 @@ Return exactly one JSON object with this shape:
                 target_channel = await self._resolve_user_dm_channel(user_id)
                 if target_channel:
                     response = f"Hey, you asked me to DM you from the server. {response}"
-                    sent_records = await self._send_organic_response_to_channel(target_channel, response, req_id=req_id)
+                    sent_batch = await self._deliver_organic_response_to_channel(target_channel, response, req_id=req_id)
                 else:
                     log.warn(
                         f"Could not open requested DM for user {user_id}",
@@ -2558,14 +2501,14 @@ Return exactly one JSON object with this shape:
                         user_id=user_id,
                     )
 
-        if sent_records is None:
-            sent_records = await self._send_organic_response(message, response)
-        if not sent_records:
+        if sent_batch is None:
+            sent_batch = await self._deliver_organic_response(message, response)
+        if sent_batch is None or not sent_batch.sent_records:
             log.warn("Response send failed before any content was delivered", self.name, component="delivery", event="delivery_failed", req_id=req_id, channel_id=channel_id)
             self._record_failure(channel_id)
             return False
 
-        delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
+        delivered_response = sent_batch.persistable_visible_text.strip()
         self._post_response_tasks().run_after_confirmed_delivery(
             PostResponseTaskContext(
                 channel_id=channel_id,
@@ -2577,13 +2520,14 @@ Return exactly one JSON object with this shape:
                 user_name=user_name,
                 content=content,
                 delivered_response=delivered_response,
-                sent_records=tuple(sent_records),
+                sent_records=sent_batch.sent_records,
                 reactions=tuple(reactions),
                 split_target=split_target,
                 context=context,
                 message=message,
                 request=request,
                 req_id=req_id,
+                delivery_outcome=sent_batch.outcome,
             )
         )
 
@@ -3346,6 +3290,7 @@ Return exactly one JSON object with this shape:
     
     async def close(self):
         """Close the bot connection."""
+        drained = False
         try:
             drained = await self.request_queue.drain(timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
             if not drained:
@@ -3362,4 +3307,7 @@ Return exactly one JSON object with this shape:
                 component="shutdown",
                 event="queue_drain_failed",
             )
+        if not drained and hasattr(self.request_queue, "cancel_active"):
+            await self.request_queue.cancel_active()
+        await self._cancel_background_tasks()
         await self.client.close()

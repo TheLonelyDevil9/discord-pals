@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import re
 
+import logger as log
+
 
 def sanitize_error_message(error: Exception) -> str:
     """Sanitize error message to avoid leaking sensitive info."""
-    msg = str(error)
+    msg = log.redact(str(error))
     msg = re.sub(r'[A-Za-z]:\\[^\s]+', '[path]', msg)
     msg = re.sub(r'/[^\s]+/', '[path]/', msg)
     msg = re.sub(r'(api[_-]?key|token|secret|password)[=:]\s*\S+', r'\1=[redacted]', msg, flags=re.IGNORECASE)

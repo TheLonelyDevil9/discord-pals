@@ -22,6 +22,7 @@ from provider_contracts import (
     ProviderError,
     ProviderRequest,
     UNSET,
+    provider_error_policy,
     reject_image_generation_disabled,
     select_newapi_auth_headers_for_endpoint,
 )
@@ -540,7 +541,7 @@ def _provider_error_from_status(
         provider_name=descriptor.name,
         tier=descriptor.tier,
         endpoint_type=endpoint,
-        retryable=code in {"rate_limit", "timeout", "network", "server_5xx"},
+        retryable=provider_error_policy(code).retry_current_provider,
         diagnostics={
             "status": status,
             "status_class": f"{status // 100}xx" if status else "",
