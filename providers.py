@@ -10,7 +10,14 @@ from typing import Any, List, Dict, Optional
 from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
 from discord_utils import remove_thinking_tags
 from newapi_adapters import NewAPIAdapterError, NewAPIProviderAdapter, is_newapi_provider_config
-from provider_contracts import ProviderDescriptor, ProviderProtocol, ProviderRequest
+from provider_contracts import (
+    GenerationResult,
+    ProviderDescriptor,
+    ProviderProtocol,
+    ProviderRequest,
+    provider_error_from_exception,
+    provider_error_policy,
+)
 import asyncio
 import copy
 import time
@@ -293,8 +300,8 @@ def build_legacy_chat_request_kwargs(
                             headers.update({str(k): str(v) for k, v in item.items()})
                     if headers:
                         request_kwargs["extra_headers"] = headers
-            except Exception as e:
-                include_headers_error = str(e)
+            except Exception:
+                include_headers_error = "parse_error"
         else:
             include_headers_error = "PyYAML not installed"
 
@@ -719,7 +726,14 @@ class AIProviderManager:
                     elif built_request.include_headers_error == "PyYAML not installed":
                         log.warn(f"[{tier}] include_headers configured but PyYAML not installed", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
                     elif built_request.include_headers_error:
-                        log.warn(f"[{tier}] Failed to parse include_headers YAML: {built_request.include_headers_error}", component="provider", event="provider_headers_error", req_id=req_id, tier=tier)
+                        log.warn(
+                            f"[{tier}] Failed to parse include_headers YAML",
+                            component="provider",
+                            event="provider_headers_error",
+                            req_id=req_id,
+                            tier=tier,
+                            reason=built_request.include_headers_error,
+                        )
                 
                 log.diagnostic(
                     f"[{tier}] Provider request",
@@ -880,7 +894,7 @@ class AIProviderManager:
 
         return None
 
-    async def _try_generate_newapi(
+    async def _try_generate_newapi_result(
         self,
         provider_cfg: dict,
         model: str,
@@ -895,7 +909,7 @@ class AIProviderManager:
         include_headers: str = "",
         req_id: str | None = None,
         cycle: int = 0,
-    ) -> str | None:
+    ) -> GenerationResult | None:
         """Generate through the explicit NewAPI adapter lane."""
 
         descriptor = ProviderDescriptor.from_config(
@@ -975,26 +989,69 @@ class AIProviderManager:
                     latency_ms=latency_ms,
                     has_reasoning=result.has_reasoning,
                 )
-                return remove_thinking_tags(content)
+                return GenerationResult(
+                    text=remove_thinking_tags(content),
+                    reasoning_text=result.reasoning_text,
+                    provider_name=result.provider_name,
+                    tier=result.tier,
+                    model=result.model,
+                    usage=result.usage,
+                    raw=result.raw,
+                )
             except NewAPIAdapterError as e:
                 error = e.provider_error
-                if error.code == "rate_limit" and attempt < MAX_RETRIES - 1:
+                policy = provider_error_policy(error.code)
+                if policy.retry_current_provider and attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAYS[attempt]
                     log.warn(
-                        f"[{tier}] NewAPI rate limited, retrying in {delay}s...",
+                        f"[{tier}] NewAPI {error.code}, retrying in {delay}s...",
                         component="provider",
                         event="newapi_provider_retry",
                         req_id=req_id,
                         tier=tier,
                         attempt=attempt + 1,
                         delay_s=delay,
-                        reason="rate_limit",
+                        reason=error.code,
                     )
                     await asyncio.sleep(delay)
                     continue
                 raise
 
         return None
+
+    async def _try_generate_newapi(
+        self,
+        provider_cfg: dict,
+        model: str,
+        messages: List[dict],
+        temperature: float,
+        max_tokens: int,
+        tier: str,
+        timeout: int = None,
+        extra_body: Optional[dict] = None,
+        include_body: str = "",
+        exclude_body: str = "",
+        include_headers: str = "",
+        req_id: str | None = None,
+        cycle: int = 0,
+    ) -> str | None:
+        """Generate through NewAPI and return only visible text for legacy callers."""
+        result = await self._try_generate_newapi_result(
+            provider_cfg,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            tier,
+            timeout=timeout,
+            extra_body=extra_body,
+            include_body=include_body,
+            exclude_body=exclude_body,
+            include_headers=include_headers,
+            req_id=req_id,
+            cycle=cycle,
+        )
+        return result.deliverable_text if result else None
 
     async def _try_generate_for_provider(
         self,
@@ -1013,8 +1070,43 @@ class AIProviderManager:
         req_id: str | None = None,
         cycle: int = 0,
     ) -> str | None:
+        result = await self._try_generate_result_for_provider(
+            client,
+            provider_cfg,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            tier,
+            timeout=timeout,
+            extra_body=extra_body,
+            include_body=include_body,
+            exclude_body=exclude_body,
+            include_headers=include_headers,
+            req_id=req_id,
+            cycle=cycle,
+        )
+        return result.deliverable_text if result else None
+
+    async def _try_generate_result_for_provider(
+        self,
+        client,
+        provider_cfg: dict,
+        model: str,
+        messages: List[dict],
+        temperature: float,
+        max_tokens: int,
+        tier: str,
+        timeout: int = None,
+        extra_body: Optional[dict] = None,
+        include_body: str = "",
+        exclude_body: str = "",
+        include_headers: str = "",
+        req_id: str | None = None,
+        cycle: int = 0,
+    ) -> GenerationResult | None:
         if is_newapi_provider_config(provider_cfg):
-            return await self._try_generate_newapi(
+            return await self._try_generate_newapi_result(
                 provider_cfg,
                 model,
                 messages,
@@ -1030,7 +1122,7 @@ class AIProviderManager:
                 cycle=cycle,
             )
 
-        return await self._try_generate(
+        text = await self._try_generate(
             client,
             model,
             messages,
@@ -1045,8 +1137,16 @@ class AIProviderManager:
             req_id=req_id,
             cycle=cycle,
         )
+        if not text:
+            return None
+        return GenerationResult(
+            text=text,
+            provider_name=str(provider_cfg.get("name") or tier),
+            tier=tier,
+            model=model,
+        )
     
-    async def generate(
+    async def generate_result(
         self,
         messages: List[dict],
         system_prompt: str,
@@ -1055,8 +1155,8 @@ class AIProviderManager:
         use_single_user: bool = True,  # SillyTavern-style by default
         preferred_tier: str = "",  # Per-character provider preference
         req_id: str | None = None,
-    ) -> str:
-        """Generate response with automatic fallback and retry (3 full cycles).
+    ) -> GenerationResult | None:
+        """Generate response metadata with automatic fallback and retry (3 full cycles).
 
         Args:
             messages: Conversation messages
@@ -1155,7 +1255,7 @@ class AIProviderManager:
 
                 try:
                     client = self.providers[tier]
-                    result = await self._try_generate_for_provider(
+                    result = await self._try_generate_result_for_provider(
                         client, provider_cfg, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
                         timeout=effective_timeout,
                         extra_body=extra_body if extra_body else None,
@@ -1182,6 +1282,7 @@ class AIProviderManager:
                     continue
                 except NewAPIAdapterError as e:
                     error = e.provider_error
+                    policy = provider_error_policy(error.code)
                     self.status[tier] = "rate limited" if error.code == "rate_limit" else "error"
                     log.error(
                         f"[{tier}] NewAPI {error.code}",
@@ -1192,15 +1293,21 @@ class AIProviderManager:
                         model=model,
                         endpoint_type=error.endpoint_type.value if error.endpoint_type else None,
                         error_code=error.code,
-                        retryable=error.retryable,
+                        retryable=policy.retry_current_provider,
+                        fallback_eligible=policy.fallback_eligible,
+                        status_class=error.diagnostics.get("status_class"),
                     )
+                    if not policy.fallback_eligible:
+                        if error.code == "cancelled":
+                            raise asyncio.CancelledError()
+                        raise
                     continue
                 except APIError as e:
                     if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
-                            result = await self._try_generate_for_provider(
+                            result = await self._try_generate_result_for_provider(
                                 client, provider_cfg, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
                                 timeout=effective_timeout,
                                 extra_body=extra_body if extra_body else None,
@@ -1216,19 +1323,51 @@ class AIProviderManager:
                             self.status[tier] = "empty response"
                             continue
                         except Exception as fallback_error:
+                            provider_error = provider_error_from_exception(
+                                fallback_error,
+                                provider_name=str(provider_cfg.get("name") or tier),
+                                tier=tier,
+                            )
                             self.status[tier] = "error"
-                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model)
+                            log.error(
+                                f"[{tier}] text-only fallback failed: {provider_error.code}",
+                                component="provider",
+                                event="provider_error",
+                                req_id=req_id,
+                                tier=tier,
+                                model=model,
+                                error_type=provider_error.diagnostics.get("error_type"),
+                                error_code=provider_error.code,
+                                retryable=provider_error.retryable,
+                                status_class=provider_error.diagnostics.get("status_class"),
+                            )
                             continue
 
+                    provider_error = provider_error_from_exception(
+                        e,
+                        provider_name=str(provider_cfg.get("name") or tier),
+                        tier=tier,
+                    )
                     self.status[tier] = "error"
-                    log.error(f"[{tier}] {str(e)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model, error_type=type(e).__name__)
+                    log.error(
+                        f"[{tier}] {provider_error.code}",
+                        component="provider",
+                        event="provider_error",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        error_type=provider_error.diagnostics.get("error_type"),
+                        error_code=provider_error.code,
+                        retryable=provider_error.retryable,
+                        status_class=provider_error.diagnostics.get("status_class"),
+                    )
                     continue
                 except Exception as e:
                     if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
-                            result = await self._try_generate_for_provider(
+                            result = await self._try_generate_result_for_provider(
                                 client, provider_cfg, model, text_only_messages, effective_temperature, effective_max_tokens, tier,
                                 timeout=effective_timeout,
                                 extra_body=extra_body if extra_body else None,
@@ -1244,12 +1383,44 @@ class AIProviderManager:
                             self.status[tier] = "empty response"
                             continue
                         except Exception as fallback_error:
+                            provider_error = provider_error_from_exception(
+                                fallback_error,
+                                provider_name=str(provider_cfg.get("name") or tier),
+                                tier=tier,
+                            )
                             self.status[tier] = "error"
-                            log.error(f"[{tier}] text-only fallback failed: {str(fallback_error)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model)
+                            log.error(
+                                f"[{tier}] text-only fallback failed: {provider_error.code}",
+                                component="provider",
+                                event="provider_error",
+                                req_id=req_id,
+                                tier=tier,
+                                model=model,
+                                error_type=provider_error.diagnostics.get("error_type"),
+                                error_code=provider_error.code,
+                                retryable=provider_error.retryable,
+                                status_class=provider_error.diagnostics.get("status_class"),
+                            )
                             continue
 
+                    provider_error = provider_error_from_exception(
+                        e,
+                        provider_name=str(provider_cfg.get("name") or tier),
+                        tier=tier,
+                    )
                     self.status[tier] = "error"
-                    log.error(f"[{tier}] {str(e)[:100]}", component="provider", event="provider_error", req_id=req_id, tier=tier, model=model, error_type=type(e).__name__)
+                    log.error(
+                        f"[{tier}] {provider_error.code}",
+                        component="provider",
+                        event="provider_error",
+                        req_id=req_id,
+                        tier=tier,
+                        model=model,
+                        error_type=provider_error.diagnostics.get("error_type"),
+                        error_code=provider_error.code,
+                        retryable=provider_error.retryable,
+                        status_class=provider_error.diagnostics.get("status_class"),
+                    )
                     continue
             
             # Wait before next cycle
@@ -1259,6 +1430,28 @@ class AIProviderManager:
         # Silent fail - no public error message
         log.error("All providers failed after 3 cycles", component="provider", event="provider_all_failed", req_id=req_id)
         return None
+
+    async def generate(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        temperature: float = None,
+        max_tokens: int = None,
+        use_single_user: bool = True,
+        preferred_tier: str = "",
+        req_id: str | None = None,
+    ) -> str | None:
+        """Generate visible text for legacy callers."""
+        result = await self.generate_result(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_single_user=use_single_user,
+            preferred_tier=preferred_tier,
+            req_id=req_id,
+        )
+        return result.deliverable_text if result else None
     
     def get_status(self) -> str:
         """Get formatted status of all providers."""

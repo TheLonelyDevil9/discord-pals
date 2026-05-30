@@ -491,3 +491,48 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         instance._resolve_channel.assert_awaited_once_with(77)
         instance._resolve_user_dm_channel.assert_awaited_once_with(42)
         add_history_mock.assert_called_once()
+
+    async def test_scheduled_reminder_partial_primary_delivery_does_not_resend_to_fallback_dm(self):
+        class PartialChannel:
+            id = 77
+            guild = None
+
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, content):
+                self.sent.append(content)
+                if len(self.sent) == 1:
+                    return types.SimpleNamespace(id=10, created_at=None, content=content)
+                raise reminder_delivery_module.discord.HTTPException("boom")
+
+        primary_channel = PartialChannel()
+        fallback_dm = types.SimpleNamespace(id=555, guild=None, send=AsyncMock())
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = types.SimpleNamespace(get_guild=lambda guild_id: None)
+        instance._resolve_channel = AsyncMock(return_value=primary_channel)
+        instance._resolve_user_dm_channel = AsyncMock(return_value=fallback_dm)
+        instance._split_response_for_delivery = lambda response: ["One.", "Two."]
+
+        reminder = {
+            "id": "rem-1",
+            "source_type": "channel",
+            "target_user_id": 42,
+            "source_channel_id": 77,
+            "source_guild_id": 5,
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(True, None)), \
+                patch("runtime_delivery.asyncio.sleep", new=AsyncMock()), \
+                patch.object(reminder_delivery_module, "add_to_history") as add_history_mock:
+            sent_messages, actual_channel_id = await instance._send_scheduled_reminder(reminder, "One.\n\nTwo.")
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(actual_channel_id, 77)
+        self.assertEqual(primary_channel.sent, ["<@42> One.", "Two."])
+        fallback_dm.send.assert_not_awaited()
+        add_history_mock.assert_called_once()
+        self.assertEqual(add_history_mock.call_args.args[2], "<@42> One.")

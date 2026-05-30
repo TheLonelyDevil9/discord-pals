@@ -112,6 +112,21 @@ X-Mode: fast
         self.assertEqual(dict_headers.extra_header_keys, ("X-Trace", "X-Mode"))
         self.assertEqual(list_headers.extra_header_keys, ("X-Trace", "X-Mode"))
 
+    def test_include_headers_parse_error_does_not_echo_header_secret(self):
+        built = providers.build_legacy_chat_request_kwargs(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            temperature=1.0,
+            max_tokens=512,
+            include_headers="""
+Authorization: [Bearer sk-secret-value
+""",
+        )
+
+        self.assertEqual(built.include_headers_error, "parse_error")
+        self.assertNotIn("sk-secret-value", built.include_headers_error)
+        self.assertNotIn("Authorization", built.include_headers_error)
+
     def test_include_body_extra_body_is_sent_without_changing_legacy_extra_body_logs(self):
         messages = [{"role": "user", "content": "hello"}]
 
@@ -413,6 +428,43 @@ class ProviderGatewayTests(unittest.IsolatedAsyncioTestCase):
         legacy.can_use_vision.assert_called_once_with("primary")
         legacy.get_status.assert_called_once_with()
         legacy.reload.assert_called_once_with()
+
+    async def test_gateway_proxies_legacy_provider_state_for_runtime_checks(self):
+        legacy = types.SimpleNamespace(
+            providers={"primary": object()},
+            image_providers={"image": object()},
+            status={"primary": "ok"},
+            image_status={"image": "ok"},
+            generate=AsyncMock(return_value="ok"),
+        )
+        gateway = ProviderGateway(legacy)
+
+        self.assertTrue(gateway.has_text_providers())
+        self.assertIs(gateway.providers, legacy.providers)
+        self.assertIs(gateway.image_providers, legacy.image_providers)
+        self.assertIs(gateway.status, legacy.status)
+        self.assertIs(gateway.image_status, legacy.image_status)
+
+    async def test_gateway_generate_result_uses_typed_result_when_available(self):
+        expected = contracts.GenerationResult(
+            text="visible",
+            reasoning_text="private",
+            provider_name="NewAPI",
+            tier="primary",
+            model="responses-model",
+        )
+        legacy = types.SimpleNamespace(generate_result=AsyncMock(return_value=expected))
+        gateway = ProviderGateway(legacy)
+
+        result = await gateway.generate_result(
+            messages=[{"role": "user", "content": "hello"}],
+            system_prompt="system",
+            preferred_tier="primary",
+            req_id="req-1",
+        )
+
+        self.assertIs(result, expected)
+        legacy.generate_result.assert_awaited_once()
 
 
 if __name__ == "__main__":

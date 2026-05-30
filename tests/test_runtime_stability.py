@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import runtime_config
+from delivery_pipeline import ConfirmedDeliveryPart, DeliveryOutcome, DeliveryState
 from scopes import ScopeLockRegistry
 
 
@@ -22,6 +23,31 @@ class _AsyncNoop:
 def _close_task(coro):
     coro.close()
     return None
+
+
+def _delivery_batch(records, *, persistable_visible_text=None):
+    records = tuple(records)
+    confirmed_parts = tuple(
+        ConfirmedDeliveryPart(
+            part_index=index,
+            visible_text=record["content"],
+            message_id=str(getattr(record["message"], "id", index)),
+        )
+        for index, record in enumerate(records)
+    )
+    text = persistable_visible_text
+    if text is None:
+        text = "\n\n".join(record["content"] for record in records)
+    return bot_instance_module.RuntimeDeliveryBatch(
+        outcome=DeliveryOutcome(
+            state=DeliveryState.SUCCESS if records else DeliveryState.FAILED,
+            correlation_id="req-test",
+            idempotency_key="idem-test",
+            confirmed_parts=confirmed_parts,
+            persistable_visible_text=text,
+        ),
+        sent_records=records,
+    )
 
 
 class SplitReplyProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -746,10 +772,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=11, created_at="t1"), "content": "One."},
             {"message": types.SimpleNamespace(id=12, created_at="t2"), "content": "Two."},
-        ])
+        ]))
 
         context = {
             "channel_id": 1,
@@ -798,9 +824,9 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "<@555> hello"},
-        ])
+        ]))
 
         context = {
             "channel_id": 1,
@@ -829,7 +855,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             sent = await instance._send_and_finalize_response("hello", context, message, request)
 
         self.assertTrue(sent)
-        instance._send_organic_response.assert_awaited_once_with(message, "<@555> hello")
+        instance._deliver_organic_response.assert_awaited_once_with(message, "<@555> hello")
         self.assertEqual(add_history_mock.call_args.args[2], "<@555> hello")
 
     async def test_send_and_finalize_avoids_phantom_history_after_later_send_failure(self):
@@ -896,7 +922,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._record_response = Mock()
         instance._update_mood = Mock()
         instance._record_failure = Mock()
-        instance._send_organic_response = AsyncMock(return_value=[])
+        instance._deliver_organic_response = AsyncMock(return_value=None)
 
         context = {
             "channel_id": 1,
@@ -948,7 +974,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "*Firefly says \"Sure.\"*",
         ])
 
-        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=generate_mock), \
                 patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
                     "identity_guard_enabled": True,
                     "identity_guard_policy": "regenerate_then_drop",
@@ -986,7 +1012,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "I can help with that from here.",
         ])
 
-        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=generate_mock), \
                 patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
                     "identity_guard_enabled": True,
                     "identity_guard_policy": "regenerate_then_drop",
@@ -1004,6 +1030,52 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, "I can help with that from here.")
         self.assertFalse(context["identity_guard_blocked"])
         self.assertEqual(generate_mock.await_count, 2)
+
+    async def test_generate_ai_response_records_typed_provider_metadata_without_reasoning_text(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+
+        context = {
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Alice: hi"}],
+            "chatroom_context": "",
+            "other_bot_names": [],
+        }
+        message = types.SimpleNamespace(channel=types.SimpleNamespace())
+        message.channel.typing = lambda: _AsyncNoop()
+        generation = bot_instance_module.GenerationResult(
+            text="Visible reply.",
+            reasoning_text="Private reasoning must stay private.",
+            provider_name="NewAPI",
+            tier="primary",
+            model="gpt-5.5",
+        )
+
+        with patch.object(bot_instance_module.provider_manager, "generate_result", new=AsyncMock(return_value=generation)), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "identity_guard_enabled": True,
+                    "identity_guard_policy": "regenerate_then_drop",
+                    "use_single_user": False,
+                    "prose_polisher_enabled": False,
+                }.get(key, default)), \
+                patch.object(bot_instance_module.runtime_config, "store_last_context"), \
+                patch.object(bot_instance_module.stats_manager, "record_response"), \
+                patch.object(bot_instance_module.metrics_manager, "record_response") as metrics_response, \
+                patch.object(bot_instance_module.metrics_manager, "record_error"), \
+                patch.object(bot_instance_module.log, "diagnostic") as diagnostic_mock:
+            response = await instance._generate_ai_response(context, message)
+
+        self.assertEqual(response, "Visible reply.")
+        self.assertEqual(context["provider_tier"], "primary")
+        self.assertEqual(context["provider_name"], "NewAPI")
+        self.assertEqual(context["provider_model"], "gpt-5.5")
+        self.assertIs(context["provider_has_reasoning"], True)
+        self.assertEqual(metrics_response.call_args.kwargs["provider_tier"], "primary")
+        diagnostic_payload = str(diagnostic_mock.call_args_list)
+        self.assertIn("has_reasoning", diagnostic_payload)
+        self.assertNotIn("Private reasoning must stay private.", diagnostic_payload)
 
     def test_identity_guard_allows_plain_bot_name_reference(self):
         instance = object.__new__(bot_instance_module.BotInstance)
@@ -1209,10 +1281,10 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         instance._check_rate_limit = Mock(return_value=False)
         instance._check_circuit_breaker = Mock(return_value=False)
         instance._is_duplicate_response = Mock(return_value=False)
-        instance._send_organic_response = AsyncMock(return_value=[
+        instance._deliver_organic_response = AsyncMock(return_value=_delivery_batch([
             {"message": types.SimpleNamespace(id=31, created_at="t1"), "content": "server reply"},
-        ])
-        instance._send_organic_response_to_channel = AsyncMock()
+        ]))
+        instance._deliver_organic_response_to_channel = AsyncMock()
         instance._resolve_user_dm_channel = AsyncMock()
         instance._remember_recent_response = Mock()
         instance._reset_failures = Mock()
@@ -1257,8 +1329,8 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(sent)
         instance._resolve_user_dm_channel.assert_not_awaited()
-        instance._send_organic_response_to_channel.assert_not_awaited()
-        instance._send_organic_response.assert_awaited_once()
+        instance._deliver_organic_response_to_channel.assert_not_awaited()
+        instance._deliver_organic_response.assert_awaited_once()
         self.assertEqual(add_history_mock.call_args.args[2], "server reply")
 
 
@@ -1279,13 +1351,37 @@ class BotLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_close_still_closes_client_when_queue_drain_times_out(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
-        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=False))
+        instance.request_queue = types.SimpleNamespace(
+            drain=AsyncMock(return_value=False),
+            cancel_active=AsyncMock(),
+        )
         instance.client = types.SimpleNamespace(close=AsyncMock())
 
         with patch.object(bot_instance_module.log, "warn") as warn_mock:
             await instance.close()
 
         warn_mock.assert_called_once()
+        instance.request_queue.cancel_active.assert_awaited_once()
+        instance.client.close.assert_awaited_once()
+
+    async def test_close_cancels_tracked_background_tasks_before_client_close(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.request_queue = types.SimpleNamespace(drain=AsyncMock(return_value=True))
+        instance.client = types.SimpleNamespace(close=AsyncMock())
+        started = asyncio.Event()
+
+        async def background_loop():
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(background_loop())
+        instance._background_tasks = {task}
+        await started.wait()
+
+        await instance.close()
+
+        self.assertTrue(task.cancelled())
         instance.client.close.assert_awaited_once()
 
 

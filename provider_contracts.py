@@ -6,6 +6,7 @@ future provider-gateway work a typed boundary without changing legacy behavior.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from typing import Any, Mapping, Sequence
@@ -74,6 +75,53 @@ class ProviderProtocol(Enum):
             ProviderProtocol.OPENAI_COMPATIBLE,
             ProviderProtocol.NEWAPI,
         }
+
+
+class ProviderErrorCode(str, Enum):
+    """Canonical provider failure categories used by fallback policy."""
+
+    AUTH = "auth"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    NETWORK = "network"
+    SERVER_5XX = "server_5xx"
+    BAD_REQUEST = "bad_request"
+    CONTENT_FILTER = "content_filter"
+    CAPABILITY_UNSUPPORTED = "capability_unsupported"
+    CANCELLED = "cancelled"
+    EMPTY_RESPONSE = "empty_response"
+    NO_CHOICES = "no_choices"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ProviderFallbackPolicy:
+    """Observable fallback behavior for one provider error category."""
+
+    retry_current_provider: bool
+    fallback_eligible: bool
+    public_notice: bool = False
+
+
+PROVIDER_FALLBACK_POLICIES: Mapping[str, ProviderFallbackPolicy] = {
+    ProviderErrorCode.AUTH.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.RATE_LIMIT.value: ProviderFallbackPolicy(True, True),
+    ProviderErrorCode.TIMEOUT.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.NETWORK.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.SERVER_5XX.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.BAD_REQUEST.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.CONTENT_FILTER.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.CAPABILITY_UNSUPPORTED.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.CANCELLED.value: ProviderFallbackPolicy(False, False),
+    ProviderErrorCode.EMPTY_RESPONSE.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.NO_CHOICES.value: ProviderFallbackPolicy(False, True),
+    ProviderErrorCode.UNKNOWN.value: ProviderFallbackPolicy(False, True),
+}
+
+
+def provider_error_policy(code: str | ProviderErrorCode) -> ProviderFallbackPolicy:
+    key = code.value if isinstance(code, ProviderErrorCode) else str(code or ProviderErrorCode.UNKNOWN.value)
+    return PROVIDER_FALLBACK_POLICIES.get(key, PROVIDER_FALLBACK_POLICIES[ProviderErrorCode.UNKNOWN.value])
 
 
 class EndpointType(Enum):
@@ -260,6 +308,85 @@ class ProviderError:
     endpoint_type: EndpointType | None = None
     retryable: bool = False
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
+
+def provider_error_code_from_exception(error: BaseException) -> ProviderErrorCode:
+    """Classify provider exceptions without exposing raw exception text."""
+
+    if isinstance(error, asyncio.CancelledError):
+        return ProviderErrorCode.CANCELLED
+    if isinstance(error, asyncio.TimeoutError):
+        return ProviderErrorCode.TIMEOUT
+
+    type_name = type(error).__name__.lower()
+    status = getattr(error, "status_code", None) or getattr(error, "status", None)
+    body_text = " ".join(
+        str(part or "")
+        for part in (
+            getattr(error, "message", ""),
+            getattr(error, "body", ""),
+            getattr(error, "response", ""),
+            error,
+        )
+    ).lower()
+
+    if "ratelimit" in type_name or "rate_limit" in type_name or status == 429:
+        return ProviderErrorCode.RATE_LIMIT
+    if "timeout" in type_name or status == 408:
+        return ProviderErrorCode.TIMEOUT
+    if "authentication" in type_name or "permissiondenied" in type_name:
+        return ProviderErrorCode.AUTH
+    if "contentfilter" in type_name or _looks_like_content_filter(body_text):
+        return ProviderErrorCode.CONTENT_FILTER
+    if "badrequest" in type_name:
+        return ProviderErrorCode.BAD_REQUEST
+    if "connection" in type_name or "network" in type_name or isinstance(error, (ConnectionError, OSError)):
+        return ProviderErrorCode.NETWORK
+
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        status_int = 0
+    if status_int in (401, 403):
+        return ProviderErrorCode.AUTH
+    if status_int == 400:
+        return ProviderErrorCode.BAD_REQUEST
+    if 500 <= status_int <= 599:
+        return ProviderErrorCode.SERVER_5XX
+
+    return ProviderErrorCode.UNKNOWN
+
+
+def provider_error_from_exception(
+    error: BaseException,
+    *,
+    provider_name: str = "",
+    tier: str = "",
+    endpoint_type: EndpointType | str | None = None,
+) -> ProviderError:
+    """Build a redacted provider error for fallback and diagnostics."""
+
+    code = provider_error_code_from_exception(error)
+    policy = provider_error_policy(code)
+    endpoint = EndpointType.parse(endpoint_type) if endpoint_type else None
+    status = getattr(error, "status_code", None) or getattr(error, "status", None)
+    diagnostics: dict[str, Any] = {"error_type": type(error).__name__}
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        status_int = 0
+    if status_int:
+        diagnostics["status_class"] = f"{status_int // 100}xx"
+
+    return ProviderError(
+        code=code.value,
+        message=f"Provider failed with {code.value}.",
+        provider_name=provider_name,
+        tier=tier,
+        endpoint_type=endpoint,
+        retryable=policy.retry_current_provider,
+        diagnostics=diagnostics,
+    )
 
 
 @dataclass(frozen=True)
@@ -488,6 +615,10 @@ def parse_provider_protocol(value: Any, default: ProviderProtocol | None = None)
     return ProviderProtocol.parse(value, default=default)
 
 
+def _looks_like_content_filter(text: str) -> bool:
+    return any(token in text for token in ("content filter", "content_filter", "safety", "blocked"))
+
+
 def _normalize_token(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_").replace("/", "_").strip("_")
 
@@ -497,8 +628,11 @@ __all__ = [
     "CapabilityFlags",
     "EndpointType",
     "GenerationResult",
+    "PROVIDER_FALLBACK_POLICIES",
     "ProviderDescriptor",
     "ProviderError",
+    "ProviderErrorCode",
+    "ProviderFallbackPolicy",
     "ProviderProtocol",
     "ProviderRequest",
     "UNSET",
@@ -508,6 +642,9 @@ __all__ = [
     "parse_endpoint_type",
     "parse_provider_protocol",
     "provider_bodies_equal",
+    "provider_error_code_from_exception",
+    "provider_error_from_exception",
+    "provider_error_policy",
     "reject_image_generation_disabled",
     "select_newapi_auth_headers",
     "select_newapi_auth_headers_for_endpoint",

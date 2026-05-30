@@ -9,6 +9,7 @@ from typing import Any
 
 import diagnostic_events
 import runtime_config
+from delivery_pipeline import DeliveryOutcome
 from discord_utils import add_to_history, store_multipart_response
 from prometheus_metrics import metrics_manager
 from scopes import memory_server_id
@@ -34,6 +35,13 @@ class PostResponseTaskContext:
     message: Any
     request: dict
     req_id: str | None
+    delivery_outcome: DeliveryOutcome | None = None
+
+    @property
+    def persistable_visible_text(self) -> str:
+        if self.delivery_outcome is not None:
+            return self.delivery_outcome.persistable_visible_text
+        return self.delivered_response
 
 
 class PostResponseTasks:
@@ -46,7 +54,7 @@ class PostResponseTasks:
         """Record confirmed visible output, then schedule non-blocking follow-ups."""
         bot = self.bot
         channel_id = task_context.channel_id
-        delivered_response = task_context.delivered_response
+        delivered_response = task_context.persistable_visible_text
 
         bot._record_emoji_budget(channel_id, delivered_response)
         bot._remember_recent_response(channel_id, delivered_response)
@@ -88,6 +96,7 @@ class PostResponseTasks:
             delivered_response=delivered_response,
             reactions=list(task_context.reactions),
             split_target=task_context.split_target,
+            delivery_outcome=task_context.delivery_outcome,
         )
 
         if task_context.reactions:

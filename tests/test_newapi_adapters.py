@@ -287,6 +287,25 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.provider_error.code, "rate_limit")
         self.assertTrue(raised.exception.provider_error.retryable)
 
+    async def test_http_400_safety_errors_map_to_content_filter(self):
+        adapter = newapi_adapters.NewAPIProviderAdapter(
+            post_json=_PostRecorder(newapi_adapters.NewAPIHTTPStatusError(400, "blocked by safety policy"))
+        )
+
+        with self.assertRaises(newapi_adapters.NewAPIAdapterError) as raised:
+            await adapter.generate(
+                descriptor=_descriptor(contracts.EndpointType.CHAT_COMPLETIONS),
+                request=contracts.ProviderRequest(
+                    endpoint_type=contracts.EndpointType.CHAT_COMPLETIONS,
+                    model="chat-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                ),
+                api_key="sk-test",
+                timeout=20,
+            )
+
+        self.assertEqual(raised.exception.provider_error.code, "content_filter")
+
 
 class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_generate_routes_explicit_newapi_provider_without_legacy_sdk_client(self):
@@ -335,6 +354,48 @@ class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             call["request"].messages,
             [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}],
         )
+
+    async def test_generate_result_preserves_newapi_reasoning_outside_visible_text(self):
+        manager = object.__new__(providers.AIProviderManager)
+        manager.providers = {"primary": object()}
+        manager.status = {}
+        manager._vision_support_overrides = {}
+        manager._build_tier_order = lambda preferred_tier="": ["primary"]
+        manager._newapi_adapter = types.SimpleNamespace(
+            generate=AsyncMock(return_value=contracts.GenerationResult(
+                text="<thinking>draft</thinking>Visible reply.",
+                reasoning_text="Private reasoning.",
+                provider_name="NewAPI",
+                tier="primary",
+                model="responses-model",
+            ))
+        )
+        provider_cfg = {
+            "name": "NewAPI",
+            "url": "https://gateway.example",
+            "key": "sk-test",
+            "requires_key": True,
+            "provider_protocol": "newapi",
+            "endpoint_type": "openai-responses",
+            "model": "responses-model",
+            "max_tokens": 256,
+            "temperature": 0.5,
+        }
+
+        with patch.dict(providers.PROVIDERS, {"primary": provider_cfg}, clear=True), \
+                patch.object(providers.log, "diagnostic"), \
+                patch.object(providers.log, "ok"):
+            result = await manager.generate_result(
+                messages=[{"role": "user", "content": "hello"}],
+                system_prompt="system",
+                use_single_user=False,
+                req_id="req-1",
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.deliverable_text, "Visible reply.")
+        self.assertEqual(result.reasoning_text, "Private reasoning.")
+        self.assertTrue(result.has_reasoning)
 
     async def test_requires_key_false_does_not_send_not_needed_auth(self):
         captured = {}

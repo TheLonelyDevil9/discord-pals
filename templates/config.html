@@ -768,7 +768,16 @@
                             <div class="form-group"><label for="new-image-provider-model">Model</label><input type="text" id="new-image-provider-model" value="gpt-image-1" required></div>
                             <div class="form-group"><label for="new-image-provider-size">Size</label><input type="text" id="new-image-provider-size" value="1024x1024"></div>
                             <div class="form-group"><label for="new-image-provider-quality">Quality</label><input type="text" id="new-image-provider-quality" placeholder="auto, high, medium, low"></div>
+                            <div class="form-group"><label for="new-image-provider-style">Style</label><input type="text" id="new-image-provider-style" placeholder="vivid, natural"></div>
+                            <div class="form-group"><label for="new-image-provider-response-format">Response Format</label><input type="text" id="new-image-provider-response-format" placeholder="b64_json, url"></div>
+                            <div class="form-group"><label for="new-image-provider-output-format">Output Format</label><input type="text" id="new-image-provider-output-format" placeholder="png, jpeg, webp"></div>
+                            <div class="form-group"><label for="new-image-provider-background">Background</label><input type="text" id="new-image-provider-background" placeholder="auto, transparent, opaque"></div>
+                            <div class="form-group"><label for="new-image-provider-moderation">Moderation</label><input type="text" id="new-image-provider-moderation" placeholder="auto, low"></div>
                             <div class="form-group"><label for="new-image-provider-timeout">Timeout (seconds)</label><input type="number" id="new-image-provider-timeout" min="5" max="3600" value="120"></div>
+                            <div class="form-group span-full">
+                                <label for="new-image-provider-extra-body">Extra Body (JSON)</label>
+                                <textarea id="new-image-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"seed": 4}'></textarea>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Add Image Provider</button>
                     </form>
@@ -886,6 +895,34 @@
                                 </select>
                             </div>
                             <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
+                            <div class="form-group">
+                                <label for="new-provider-extra-body">Extra Body (JSON)</label>
+                                <textarea id="new-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-include-body">Include Body (YAML)</label>
+                                <textarea id="new-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-exclude-body">Exclude Body (YAML)</label>
+                                <textarea id="new-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-include-headers">Include Headers (YAML)</label>
+                                <textarea id="new-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-reasoning">Reasoning (JSON)</label>
+                                <textarea id="new-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-output-config">Output Config (JSON)</label>
+                                <textarea id="new-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-provider-thinking">Thinking (JSON)</label>
+                                <textarea id="new-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                            </div>
                             <div class="form-group">
                                 <label>Provider Capabilities</label>
                                 <div class="provider-toggle-grid">
@@ -1144,6 +1181,34 @@
                 </div>
                 <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
                 <div class="form-group">
+                    <label for="edit-provider-extra-body">Extra Body (JSON)</label>
+                    <textarea id="edit-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-include-body">Include Body (YAML)</label>
+                    <textarea id="edit-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-exclude-body">Exclude Body (YAML)</label>
+                    <textarea id="edit-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-include-headers">Include Headers (YAML)</label>
+                    <textarea id="edit-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-reasoning">Reasoning (JSON)</label>
+                    <textarea id="edit-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-output-config">Output Config (JSON)</label>
+                    <textarea id="edit-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="edit-provider-thinking">Thinking (JSON)</label>
+                    <textarea id="edit-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                </div>
+                <div class="form-group">
                     <label>Provider Capabilities</label>
                     <div class="provider-toggle-grid">
                         <label class="checkbox-label"><input type="checkbox" id="edit-provider-requires-key" checked><span>Requires Key</span></label>
@@ -1164,6 +1229,41 @@
             <div class="editor-actions">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
                 <button type="button" class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="edit-image-provider-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-image-provider-title">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="edit-image-provider-title">Edit Image Provider</h3>
+            <button type="button" class="modal-close" onclick="closeEditImageProviderModal()" aria-label="Close image provider editor">Close</button>
+        </div>
+        <form id="edit-image-provider-form" class="provider-form">
+            <input type="hidden" id="edit-image-provider-index">
+            <div class="settings-grid">
+                <div class="form-group"><label for="edit-image-provider-name">Display Name</label><input type="text" id="edit-image-provider-name" required></div>
+                <div class="form-group"><label for="edit-image-provider-endpoint">API Endpoint</label><input type="text" id="edit-image-provider-endpoint" required></div>
+                <div class="form-group"><label for="edit-image-provider-key-env">API Key Env Var</label><input type="text" id="edit-image-provider-key-env" placeholder="OPENAI_API_KEY"></div>
+                <div class="form-group"><label for="edit-image-provider-key">Direct API Key</label><input type="password" id="edit-image-provider-key" placeholder="Leave blank to keep current"></div>
+                <div class="form-group"><label for="edit-image-provider-model">Model</label><input type="text" id="edit-image-provider-model" required></div>
+                <div class="form-group"><label for="edit-image-provider-size">Size</label><input type="text" id="edit-image-provider-size"></div>
+                <div class="form-group"><label for="edit-image-provider-quality">Quality</label><input type="text" id="edit-image-provider-quality" placeholder="auto, high, medium, low"></div>
+                <div class="form-group"><label for="edit-image-provider-style">Style</label><input type="text" id="edit-image-provider-style" placeholder="vivid, natural"></div>
+                <div class="form-group"><label for="edit-image-provider-response-format">Response Format</label><input type="text" id="edit-image-provider-response-format" placeholder="b64_json, url"></div>
+                <div class="form-group"><label for="edit-image-provider-output-format">Output Format</label><input type="text" id="edit-image-provider-output-format" placeholder="png, jpeg, webp"></div>
+                <div class="form-group"><label for="edit-image-provider-background">Background</label><input type="text" id="edit-image-provider-background" placeholder="auto, transparent, opaque"></div>
+                <div class="form-group"><label for="edit-image-provider-moderation">Moderation</label><input type="text" id="edit-image-provider-moderation" placeholder="auto, low"></div>
+                <div class="form-group"><label for="edit-image-provider-timeout">Timeout (seconds)</label><input type="number" id="edit-image-provider-timeout" min="5" max="3600"></div>
+                <div class="form-group span-full">
+                    <label for="edit-image-provider-extra-body">Extra Body (JSON)</label>
+                    <textarea id="edit-image-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"seed": 4}'></textarea>
+                </div>
+            </div>
+            <div class="editor-actions">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" class="btn btn-ghost" onclick="closeEditImageProviderModal()">Cancel</button>
             </div>
         </form>
     </div>
@@ -1378,6 +1478,8 @@ let timezoneOptionsPromise = null;
 let providersData = [];
 let providersLoaded = false;
 let imageProvidersData = [];
+let imageProvidersLoaded = false;
+let imageProvidersTouched = false;
 let sortableLoaded = false;
 
 function csrfHeaders() {
@@ -1843,6 +1945,7 @@ function ensureProvidersLoaded() {
         providersData = data.providers || [];
         if (!imageProvidersData.length && Array.isArray(data.image_providers)) {
             imageProvidersData = data.image_providers;
+            imageProvidersLoaded = true;
         }
     } catch (e) {
         providersData = [];
@@ -1881,6 +1984,110 @@ function providerProtocol(provider) {
 
 function providerEndpointType(provider) {
     return provider.endpoint_type || provider.endpoint || 'openai-chat';
+}
+
+const providerJsonObjectFields = ['extra_body', 'reasoning', 'output_config', 'thinking'];
+const providerYamlTextFields = ['include_body', 'exclude_body', 'include_headers'];
+const imageProviderOptionalStringFields = ['quality', 'style', 'response_format', 'output_format', 'background', 'moderation'];
+
+function fieldIdSuffix(field) {
+    return field.replace(/_/g, '-');
+}
+
+function optionalJsonObjectText(value) {
+    if (value === undefined || value === null) return '';
+    return JSON.stringify(value, null, 2);
+}
+
+function parseOptionalJsonObject(raw, label) {
+    const text = (raw || '').trim();
+    if (!text) return { ok: true, value: undefined };
+    try {
+        const value = JSON.parse(text);
+        if (!value || Array.isArray(value) || typeof value !== 'object') {
+            return { ok: false, message: `${label} must be a JSON object` };
+        }
+        return { ok: true, value };
+    } catch (err) {
+        return { ok: false, message: `Invalid ${label} JSON: ${err.message}` };
+    }
+}
+
+function textareaValue(id, fallback = '') {
+    const el = document.getElementById(id);
+    return el ? el.value : fallback;
+}
+
+function setTextareaValue(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? '';
+}
+
+function providerFieldId(prefix, field) {
+    return `${prefix}-provider-${fieldIdSuffix(field)}`;
+}
+
+function setProviderCustomFieldValues(prefix, provider) {
+    providerJsonObjectFields.forEach(field => {
+        setTextareaValue(providerFieldId(prefix, field), provider[field] === undefined ? '' : optionalJsonObjectText(provider[field]));
+    });
+    providerYamlTextFields.forEach(field => {
+        setTextareaValue(providerFieldId(prefix, field), provider[field] || '');
+    });
+}
+
+function collectProviderJsonObjectValues(prefix) {
+    const values = {};
+    for (const field of providerJsonObjectFields) {
+        const parsed = parseOptionalJsonObject(textareaValue(providerFieldId(prefix, field)), field);
+        if (!parsed.ok) {
+            showToast(parsed.message, 'error');
+            return null;
+        }
+        values[field] = parsed.value;
+    }
+    return values;
+}
+
+function applyProviderCustomFieldValues(prefix, provider, jsonValues) {
+    providerJsonObjectFields.forEach(field => {
+        if (jsonValues[field] !== undefined) provider[field] = jsonValues[field]; else delete provider[field];
+    });
+    providerYamlTextFields.forEach(field => {
+        const value = textareaValue(providerFieldId(prefix, field));
+        if (value.trim()) provider[field] = value; else delete provider[field];
+    });
+}
+
+function imageProviderFieldId(prefix, field) {
+    return `${prefix}-image-provider-${fieldIdSuffix(field)}`;
+}
+
+function setImageProviderCustomFieldValues(prefix, provider) {
+    imageProviderOptionalStringFields.forEach(field => {
+        const el = document.getElementById(imageProviderFieldId(prefix, field));
+        if (el) el.value = provider[field] || '';
+    });
+    setTextareaValue(imageProviderFieldId(prefix, 'extra_body'), provider.extra_body === undefined ? '' : optionalJsonObjectText(provider.extra_body));
+}
+
+function collectImageProviderExtraBody(prefix) {
+    const parsed = parseOptionalJsonObject(textareaValue(imageProviderFieldId(prefix, 'extra_body')), 'image extra_body');
+    if (!parsed.ok) {
+        showToast(parsed.message, 'error');
+        return null;
+    }
+    return parsed;
+}
+
+function applyImageProviderCustomFieldValues(prefix, provider, parsedExtraBody) {
+    imageProviderOptionalStringFields.forEach(field => {
+        const el = document.getElementById(imageProviderFieldId(prefix, field));
+        if (!el) return;
+        const value = el.value.trim();
+        if (value) provider[field] = value; else delete provider[field];
+    });
+    if (parsedExtraBody.value !== undefined) provider.extra_body = parsedExtraBody.value; else delete provider.extra_body;
 }
 
 function providerCapabilityBadges(provider) {
@@ -1936,6 +2143,7 @@ async function loadImageProviders() {
         const result = await response.json();
         if (result.status === 'ok') {
             imageProvidersData = result.image_providers || [];
+            imageProvidersLoaded = true;
             renderImageProviderList(result.summary || []);
             return;
         }
@@ -1946,9 +2154,11 @@ async function loadImageProviders() {
             const data = JSON.parse(editor?.dataset.raw || editor?.value || '{}');
             if (Array.isArray(data.image_providers)) {
                 imageProvidersData = data.image_providers;
+                imageProvidersLoaded = true;
             }
         } catch (e) { /* keep empty fallback */ }
     }
+    imageProvidersLoaded = true;
     renderImageProviderList(getInitialImageProviders());
 }
 
@@ -1969,6 +2179,7 @@ function renderImageProviderList(summary) {
             <div class="provider-actions">
                 <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, -1)" ${i === 0 ? 'disabled' : ''}>Up</button>
                 <button type="button" class="btn-icon" onclick="moveImageProvider(${i}, 1)" ${i === providers.length - 1 ? 'disabled' : ''}>Down</button>
+                <button type="button" class="btn-icon" onclick="editImageProvider(${i})">Edit</button>
                 <button type="button" class="btn-icon" onclick="deleteImageProvider(${i})">Delete</button>
             </div>
         </div>
@@ -1986,6 +2197,9 @@ async function saveImageProvidersToServer() {
         showToast(result.message || 'Failed to save image providers', 'error');
         return false;
     }
+    imageProvidersData = result.image_providers || imageProvidersData;
+    imageProvidersLoaded = true;
+    imageProvidersTouched = true;
     renderImageProviderList(result.summary || []);
     return true;
 }
@@ -2008,6 +2222,55 @@ async function deleteImageProvider(index) {
     imageProvidersData.splice(index, 1);
     if (await saveImageProvidersToServer()) showToast('Image provider deleted', 'success');
 }
+
+function editImageProvider(index) {
+    const provider = imageProvidersData[index];
+    if (!provider) return;
+    document.getElementById('edit-image-provider-index').value = index;
+    document.getElementById('edit-image-provider-name').value = provider.name || '';
+    document.getElementById('edit-image-provider-endpoint').value = provider.url || provider.base_url || '';
+    document.getElementById('edit-image-provider-key-env').value = provider.key_env || '';
+    document.getElementById('edit-image-provider-key').value = '';
+    document.getElementById('edit-image-provider-model').value = provider.model || 'gpt-image-1';
+    document.getElementById('edit-image-provider-size').value = provider.size || '1024x1024';
+    document.getElementById('edit-image-provider-timeout').value = provider.timeout || '';
+    setImageProviderCustomFieldValues('edit', provider);
+    document.getElementById('edit-image-provider-modal').classList.add('active');
+}
+
+function closeEditImageProviderModal() {
+    document.getElementById('edit-image-provider-modal').classList.remove('active');
+}
+
+document.getElementById('edit-image-provider-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const parsedExtraBody = collectImageProviderExtraBody('edit');
+    if (!parsedExtraBody) return;
+
+    const index = parseInt(document.getElementById('edit-image-provider-index').value);
+    const provider = imageProvidersData[index];
+    if (!provider) return;
+    provider.name = document.getElementById('edit-image-provider-name').value.trim();
+    provider.url = document.getElementById('edit-image-provider-endpoint').value.trim();
+    delete provider.base_url;
+    provider.key_env = document.getElementById('edit-image-provider-key-env').value.trim();
+    if (!provider.key_env) delete provider.key_env;
+    const newKey = document.getElementById('edit-image-provider-key').value.trim();
+    if (newKey) provider.api_key = newKey;
+    provider.model = document.getElementById('edit-image-provider-model').value.trim();
+    provider.size = document.getElementById('edit-image-provider-size').value.trim() || '1024x1024';
+    const timeout = document.getElementById('edit-image-provider-timeout').value.trim();
+    if (timeout) provider.timeout = parseInt(timeout); else delete provider.timeout;
+    applyImageProviderCustomFieldValues('edit', provider, parsedExtraBody);
+    if (await saveImageProvidersToServer()) {
+        closeEditImageProviderModal();
+        showToast('Image provider updated', 'success');
+    }
+});
+
+document.getElementById('edit-image-provider-modal')?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) closeEditImageProviderModal();
+});
 
 function setupDragAndDrop() {
     const list = document.getElementById('provider-list');
@@ -2075,9 +2338,13 @@ function setProviderFormValues(prefix, provider) {
     document.getElementById(`${prefix}-provider-supports-streaming`).checked = provider.supports_streaming === true;
     document.getElementById(`${prefix}-provider-image-modeled`).checked = provider.image_generation_modeled === true;
     document.getElementById(`${prefix}-provider-image-disabled`).checked = provider.image_generation_disabled === true;
+    setProviderCustomFieldValues(prefix, provider);
 }
 
-function applyProviderFormValues(prefix, provider) {
+function applyProviderFormValues(prefix, provider, jsonValues = null) {
+    jsonValues = jsonValues || collectProviderJsonObjectValues(prefix);
+    if (!jsonValues) return false;
+
     const protocol = document.getElementById(`${prefix}-provider-protocol`).value;
     if (protocol && protocol !== 'legacy-openai-compatible') provider.provider_protocol = protocol; else delete provider.provider_protocol;
     delete provider.protocol;
@@ -2113,6 +2380,8 @@ function applyProviderFormValues(prefix, provider) {
         const checked = document.getElementById(id).checked;
         if (checked !== booleanDefaults[field]) provider[field] = checked; else delete provider[field];
     });
+    applyProviderCustomFieldValues(prefix, provider, jsonValues);
+    return true;
 }
 
 function editProvider(index) {
@@ -2146,6 +2415,9 @@ document.getElementById('edit-provider-endpoint')?.addEventListener('input', (e)
 
 document.getElementById('edit-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const parsedJsonFields = collectProviderJsonObjectValues('edit');
+    if (!parsedJsonFields) return;
+
     const index = parseInt(document.getElementById('edit-provider-index').value);
     const provider = providersData[index];
     if (!provider) return;
@@ -2153,7 +2425,7 @@ document.getElementById('edit-provider-form')?.addEventListener('submit', async 
     provider.url = document.getElementById('edit-provider-endpoint').value.trim() || undefined;
     provider.model = document.getElementById('edit-provider-model').value.trim();
     provider.temperature = parseFloat(document.getElementById('edit-provider-temp').value) || 0.7;
-    applyProviderFormValues('edit', provider);
+    if (!applyProviderFormValues('edit', provider, parsedJsonFields)) return;
     const newKey = document.getElementById('edit-provider-key').value.trim();
     if (newKey) provider.api_key = newKey;
     const maxTokens = document.getElementById('edit-provider-max-tokens').value.trim();
@@ -2191,7 +2463,8 @@ async function saveProvidersToServer() {
         const existing = JSON.parse(jsonEditor.value || '{}');
         if (existing.timeout !== undefined) globalFields.timeout = existing.timeout;
         if (existing.character_providers !== undefined) globalFields.character_providers = existing.character_providers;
-        if (existing.image_providers !== undefined) globalFields.image_providers = existing.image_providers;
+        if (imageProvidersTouched) globalFields.image_providers = imageProvidersData;
+        else if (existing.image_providers !== undefined) globalFields.image_providers = existing.image_providers;
     } catch (e) { /* ignore */ }
     const data = { providers: providersData, ...globalFields };
     const jsonStr = JSON.stringify(data, null, 2);
@@ -2227,6 +2500,9 @@ function updateProviderDefaults() {
 
 document.getElementById('add-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const parsedJsonFields = collectProviderJsonObjectValues('new');
+    if (!parsedJsonFields) return;
+
     ensureProvidersLoaded();
     const name = document.getElementById('new-provider-name').value.trim();
     const url = document.getElementById('new-provider-endpoint').value.trim();
@@ -2239,7 +2515,7 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
     if (url) newProvider.url = url;
     if (key_env) newProvider.key_env = key_env;
     if (api_key) newProvider.api_key = api_key;
-    applyProviderFormValues('new', newProvider);
+    if (!applyProviderFormValues('new', newProvider, parsedJsonFields)) return;
     const newReasoningEffort = document.getElementById('new-provider-reasoning-effort').value;
     if (newReasoningEffort) newProvider.reasoning_effort = newReasoningEffort;
     const newReasoningFormat = document.getElementById('new-provider-reasoning-format').value;
@@ -2260,13 +2536,15 @@ document.getElementById('add-provider-form')?.addEventListener('submit', async (
 
 document.getElementById('add-image-provider-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const parsedExtraBody = collectImageProviderExtraBody('new');
+    if (!parsedExtraBody) return;
+
     const name = document.getElementById('new-image-provider-name').value.trim();
     const url = document.getElementById('new-image-provider-endpoint').value.trim();
     const keyEnv = document.getElementById('new-image-provider-key-env').value.trim();
     const apiKey = document.getElementById('new-image-provider-key').value.trim();
     const model = document.getElementById('new-image-provider-model').value.trim();
     const size = document.getElementById('new-image-provider-size').value.trim();
-    const quality = document.getElementById('new-image-provider-quality').value.trim();
     const timeout = document.getElementById('new-image-provider-timeout').value.trim();
     if (!name || !url || !model) {
         showToast('Image provider needs a name, endpoint, and model', 'error');
@@ -2275,8 +2553,8 @@ document.getElementById('add-image-provider-form')?.addEventListener('submit', a
     const provider = { name, url, model, size: size || '1024x1024' };
     if (keyEnv) provider.key_env = keyEnv;
     if (apiKey) provider.api_key = apiKey;
-    if (quality) provider.quality = quality;
     if (timeout) provider.timeout = parseInt(timeout);
+    applyImageProviderCustomFieldValues('new', provider, parsedExtraBody);
     if (!imageProvidersData.length) await loadImageProviders();
     imageProvidersData.push(provider);
     if (await saveImageProvidersToServer()) {
