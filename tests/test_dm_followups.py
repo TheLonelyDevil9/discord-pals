@@ -20,6 +20,7 @@ class _FakeDMChannel:
         self.id = channel_id
         self.sent_messages = []
         self.sent_files = []
+        self.sent_message_objects = []
 
     def typing(self):
         return _FakeTyping()
@@ -27,7 +28,19 @@ class _FakeDMChannel:
     async def send(self, content=None, file=None):
         self.sent_messages.append(content)
         self.sent_files.append(file)
-        return types.SimpleNamespace(id=len(self.sent_messages), created_at=None)
+        sent = _FakeSentMessage(message_id=len(self.sent_messages))
+        self.sent_message_objects.append(sent)
+        return sent
+
+
+class _FakeSentMessage:
+    def __init__(self, message_id):
+        self.id = message_id
+        self.created_at = None
+        self.reactions = []
+
+    async def add_reaction(self, reaction):
+        self.reactions.append(reaction)
 
 
 class _FakeUser:
@@ -57,6 +70,17 @@ class _FakeClient:
 
 
 class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self._dm_access_patch = patch.object(
+            bot_instance_module.runtime_config,
+            "is_dm_response_allowed",
+            return_value=(True, None),
+        )
+        self._dm_access_patch.start()
+
+    async def asyncTearDown(self):
+        self._dm_access_patch.stop()
+
     async def test_followup_cycle_recovers_when_dm_channel_is_not_cached(self):
         instance = object.__new__(bot_instance_module.BotInstance)
         instance.name = "Nahida"
@@ -96,6 +120,47 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance._dm_followup_state[42]["last_followup"], 2_000.0)
         add_history_mock.assert_called_once_with(
             "dm:Nahida:user:42", "assistant", "Checking in.", author_name="Nahida", timestamp=None
+        )
+
+    async def test_followup_cycle_strips_reaction_tags_before_dm_send(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        fake_user = _FakeUser(dm_channel)
+        instance.client = _FakeClient(fake_user)
+        instance._dm_followup_state = {
+            42: {
+                "last_user_msg": 1_000.0,
+                "followups_sent": 0,
+                "last_followup": 0,
+                "channel_id": 555,
+                "user_name": "Alice",
+            }
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+            "dm_image_generation_enabled": False,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[{"role": "user", "author": "Alice", "content": "Good night"}]), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock(return_value="[REACT: 😊] Good morning, sleepyhead.")), \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.asyncio, "sleep", new=AsyncMock(return_value=None)):
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(dm_channel.sent_messages, ["Good morning, sleepyhead."])
+        self.assertEqual(dm_channel.sent_message_objects[0].reactions, ["😊"])
+        add_history_mock.assert_called_once_with(
+            "dm:Firefly:user:42", "assistant", "Good morning, sleepyhead.", author_name="Firefly", timestamp=None
         )
 
     async def test_followup_cycle_respects_unavailable_schedule(self):
@@ -344,3 +409,72 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 0)
         self.assertEqual(instance._dm_followup_state[42]["last_followup"], 0)
         add_history_mock.assert_not_called()
+
+    async def test_explicit_dm_image_request_uses_context_and_records_history(self):
+        dm_channel = _FakeDMChannel(channel_id=555)
+        history = [{"role": "user", "author": "Alice", "content": "The train window looks lonely tonight."}]
+
+        with patch.object(dm_images_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_image_generation_enabled": True,
+            "dm_image_generation_preferred_tier": "primary",
+            "dm_image_generation_caption_chance": 0.0,
+            "dm_image_generation_prompt": "soft train-window scene",
+        }.get(key, default)), \
+                patch.object(dm_images_module.provider_manager, "generate_image", new=AsyncMock(return_value={
+                    "bytes": b"fake-png",
+                    "filename": "requested.png",
+                })) as image_mock, \
+                patch.object(dm_images_module, "add_to_history") as add_history_mock, \
+                patch.object(dm_images_module.log, "info"), \
+                patch.object(dm_images_module.log, "warn"):
+            sent = await dm_images_module.generate_and_send_requested_dm_image(
+                bot_name="Firefly",
+                channel=dm_channel,
+                user_id=42,
+                user_name="Alice",
+                character_name="Firefly",
+                request_text="can you draw me a picture of the window?",
+                history=history,
+                history_id="dm:Firefly:user:42",
+                system_prompt="Firefly likes gentle stargazing scenes.",
+                context_messages=[{"role": "system", "content": "Recent memories mention the Astral Express."}],
+                req_id="req-image",
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(dm_channel.sent_files[0].filename, "requested.png")
+        prompt = image_mock.await_args.args[0]
+        self.assertIn("draw me a picture", prompt)
+        self.assertIn("Firefly likes gentle stargazing scenes", prompt)
+        self.assertIn("Astral Express", prompt)
+        self.assertEqual(image_mock.await_args.kwargs["preferred_tier"], "primary")
+        add_history_mock.assert_called_once_with(
+            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", timestamp=None
+        )
+
+    async def test_bot_instance_handles_explicit_dm_image_request_before_text_generation(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        dm_channel = _FakeDMChannel(channel_id=555)
+        message = types.SimpleNamespace(channel=dm_channel)
+        context = {
+            "is_dm": True,
+            "content": "please draw me a picture of the train",
+            "channel_id": "dm:Firefly:user:42",
+            "user_id": 42,
+            "user_name": "Alice",
+            "system_prompt": "SYSTEM",
+            "messages_for_api": [{"role": "user", "content": "Alice: please draw me a picture of the train"}],
+            "req_id": "req-image",
+        }
+
+        with patch.object(dm_images_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_image_generation_enabled": True,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[]), \
+                patch.object(dm_images_module, "generate_and_send_requested_dm_image", new=AsyncMock(return_value=True)) as image_mock:
+            handled = await instance._maybe_handle_dm_image_request(context, message)
+
+        self.assertTrue(handled)
+        self.assertEqual(image_mock.await_args.kwargs["request_text"], "please draw me a picture of the train")

@@ -255,6 +255,7 @@ def load_image_providers() -> dict:
             elif provider.get("key_env"):
                 key = os.getenv(provider["key_env"], "")
             log.register_secret(key)
+            requires_key = _validate_provider_bool(provider.get("requires_key"), True, name="image_provider.requires_key")
             if not key:
                 key = "not-needed"
 
@@ -262,6 +263,7 @@ def load_image_providers() -> dict:
                 "name": _validate_provider_value(provider.get("name"), str, f"Image Provider {i+1}", name="image_provider.name"),
                 "url": url,
                 "key": key,
+                "requires_key": requires_key,
                 "model": _validate_provider_value(provider.get("model"), str, "gpt-image-1", name="image_provider.model"),
                 "size": _validate_provider_value(provider.get("size"), str, "1024x1024", name="image_provider.size"),
                 "quality": _validate_provider_value(provider.get("quality"), str, "", name="image_provider.quality"),
