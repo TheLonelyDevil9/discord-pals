@@ -1753,6 +1753,29 @@ Return exactly one JSON object with this shape:
                 await add_reactions(message, [reaction], guild)
             except Exception as e:
                 log.debug(f"Failed to add reaction: {e}", self.name)
+
+    async def _maybe_handle_dm_image_request(self, context: dict, message) -> bool:
+        """Generate and send an image when a DM user explicitly asks for one."""
+        if not dm_images.should_handle_dm_image_request(
+            content=context.get("content", ""),
+            is_dm=context.get("is_dm", False),
+        ):
+            return False
+
+        async with message.channel.typing():
+            return await dm_images.generate_and_send_requested_dm_image(
+                bot_name=self.name,
+                channel=message.channel,
+                user_id=context.get("user_id"),
+                user_name=context.get("user_name", ""),
+                character_name=self.character.name if self.character else self.name,
+                request_text=context.get("content", ""),
+                history=get_history(context["channel_id"]),
+                history_id=context["channel_id"],
+                system_prompt=context.get("system_prompt", ""),
+                context_messages=context.get("messages_for_api", []),
+                req_id=context.get("req_id"),
+            )
     
     async def _gather_mentioned_user_context(self, message: discord.Message, char_name: str) -> str:
         """Gather ephemeral context about mentioned users from recent channel messages.
@@ -2607,6 +2630,9 @@ Return exactly one JSON object with this shape:
                 log.diagnostic("Coordinator slot acquired", self.name, component="coordinator", event="coordinator_acquire", req_id=req_id, message_id=message_id)
 
                 try:
+                    if await self._maybe_handle_dm_image_request(context, message):
+                        return
+
                     # Generate AI response (handles provider call, sanitization)
                     response = await self._generate_ai_response(context, message)
                     if response is None:
@@ -3134,6 +3160,7 @@ Return exactly one JSON object with this shape:
                     continue
 
                 response = sanitize_response(response, self.character.name if self.character else None)
+                response, reactions = parse_reactions(response)
                 if not response:
                     log.warn(f"DM follow-up sanitized to empty response for user {user_id}", self.name)
                     continue
@@ -3150,6 +3177,8 @@ Return exactly one JSON object with this shape:
                 if not sent_records:
                     log.warn(f"DM follow-up send failed for user {user_id}", self.name)
                     continue
+                if reactions:
+                    await self._send_staggered_reactions(sent_records[0]["message"], reactions, None)
 
                 delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
                 first_sent_message = sent_records[0]["message"]

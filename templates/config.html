@@ -759,6 +759,25 @@
                         <p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>
                         {% endif %}
                     </div>
+                    <div class="image-provider-test-panel" aria-live="polite">
+                        <div class="settings-grid compact-grid">
+                            <div class="form-group">
+                                <label for="image-provider-test-index">Test Provider</label>
+                                <select id="image-provider-test-index" title="Image provider to test"></select>
+                            </div>
+                            <div class="form-group span-full">
+                                <label for="image-provider-test-prompt">Test Prompt</label>
+                                <textarea id="image-provider-test-prompt" rows="3" spellcheck="true">A small cozy Discord-style image preview with soft lighting and simple composition.</textarea>
+                            </div>
+                        </div>
+                        <div class="image-provider-test-actions">
+                            <button type="button" class="btn btn-ghost" onclick="testImageProvider()">Generate Test Image</button>
+                            <span id="image-provider-test-status" class="form-hint"></span>
+                        </div>
+                        <div id="image-provider-test-result" class="image-provider-test-result empty">
+                            <span>Preview</span>
+                        </div>
+                    </div>
                     <form id="add-image-provider-form" class="provider-form" style="margin-top: 16px;">
                         <div class="settings-grid compact-grid">
                             <div class="form-group"><label for="new-image-provider-name">Display Name</label><input type="text" id="new-image-provider-name" value="OpenAI Images" required></div>
@@ -1446,6 +1465,11 @@ label.toggle-switch {
 .provider-item:hover { border-color: var(--accent); }
 .provider-item.dragging { opacity: 0.5; }
 .provider-item .drag-handle { color: var(--text-muted); cursor: grab; font-size: 1rem; }
+.image-provider-test-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-primary); }
+.image-provider-test-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.image-provider-test-result { width: min(220px, 100%); aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border: 1px dashed var(--border-subtle); border-radius: 8px; background: var(--bg-secondary); color: var(--text-muted); }
+.image-provider-test-result img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.image-provider-test-result.empty span { font-size: 0.85rem; }
 .provider-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .provider-name { font-weight: 500; color: var(--text-primary); }
 .provider-tier, .provider-model { font-size: 0.75rem; color: var(--text-muted); }
@@ -2166,6 +2190,7 @@ function renderImageProviderList(summary) {
     const list = document.getElementById('image-provider-list');
     if (!list) return;
     const providers = summary || [];
+    renderImageProviderTestOptions(providers);
     if (!providers.length) {
         list.innerHTML = '<p class="text-muted">No image providers configured. Add one below to enable DM image generation.</p>';
         return;
@@ -2184,6 +2209,62 @@ function renderImageProviderList(summary) {
             </div>
         </div>
     `).join('');
+}
+
+function renderImageProviderTestOptions(summary) {
+    const select = document.getElementById('image-provider-test-index');
+    if (!select) return;
+    const providers = summary || imageProvidersData.map((provider, index) => ({
+        name: provider.name || `Image Provider ${index + 1}`,
+        tier: getTierName(index),
+        model: provider.model || 'gpt-image-1'
+    }));
+    if (!providers.length) {
+        select.innerHTML = '<option value="">No image providers</option>';
+        select.disabled = true;
+        return;
+    }
+    select.disabled = false;
+    select.innerHTML = providers.map((provider, index) => (
+        `<option value="${index}">${escapeHtml(provider.tier || getTierName(index))} - ${escapeHtml(provider.name || 'Unnamed')} (${escapeHtml(provider.model || 'gpt-image-1')})</option>`
+    )).join('');
+}
+
+async function testImageProvider() {
+    const select = document.getElementById('image-provider-test-index');
+    const promptEl = document.getElementById('image-provider-test-prompt');
+    const status = document.getElementById('image-provider-test-status');
+    const resultBox = document.getElementById('image-provider-test-result');
+    if (!select || select.disabled || !select.value) {
+        showToast('Add an image provider first', 'error');
+        return;
+    }
+    const index = parseInt(select.value, 10);
+    status.textContent = 'Generating...';
+    resultBox.classList.add('empty');
+    resultBox.innerHTML = '<span>Generating</span>';
+    try {
+        const response = await fetch(`/api/test-image-provider/${index}`, {
+            method: 'POST',
+            headers: csrfHeaders(),
+            body: JSON.stringify({ prompt: promptEl?.value || '' })
+        });
+        const payload = await response.json();
+        if (!payload.success) {
+            status.textContent = '';
+            resultBox.innerHTML = '<span>Failed</span>';
+            showToast('Image test failed: ' + (payload.error || 'Unknown error'), 'error');
+            return;
+        }
+        resultBox.classList.remove('empty');
+        resultBox.innerHTML = `<img src="${escapeHtml(payload.image_src)}" alt="Generated image test preview">`;
+        status.textContent = `${payload.provider_name || 'Provider'} returned ${payload.model || 'an image'}`;
+        showToast('Image provider generated a test image', 'success');
+    } catch (err) {
+        status.textContent = '';
+        resultBox.innerHTML = '<span>Failed</span>';
+        showToast('Image test failed: ' + err.message, 'error');
+    }
 }
 
 async function saveImageProvidersToServer() {

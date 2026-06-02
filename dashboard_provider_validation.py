@@ -2,6 +2,107 @@
 
 from __future__ import annotations
 
+import os
+
+
+TEXT_PROVIDER_REQUIRED_FIELDS = ("url", "model", "auth")
+IMAGE_PROVIDER_REQUIRED_FIELDS = ("url", "model", "auth")
+
+
+def _dashboard_bool(value, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+    return default
+
+
+def _auth_field_status(provider: dict) -> dict:
+    api_key_configured = bool(str(provider.get("api_key") or "").strip())
+    key_env = str(provider.get("key_env") or "").strip()
+    key_env_configured = bool(key_env and os.getenv(key_env))
+    return {
+        "api_key": api_key_configured,
+        "key_env": bool(key_env),
+        "key_env_configured": key_env_configured,
+        "auth": api_key_configured or key_env_configured,
+        "auth_source": "api_key" if api_key_configured else ("key_env" if key_env else ""),
+    }
+
+
+def _provider_field_status(provider: dict, *, provider_kind: str, index: int) -> dict:
+    tier = provider_tier_name(index)
+    endpoint = str(provider.get("url") or provider.get("base_url") or "").strip()
+    model = str(provider.get("model") or "").strip()
+    requires_key = _dashboard_bool(provider.get("requires_key"), True)
+    auth_status = _auth_field_status(provider)
+    required_fields = list(IMAGE_PROVIDER_REQUIRED_FIELDS if provider_kind == "image" else TEXT_PROVIDER_REQUIRED_FIELDS)
+
+    configured_fields = {
+        "url": bool(endpoint),
+        "model": bool(model),
+        "auth": auth_status["auth"] or not requires_key,
+        "api_key": auth_status["api_key"],
+        "key_env": auth_status["key_env"],
+        "key_env_configured": auth_status["key_env_configured"],
+        "requires_key": requires_key,
+    }
+    missing_required = [
+        field for field in required_fields
+        if field != "auth" and not configured_fields.get(field)
+    ]
+    if requires_key and not auth_status["auth"]:
+        missing_required.append("auth")
+
+    return {
+        "index": index,
+        "tier": tier,
+        "kind": provider_kind,
+        "name": provider.get("name") or (f"Image Provider {index + 1}" if provider_kind == "image" else f"Provider {index + 1}"),
+        "model": model,
+        "url": endpoint,
+        "required_fields": required_fields,
+        "configured_fields": configured_fields,
+        "missing_required": missing_required,
+        "configured": not missing_required,
+        "auth_source": auth_status["auth_source"],
+    }
+
+
+def summarize_provider_configs(provider_list: list) -> list[dict]:
+    return [
+        _provider_field_status(provider, provider_kind="text", index=index)
+        for index, provider in enumerate(provider_list if isinstance(provider_list, list) else [])
+        if isinstance(provider, dict)
+    ]
+
+
+def summarize_image_provider_configs(provider_list: list) -> list[dict]:
+    return [
+        _provider_field_status(provider, provider_kind="image", index=index)
+        for index, provider in enumerate(provider_list if isinstance(provider_list, list) else [])
+        if isinstance(provider, dict)
+    ]
+
+
+def provider_config_schema() -> dict:
+    return {
+        "text_provider": {
+            "required_fields": list(TEXT_PROVIDER_REQUIRED_FIELDS),
+            "auth": "Set api_key directly or set key_env to an environment variable containing the key. Set requires_key=false for local/keyless providers.",
+        },
+        "image_provider": {
+            "required_fields": list(IMAGE_PROVIDER_REQUIRED_FIELDS),
+            "auth": "Set api_key directly or set key_env to an environment variable containing the key. Set requires_key=false for local/keyless providers.",
+        },
+    }
+
 
 def validate_providers_json_payload(data: dict) -> str | None:
     """Return a validation error for malformed provider config, else None."""

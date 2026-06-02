@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import types
 import unittest
@@ -520,6 +521,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
             "edit-image-provider-background",
             "edit-image-provider-moderation",
             "edit-image-provider-extra-body",
+            "image-provider-test-index",
+            "image-provider-test-prompt",
+            "image-provider-test-result",
         ):
             self.assertIn(f'id="{field_id}"', page)
         self.assertIn("providerJsonObjectFields", page)
@@ -703,8 +707,10 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         post_body = post_response.get_json()
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_body["summary"][0]["tier"], "primary")
+        self.assertEqual(get_body["field_status"][0]["missing_required"], ["auth"])
         self.assertEqual(post_response.status_code, 200)
         self.assertEqual(post_body["summary"][0]["name"], "New Images")
+        self.assertIn("field_status", post_body)
         self.assertEqual(saved_payloads[-1]["image_providers"][0], {
             "name": "New Images",
             "url": "https://example.invalid/v1",
@@ -720,6 +726,85 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
             "extra_body": {"seed": 4},
         })
         self.assertEqual(invalid_response.status_code, 400)
+
+    def test_provider_metadata_api_exposes_required_and_configured_fields(self):
+        providers_payload = {
+            "providers": [
+                {
+                    "name": "Ready Text",
+                    "url": "https://api.invalid/v1",
+                    "model": "text-model",
+                    "key_env": "READY_TEXT_KEY",
+                },
+                {
+                    "name": "Missing Text",
+                    "url": "",
+                    "model": "",
+                    "requires_key": True,
+                },
+            ],
+            "image_providers": [
+                {
+                    "name": "Image",
+                    "url": "https://images.invalid/v1",
+                    "model": "gpt-image-1",
+                    "requires_key": False,
+                }
+            ],
+        }
+
+        with patch.object(dashboard_module, "_load_providers_json", return_value=providers_payload), \
+                patch.dict(os.environ, {"READY_TEXT_KEY": "configured"}, clear=False):
+            response = self.client.get("/api/providers/metadata")
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["schema"]["text_provider"]["required_fields"], ["url", "model", "auth"])
+        self.assertTrue(body["providers"][0]["configured"])
+        self.assertEqual(body["providers"][0]["auth_source"], "key_env")
+        self.assertEqual(body["providers"][1]["missing_required"], ["url", "model", "auth"])
+        self.assertTrue(body["image_providers"][0]["configured"])
+        self.assertFalse(body["image_providers"][0]["configured_fields"]["requires_key"])
+
+    def test_image_provider_test_api_generates_preview_without_real_provider(self):
+        providers_payload = {
+            "providers": [],
+            "image_providers": [{
+                "name": "Preview Images",
+                "url": "https://images.invalid/v1",
+                "api_key": "test-key",
+                "model": "gpt-image-1",
+                "size": "1024x1024",
+                "quality": "low",
+            }],
+        }
+        captured_kwargs = {}
+
+        class FakeImages:
+            async def generate(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                image = types.SimpleNamespace(b64_json="ZmFrZS1pbWFnZQ==", revised_prompt="revised")
+                return types.SimpleNamespace(data=[image])
+
+        fake_client = types.SimpleNamespace(images=FakeImages())
+
+        with patch.object(dashboard_module, "_load_providers_json", return_value=providers_payload), \
+                patch("openai.AsyncOpenAI", return_value=fake_client) as openai_mock:
+            response = self.client.post(
+                "/api/test-image-provider/0",
+                json={"prompt": "tiny dashboard preview"},
+                headers=self.csrf_headers(),
+            )
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(body["success"])
+        self.assertTrue(body["image_src"].startswith("data:image/png;base64,"))
+        self.assertEqual(body["provider_name"], "Preview Images")
+        self.assertEqual(body["revised_prompt"], "revised")
+        self.assertEqual(captured_kwargs["prompt"], "tiny dashboard preview")
+        self.assertEqual(captured_kwargs["quality"], "low")
+        self.assertEqual(openai_mock.call_args.kwargs["api_key"], "test-key")
 
     def test_newapi_provider_health_check_validates_config_without_prompt_data(self):
         providers_payload = {

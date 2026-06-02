@@ -7,6 +7,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 import asyncio
 import concurrent.futures
 import threading
+import base64
 import json
 import os
 import io
@@ -27,7 +28,13 @@ from security import (
 from constants import ALLOWED_IMPORT_FILES
 import config as app_config
 from config import AUTO_MEMORIES_FILE, MANUAL_LORE_FILE
-from dashboard_provider_validation import summarize_image_providers, validate_providers_json_payload
+from dashboard_provider_validation import (
+    provider_config_schema,
+    summarize_image_provider_configs,
+    summarize_image_providers,
+    summarize_provider_configs,
+    validate_providers_json_payload,
+)
 from version import VERSION
 
 app = Flask(__name__, template_folder='templates', static_folder='images', static_url_path='/static')
@@ -953,6 +960,7 @@ def api_image_providers():
             'status': 'ok',
             'image_providers': image_providers,
             'summary': summarize_image_providers(image_providers),
+            'field_status': summarize_image_provider_configs(image_providers),
         })
 
     data = request.json
@@ -986,6 +994,14 @@ def api_image_providers():
             value = provider.get(key)
             if isinstance(value, str) and value.strip():
                 cleaned_provider[key] = value.strip()
+        if provider.get('requires_key') is not None:
+            value = provider.get('requires_key')
+            if isinstance(value, bool):
+                cleaned_provider['requires_key'] = value
+            elif isinstance(value, str) and value.strip().lower() in ('true', 'false', '1', '0', 'yes', 'no', 'on', 'off'):
+                cleaned_provider['requires_key'] = value.strip().lower() in ('true', '1', 'yes', 'on')
+            else:
+                return jsonify({'status': 'error', 'message': f'Image provider {index} requires_key must be true or false'}), 400
         if provider.get('timeout') not in (None, ''):
             try:
                 cleaned_provider['timeout'] = max(5, min(3600, int(provider.get('timeout'))))
@@ -1006,7 +1022,28 @@ def api_image_providers():
         'status': 'ok',
         'image_providers': cleaned,
         'summary': summarize_image_providers(cleaned),
+        'field_status': summarize_image_provider_configs(cleaned),
         'image_provider_tiers': list(app_config.IMAGE_PROVIDERS.keys()),
+    })
+
+
+@app.route('/api/providers/metadata')
+@requires_csrf
+def api_providers_metadata():
+    """Return provider field requirements and configured/missing status."""
+    providers_data = _load_providers_json()
+    providers = providers_data.get("providers", [])
+    image_providers = providers_data.get("image_providers", [])
+    if not isinstance(providers, list):
+        providers = []
+    if not isinstance(image_providers, list):
+        image_providers = []
+
+    return jsonify({
+        'status': 'ok',
+        'schema': provider_config_schema(),
+        'providers': summarize_provider_configs(providers),
+        'image_providers': summarize_image_provider_configs(image_providers),
     })
 
 
@@ -1740,6 +1777,128 @@ def _sanitize_error_message(error: Exception) -> str:
     # Remove API keys that might be in error messages
     msg = re.sub(r'(api[_-]?key|token|secret|password)[=:]\s*\S+', r'\1=[redacted]', msg, flags=re.IGNORECASE)
     return msg[:200]
+
+
+def _dashboard_bool(value, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+    return default
+
+
+def _resolve_dashboard_provider_key(provider: dict) -> tuple[str, str]:
+    key = ""
+    source = ""
+    if provider.get("api_key"):
+        key = str(provider["api_key"])
+        source = "api_key"
+    elif provider.get("key_env"):
+        source = "key_env"
+        key = os.getenv(str(provider["key_env"]), "")
+    return key, source
+
+
+def _build_image_generation_kwargs(provider: dict, prompt: str) -> dict:
+    request_kwargs = {
+        "model": str(provider.get("model") or "gpt-image-1").strip(),
+        "prompt": prompt,
+        "n": 1,
+        "size": str(provider.get("size") or "1024x1024").strip() or "1024x1024",
+    }
+    for field in ("quality", "style", "response_format", "output_format", "background", "moderation"):
+        value = provider.get(field)
+        if isinstance(value, str) and value.strip():
+            request_kwargs[field] = value.strip()
+    if isinstance(provider.get("extra_body"), dict) and provider["extra_body"]:
+        request_kwargs["extra_body"] = provider["extra_body"]
+    return request_kwargs
+
+
+def _image_mime_type(provider: dict) -> str:
+    output_format = str(provider.get("output_format") or "").strip().lower()
+    if output_format in ("jpeg", "jpg"):
+        return "image/jpeg"
+    if output_format == "webp":
+        return "image/webp"
+    return "image/png"
+
+
+@app.route('/api/test-image-provider/<int:index>', methods=['POST'])
+@requires_csrf
+def api_test_image_provider(index):
+    """Generate a small dashboard preview image from one configured image provider."""
+    providers_data = _load_providers_json()
+    image_providers = providers_data.get("image_providers", [])
+    if not isinstance(image_providers, list):
+        return jsonify({'success': False, 'error': 'image_providers must be a list'}), 400
+    if index < 0 or index >= len(image_providers):
+        return jsonify({'success': False, 'error': 'Image provider index out of range'}), 404
+
+    provider = image_providers[index]
+    if not isinstance(provider, dict):
+        return jsonify({'success': False, 'error': 'Image provider must be an object'}), 400
+
+    url = str(provider.get("url") or provider.get("base_url") or "").strip()
+    model = str(provider.get("model") or "gpt-image-1").strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Image provider missing URL'}), 400
+    if not model:
+        return jsonify({'success': False, 'error': 'Image provider missing model'}), 400
+
+    requires_key = _dashboard_bool(provider.get("requires_key"), True)
+    key, key_source = _resolve_dashboard_provider_key(provider)
+    if requires_key and not key:
+        return jsonify({'success': False, 'error': 'Image provider API key is not configured'}), 400
+    if not key:
+        key = "not-needed"
+
+    data = request.json if isinstance(request.json, dict) else {}
+    prompt = str(data.get("prompt") or "").strip()
+    if not prompt:
+        prompt = "A small cozy Discord-style image preview with soft lighting and simple composition."
+    prompt = prompt[:1200]
+
+    try:
+        from openai import AsyncOpenAI
+        from providers import AIProviderManager
+
+        client = AsyncOpenAI(
+            base_url=url,
+            api_key=key,
+            timeout=max(5, min(3600, int(provider.get("timeout") or 120))),
+        )
+        response = asyncio.run(client.images.generate(**_build_image_generation_kwargs(provider, prompt)))
+        image_bytes, revised_prompt = AIProviderManager._image_bytes_from_response(response)
+        image_url = None
+        if not image_bytes:
+            image_items = getattr(response, "data", None) or []
+            first_image = image_items[0] if image_items else None
+            image_url = getattr(first_image, "url", None) if first_image else None
+        if not image_bytes and not image_url:
+            return jsonify({'success': False, 'error': 'Image provider returned no image data'}), 502
+
+        image_src = image_url
+        if image_bytes:
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            image_src = f"data:{_image_mime_type(provider)};base64,{encoded}"
+
+        return jsonify({
+            'success': True,
+            'provider_name': provider.get("name") or f"Image Provider {index + 1}",
+            'model': model,
+            'key_source': key_source,
+            'revised_prompt': revised_prompt,
+            'image_src': image_src,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': _sanitize_error_message(e)}), 500
 
 
 @app.route('/api/test-provider/<int:index>')
