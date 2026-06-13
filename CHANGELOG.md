@@ -4,6 +4,20 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.9] - 2026-06-13
+
+Ships self-serve dashboard setup for single-bot and multi-bot deployments.
+
+### Added
+
+- Added a Config page Advanced Bot Mode panel for switching between single-bot and multi-bot mode without hand-editing `bots.json`.
+- Added dashboard-managed multi-bot rows for bot name, character, token environment variable, and optional nicknames.
+
+### Changed
+
+- Kept raw `bots.json` editing available for recovery while making the managed Bot Mode form the simple setup path.
+- Refresh the Discord Tokens card after bot-mode saves so each declared multi-bot token can be filled from the dashboard.
+
 ## [v2.3.8] - 2026-06-13
 
 Ships dashboard-managed Discord bot token configuration for both single-bot and multi-bot deployments.
