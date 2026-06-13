@@ -1067,10 +1067,51 @@
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Advanced</h2>
-                <p class="section-kicker">Raw files and diagnostics.</p>
+                <p class="section-kicker">Secrets, raw files, and diagnostics.</p>
             </div>
         </div>
         <div class="section-grid">
+            <div class="card">
+                {% set multi_bot_tokens = discord_token_status.multi_bot_tokens %}
+                <div class="card-header">
+                    <span class="card-title">Discord Tokens</span>
+                    <span id="discord-token-status-pill" class="impact-pill">{{ 'Set' if discord_token_status.single_bot_mode and discord_token_status.configured else 'Missing' if discord_token_status.single_bot_mode else 'Multi-Bot' }}</span>
+                </div>
+                <div class="card-body">
+                    {% if discord_token_status.single_bot_mode %}
+                    <form id="discord-token-form" class="discord-token-form" data-token-env="{{ discord_token_status.key }}">
+                        <div class="form-group">
+                            <label for="discord_token">Bot Token</label>
+                            <input type="password" id="discord_token" autocomplete="new-password" placeholder="Paste token to replace current value">
+                            <p class="form-hint">Saved as <code>{{ discord_token_status.key }}</code> in <code>.env</code>. Existing token values stay hidden.</p>
+                        </div>
+                        <div class="editor-actions">
+                            <button type="submit" class="btn btn-primary" id="discord-token-save-btn" data-token-save>Save Token</button>
+                            <button type="button" class="btn btn-ghost" id="discord-token-restart-btn" data-token-restart onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                        </div>
+                        <p id="discord-token-result" class="form-hint" data-token-result aria-live="polite"></p>
+                    </form>
+                    {% elif multi_bot_tokens %}
+                    {% for bot_token in multi_bot_tokens %}
+                    <form class="discord-token-form" data-token-env="{{ bot_token.token_env }}">
+                        <div class="form-group">
+                            <label for="discord_token_{{ loop.index }}">{{ bot_token.name }} Token</label>
+                            <input type="password" id="discord_token_{{ loop.index }}" autocomplete="new-password" placeholder="Paste token to replace current value">
+                            <p class="form-hint">Saved as <code>{{ bot_token.token_env }}</code> in <code>.env</code>{% if bot_token.character %} for <code>{{ bot_token.character }}</code>{% endif %}. Existing token values stay hidden.</p>
+                        </div>
+                        <div class="editor-actions">
+                            <span class="impact-pill" data-token-status="{{ bot_token.token_env }}">{{ 'Set' if bot_token.configured else 'Missing' }}</span>
+                            <button type="submit" class="btn btn-primary" data-token-save>Save Token</button>
+                            <button type="button" class="btn btn-ghost" data-token-restart onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                        </div>
+                        <p class="form-hint" data-token-result aria-live="polite"></p>
+                    </form>
+                    {% endfor %}
+                    {% else %}
+                    <p class="form-hint">No valid bot token entries found in <code>bots.json</code>.</p>
+                    {% endif %}
+                </div>
+            </div>
             {% if bots %}
             <div class="card">
                 <div class="card-header">
@@ -1574,6 +1615,93 @@ async function postConfig(data, successMessage) {
     });
     showToast(response.ok ? successMessage : 'Failed to save settings', response.ok ? 'success' : 'error');
     return response.ok;
+}
+
+function setDiscordTokenStatus(tokenEnv, configured, restartRequired, form) {
+    const pill = form?.querySelector('[data-token-status]') || document.getElementById('discord-token-status-pill');
+    const restartBtn = form?.querySelector('[data-token-restart]') || document.getElementById('discord-token-restart-btn');
+    const result = form?.querySelector('[data-token-result]') || document.getElementById('discord-token-result');
+    if (pill) pill.textContent = configured ? 'Set' : 'Missing';
+    if (restartBtn) restartBtn.hidden = !restartRequired;
+    if (result && restartRequired) result.textContent = `${tokenEnv} saved. Restart bot to use it.`;
+}
+
+document.querySelectorAll('.discord-token-form').forEach((form) => {
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = form.querySelector('input[type="password"]');
+        const button = form.querySelector('[data-token-save]');
+        const result = form.querySelector('[data-token-result]');
+        const tokenEnv = form.dataset.tokenEnv || 'DISCORD_TOKEN';
+        const token = input?.value.trim() || '';
+        if (!token) {
+            if (result) result.textContent = 'Paste a Discord bot token first.';
+            showToast('Paste a Discord bot token first', 'error');
+            return;
+        }
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch('/api/discord-token', {
+                method: 'POST',
+                headers: csrfHeaders(),
+                body: JSON.stringify({ token, token_env: tokenEnv })
+            });
+            const data = await response.json();
+            if (response.ok && data.status === 'ok') {
+                input.value = '';
+                setDiscordTokenStatus(tokenEnv, true, Boolean(data.restart_required), form);
+                showToast('Discord token saved', 'success');
+            } else {
+                const message = data.message || 'Failed to save Discord token';
+                if (result) result.textContent = message;
+                showToast(message, 'error');
+            }
+        } catch (error) {
+            if (result) result.textContent = 'Failed to save Discord token.';
+            showToast('Failed to save Discord token', 'error');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    });
+});
+
+
+async function restartBotFromConfig(button) {
+    showConfirm(
+        'Restart Bot',
+        'Restart now? Discord bots will briefly disconnect while the new token loads.',
+        async () => {
+            const previousText = button?.textContent || 'Restart Bot';
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Restarting...';
+            }
+            try {
+                const response = await fetch('/api/restart', {
+                    method: 'POST',
+                    headers: csrfHeaders()
+                });
+                const data = await response.json();
+                if (response.ok && data.status === 'ok') {
+                    showToast('Restart initiated. Page will reload soon.', 'warning');
+                    setTimeout(() => window.location.reload(), 10000);
+                } else {
+                    showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = previousText;
+                    }
+                }
+            } catch (error) {
+                showToast('Failed to restart. Check connection.', 'error');
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = previousText;
+                }
+            }
+        },
+        { confirmText: 'Restart', confirmClass: 'btn-primary' }
+    );
 }
 
 document.getElementById('context-settings-form')?.addEventListener('submit', async (e) => {
