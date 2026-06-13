@@ -1383,10 +1383,42 @@ def api_config():
     return jsonify(runtime_config.get_all())
 
 
+def _validate_discord_token_payload(data: dict) -> tuple[str | None, str | None, int]:
+    """Return the token value or a dashboard-safe validation error."""
+    token = data.get('token')
+    if not isinstance(token, str):
+        return None, 'Discord token is required', 400
+
+    token = token.strip()
+    if not token:
+        return None, 'Discord token is required', 400
+    if "\n" in token or "\r" in token:
+        return None, 'Discord token cannot contain line breaks', 400
+    if len(token) < 32:
+        return None, 'Discord token looks too short', 400
+    return token, None, 200
+
+
+def _resolve_discord_token_env_key(data: dict) -> tuple[str | None, str | None, int]:
+    """Return the .env key targeted by a Discord token update."""
+    token_env = data.get('token_env', env_config.DISCORD_TOKEN_ENV_KEY)
+    if not isinstance(token_env, str):
+        return None, 'Discord token target is required', 400
+
+    token_env = token_env.strip()
+    if token_env == env_config.DISCORD_TOKEN_ENV_KEY:
+        return token_env, None, 200
+    if not env_config.is_valid_env_key(token_env):
+        return None, 'Discord token target is invalid', 400
+    if not env_config.is_declared_bot_token_env(token_env):
+        return None, 'Discord token target is not declared in bots.json', 400
+    return token_env, None, 200
+
+
 @app.route('/api/discord-token', methods=['GET', 'POST'])
 @requires_csrf
 def api_discord_token():
-    """Get or update the single-bot Discord token status without returning it."""
+    """Get or update Discord token status without returning token values."""
     if request.method == 'GET':
         return jsonify({'status': 'ok', **env_config.discord_token_status()})
 
@@ -1394,30 +1426,33 @@ def api_discord_token():
     if not isinstance(data, dict):
         return jsonify({'status': 'error', 'message': 'JSON object required'}), 400
 
-    token = data.get('token')
-    if not isinstance(token, str):
-        return jsonify({'status': 'error', 'message': 'Discord token is required'}), 400
+    token, error, status_code = _validate_discord_token_payload(data)
+    if error:
+        return jsonify({'status': 'error', 'message': error}), status_code
 
-    token = token.strip()
-    if not token:
-        return jsonify({'status': 'error', 'message': 'Discord token is required'}), 400
-    if "\n" in token or "\r" in token:
-        return jsonify({'status': 'error', 'message': 'Discord token cannot contain line breaks'}), 400
-    if len(token) < 32:
-        return jsonify({'status': 'error', 'message': 'Discord token looks too short'}), 400
+    token_env, error, status_code = _resolve_discord_token_env_key(data)
+    if error:
+        return jsonify({'status': 'error', 'message': error}), status_code
 
     try:
-        env_config.write_env_value(env_config.DISCORD_TOKEN_ENV_KEY, token)
+        env_config.write_env_value(token_env, token)
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     except OSError as e:
-        log.error(f"Failed to update {env_config.DISCORD_TOKEN_ENV_KEY} in .env: {e}")
+        log.error(f"Failed to update {token_env} in .env: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to update .env'}), 500
 
-    log.info(f"Dashboard updated {env_config.DISCORD_TOKEN_ENV_KEY} in .env; restart required")
+    log.info(f"Dashboard updated {token_env} in .env; restart required")
     status = env_config.discord_token_status()
-    status["configured"] = True
     status["restart_required"] = True
+    status["updated_key"] = token_env
+    if token_env == env_config.DISCORD_TOKEN_ENV_KEY:
+        status["configured"] = True
+    else:
+        for target in status.get("multi_bot_tokens", []):
+            if target.get("token_env") == token_env:
+                target["configured"] = True
+                break
     return jsonify({'status': 'ok', **status})
 
 
