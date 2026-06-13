@@ -1055,7 +1055,7 @@ def save_bots():
     content = request.form.get('content', '')
     try:
         json.loads(content)  # Validate JSON
-        with open('bots.json', 'w') as f:
+        with open(env_config.BOTS_FILE, 'w') as f:
             f.write(content)
         return redirect(url_for('config_page', message='Bots config saved successfully'))
     except json.JSONDecodeError as e:
@@ -1064,6 +1064,20 @@ def save_bots():
     except Exception as e:
         log.error(f"Failed to save bots.json: {e}")
         return redirect(url_for('config_page', error=f'Save failed: {e}'))
+
+
+@app.route('/api/bot-mode', methods=['GET', 'POST'])
+@requires_csrf
+def api_bot_mode():
+    """Get or update dashboard-managed single/multi-bot config."""
+    if request.method == 'GET':
+        return jsonify({'status': 'ok', **env_config.load_bot_mode_config()})
+
+    mode_config, error = env_config.save_bot_mode(request.json, get_character_files())
+    if error: return jsonify({'status': 'error', 'message': error}), 400
+    mode_config.pop("saved_mode", None)
+    log.info("Dashboard saved bot mode; restart required")
+    return jsonify({'status': 'ok', **mode_config, 'discord_token_status': env_config.discord_token_status()})
 
 
 @app.route('/settings/autonomous/save', methods=['POST'])
@@ -1270,9 +1284,9 @@ def config_page():
     
     # Load bots.json
     bots_raw = "{}"
-    if os.path.exists('bots.json'):
+    if env_config.BOTS_FILE.exists():
         try:
-            with open('bots.json', 'r') as f:
+            with open(env_config.BOTS_FILE, 'r') as f:
                 bots_raw = f.read()
         except Exception:
             pass
@@ -1337,6 +1351,7 @@ def config_page():
         command_sync_statuses=[_serialize_command_sync_status(bot) for bot in bot_instances],
         providers_raw=providers_raw,
         bots_raw=bots_raw,
+        bot_mode_config=env_config.load_bot_mode_config(),
         autonomous_raw=autonomous_raw,
         discord_token_status=env_config.discord_token_status(),
         system_content=system_content,
@@ -1687,7 +1702,7 @@ def api_nicknames():
             bot.nicknames = nicknames
             
             # Persist to bots.json if it exists (multi-bot mode)
-            bots_file = Path('bots.json')
+            bots_file = env_config.BOTS_FILE
             persisted = False
             
             if bots_file.exists():

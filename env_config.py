@@ -128,6 +128,164 @@ def is_declared_bot_token_env(key: str) -> bool:
     return any(target["token_env"] == key for target in load_bot_token_targets())
 
 
+def load_bots_json_data(bots_file: Path | None = None) -> tuple[dict, str | None]:
+    """Load bots.json for dashboard-managed bot-mode controls."""
+    bots_file = bots_file or BOTS_FILE
+    try:
+        data = json.loads(bots_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"bots": []}, None
+    except json.JSONDecodeError as e:
+        return {"bots": []}, f"Invalid bots.json: {e}"
+    except OSError as e:
+        return {"bots": []}, f"Could not read bots.json: {e}"
+
+    if not isinstance(data, dict):
+        return {"bots": []}, "bots.json must contain an object"
+
+    bots = data.get("bots")
+    if bots is None:
+        data["bots"] = []
+    elif not isinstance(bots, list):
+        return {"bots": []}, 'bots.json "bots" must be a list'
+    return data, None
+
+
+def load_bot_mode_config(bots_file: Path | None = None) -> dict:
+    """Return dashboard-safe bot-mode state without exposing token values."""
+    bots_file = bots_file or BOTS_FILE
+    data, error = load_bots_json_data(bots_file)
+    mode = "multi" if bots_file.exists() else "single"
+    bots = []
+    if isinstance(data.get("bots"), list):
+        for index, bot_cfg in enumerate(data["bots"], start=1):
+            if not isinstance(bot_cfg, dict):
+                continue
+            bots.append({
+                "name": str(bot_cfg.get("name") or f"Bot {index}").strip(),
+                "character": str(bot_cfg.get("character") or "").strip(),
+                "token_env": str(bot_cfg.get("token_env") or "").strip(),
+                "nicknames": str(bot_cfg.get("nicknames") or "").strip(),
+            })
+
+    return {
+        "mode": mode,
+        "single_bot_mode": mode == "single",
+        "multi_bot_mode": mode == "multi",
+        "bots": bots,
+        "error": error,
+        "restart_required": False,
+    }
+
+
+def _sanitize_bot_name(value, index: int) -> str | None:
+    """Normalize a dashboard bot display name."""
+    del index
+    name = str(value or "").strip()
+    if not name:
+        return None
+    return re.sub(r"\s+", " ", name)[:80]
+
+
+def normalize_bot_mode_payload(
+    data: dict,
+    available_characters: list[str] | set[str] | tuple[str, ...] | None = None,
+) -> tuple[dict | None, str | None]:
+    """Validate dashboard bot-mode payload before writing bots.json."""
+    if not isinstance(data, dict):
+        return None, "JSON object required"
+
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in {"single", "multi"}:
+        return None, "Choose single or multi bot mode"
+
+    if mode == "single":
+        return {"mode": "single", "bots": []}, None
+
+    raw_bots = data.get("bots")
+    if not isinstance(raw_bots, list):
+        return None, "Multi-bot mode needs at least one bot"
+
+    available = set(available_characters or [])
+    bots = []
+    seen_names = set()
+    seen_token_envs = set()
+    for index, raw_bot in enumerate(raw_bots, start=1):
+        if not isinstance(raw_bot, dict):
+            return None, f"Bot {index} is invalid"
+
+        name = _sanitize_bot_name(raw_bot.get("name"), index)
+        if not name:
+            return None, f"Bot {index} needs a name"
+        name_key = name.casefold()
+        if name_key in seen_names:
+            return None, f"Bot name '{name}' is duplicated"
+        seen_names.add(name_key)
+
+        character = str(raw_bot.get("character") or "").strip()
+        if not character:
+            return None, f"{name} needs a character"
+        if available and character not in available:
+            return None, f"{name} uses unknown character '{character}'"
+
+        token_env = str(raw_bot.get("token_env") or "").strip()
+        if not token_env:
+            return None, f"{name} needs a token env"
+        if not is_valid_env_key(token_env):
+            return None, f"{name} token env is invalid"
+        if token_env in seen_token_envs:
+            return None, f"Token env '{token_env}' is duplicated"
+        seen_token_envs.add(token_env)
+
+        bot = {
+            "name": name,
+            "token_env": token_env,
+            "character": character,
+        }
+        nicknames = str(raw_bot.get("nicknames") or "").strip()
+        if nicknames:
+            bot["nicknames"] = nicknames[:240]
+        bots.append(bot)
+
+    if not bots:
+        return None, "Multi-bot mode needs at least one bot"
+    return {"mode": "multi", "bots": bots}, None
+
+
+def write_bots_json_payload(payload: dict, bots_file: Path | None = None) -> None:
+    """Persist validated multi-bot config with stable formatting."""
+    bots_file = bots_file or BOTS_FILE
+    bots_file.parent.mkdir(parents=True, exist_ok=True)
+    bots_file.write_text(
+        json.dumps({"bots": payload["bots"]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def save_bot_mode(
+    data: dict,
+    available_characters: list[str] | set[str] | tuple[str, ...] | None = None,
+) -> tuple[dict | None, str | None]:
+    """Apply a validated single/multi-bot dashboard mode change."""
+    payload, error = normalize_bot_mode_payload(data, available_characters)
+    if error:
+        return None, error
+
+    try:
+        if payload["mode"] == "single":
+            if BOTS_FILE.exists():
+                BOTS_FILE.unlink()
+        else:
+            write_bots_json_payload(payload)
+    except OSError as e:
+        return None, f"Save failed: {e}"
+
+    mode_config = load_bot_mode_config()
+    mode_config["restart_required"] = True
+    mode_config["saved_mode"] = payload["mode"]
+    return mode_config, None
+
+
 def discord_token_status() -> dict:
     """Return dashboard-safe Discord token metadata."""
     token_value = read_env_value(DISCORD_TOKEN_ENV_KEY)
