@@ -14,16 +14,32 @@ class DashboardDiscordTokenTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_file = Path(self.temp_dir.name) / ".env"
         self.bots_file = Path(self.temp_dir.name) / "bots.json"
+        self.characters_dir = Path(self.temp_dir.name) / "characters"
+        self.characters_dir.mkdir()
+        (self.characters_dir / "firefly.md").write_text("## System Persona\nFirefly\n", encoding="utf-8")
+        (self.characters_dir / "nicole.md").write_text("## System Persona\nNicole\n", encoding="utf-8")
         self.env_patch = patch.object(env_config, "ENV_FILE", self.env_file)
         self.bots_patch = patch.object(env_config, "BOTS_FILE", self.bots_file)
+        self.characters_patch = patch.object(dashboard_module, "CHARACTERS_DIR", self.characters_dir)
+        self.log_info_patch = patch.object(dashboard_module.log, "info")
+        self.log_warn_patch = patch.object(dashboard_module.log, "warn")
+        self.log_error_patch = patch.object(dashboard_module.log, "error")
         self.env_patch.start()
         self.bots_patch.start()
+        self.characters_patch.start()
+        self.log_info_patch.start()
+        self.log_warn_patch.start()
+        self.log_error_patch.start()
         dashboard_module.app.config["TESTING"] = True
         self.client = dashboard_module.app.test_client()
         with self.client.session_transaction() as session:
             session["csrf_token"] = "test-csrf"
 
     def tearDown(self):
+        self.log_error_patch.stop()
+        self.log_warn_patch.stop()
+        self.log_info_patch.stop()
+        self.characters_patch.stop()
         self.bots_patch.stop()
         self.env_patch.stop()
         self.temp_dir.cleanup()
@@ -201,6 +217,106 @@ class DashboardDiscordTokenTests(unittest.TestCase):
         self.assertIn("FIREFLY_DISCORD_TOKEN", html)
         self.assertIn("NICOLE_DISCORD_TOKEN", html)
         self.assertNotIn(secret, html)
+
+    def test_bot_mode_api_saves_multi_bot_config_without_tokens(self):
+        response = self.client.post(
+            "/api/bot-mode",
+            data=json.dumps({
+                "mode": "multi",
+                "bots": [
+                    {
+                        "name": "Firefly",
+                        "character": "firefly",
+                        "token_env": "FIREFLY_DISCORD_TOKEN",
+                        "nicknames": "fly, bestie",
+                    },
+                    {
+                        "name": "Nicole",
+                        "character": "nicole",
+                        "token_env": "NICOLE_DISCORD_TOKEN",
+                    },
+                ],
+            }),
+            headers=self.csrf_headers(),
+        )
+        data = response.get_json()
+        saved = json.loads(self.bots_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["multi_bot_mode"])
+        self.assertTrue(data["restart_required"])
+        self.assertEqual(saved["bots"][0]["name"], "Firefly")
+        self.assertEqual(saved["bots"][0]["nicknames"], "fly, bestie")
+        self.assertEqual(saved["bots"][1]["token_env"], "NICOLE_DISCORD_TOKEN")
+        self.assertNotIn("token=", json.dumps(saved).lower())
+        self.assertEqual(
+            [target["token_env"] for target in data["discord_token_status"]["multi_bot_tokens"]],
+            ["FIREFLY_DISCORD_TOKEN", "NICOLE_DISCORD_TOKEN"],
+        )
+
+    def test_bot_mode_api_rejects_invalid_multi_bot_rows(self):
+        response = self.client.post(
+            "/api/bot-mode",
+            data=json.dumps({
+                "mode": "multi",
+                "bots": [
+                    {"name": "Firefly", "character": "firefly", "token_env": "FIREFLY_DISCORD_TOKEN"},
+                    {"name": "Nicole", "character": "missing", "token_env": "FIREFLY_DISCORD_TOKEN"},
+                ],
+            }),
+            headers=self.csrf_headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(self.bots_file.exists())
+
+    def test_bot_mode_api_switches_to_single_by_removing_bots_json(self):
+        self.write_bots([
+            {"name": "Firefly", "token_env": "FIREFLY_DISCORD_TOKEN", "character": "firefly"},
+        ])
+
+        response = self.client.post(
+            "/api/bot-mode",
+            data=json.dumps({"mode": "single", "bots": []}),
+            headers=self.csrf_headers(),
+        )
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["single_bot_mode"])
+        self.assertTrue(data["restart_required"])
+        self.assertFalse(self.bots_file.exists())
+
+    def test_bot_mode_api_requires_csrf(self):
+        response = self.client.post(
+            "/api/bot-mode",
+            data=json.dumps({"mode": "single", "bots": []}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_config_page_shows_managed_bot_mode_panel(self):
+        self.write_bots([
+            {
+                "name": "Firefly",
+                "token_env": "FIREFLY_DISCORD_TOKEN",
+                "character": "firefly",
+                "nicknames": "fly",
+            },
+        ])
+
+        response = self.client.get("/config")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Bot Mode", html)
+        self.assertIn("Multi Bot", html)
+        self.assertIn("bot-mode-form", html)
+        self.assertIn("FIREFLY_DISCORD_TOKEN", html)
+        self.assertIn("fly", html)
 
 
 if __name__ == "__main__":

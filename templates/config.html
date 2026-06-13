@@ -1071,13 +1071,59 @@
             </div>
         </div>
         <div class="section-grid">
+            <div class="card span-full">
+                <div class="card-header">
+                    <span class="card-title">Bot Mode</span>
+                    <span id="bot-mode-status-pill" class="impact-pill">{{ 'Multi-Bot' if bot_mode_config.multi_bot_mode else 'Single Bot' }}</span>
+                </div>
+                <div class="card-body">
+                    <form id="bot-mode-form"
+                        data-current-mode="{{ bot_mode_config.mode }}"
+                        data-initial-bots='{{ bot_mode_config.bots | tojson }}'>
+                        <div class="mode-switch" role="radiogroup" aria-label="Bot mode">
+                            <label class="mode-option">
+                                <input type="radio" name="bot_mode" value="single" {% if bot_mode_config.single_bot_mode %}checked{% endif %}>
+                                <span>
+                                    <strong>Single Bot</strong>
+                                    <small>Uses <code>DISCORD_TOKEN</code> and one default character.</small>
+                                </span>
+                            </label>
+                            <label class="mode-option">
+                                <input type="radio" name="bot_mode" value="multi" {% if bot_mode_config.multi_bot_mode %}checked{% endif %}>
+                                <span>
+                                    <strong>Multi Bot</strong>
+                                    <small>Creates <code>bots.json</code> with one token env per bot.</small>
+                                </span>
+                            </label>
+                        </div>
+
+                        {% if bot_mode_config.error %}
+                        <p class="form-hint error-text">{{ bot_mode_config.error }}</p>
+                        {% endif %}
+
+                        <div id="bot-mode-multi-panel" class="bot-mode-panel" {% if not bot_mode_config.multi_bot_mode %}hidden{% endif %}>
+                            <div class="bot-mode-toolbar">
+                                <p class="form-hint">Add each Discord application here. Tokens are saved below, never in <code>bots.json</code>.</p>
+                                <button type="button" class="btn btn-ghost btn-sm" onclick="addBotModeRow()">Add Bot</button>
+                            </div>
+                            <div id="bot-mode-rows" class="bot-mode-rows"></div>
+                        </div>
+
+                        <div class="editor-actions">
+                            <button type="submit" class="btn btn-primary" id="bot-mode-save-btn">Save Bot Mode</button>
+                            <button type="button" class="btn btn-ghost" id="bot-mode-restart-btn" data-token-restart onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                        </div>
+                        <p id="bot-mode-result" class="form-hint" aria-live="polite"></p>
+                    </form>
+                </div>
+            </div>
             <div class="card">
                 {% set multi_bot_tokens = discord_token_status.multi_bot_tokens %}
                 <div class="card-header">
                     <span class="card-title">Discord Tokens</span>
                     <span id="discord-token-status-pill" class="impact-pill">{{ 'Set' if discord_token_status.single_bot_mode and discord_token_status.configured else 'Missing' if discord_token_status.single_bot_mode else 'Multi-Bot' }}</span>
                 </div>
-                <div class="card-body">
+                <div id="discord-token-card-body" class="card-body">
                     {% if discord_token_status.single_bot_mode %}
                     <form id="discord-token-form" class="discord-token-form" data-token-env="{{ discord_token_status.key }}">
                         <div class="form-group">
@@ -1528,8 +1574,21 @@ label.toggle-switch {
 .modal-close { background: transparent; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-muted); cursor: pointer; font: inherit; min-height: 36px; padding: 6px 10px; }
 .provider-toggle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; }
 .provider-toggle-grid .checkbox-label { min-height: 36px; }
+.mode-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.mode-option { display: flex; gap: 10px; align-items: flex-start; padding: 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-primary); cursor: pointer; }
+.mode-option:has(input:checked) { border-color: var(--accent); background: var(--accent-muted); }
+.mode-option input { margin-top: 3px; }
+.mode-option strong, .mode-option small { display: block; }
+.mode-option small { margin-top: 3px; color: var(--text-muted); }
+.bot-mode-panel { margin-bottom: 16px; }
+.bot-mode-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.bot-mode-rows { display: flex; flex-direction: column; gap: 10px; }
+.bot-mode-row { display: grid; grid-template-columns: minmax(120px, 0.9fr) minmax(140px, 1fr) minmax(180px, 1.1fr) minmax(120px, 0.9fr) auto; gap: 10px; align-items: end; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-subtle); border-radius: 8px; }
+.bot-mode-row .form-group { margin-bottom: 0; }
+.bot-mode-row-remove { align-self: end; }
+.error-text { color: var(--danger); }
 @media (max-width: 768px) {
-    .section-grid, .settings-grid { grid-template-columns: 1fr; }
+    .section-grid, .settings-grid, .mode-switch, .bot-mode-row { grid-template-columns: 1fr; }
     .bot-row, .schedule-bot-header { flex-wrap: wrap; }
     .schedule-timezone-row, .schedule-everyday-row, .schedule-day-row { grid-template-columns: 1fr; }
     .provider-item { align-items: flex-start; flex-wrap: wrap; }
@@ -1617,6 +1676,191 @@ async function postConfig(data, successMessage) {
     return response.ok;
 }
 
+function htmlEscape(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function slugToEnvName(value) {
+    const cleaned = String(value || '')
+        .trim()
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/[^A-Za-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .toUpperCase();
+    const safe = cleaned || 'BOT';
+    return /^[A-Z_]/.test(safe) ? `${safe}_DISCORD_TOKEN` : `BOT_${safe}_DISCORD_TOKEN`;
+}
+
+function characterOptions(selected) {
+    const characters = {{ characters | tojson }};
+    return characters.map((character) => {
+        const value = htmlEscape(character);
+        return `<option value="${value}" ${character === selected ? 'selected' : ''}>${value}</option>`;
+    }).join('');
+}
+
+function botModeRowTemplate(bot = {}) {
+    const rowId = `bot-mode-row-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const name = bot.name || '';
+    const character = bot.character || {{ (characters[0] if characters else '') | tojson }};
+    const tokenEnv = bot.token_env || slugToEnvName(name || 'Bot');
+    const nicknames = bot.nicknames || '';
+    return `
+        <div class="bot-mode-row" data-bot-mode-row>
+            <div class="form-group">
+                <label for="${rowId}-name">Name</label>
+                <input id="${rowId}-name" type="text" data-bot-name value="${htmlEscape(name)}" placeholder="Firefly" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="${rowId}-character">Character</label>
+                <select id="${rowId}-character" data-bot-character title="Character">${characterOptions(character)}</select>
+            </div>
+            <div class="form-group">
+                <label for="${rowId}-token-env">Token Env</label>
+                <input id="${rowId}-token-env" type="text" data-bot-token-env value="${htmlEscape(tokenEnv)}" placeholder="FIREFLY_DISCORD_TOKEN" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="${rowId}-nicknames">Nicknames</label>
+                <input id="${rowId}-nicknames" type="text" data-bot-nicknames value="${htmlEscape(nicknames)}" placeholder="fly, bestie">
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm bot-mode-row-remove" onclick="removeBotModeRow(this)">Remove</button>
+        </div>
+    `;
+}
+
+function getBotModeRows() {
+    return Array.from(document.querySelectorAll('[data-bot-mode-row]')).map((row) => ({
+        name: row.querySelector('[data-bot-name]')?.value.trim() || '',
+        character: row.querySelector('[data-bot-character]')?.value.trim() || '',
+        token_env: row.querySelector('[data-bot-token-env]')?.value.trim() || '',
+        nicknames: row.querySelector('[data-bot-nicknames]')?.value.trim() || ''
+    }));
+}
+
+function addBotModeRow(bot = {}) {
+    const container = document.getElementById('bot-mode-rows');
+    if (!container) return;
+    container.insertAdjacentHTML('beforeend', botModeRowTemplate(bot));
+    const row = container.lastElementChild;
+    const nameInput = row?.querySelector('[data-bot-name]');
+    const tokenInput = row?.querySelector('[data-bot-token-env]');
+    nameInput?.addEventListener('blur', () => {
+        if (tokenInput && !tokenInput.value.trim()) {
+            tokenInput.value = slugToEnvName(nameInput.value);
+        }
+    });
+}
+
+function removeBotModeRow(button) {
+    const rows = document.querySelectorAll('[data-bot-mode-row]');
+    if (rows.length <= 1) {
+        showToast('Multi-bot mode needs at least one bot', 'error');
+        return;
+    }
+    button.closest('[data-bot-mode-row]')?.remove();
+}
+
+function setBotModePanel(mode) {
+    document.getElementById('bot-mode-multi-panel')?.toggleAttribute('hidden', mode !== 'multi');
+}
+
+function renderDiscordTokenCard(status) {
+    const cardBody = document.getElementById('discord-token-card-body');
+    const pill = document.getElementById('discord-token-status-pill');
+    if (!cardBody || !status) return;
+
+    if (status.single_bot_mode) {
+        if (pill) pill.textContent = status.configured ? 'Set' : 'Missing';
+        cardBody.innerHTML = `
+            <form id="discord-token-form" class="discord-token-form" data-token-env="${htmlEscape(status.key || 'DISCORD_TOKEN')}">
+                <div class="form-group">
+                    <label for="discord_token">Bot Token</label>
+                    <input type="password" id="discord_token" autocomplete="new-password" placeholder="Paste token to replace current value">
+                    <p class="form-hint">Saved as <code>${htmlEscape(status.key || 'DISCORD_TOKEN')}</code> in <code>.env</code>. Existing token values stay hidden.</p>
+                </div>
+                <div class="editor-actions">
+                    <button type="submit" class="btn btn-primary" id="discord-token-save-btn" data-token-save>Save Token</button>
+                    <button type="button" class="btn btn-ghost" id="discord-token-restart-btn" data-token-restart onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                </div>
+                <p id="discord-token-result" class="form-hint" data-token-result aria-live="polite"></p>
+            </form>`;
+    } else if (status.multi_bot_tokens?.length) {
+        if (pill) pill.textContent = 'Multi-Bot';
+        cardBody.innerHTML = status.multi_bot_tokens.map((botToken, index) => `
+            <form class="discord-token-form" data-token-env="${htmlEscape(botToken.token_env)}">
+                <div class="form-group">
+                    <label for="discord_token_${index + 1}">${htmlEscape(botToken.name)} Token</label>
+                    <input type="password" id="discord_token_${index + 1}" autocomplete="new-password" placeholder="Paste token to replace current value">
+                    <p class="form-hint">Saved as <code>${htmlEscape(botToken.token_env)}</code> in <code>.env</code>${botToken.character ? ` for <code>${htmlEscape(botToken.character)}</code>` : ''}. Existing token values stay hidden.</p>
+                </div>
+                <div class="editor-actions">
+                    <span class="impact-pill" data-token-status="${htmlEscape(botToken.token_env)}">${botToken.configured ? 'Set' : 'Missing'}</span>
+                    <button type="submit" class="btn btn-primary" data-token-save>Save Token</button>
+                    <button type="button" class="btn btn-ghost" data-token-restart onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                </div>
+                <p class="form-hint" data-token-result aria-live="polite"></p>
+            </form>
+        `).join('');
+    } else {
+        if (pill) pill.textContent = 'Multi-Bot';
+        cardBody.innerHTML = '<p class="form-hint">No valid bot token entries found in <code>bots.json</code>.</p>';
+    }
+    bindDiscordTokenForms();
+}
+
+function initializeBotModeForm() {
+    const form = document.getElementById('bot-mode-form');
+    if (!form) return;
+    const initialBots = JSON.parse(form.dataset.initialBots || '[]');
+    const modeInputs = form.querySelectorAll('input[name="bot_mode"]');
+    const rows = initialBots.length ? initialBots : [{ name: 'Firefly', character: {{ (characters[0] if characters else '') | tojson }}, token_env: 'FIREFLY_DISCORD_TOKEN', nicknames: '' }];
+    rows.forEach(addBotModeRow);
+    modeInputs.forEach((input) => {
+        input.addEventListener('change', () => setBotModePanel(input.value));
+        if (input.checked) setBotModePanel(input.value);
+    });
+}
+
+document.getElementById('bot-mode-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const button = document.getElementById('bot-mode-save-btn');
+    const result = document.getElementById('bot-mode-result');
+    const mode = form.querySelector('input[name="bot_mode"]:checked')?.value || 'single';
+    const payload = { mode, bots: mode === 'multi' ? getBotModeRows() : [] };
+    if (button) button.disabled = true;
+    if (result) result.textContent = 'Saving bot mode...';
+    try {
+        const response = await fetch('/api/bot-mode', {
+            method: 'POST',
+            headers: csrfHeaders(),
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (response.ok && data.status === 'ok') {
+            document.getElementById('bot-mode-status-pill').textContent = data.multi_bot_mode ? 'Multi-Bot' : 'Single Bot';
+            document.getElementById('bot-mode-restart-btn').hidden = !data.restart_required;
+            renderDiscordTokenCard(data.discord_token_status);
+            if (result) result.textContent = `${data.multi_bot_mode ? 'Multi-bot' : 'Single-bot'} mode saved. Restart bot to apply.`;
+            showToast('Bot mode saved', 'success');
+        } else {
+            const message = data.message || 'Failed to save bot mode';
+            if (result) result.textContent = message;
+            showToast(message, 'error');
+        }
+    } catch (error) {
+        if (result) result.textContent = 'Failed to save bot mode.';
+        showToast('Failed to save bot mode', 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
+});
+
 function setDiscordTokenStatus(tokenEnv, configured, restartRequired, form) {
     const pill = form?.querySelector('[data-token-status]') || document.getElementById('discord-token-status-pill');
     const restartBtn = form?.querySelector('[data-token-restart]') || document.getElementById('discord-token-restart-btn');
@@ -1626,8 +1870,11 @@ function setDiscordTokenStatus(tokenEnv, configured, restartRequired, form) {
     if (result && restartRequired) result.textContent = `${tokenEnv} saved. Restart bot to use it.`;
 }
 
-document.querySelectorAll('.discord-token-form').forEach((form) => {
-    form.addEventListener('submit', async (e) => {
+function bindDiscordTokenForms() {
+    document.querySelectorAll('.discord-token-form').forEach((form) => {
+        if (form.dataset.bound === 'true') return;
+        form.dataset.bound = 'true';
+        form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const input = form.querySelector('input[type="password"]');
         const button = form.querySelector('[data-token-save]');
@@ -1663,7 +1910,10 @@ document.querySelectorAll('.discord-token-form').forEach((form) => {
             if (button) button.disabled = false;
         }
     });
-});
+    });
+}
+
+bindDiscordTokenForms();
 
 
 async function restartBotFromConfig(button) {
@@ -2787,6 +3037,7 @@ document.querySelectorAll('.json-editor').forEach(textarea => {
 document.addEventListener('DOMContentLoaded', () => {
     initializeConfigTabs();
     initializeLazyEditors();
+    initializeBotModeForm();
     initializeScheduleEditors();
     loadImageProviders();
 });
