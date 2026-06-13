@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.3.8] - 2026-06-13
+
+Ships dashboard-managed Discord bot token configuration for both single-bot and multi-bot deployments.
+
+### Added
+
+- Added a Config page Advanced token editor for the single-bot `DISCORD_TOKEN` fallback.
+- Added multi-bot token fields generated from each `bots.json` `token_env`, so each Discord application can keep its own `.env` token.
+
+### Changed
+
+- Kept literal Discord tokens out of `bots.json`; the dashboard writes only the matching `.env` variable and never renders saved token values.
+- Required a restart after token saves so running bot clients reload the updated environment value.
+
+### Fixed
+
+- Blocked dashboard writes to undeclared Discord token environment variables, keeping multi-bot token edits scoped to `bots.json` targets.
+
 ## [v2.3.7] - 2026-05-30
 
 Ships the staging messaging robustness refactor to main under a new release tag so normal dashboard and standalone updates can discover it.
