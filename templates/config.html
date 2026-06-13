@@ -1067,10 +1067,33 @@
         <div class="section-heading">
             <div>
                 <h2 class="section-title">Advanced</h2>
-                <p class="section-kicker">Raw files and diagnostics.</p>
+                <p class="section-kicker">Secrets, raw files, and diagnostics.</p>
             </div>
         </div>
         <div class="section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Discord Token</span>
+                    <span id="discord-token-status-pill" class="impact-pill">{{ 'Set' if discord_token_status.configured else 'Missing' }}</span>
+                </div>
+                <div class="card-body">
+                    <form id="discord-token-form">
+                        <div class="form-group">
+                            <label for="discord_token">Bot Token</label>
+                            <input type="password" id="discord_token" autocomplete="new-password" placeholder="Paste token to replace current value">
+                            <p class="form-hint">Saved as <code>{{ discord_token_status.key }}</code> in <code>.env</code>. Existing token values stay hidden.</p>
+                            {% if not discord_token_status.single_bot_mode %}
+                            <p class="form-hint">Multi-bot mode is active. This updates the single-bot fallback token, not the per-bot <code>token_env</code> values in <code>bots.json</code>.</p>
+                            {% endif %}
+                        </div>
+                        <div class="editor-actions">
+                            <button type="submit" class="btn btn-primary" id="discord-token-save-btn">Save Token</button>
+                            <button type="button" class="btn btn-ghost" id="discord-token-restart-btn" onclick="restartBotFromConfig(this)" hidden>Restart Bot</button>
+                        </div>
+                        <p id="discord-token-result" class="form-hint" aria-live="polite"></p>
+                    </form>
+                </div>
+            </div>
             {% if bots %}
             <div class="card">
                 <div class="card-header">
@@ -1574,6 +1597,89 @@ async function postConfig(data, successMessage) {
     });
     showToast(response.ok ? successMessage : 'Failed to save settings', response.ok ? 'success' : 'error');
     return response.ok;
+}
+
+function setDiscordTokenStatus(configured, restartRequired) {
+    const pill = document.getElementById('discord-token-status-pill');
+    const restartBtn = document.getElementById('discord-token-restart-btn');
+    const result = document.getElementById('discord-token-result');
+    if (pill) pill.textContent = configured ? 'Set' : 'Missing';
+    if (restartBtn) restartBtn.hidden = !restartRequired;
+    if (result && restartRequired) result.textContent = 'Token saved. Restart bot to use it.';
+}
+
+document.getElementById('discord-token-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('discord_token');
+    const button = document.getElementById('discord-token-save-btn');
+    const result = document.getElementById('discord-token-result');
+    const token = input?.value.trim() || '';
+    if (!token) {
+        if (result) result.textContent = 'Paste a Discord bot token first.';
+        showToast('Paste a Discord bot token first', 'error');
+        return;
+    }
+    if (button) button.disabled = true;
+    try {
+        const response = await fetch('/api/discord-token', {
+            method: 'POST',
+            headers: csrfHeaders(),
+            body: JSON.stringify({ token })
+        });
+        const data = await response.json();
+        if (response.ok && data.status === 'ok') {
+            input.value = '';
+            setDiscordTokenStatus(Boolean(data.configured), Boolean(data.restart_required));
+            showToast('Discord token saved', 'success');
+        } else {
+            const message = data.message || 'Failed to save Discord token';
+            if (result) result.textContent = message;
+            showToast(message, 'error');
+        }
+    } catch (error) {
+        if (result) result.textContent = 'Failed to save Discord token.';
+        showToast('Failed to save Discord token', 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
+});
+
+async function restartBotFromConfig(button) {
+    showConfirm(
+        'Restart Bot',
+        'Restart now? Discord bots will briefly disconnect while the new token loads.',
+        async () => {
+            const previousText = button?.textContent || 'Restart Bot';
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Restarting...';
+            }
+            try {
+                const response = await fetch('/api/restart', {
+                    method: 'POST',
+                    headers: csrfHeaders()
+                });
+                const data = await response.json();
+                if (response.ok && data.status === 'ok') {
+                    showToast('Restart initiated. Page will reload soon.', 'warning');
+                    setTimeout(() => window.location.reload(), 10000);
+                } else {
+                    showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = previousText;
+                    }
+                }
+            } catch (error) {
+                showToast('Failed to restart. Check connection.', 'error');
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = previousText;
+                }
+            }
+        },
+        { confirmText: 'Restart', confirmClass: 'btn-primary' }
+    );
 }
 
 document.getElementById('context-settings-form')?.addEventListener('submit', async (e) => {

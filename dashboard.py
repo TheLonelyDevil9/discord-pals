@@ -19,6 +19,7 @@ import zipfile
 from pathlib import Path
 from datetime import timedelta, datetime
 import logger as log
+import env_config
 from security import (
     safe_path, safe_filename, validate_zip_entry,
     get_or_create_secret_key, requires_auth, requires_csrf,
@@ -1337,6 +1338,7 @@ def config_page():
         providers_raw=providers_raw,
         bots_raw=bots_raw,
         autonomous_raw=autonomous_raw,
+        discord_token_status=env_config.discord_token_status(),
         system_content=system_content,
         other_prompts_content=other_prompts_content,
         message=request.args.get('message'),
@@ -1379,6 +1381,44 @@ def api_config():
         return jsonify({'status': 'ok'})
 
     return jsonify(runtime_config.get_all())
+
+
+@app.route('/api/discord-token', methods=['GET', 'POST'])
+@requires_csrf
+def api_discord_token():
+    """Get or update the single-bot Discord token status without returning it."""
+    if request.method == 'GET':
+        return jsonify({'status': 'ok', **env_config.discord_token_status()})
+
+    data = request.json
+    if not isinstance(data, dict):
+        return jsonify({'status': 'error', 'message': 'JSON object required'}), 400
+
+    token = data.get('token')
+    if not isinstance(token, str):
+        return jsonify({'status': 'error', 'message': 'Discord token is required'}), 400
+
+    token = token.strip()
+    if not token:
+        return jsonify({'status': 'error', 'message': 'Discord token is required'}), 400
+    if "\n" in token or "\r" in token:
+        return jsonify({'status': 'error', 'message': 'Discord token cannot contain line breaks'}), 400
+    if len(token) < 32:
+        return jsonify({'status': 'error', 'message': 'Discord token looks too short'}), 400
+
+    try:
+        env_config.write_env_value(env_config.DISCORD_TOKEN_ENV_KEY, token)
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except OSError as e:
+        log.error(f"Failed to update {env_config.DISCORD_TOKEN_ENV_KEY} in .env: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to update .env'}), 500
+
+    log.info(f"Dashboard updated {env_config.DISCORD_TOKEN_ENV_KEY} in .env; restart required")
+    status = env_config.discord_token_status()
+    status["configured"] = True
+    status["restart_required"] = True
+    return jsonify({'status': 'ok', **status})
 
 
 @app.route('/api/bot-timezones', methods=['GET', 'POST'])

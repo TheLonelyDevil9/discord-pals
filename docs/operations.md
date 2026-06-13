@@ -210,7 +210,9 @@ discord-pals/
 
 ### Token errors
 
-Single-bot mode needs `DISCORD_TOKEN` in `.env`. Multi-bot mode uses the token variable names listed in `bots.json`; each `token_env` must exist in `.env` and contain a real token.
+Single-bot mode needs `DISCORD_TOKEN` in `.env`. The dashboard Config page can update this value from the Advanced tab; saved tokens are never displayed and require a bot restart before they take effect.
+
+Multi-bot mode uses the token variable names listed in `bots.json`; each `token_env` must exist in `.env` and contain a real token.
 
 ### No characters available
 
