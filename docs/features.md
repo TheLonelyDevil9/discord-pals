@@ -167,7 +167,7 @@ Other second-level headings are ignored by the parser and shown as ignored in th
 
 The Config page Advanced tab has a Bot Mode panel for switching between single-bot and multi-bot deployments without editing JSON by hand.
 
-Use Single Bot when one Discord application should run from `DISCORD_TOKEN`. Use Multi Bot to add one row per Discord application. Each row writes a `bots.json` entry with the bot name, character, token environment variable, and optional nicknames. Literal Discord tokens stay out of `bots.json`; after saving multi-bot mode, use the Discord Tokens card to fill each generated token field, then restart the bot.
+Use Single Bot when one Discord application should run from `DISCORD_TOKEN`. Use Multi Bot to add one row per Discord application. Each row writes a `bots.json` entry with the bot name, character, token environment variable, and optional nicknames. Literal Discord tokens stay out of `bots.json`; after saving multi-bot mode, provide each generated token variable through `.env` or the process environment, then restart the bot. The Discord Tokens card can write `.env` values for local installs.
 
 Raw `bots.json` editing remains available in Advanced for recovery and bulk edits.
 

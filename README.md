@@ -81,7 +81,7 @@ Create or update your Discord application:
 4. In OAuth2 URL Generator, select `bot` and `applications.commands`.
 5. Invite the bot with the channel/message permissions it needs: view channels, send messages, read message history, add reactions, use external emojis, and manage messages if you want cleanup commands.
 
-Add secrets to `.env`:
+Add secrets to `.env` or your process environment:
 
 ```env
 DISCORD_TOKEN=your_discord_bot_token
@@ -193,7 +193,7 @@ Run multiple bots from one process with `bots.json`:
 }
 ```
 
-Add matching token variables to `.env`:
+Add matching token variables to `.env` or your process environment:
 
 ```env
 FIREFLY_TOKEN=your_firefly_token
@@ -209,11 +209,11 @@ Each bot needs its own Discord application. Startup validation reports missing o
 - Prompt files live under `prompts/`; `prompts/system.md` is read-only in the dashboard, and `prompts/other_prompts.md` holds editable post-system prompt sections.
 - Provider config lives in `providers.json`.
 - Multi-bot config lives in `bots.json`.
-- Tokens belong in `.env`; do not commit real secrets.
+- Tokens belong in environment variables or `.env`; do not commit real secrets.
 
 ## Troubleshooting
 
-- Missing token: single-bot mode needs `DISCORD_TOKEN`; multi-bot mode needs every `token_env` from `bots.json`.
+- Missing token: single-bot mode needs `DISCORD_TOKEN`; multi-bot mode needs every `token_env` from `bots.json`. Values can come from `.env` or the process environment.
 - Bot online but silent: enable Message Content Intent and check response access settings in the dashboard.
 - Slash commands missing: restart the bot, confirm the invite used `applications.commands`, and check the dashboard Slash Command Sync section.
 - Provider errors: run `python diagnose.py`, check API keys, and increase provider timeout for slow local models.
