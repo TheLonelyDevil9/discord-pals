@@ -1,6 +1,6 @@
 # Provider Configuration
 
-Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider definitions in `providers.json`, and keep secrets in `.env` whenever possible.
+Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider definitions in `providers.json`, and keep secrets in environment variables or `.env`.
 
 ## Basic Shape
 
@@ -19,6 +19,8 @@ Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider def
 ```
 
 The bot tries providers in list order until one succeeds. You can add, reorder, and edit chat and image providers from the dashboard Config page.
+
+For unattended deployments, `python startup.py --init-configs` creates a starter `providers.json` that reads `OPENAI_API_KEY` from the process environment. Docker, Compose, systemd, and host shells can provide those variables without a populated `.env` file.
 
 Common provider fields:
 

@@ -40,7 +40,7 @@ Thank you for your interest in contributing to Discord Pals! This document provi
 4. **Set up your test bot**
 
    - Create a test bot in the [Discord Developer Portal](https://discord.com/developers/applications)
-   - Copy `.env.example` to `.env` and add your tokens
+   - Copy `.env.example` to `.env` or export the same variables in your shell
    - Create a `providers.json` with your AI provider config
 
 ## Code Style

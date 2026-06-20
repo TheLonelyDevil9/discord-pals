@@ -121,6 +121,16 @@ services:
 
 `python startup.py --init-configs` creates starter `.env` and `providers.json` files without prompts and without writing secrets. Runtime environment variables from Docker, Compose, systemd, or a host shell can satisfy startup validation, so mounting `.env` is optional. Mount `providers.json` or `bots.json` only when you want to manage those files outside the container image.
 
+For multi-bot Docker runs, mount or bake a `bots.json` file and add one environment variable per bot `token_env`:
+
+```yaml
+environment:
+  FIREFLY_DISCORD_TOKEN: ${FIREFLY_DISCORD_TOKEN}
+  NAHIDA_DISCORD_TOKEN: ${NAHIDA_DISCORD_TOKEN}
+volumes:
+  - ./bots.json:/app/bots.json:ro
+```
+
 Run:
 
 ```bash
@@ -213,9 +223,9 @@ discord-pals/
 
 ### Token errors
 
-Single-bot mode needs `DISCORD_TOKEN` in `.env`. The dashboard Config page Advanced tab can update this value; saved tokens are never displayed and require a bot restart before they take effect.
+Single-bot mode needs `DISCORD_TOKEN` from `.env` or the process environment. The dashboard Config page Advanced tab can update `.env`; saved tokens are never displayed and require a bot restart before they take effect.
 
-Multi-bot mode uses the token variable names listed in `bots.json`. The Config page Advanced tab shows one token field per declared `token_env`, writes the matching `.env` variable, and never stores literal tokens in `bots.json`.
+Multi-bot mode uses the token variable names listed in `bots.json`. The Config page Advanced tab shows one token field per declared `token_env`, writes the matching `.env` variable, and never stores literal tokens in `bots.json`. In container deployments where secrets come from Compose or the host environment, update those runtime variables outside the dashboard.
 
 ### No characters available
 
