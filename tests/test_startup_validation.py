@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,39 @@ class StartupBotsConfigTests(unittest.TestCase):
 
         self.assertTrue(passed)
         self.assertEqual([], issues)
+
+    def test_check_bots_config_accepts_process_env_tokens_without_env_file(self):
+        self.write_bots([
+            {"name": "Firefly", "token_env": "FIREFLY_DISCORD_TOKEN", "character": "firefly"},
+        ])
+
+        with patch.dict(os.environ, {"FIREFLY_DISCORD_TOKEN": "real.token.value"}, clear=True):
+            passed, issues = startup.check_bots_config()
+
+        self.assertTrue(passed)
+        self.assertEqual([], issues)
+
+    def test_check_env_file_accepts_process_env_without_file(self):
+        with patch.dict(os.environ, {"DISCORD_TOKEN": "real.token.value"}, clear=True):
+            passed, issues = startup.check_env_file(interactive=False)
+
+        self.assertTrue(passed)
+        self.assertEqual([], issues)
+
+    def test_check_providers_config_accepts_default_provider_env_without_file(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "real.key.value"}, clear=True):
+            passed, issues = startup.check_providers_config(interactive=False)
+
+        self.assertTrue(passed)
+        self.assertEqual([], issues)
+
+    def test_initialize_blank_configs_creates_env_and_provider_files(self):
+        created = startup.initialize_blank_configs()
+
+        self.assertEqual({".env", "providers.json"}, {path.name for path in created})
+        self.assertTrue(self.base_dir.joinpath(".env").exists())
+        providers = json.loads(self.base_dir.joinpath("providers.json").read_text(encoding="utf-8"))
+        self.assertEqual("OPENAI_API_KEY", providers["providers"][0]["key_env"])
 
     def test_check_discord_token_skips_single_bot_token_when_bots_json_exists(self):
         self.write_bots([

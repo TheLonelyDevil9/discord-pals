@@ -95,6 +95,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN python startup.py --init-configs
 
 CMD ["python", "main.py"]
 ```
@@ -107,16 +108,18 @@ services:
   discord-pals:
     build: .
     restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     volumes:
       - ./bot_data:/app/bot_data
       - ./characters:/app/characters
       - ./prompts:/app/prompts
-      - ./.env:/app/.env:ro
-      - ./providers.json:/app/providers.json:ro
-      - ./bots.json:/app/bots.json:ro
     ports:
       - "5000:5000"
 ```
+
+`python startup.py --init-configs` creates starter `.env` and `providers.json` files without prompts and without writing secrets. Runtime environment variables from Docker, Compose, systemd, or a host shell can satisfy startup validation, so mounting `.env` is optional. Mount `providers.json` or `bots.json` only when you want to manage those files outside the container image.
 
 Run:
 

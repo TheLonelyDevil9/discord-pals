@@ -4,6 +4,24 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.4.0] - 2026-06-20
+
+Adds non-interactive Docker/startup configuration so container deployments can use process environment secrets without a populated .env file.
+
+### Added
+
+- Added `python startup.py --init-configs` for prompt-free starter `.env` and `providers.json` creation.
+- Added Docker documentation for environment-variable-only secret injection.
+
+### Changed
+
+- Allowed startup validation to use process environment variables instead of requiring a populated `.env` file.
+- Kept startup prompts disabled automatically when `main.py` runs without an interactive stdin.
+
+### Fixed
+
+- Avoided Windows console encoding failures in startup validation status output.
+
 ## [v2.3.9] - 2026-06-13
 
 Ships self-serve dashboard setup for single-bot and multi-bot deployments.
