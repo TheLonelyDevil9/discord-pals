@@ -4,6 +4,7 @@ Ensures configuration is valid before bot starts.
 Provides helpful error messages and auto-setup guidance.
 """
 
+import argparse
 import os
 import sys
 import json
@@ -21,16 +22,143 @@ class Colors:
     DIM = '\033[2m'
     END = '\033[0m'
 
-def ok(msg): print(f"{Colors.OK}✓{Colors.END} {msg}")
-def warn(msg): print(f"{Colors.WARN}⚠{Colors.END} {msg}")
-def fail(msg): print(f"{Colors.FAIL}✗{Colors.END} {msg}")
-def info(msg): print(f"{Colors.INFO}ℹ{Colors.END} {msg}")
+def ok(msg): print(f"{Colors.OK}[OK]{Colors.END} {msg}")
+def warn(msg): print(f"{Colors.WARN}[WARN]{Colors.END} {msg}")
+def fail(msg): print(f"{Colors.FAIL}[FAIL]{Colors.END} {msg}")
+def info(msg): print(f"{Colors.INFO}[INFO]{Colors.END} {msg}")
 
 
 BASE_DIR = Path(__file__).parent
 
 
-def check_env_file() -> Tuple[bool, List[str]]:
+DEFAULT_PROVIDER_ENV_NAMES = (
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ZAI_API_KEY",
+    "MOONSHOT_API_KEY",
+    "LOCAL_API_KEY",
+)
+
+
+def _read_json_config(path: Path) -> Optional[dict]:
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _env_file_values() -> dict:
+    """Read values from .env without requiring process environment mutation."""
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return {}
+
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        dotenv_values = None
+
+    if dotenv_values:
+        return {
+            key: "" if value is None else str(value)
+            for key, value in dotenv_values(env_file).items()
+            if key
+        }
+
+    values = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _process_environment_has_config() -> bool:
+    """Return True when Docker/systemd-style env vars can replace .env."""
+    if os.getenv("DISCORD_TOKEN"):
+        return True
+    if any(os.getenv(name) for name in DEFAULT_PROVIDER_ENV_NAMES):
+        return True
+
+    bots_data = _read_json_config(BASE_DIR / "bots.json") or {}
+    for bot_cfg in bots_data.get("bots", []):
+        if not isinstance(bot_cfg, dict):
+            continue
+        token_env = str(bot_cfg.get("token_env") or "").strip()
+        if token_env and os.getenv(token_env):
+            return True
+
+    providers_data = _read_json_config(BASE_DIR / "providers.json") or {}
+    for section in ("providers", "image_providers"):
+        for provider in providers_data.get(section, []):
+            if not isinstance(provider, dict):
+                continue
+            key_env = str(provider.get("key_env") or "").strip()
+            if key_env and os.getenv(key_env):
+                return True
+
+    return False
+
+
+def _default_provider_config() -> dict:
+    return {
+        "providers": [
+            {
+                "name": "OpenAI",
+                "url": "https://api.openai.com/v1",
+                "key_env": "OPENAI_API_KEY",
+                "model": "gpt-4o",
+                "max_tokens": 4096,
+                "temperature": 1.0,
+            }
+        ],
+        "timeout": 60,
+        "image_providers": [],
+        "character_providers": {},
+    }
+
+
+def initialize_blank_configs(force: bool = False) -> List[Path]:
+    """Create starter config files without prompting or writing secrets."""
+    created = []
+    env_file = BASE_DIR / ".env"
+    providers_file = BASE_DIR / "providers.json"
+
+    if force or not env_file.exists():
+        env_file.write_text(
+            "# Discord Pals can also read these from process env vars.\n"
+            "# DISCORD_TOKEN=\n"
+            "# OPENAI_API_KEY=\n"
+            "# DASHBOARD_USER=admin\n"
+            "# DASHBOARD_PASS=\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        created.append(env_file)
+
+    if force or not providers_file.exists():
+        providers_file.write_text(
+            json.dumps(_default_provider_config(), indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        created.append(providers_file)
+
+    return created
+
+
+def check_env_file(interactive: bool = True) -> Tuple[bool, List[str]]:
     """Check if .env file exists, offer to create from example."""
     env_file = BASE_DIR / ".env"
     env_example = BASE_DIR / ".env.example"
@@ -39,9 +167,18 @@ def check_env_file() -> Tuple[bool, List[str]]:
     if env_file.exists():
         ok(".env file found")
         return True, issues
+
+    if _process_environment_has_config():
+        ok(".env file not found - using process environment")
+        return True, issues
     
     if env_example.exists():
         fail(".env file missing!")
+        if not interactive:
+            info("Run python startup.py --init-configs to create starter files without prompts")
+            issues.append("missing .env")
+            return False, issues
+
         print(f"\n{Colors.BOLD}Would you like to create .env from .env.example?{Colors.END}")
         print(f"{Colors.DIM}(You'll need to edit it with your tokens after){Colors.END}")
         
@@ -84,34 +221,9 @@ def _env_secret_missing(value: Optional[str]) -> bool:
 
 
 def _load_env_values() -> dict:
-    """Read values exactly from .env so missing multi-bot vars can be reported."""
-    env_file = BASE_DIR / ".env"
-    if not env_file.exists():
-        return {}
-
-    try:
-        from dotenv import dotenv_values
-    except ImportError:
-        dotenv_values = None
-
-    if dotenv_values:
-        return {
-            key: "" if value is None else str(value)
-            for key, value in dotenv_values(env_file).items()
-            if key
-        }
-
-    values = {}
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if key:
-            values[key] = value.strip().strip('"').strip("'")
+    """Read .env plus process env so Docker/systemd vars are honored."""
+    values = _env_file_values()
+    values.update({key: str(value) for key, value in os.environ.items() if key})
     return values
 
 
@@ -190,7 +302,7 @@ def check_bots_config() -> Tuple[bool, List[str]]:
     return len(issues) == 0, issues
 
 
-def check_providers_config() -> Tuple[bool, List[str]]:
+def check_providers_config(interactive: bool = True) -> Tuple[bool, List[str]]:
     """Check providers.json, offer to create from example."""
     providers_file = BASE_DIR / "providers.json"
     providers_example = BASE_DIR / "providers.json.example"
@@ -249,9 +361,18 @@ def check_providers_config() -> Tuple[bool, List[str]]:
         
         return len(issues) == 0, issues
     
+    if any(os.getenv(name) for name in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY")):
+        warn("providers.json missing - using built-in provider defaults from process environment")
+        return True, issues
+
     # No providers.json - offer to create
     if providers_example.exists():
         fail("providers.json missing!")
+        if not interactive:
+            info("Run python startup.py --init-configs to create starter files without prompts")
+            issues.append("missing providers.json")
+            return False, issues
+
         print(f"\n{Colors.BOLD}Would you like to create providers.json?{Colors.END}")
         print("\nOptions:")
         print("  1) Create from example (for cloud APIs like OpenAI)")
@@ -388,7 +509,7 @@ def validate_startup(interactive: bool = True) -> bool:
     
     # 1. Check .env file
     print(f"{Colors.BOLD}[1/5] Environment File{Colors.END}")
-    passed, issues = check_env_file()
+    passed, issues = check_env_file(interactive=interactive)
     all_issues.extend(issues)
     
     # 2. Check bots.json
@@ -398,7 +519,7 @@ def validate_startup(interactive: bool = True) -> bool:
 
     # 3. Check providers.json
     print(f"\n{Colors.BOLD}[3/5] Provider Configuration{Colors.END}")
-    passed, issues = check_providers_config()
+    passed, issues = check_providers_config(interactive=interactive)
     all_issues.extend(issues)
     
     # 4. Check Discord token
@@ -417,23 +538,54 @@ def validate_startup(interactive: bool = True) -> bool:
     critical_issues = [i for i in all_issues if 'missing' in i.lower() or 'invalid' in i.lower()]
     
     if not all_issues:
-        print(f"{Colors.OK}{Colors.BOLD}✓ All checks passed! Starting bot...{Colors.END}")
+        print(f"{Colors.OK}{Colors.BOLD}[OK] All checks passed! Starting bot...{Colors.END}")
         return True
     elif critical_issues:
-        print(f"{Colors.FAIL}{Colors.BOLD}✗ {len(critical_issues)} critical issue(s) found:{Colors.END}")
+        print(f"{Colors.FAIL}{Colors.BOLD}[FAIL] {len(critical_issues)} critical issue(s) found:{Colors.END}")
         for issue in critical_issues:
-            print(f"  • {issue}")
+            print(f"  - {issue}")
         print(f"\n{Colors.WARN}Please fix these issues and try again.{Colors.END}")
         return False
     else:
-        print(f"{Colors.WARN}{Colors.BOLD}⚠ {len(all_issues)} warning(s):{Colors.END}")
+        print(f"{Colors.WARN}{Colors.BOLD}[WARN] {len(all_issues)} warning(s):{Colors.END}")
         for issue in all_issues:
-            print(f"  • {issue}")
+            print(f"  - {issue}")
         print(f"\n{Colors.INFO}Proceeding with warnings...{Colors.END}")
         return True
 
 
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Validate or initialize Discord Pals config")
+    parser.add_argument(
+        "--init-configs",
+        action="store_true",
+        help="create starter .env and providers.json files without prompting",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace existing files when used with --init-configs",
+    )
+    parser.add_argument(
+        "--no-input",
+        action="store_true",
+        help="run validation without interactive prompts",
+    )
+    args = parser.parse_args(argv)
+
+    if args.init_configs:
+        created = initialize_blank_configs(force=args.force)
+        if created:
+            for path in created:
+                ok(f"Created {path.name}")
+        else:
+            ok("Starter config files already exist")
+        return 0
+
+    interactive = not args.no_input and sys.stdin.isatty()
+    success = validate_startup(interactive=interactive)
+    return 0 if success else 1
+
+
 if __name__ == "__main__":
-    # Run standalone validation
-    success = validate_startup(interactive=True)
-    sys.exit(0 if success else 1)
+    sys.exit(main())

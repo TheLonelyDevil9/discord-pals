@@ -126,13 +126,13 @@ async def run_bots():
 
 if __name__ == "__main__":
     # Run startup validation first
+    import sys
     from startup import validate_startup
 
     runtime_config.apply_logging_config()
     
-    if not validate_startup(interactive=True):
+    if not validate_startup(interactive=sys.stdin.isatty()):
         log.error("Startup validation failed. Please fix the issues above.")
-        import sys
         sys.exit(1)
     
     log.divider()
