@@ -65,6 +65,14 @@ chmod +x setup.sh
 
 The setup script creates a virtual environment, installs dependencies, asks for provider and bot details, and writes `.env`, `providers.json`, and `bots.json` when needed.
 
+For container or other non-interactive setup, create starter files without prompts:
+
+```bash
+python startup.py --init-configs
+```
+
+Secrets can still come from process environment variables such as `DISCORD_TOKEN` and `OPENAI_API_KEY`; a populated `.env` file is not required when those variables are supplied by the runtime.
+
 Create or update your Discord application:
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications).
