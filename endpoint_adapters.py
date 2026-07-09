@@ -1,8 +1,10 @@
-"""Dedicated NewAPI runtime adapters.
+"""Multi-endpoint provider adapters.
 
-The legacy OpenAI-compatible providers keep using the OpenAI SDK. These
-adapters are opt-in via ``provider_protocol: newapi`` so endpoint-specific
-auth, URL, request, and response shapes cannot leak into the legacy lane.
+OpenAI-compatible Chat Completions providers keep using the OpenAI SDK lane.
+These adapters serialize requests for the other native endpoint families —
+OpenAI Responses, Anthropic Messages, and Gemini generateContent — selected
+per provider via ``endpoint_type``, so endpoint-specific auth, URL, request,
+and response shapes cannot leak into the SDK lane.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from provider_contracts import (
     UNSET,
     provider_error_policy,
     reject_image_generation_disabled,
-    select_newapi_auth_headers_for_endpoint,
+    select_auth_headers_for_endpoint,
 )
 
 try:
@@ -39,15 +41,15 @@ PostJSON = Callable[[str, Mapping[str, str], Mapping[str, Any], int], Awaitable[
 
 
 @dataclass(frozen=True)
-class NewAPIHTTPStatusError(Exception):
+class EndpointHTTPStatusError(Exception):
     status: int
     body: str = ""
 
     def __str__(self) -> str:
-        return f"NewAPI HTTP {self.status}"
+        return f"Endpoint HTTP {self.status}"
 
 
-class NewAPIAdapterError(Exception):
+class EndpointAdapterError(Exception):
     """Adapter failure with typed, redacted provider diagnostics."""
 
     def __init__(self, provider_error: ProviderError):
@@ -55,8 +57,8 @@ class NewAPIAdapterError(Exception):
         super().__init__(provider_error.code)
 
 
-class NewAPIProviderAdapter:
-    """Serialize requests for explicit NewAPI endpoint types."""
+class EndpointProviderAdapter:
+    """Serialize requests for explicit provider endpoint types."""
 
     def __init__(self, post_json: PostJSON | None = None):
         self._post_json = post_json or post_json_request
@@ -75,11 +77,11 @@ class NewAPIProviderAdapter:
     ) -> GenerationResult:
         image_error = reject_image_generation_disabled(descriptor, request)
         if image_error:
-            raise NewAPIAdapterError(image_error)
+            raise EndpointAdapterError(image_error)
 
         endpoint = EndpointType.parse(request.endpoint_type)
         if not descriptor.capabilities.supports(endpoint):
-            raise NewAPIAdapterError(
+            raise EndpointAdapterError(
                 ProviderError(
                     code="capability_unsupported",
                     message="Provider does not support the requested endpoint.",
@@ -98,7 +100,7 @@ class NewAPIProviderAdapter:
             include_body=include_body,
             exclude_body=exclude_body,
         )
-        auth = select_newapi_auth_headers_for_endpoint(
+        auth = select_auth_headers_for_endpoint(
             api_key,
             endpoint,
             requires_key=requires_key,
@@ -110,8 +112,8 @@ class NewAPIProviderAdapter:
             payload = await self._post_json(url, headers, body, timeout)
         except asyncio.TimeoutError:
             raise
-        except NewAPIHTTPStatusError as error:
-            raise NewAPIAdapterError(_provider_error_from_status(error.status, descriptor, endpoint, error.body))
+        except EndpointHTTPStatusError as error:
+            raise EndpointAdapterError(_provider_error_from_status(error.status, descriptor, endpoint, error.body))
 
         return self._parse_response(descriptor, request, payload)
 
@@ -121,7 +123,7 @@ class NewAPIProviderAdapter:
         request: ProviderRequest,
     ) -> tuple[str, dict[str, Any]]:
         endpoint = EndpointType.parse(request.endpoint_type)
-        base_url = descriptor.newapi_base_url
+        base_url = descriptor.provider_base_url
         if endpoint is EndpointType.CHAT_COMPLETIONS:
             return _join_url(base_url, "chat/completions"), _openai_chat_body(request)
         if endpoint is EndpointType.RESPONSES:
@@ -132,10 +134,10 @@ class NewAPIProviderAdapter:
         if endpoint is EndpointType.GEMINI:
             model = quote(request.model or descriptor.model, safe="")
             return _join_url(base_url, f"models/{model}:generateContent"), _gemini_body(request)
-        raise NewAPIAdapterError(
+        raise EndpointAdapterError(
             ProviderError(
                 code="capability_unsupported",
-                message="NewAPI adapter does not support this endpoint.",
+                message="Endpoint adapter does not support this endpoint.",
                 provider_name=descriptor.name,
                 tier=descriptor.tier,
                 endpoint_type=endpoint,
@@ -184,15 +186,35 @@ async def post_json_request(
         async with session.post(url, headers=dict(headers), json=dict(body)) as response:
             text = await response.text()
             if response.status >= 400:
-                raise NewAPIHTTPStatusError(response.status, text[:1000])
+                raise EndpointHTTPStatusError(response.status, text[:1000])
             if not text.strip():
                 return {}
             return await response.json(content_type=None)
 
 
-def is_newapi_provider_config(config: Mapping[str, Any]) -> bool:
+def uses_endpoint_adapter(config: Mapping[str, Any]) -> bool:
+    """Route through the endpoint adapter for non-Chat-Completions endpoint types.
+
+    ``endpoint_type`` is the supported selector. ``provider_protocol: newapi``
+    is a deprecated alias kept only so existing provider configs keep routing
+    here until they are re-saved.
+    """
     protocol = str(config.get("provider_protocol") or config.get("protocol") or "").strip().lower()
-    return protocol.replace("_", "-") in {"newapi", "new-api"}
+    if protocol.replace("_", "-") in {"newapi", "new-api"}:
+        return True
+    raw_endpoint = config.get("endpoint_type", config.get("endpoint"))
+    if raw_endpoint is None or str(raw_endpoint).strip() == "":
+        return False
+    try:
+        endpoint = EndpointType.parse(raw_endpoint)
+    except ValueError:
+        return False
+    return endpoint in (
+        EndpointType.RESPONSES,
+        EndpointType.MESSAGES,
+        EndpointType.ANTHROPIC_MESSAGES,
+        EndpointType.GEMINI,
+    )
 
 
 def _openai_chat_body(request: ProviderRequest) -> dict[str, Any]:
@@ -540,7 +562,7 @@ def _provider_error_from_status(
         code = "unknown"
     return ProviderError(
         code=code,
-        message=f"NewAPI request failed with HTTP {status}.",
+        message=f"Endpoint request failed with HTTP {status}.",
         provider_name=descriptor.name,
         tier=descriptor.tier,
         endpoint_type=endpoint,

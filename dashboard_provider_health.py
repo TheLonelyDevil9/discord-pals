@@ -17,18 +17,18 @@ def sanitize_error_message(error: Exception) -> str:
     return msg[:200]
 
 
-def test_newapi_provider_config(provider: dict) -> dict:
-    """Validate a NewAPI provider configuration without sending prompt data."""
-    from newapi_adapters import is_newapi_provider_config
+def test_endpoint_provider_config(provider: dict) -> dict:
+    """Validate an endpoint-adapter provider configuration without sending prompt data."""
+    from endpoint_adapters import uses_endpoint_adapter
     from provider_contracts import (
         CapabilityFlags,
         EndpointType,
         ProviderDescriptor,
         reject_image_generation_disabled,
-        select_newapi_auth_headers_for_endpoint,
+        select_auth_headers_for_endpoint,
     )
 
-    if not is_newapi_provider_config(provider):
+    if not uses_endpoint_adapter(provider):
         return {'handled': False}
 
     if not (provider.get('url') or provider.get('base_url')):
@@ -59,13 +59,13 @@ def test_newapi_provider_config(provider: dict) -> dict:
         if image_error and endpoint is EndpointType.IMAGE_GENERATIONS:
             return {'handled': True, 'success': False, 'error': image_error.message}
 
-        auth = select_newapi_auth_headers_for_endpoint(api_key, endpoint, requires_key=requires_key)
+        auth = select_auth_headers_for_endpoint(api_key, endpoint, requires_key=requires_key)
         return {
             'handled': True,
             'success': True,
-            'message': 'NewAPI provider configuration is valid',
+            'message': 'Provider endpoint configuration is valid',
             'endpoint_type': endpoint.value,
-            'base_url': descriptor.newapi_base_url,
+            'base_url': descriptor.provider_base_url,
             'auth_header': auth.diagnostics.get('header_name', ''),
             'capabilities': CapabilityFlags.from_config(provider).__dict__,
         }

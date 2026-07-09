@@ -449,7 +449,7 @@ class ProviderGatewayTests(unittest.IsolatedAsyncioTestCase):
         expected = contracts.GenerationResult(
             text="visible",
             reasoning_text="private",
-            provider_name="NewAPI",
+            provider_name="Endpoint Provider",
             tier="primary",
             model="responses-model",
         )

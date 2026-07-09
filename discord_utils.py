@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 from config import MAX_HISTORY_MESSAGES, MAX_EMOJIS_IN_PROMPT, DATA_DIR
+import attribution
 import logger as log
 from scopes import dm_history_id
 
@@ -921,21 +922,28 @@ def acknowledge_cleared(channel_id: int):
 def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     """Format history for AI consumption with optional limit."""
     history = get_history(channel_id)[-limit:]  # Apply limit
+    canonical_authors = attribution.canonical_author_map(history)
     formatted = []
 
     for idx, msg in enumerate(history):
         role = msg.get("role", "user")
         content = msg.get("content", "")
-        author = msg.get("author")
         gap_prefix = _get_time_gap_prefix(history[idx - 1] if idx > 0 else None, msg)
 
-        if role == "user" and author:
-            content = f"{author}: {content}"
+        attributed = False
+        if role == "user":
+            author = attribution.resolve_author(msg, canonical_authors)
+            if author:
+                content = attribution.render_attributed_content(author, content)
+                attributed = True
 
         if gap_prefix:
             content = f"{gap_prefix}{content}"
 
-        formatted.append({"role": role, "content": content})
+        formatted_msg = {"role": role, "content": content}
+        if attributed:
+            formatted_msg["attributed"] = True
+        formatted.append(formatted_msg)
 
     return formatted
 
@@ -957,22 +965,29 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
     # Include all messages with bot personality bleed prevention.
     all_history = all_history[-total_limit:]
 
-    # Format all messages
+    # Format all messages through the shared attribution renderer so one
+    # user_id keeps one canonical name across the whole rendered window.
+    canonical_authors = attribution.canonical_author_map(all_history)
     formatted = []
     for msg in all_history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         author = msg.get("author")
+        attributed = False
 
-        if role == "user" and author:
+        if role == "user":
             # User messages get Author: prefix (no brackets)
-            content = f"{author}: {content}"
+            resolved = attribution.resolve_author(msg, canonical_authors)
+            if resolved:
+                content = attribution.render_attributed_content(resolved, content)
+                attributed = True
         elif role == "assistant":
             # Bot messages: check if this is from the CURRENT bot or a DIFFERENT bot
             if author and current_bot_name and author.lower() != current_bot_name.lower():
                 # Different bot - treat as "user" role with name prefix to prevent personality bleed
                 role = "user"
-                content = f"{author}: {content}"
+                content = attribution.render_attributed_content(author, content)
+                attributed = True
             # If same bot or no author field, keep as assistant (no prefix)
 
         previous_msg = all_history[len(formatted) - 1] if formatted else None
@@ -981,6 +996,8 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
             content = f"{gap_prefix}{content}"
 
         formatted_msg = {"role": role, "content": content}
+        if attributed:
+            formatted_msg["attributed"] = True
         if role == "assistant":
             assistant_author = author or current_bot_name
             if assistant_author:

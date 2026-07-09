@@ -94,10 +94,9 @@
       "include_headers": "X-Custom-Auth: bearer-token-here\nX-Request-Source: discord-pals"
     },
     {
-      "name": "NewAPI Responses Example",
-      "url": "https://newapi.example",
-      "key_env": "NEWAPI_API_KEY",
-      "provider_protocol": "newapi",
+      "name": "OpenAI Responses Example",
+      "url": "https://api.openai.com",
+      "key_env": "OPENAI_API_KEY",
       "endpoint_type": "openai-responses",
       "model": "gpt-5.5",
       "max_tokens": 8192,
@@ -106,6 +105,27 @@
       "supports_reasoning": true,
       "reasoning_effort": "high",
       "reasoning_format": "openai_responses"
+    },
+    {
+      "name": "Anthropic (native Messages API)",
+      "url": "https://api.anthropic.com",
+      "key_env": "ANTHROPIC_API_KEY",
+      "endpoint_type": "anthropic-messages",
+      "model": "claude-sonnet-5",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "supports_vision": true,
+      "supports_reasoning": true
+    },
+    {
+      "name": "Gemini (native API)",
+      "url": "https://generativelanguage.googleapis.com",
+      "key_env": "GEMINI_API_KEY",
+      "endpoint_type": "gemini",
+      "model": "gemini-2.5-pro",
+      "max_tokens": 8192,
+      "temperature": 1.0,
+      "supports_vision": true
     }
   ],
   "timeout": 60,

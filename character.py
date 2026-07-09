@@ -953,17 +953,26 @@ class CharacterManager:
             mentionable_bots: List of bots that can be @mentioned
         """
 
-        # Add active users for social awareness
+        # Roster context: declare participant names by category so the model
+        # can bind each "Name:" transcript prefix to the right speaker.
         active_users_context = ""
-        if active_users and len(active_users) > 1:
+        if active_users:
             others = [u for u in active_users if u != user_name][:5]
-            if others:
-                active_users_context = f"Other active participants: {', '.join(others)}"
+            humans = [u for u in ([user_name] if user_name else []) + others if u]
+            if humans:
+                active_users_context = (
+                    "Human participants (each transcript line starts with the speaker's name): "
+                    f"{', '.join(humans)}"
+                )
 
         # Add other bots awareness to prevent impersonation
         other_bots_context = ""
         if other_bot_names:
-            other_bots_context = f"Other bot characters in this channel (you are NOT them, do not imitate): {', '.join(other_bot_names)}"
+            other_bots_context = (
+                f"Other bot characters in this channel: {', '.join(other_bot_names)}. "
+                "You are NOT them: never write their dialogue or prefix a line with their name, "
+                "and treat their transcript lines as other speakers' turns."
+            )
 
         # Add mentionable users context (for @mention feature)
         # Show @Username format (not raw <@id>) - AI learns to use @Name, we convert on output

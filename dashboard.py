@@ -2006,9 +2006,9 @@ def api_test_provider(index):
             return jsonify({'success': False, 'error': 'Provider index out of range'})
 
         p = providers[index]
-        from dashboard_provider_health import test_newapi_provider_config
-        if (newapi_result := test_newapi_provider_config(p)).get('handled'):
-            return jsonify({key: value for key, value in newapi_result.items() if key != 'handled'})
+        from dashboard_provider_health import test_endpoint_provider_config
+        if (endpoint_result := test_endpoint_provider_config(p)).get('handled'):
+            return jsonify({key: value for key, value in endpoint_result.items() if key != 'handled'})
 
         # Support both 'url' and 'base_url' for backwards compatibility
         url = p.get('url') or p.get('base_url')

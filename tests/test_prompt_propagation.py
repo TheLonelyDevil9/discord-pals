@@ -54,9 +54,9 @@ class PromptPropagationTests(unittest.TestCase):
         self.assertEqual(
             immediate,
             [
-                {"role": "user", "content": "Alice: Hi"},
+                {"role": "user", "content": "Alice: Hi", "attributed": True},
                 {"role": "assistant", "content": "Hello there", "author": "Nahida"},
-                {"role": "user", "content": "Nilou: I can help too"},
+                {"role": "user", "content": "Nilou: I can help too", "attributed": True},
             ]
         )
 
@@ -79,9 +79,9 @@ class PromptPropagationTests(unittest.TestCase):
         self.assertEqual(
             immediate,
             [
-                {"role": "user", "content": "Alice: Hi"},
+                {"role": "user", "content": "Alice: Hi", "attributed": True},
                 {"role": "assistant", "content": "Hello there", "author": "Nahida"},
-                {"role": "user", "content": "Nilou: I can help too"},
+                {"role": "user", "content": "Nilou: I can help too", "attributed": True},
             ]
         )
 
@@ -489,11 +489,14 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("moveProvider(", page)
         self.assertIn('id="prose_polisher_enabled"', page)
         self.assertIn('id="new-provider-reasoning-effort"', page)
-        self.assertIn('id="new-provider-protocol"', page)
         self.assertIn('id="new-provider-endpoint-type"', page)
         self.assertIn('id="new-provider-key-env"', page)
         self.assertIn('id="new-provider-supports-vision"', page)
-        self.assertIn('id="edit-provider-protocol"', page)
+        self.assertIn('id="edit-provider-endpoint-type"', page)
+        # Provider protocol selects were removed with the NewAPI lane;
+        # endpoint_type alone selects the adapter.
+        self.assertNotIn('id="new-provider-protocol"', page)
+        self.assertNotIn('id="edit-provider-protocol"', page)
         for field_id in (
             "new-provider-extra-body",
             "new-provider-include-body",
@@ -806,13 +809,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(captured_kwargs["quality"], "low")
         self.assertEqual(openai_mock.call_args.kwargs["api_key"], "test-key")
 
-    def test_newapi_provider_health_check_validates_config_without_prompt_data(self):
+    def test_endpoint_provider_health_check_validates_config_without_prompt_data(self):
         providers_payload = {
             "providers": [{
-                "name": "NewAPI Responses",
-                "url": "https://newapi.example",
-                "key_env": "NEWAPI_API_KEY",
-                "provider_protocol": "newapi",
+                "name": "Responses Provider",
+                "url": "https://gateway.example",
+                "key_env": "ENDPOINT_API_KEY",
                 "endpoint_type": "openai-responses",
                 "model": "gpt-5.5",
                 "supports_reasoning": True,
@@ -823,7 +825,7 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "Path", return_value=fake_path), \
                 patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
-                patch.dict(dashboard_module.os.environ, {"NEWAPI_API_KEY": "sk-test"}):
+                patch.dict(dashboard_module.os.environ, {"ENDPOINT_API_KEY": "sk-test"}):
             response = self.client.get("/api/test-provider/0")
 
         body = response.get_json()
@@ -833,13 +835,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(body["auth_header"], "Authorization")
         self.assertNotIn("sk-test", json.dumps(body))
 
-    def test_newapi_provider_health_check_reports_missing_key(self):
+    def test_endpoint_provider_health_check_reports_missing_key(self):
         providers_payload = {
             "providers": [{
-                "name": "NewAPI Responses",
-                "url": "https://newapi.example",
-                "key_env": "MISSING_NEWAPI_KEY",
-                "provider_protocol": "newapi",
+                "name": "Responses Provider",
+                "url": "https://gateway.example",
+                "key_env": "MISSING_ENDPOINT_KEY",
                 "endpoint_type": "openai-responses",
                 "model": "gpt-5.5",
             }]

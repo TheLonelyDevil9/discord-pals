@@ -1,4 +1,4 @@
-"""Pure provider gateway contracts and NewAPI helper policies.
+"""Pure provider gateway contracts and endpoint helper policies.
 
 This module is intentionally not wired into runtime provider calls yet. It gives
 future provider-gateway work a typed boundary without changing legacy behavior.
@@ -32,7 +32,6 @@ class ProviderProtocol(Enum):
     OPENAI = "openai"
     OPENAI_COMPATIBLE = "openai_compatible"
     OPENAI_LIKE = "openai_compatible"
-    NEWAPI = "newapi"
     GEMINI = "gemini"
     ANTHROPIC = "anthropic"
 
@@ -55,8 +54,10 @@ class ProviderProtocol(Enum):
             "oai": cls.OPENAI_COMPATIBLE,
             "oai_compatible": cls.OPENAI_COMPATIBLE,
             "chat_completions": cls.OPENAI_COMPATIBLE,
-            "newapi": cls.NEWAPI,
-            "new_api": cls.NEWAPI,
+            # Deprecated aliases from the removed NewAPI lane; kept so existing
+            # provider configs continue to parse.
+            "newapi": cls.OPENAI_COMPATIBLE,
+            "new_api": cls.OPENAI_COMPATIBLE,
             "gemini": cls.GEMINI,
             "google": cls.GEMINI,
             "google_gemini": cls.GEMINI,
@@ -73,7 +74,6 @@ class ProviderProtocol(Enum):
             ProviderProtocol.LEGACY_OPENAI_COMPATIBLE,
             ProviderProtocol.OPENAI,
             ProviderProtocol.OPENAI_COMPATIBLE,
-            ProviderProtocol.NEWAPI,
         }
 
 
@@ -274,8 +274,8 @@ class ProviderDescriptor:
         )
 
     @property
-    def newapi_base_url(self) -> str:
-        return newapi_base_url_for_endpoint(
+    def provider_base_url(self) -> str:
+        return provider_base_url_for_endpoint(
             self.base_url,
             self.endpoint_type,
             append_base_path=self.append_base_path,
@@ -429,13 +429,13 @@ class AuthHeaderSelection:
         )
 
 
-def newapi_base_url(
+def provider_base_url(
     base_url: str,
     protocol: ProviderProtocol | str | None = ProviderProtocol.OPENAI_COMPATIBLE,
     *,
     append_base_path: bool = True,
 ) -> str:
-    """Return the NewAPI base URL for a protocol without appending twice."""
+    """Return the resolved base URL for a protocol without appending twice."""
 
     cleaned = str(base_url or "").strip().rstrip("/")
     if not cleaned:
@@ -447,7 +447,6 @@ def newapi_base_url(
     suffix_by_protocol = {
         ProviderProtocol.OPENAI: "/v1",
         ProviderProtocol.OPENAI_COMPATIBLE: "/v1",
-        ProviderProtocol.NEWAPI: "/v1",
         ProviderProtocol.GEMINI: "/v1beta",
         ProviderProtocol.ANTHROPIC: "",
     }
@@ -459,13 +458,13 @@ def newapi_base_url(
     return f"{cleaned}{suffix}"
 
 
-def newapi_base_url_for_endpoint(
+def provider_base_url_for_endpoint(
     base_url: str,
     endpoint_type: EndpointType | str | None = EndpointType.CHAT_COMPLETIONS,
     *,
     append_base_path: bool = True,
 ) -> str:
-    """Return the NewAPI base URL selected by explicit endpoint type."""
+    """Return the resolved base URL selected by explicit endpoint type."""
 
     cleaned = str(base_url or "").strip().rstrip("/")
     if not cleaned:
@@ -491,7 +490,7 @@ def newapi_base_url_for_endpoint(
     return f"{cleaned}{suffix}"
 
 
-def select_newapi_auth_headers(
+def select_auth_headers(
     api_key: str | _UnsetType | None,
     protocol: ProviderProtocol | str | None = ProviderProtocol.OPENAI_COMPATIBLE,
     *,
@@ -540,13 +539,13 @@ def select_newapi_auth_headers(
     )
 
 
-def select_newapi_auth_headers_for_endpoint(
+def select_auth_headers_for_endpoint(
     api_key: str | _UnsetType | None,
     endpoint_type: EndpointType | str | None = EndpointType.CHAT_COMPLETIONS,
     *,
     requires_key: bool = True,
 ) -> AuthHeaderSelection:
-    """Select NewAPI auth headers using explicit endpoint family defaults."""
+    """Select auth headers using explicit endpoint family defaults."""
 
     endpoint = EndpointType.parse(endpoint_type)
     protocol_by_endpoint = {
@@ -555,7 +554,7 @@ def select_newapi_auth_headers_for_endpoint(
         EndpointType.MESSAGES: ProviderProtocol.ANTHROPIC,
     }
     protocol = protocol_by_endpoint.get(endpoint, ProviderProtocol.OPENAI_COMPATIBLE)
-    return select_newapi_auth_headers(api_key, protocol, requires_key=requires_key)
+    return select_auth_headers(api_key, protocol, requires_key=requires_key)
 
 
 def reject_image_generation_disabled(
@@ -637,8 +636,8 @@ __all__ = [
     "ProviderRequest",
     "UNSET",
     "canonical_provider_body",
-    "newapi_base_url",
-    "newapi_base_url_for_endpoint",
+    "provider_base_url",
+    "provider_base_url_for_endpoint",
     "parse_endpoint_type",
     "parse_provider_protocol",
     "provider_bodies_equal",
@@ -646,6 +645,6 @@ __all__ = [
     "provider_error_from_exception",
     "provider_error_policy",
     "reject_image_generation_disabled",
-    "select_newapi_auth_headers",
-    "select_newapi_auth_headers_for_endpoint",
+    "select_auth_headers",
+    "select_auth_headers_for_endpoint",
 ]

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
+import attribution
 from context_builder import ContextBuilder
 from provider_gateway import provider_gateway as provider_manager
 from provider_contracts import GenerationResult
@@ -660,12 +661,14 @@ class BotInstance:
         speaker_is_bot: bool,
         target_user_name: str | None = None,
         split_target_name: str | None = None,
+        other_participant_names: list[str] | None = None,
     ) -> str:
         return IdentityPolicy.current_speaker_context(
             speaker_name=speaker_name,
             speaker_is_bot=speaker_is_bot,
             target_user_name=target_user_name,
             direct_target_name=split_target_name,
+            other_participant_names=other_participant_names,
         )
 
     async def _prepare_message_content(self, message: discord.Message, user_name: str,
@@ -1885,7 +1888,8 @@ Return exactly one JSON object with this shape:
             author = msg.get("author") or target_user_name or "User"
             relevant_messages.append({
                 "role": "user",
-                "content": f"{author}: {msg.get('content', '')}"
+                "content": attribution.render_attributed_content(author, msg.get("content", "")),
+                "attributed": True,
             })
             keep_following_assistant = True
 
@@ -2149,6 +2153,7 @@ Return exactly one JSON object with this shape:
             speaker_is_bot=current_message_is_bot,
             target_user_name=target_user_name,
             split_target_name=getattr(split_target, "display_name", None) or getattr(split_target, "name", None),
+            other_participant_names=active_users,
         )
         messages_for_api.append({
             "role": "system",
@@ -2387,7 +2392,11 @@ Return exactly one JSON object with this shape:
             response = sanitize_response(response, self.character.name)
             response = await self._polish_response(response)
             response = sanitize_response(response, self.character.name)
-            violation = self._detect_identity_violation(response, other_bot_names)
+            violation = self._detect_identity_violation(
+                response,
+                other_bot_names,
+                human_participant_names=self._human_participant_names(context.get("channel_id")),
+            )
             if not violation:
                 return response
 
@@ -2415,10 +2424,29 @@ Return exactly one JSON object with this shape:
         context["identity_guard_reason"] = last_violation
         return None
 
-    def _detect_identity_violation(self, response: str, other_bot_names: list[str]) -> dict | None:
+    def _detect_identity_violation(
+        self,
+        response: str,
+        other_bot_names: list[str],
+        human_participant_names: list[str] | None = None,
+    ) -> dict | None:
         return IdentityPolicy(
             enabled=runtime_config.get("identity_guard_enabled", True)
-        ).detect_violation(response, other_bot_names)
+        ).detect_violation(
+            response,
+            other_bot_names,
+            human_participant_names=human_participant_names,
+        )
+
+    def _human_participant_names(self, channel_id) -> list[str]:
+        """Known human speaker names for this channel, minus the current character."""
+        if channel_id is None:
+            return []
+        current_name = (self.character.name if self.character else "").lower()
+        return [
+            name for name in get_active_users(channel_id)
+            if name and name.lower() != current_name
+        ]
 
     async def _send_and_finalize_response(self, response: str, context: dict,
                                            message, request: dict) -> bool:

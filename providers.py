@@ -8,8 +8,9 @@ import base64
 from dataclasses import dataclass
 from typing import Any, List, Dict, Optional
 from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
+import attribution
 from discord_utils import remove_thinking_tags
-from newapi_adapters import NewAPIAdapterError, NewAPIProviderAdapter, is_newapi_provider_config
+from endpoint_adapters import EndpointAdapterError, EndpointProviderAdapter, uses_endpoint_adapter
 from provider_contracts import (
     GenerationResult,
     ProviderDescriptor,
@@ -440,30 +441,25 @@ def format_as_single_user(messages: List[dict], system_prompt: str) -> List[dict
             section_title = "Context" if msg.get("kind") == "chatroom_context" else "Instructions"
             parts.append(f"### {section_title}\n{content}")
         elif role == "user":
-            # Check if content already has Author: prefix (from format_history_split)
-            # to avoid double-prefixing
-            # Look for pattern like "Name: " at start (not brackets)
-            if ": " in content[:50] and not content.startswith("("):
-                first_colon = content.find(": ")
-                prefix = content[:first_colon]
-                # If prefix looks like a name (no special chars except spaces), it's already formatted
-                if first_colon < 30 and prefix.replace(" ", "").isalnum():
-                    parts.append(content)
-                    continue
-            # Add author prefix - use "author" key (not "author_name")
-            author = msg.get("author", "User")
-            parts.append(f"{author}: {content}")
+            # Messages rendered by the shared attribution formatter carry an
+            # explicit flag; trust it instead of sniffing content for a
+            # "Name:" shape, which misfires on colon-leading text.
+            if msg.get("attributed"):
+                parts.append(content)
+                continue
+            author = msg.get("author", attribution.DEFAULT_USER_FALLBACK)
+            parts.append(attribution.render_attributed_content(author, content))
         elif role == "assistant":
-            # Bot's own messages - check for existing prefix
-            if ": " in content[:50] and not content.startswith("("):
-                first_colon = content.find(": ")
-                prefix = content[:first_colon]
-                if first_colon < 30 and prefix.replace(" ", "").isalnum():
-                    parts.append(content)
-                    continue
+            if msg.get("attributed"):
+                parts.append(content)
+                continue
             # Always prefix assistant messages with author name
-            author = msg.get("author", "Assistant")
-            parts.append(f"{author}: {content}")
+            author = msg.get("author", attribution.DEFAULT_ASSISTANT_FALLBACK)
+            parts.append(
+                attribution.render_attributed_content(
+                    author, content, fallback=attribution.DEFAULT_ASSISTANT_FALLBACK
+                )
+            )
     
     # Combine all parts into a single user message
     combined = "\n\n".join(parts)
@@ -480,13 +476,13 @@ class AIProviderManager:
         self.status: Dict[str, str] = {tier: "unknown" for tier in PROVIDERS}
         self.image_status: Dict[str, str] = {tier: "unknown" for tier in IMAGE_PROVIDERS}
         self._vision_support_overrides: Dict[str, bool] = {}
-        self._newapi_adapter = NewAPIProviderAdapter()
+        self._endpoint_adapter = EndpointProviderAdapter()
         
         for tier, cfg in PROVIDERS.items():
             key = cfg.get("key")
             if key:
-                if is_newapi_provider_config(cfg):
-                    self.providers[tier] = self._newapi_adapter
+                if uses_endpoint_adapter(cfg):
+                    self.providers[tier] = self._endpoint_adapter
                     continue
                 # Auto-detect OpenRouter and inject recommended headers
                 default_headers = {}
@@ -894,7 +890,7 @@ class AIProviderManager:
 
         return None
 
-    async def _try_generate_newapi_result(
+    async def _try_generate_endpoint_result(
         self,
         provider_cfg: dict,
         model: str,
@@ -910,12 +906,12 @@ class AIProviderManager:
         req_id: str | None = None,
         cycle: int = 0,
     ) -> GenerationResult | None:
-        """Generate through the explicit NewAPI adapter lane."""
+        """Generate through the explicit endpoint adapter lane."""
 
         descriptor = ProviderDescriptor.from_config(
             provider_cfg,
             tier=tier,
-            default_protocol=ProviderProtocol.NEWAPI,
+            default_protocol=ProviderProtocol.OPENAI_COMPATIBLE,
         )
         request = ProviderRequest(
             endpoint_type=descriptor.endpoint_type,
@@ -931,9 +927,9 @@ class AIProviderManager:
             attempt_started = time.perf_counter()
             try:
                 log.diagnostic(
-                    f"[{tier}] NewAPI provider request",
+                    f"[{tier}] Endpoint provider request",
                     component="provider",
-                    event="newapi_provider_request",
+                    event="endpoint_provider_request",
                     req_id=req_id,
                     tier=tier,
                     model=model,
@@ -950,7 +946,7 @@ class AIProviderManager:
                     timeout=effective_timeout,
                 )
                 result = await asyncio.wait_for(
-                    self._newapi_adapter.generate(
+                    self._endpoint_adapter.generate(
                         descriptor=descriptor,
                         request=request,
                         api_key="" if not provider_cfg.get("requires_key", True) and provider_cfg.get("key") == "not-needed" else provider_cfg.get("key") or "",
@@ -966,9 +962,9 @@ class AIProviderManager:
                 content = result.deliverable_text
                 if not content or content.strip() == "":
                     log.warn(
-                        f"[{tier}] Empty content from NewAPI {model}",
+                        f"[{tier}] Empty content from endpoint provider {model}",
                         component="provider",
-                        event="newapi_provider_empty",
+                        event="endpoint_provider_empty",
                         req_id=req_id,
                         tier=tier,
                         model=model,
@@ -978,9 +974,9 @@ class AIProviderManager:
                     return None
 
                 log.ok(
-                    f"[{tier}] Got {len(content)} chars from NewAPI {model}",
+                    f"[{tier}] Got {len(content)} chars from endpoint provider {model}",
                     component="provider",
-                    event="newapi_provider_response",
+                    event="endpoint_provider_response",
                     req_id=req_id,
                     tier=tier,
                     model=model,
@@ -998,15 +994,15 @@ class AIProviderManager:
                     usage=result.usage,
                     raw=result.raw,
                 )
-            except NewAPIAdapterError as e:
+            except EndpointAdapterError as e:
                 error = e.provider_error
                 policy = provider_error_policy(error.code)
                 if policy.retry_current_provider and attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAYS[attempt]
                     log.warn(
-                        f"[{tier}] NewAPI {error.code}, retrying in {delay}s...",
+                        f"[{tier}] Endpoint provider {error.code}, retrying in {delay}s...",
                         component="provider",
-                        event="newapi_provider_retry",
+                        event="endpoint_provider_retry",
                         req_id=req_id,
                         tier=tier,
                         attempt=attempt + 1,
@@ -1019,7 +1015,7 @@ class AIProviderManager:
 
         return None
 
-    async def _try_generate_newapi(
+    async def _try_generate_endpoint(
         self,
         provider_cfg: dict,
         model: str,
@@ -1035,8 +1031,8 @@ class AIProviderManager:
         req_id: str | None = None,
         cycle: int = 0,
     ) -> str | None:
-        """Generate through NewAPI and return only visible text for legacy callers."""
-        result = await self._try_generate_newapi_result(
+        """Generate through the endpoint adapter and return only visible text for legacy callers."""
+        result = await self._try_generate_endpoint_result(
             provider_cfg,
             model,
             messages,
@@ -1105,8 +1101,8 @@ class AIProviderManager:
         req_id: str | None = None,
         cycle: int = 0,
     ) -> GenerationResult | None:
-        if is_newapi_provider_config(provider_cfg):
-            return await self._try_generate_newapi_result(
+        if uses_endpoint_adapter(provider_cfg):
+            return await self._try_generate_endpoint_result(
                 provider_cfg,
                 model,
                 messages,
@@ -1280,14 +1276,14 @@ class AIProviderManager:
                 except RateLimitError:
                     self.status[tier] = "rate limited"
                     continue
-                except NewAPIAdapterError as e:
+                except EndpointAdapterError as e:
                     error = e.provider_error
                     policy = provider_error_policy(error.code)
                     self.status[tier] = "rate limited" if error.code == "rate_limit" else "error"
                     log.error(
-                        f"[{tier}] NewAPI {error.code}",
+                        f"[{tier}] Endpoint provider {error.code}",
                         component="provider",
-                        event="newapi_provider_error",
+                        event="endpoint_provider_error",
                         req_id=req_id,
                         tier=tier,
                         model=model,
@@ -1479,7 +1475,7 @@ class AIProviderManager:
 
             # Check if provider has embedding support configured
             provider_cfg = PROVIDERS.get(tier, {})
-            if is_newapi_provider_config(provider_cfg):
+            if uses_endpoint_adapter(provider_cfg):
                 continue
             embedding_model = provider_cfg.get("embedding_model", "text-embedding-3-small")
 

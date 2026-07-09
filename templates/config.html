@@ -860,18 +860,10 @@
                                 <select id="new-provider-type" required onchange="updateProviderDefaults()">
                                     <option value="">Select type...</option>
                                     <option value="openai">OpenAI</option>
-                                    <option value="newapi">NewAPI</option>
                                     <option value="anthropic">Anthropic</option>
                                     <option value="google">Google (Gemini)</option>
                                     <option value="openrouter">OpenRouter</option>
                                     <option value="local">Local / Custom</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-protocol">Provider Protocol</label>
-                                <select id="new-provider-protocol">
-                                    <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
-                                    <option value="newapi">NewAPI</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -1239,13 +1231,6 @@
             <input type="hidden" id="edit-provider-index">
             <div class="settings-grid">
                 <div class="form-group"><label for="edit-provider-name">Display Name</label><input type="text" id="edit-provider-name" required></div>
-                <div class="form-group">
-                    <label for="edit-provider-protocol">Provider Protocol</label>
-                    <select id="edit-provider-protocol">
-                        <option value="legacy-openai-compatible">Legacy OpenAI-Compatible</option>
-                        <option value="newapi">NewAPI</option>
-                    </select>
-                </div>
                 <div class="form-group">
                     <label for="edit-provider-endpoint-type">Endpoint Type</label>
                     <select id="edit-provider-endpoint-type">
@@ -2380,10 +2365,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function providerProtocol(provider) {
-    return provider.provider_protocol || provider.protocol || 'legacy-openai-compatible';
-}
-
 function providerEndpointType(provider) {
     return provider.endpoint_type || provider.endpoint || 'openai-chat';
 }
@@ -2786,7 +2767,6 @@ async function testProvider(index) {
 }
 
 function setProviderFormValues(prefix, provider) {
-    document.getElementById(`${prefix}-provider-protocol`).value = providerProtocol(provider);
     document.getElementById(`${prefix}-provider-endpoint-type`).value = providerEndpointType(provider);
     document.getElementById(`${prefix}-provider-key-env`).value = provider.key_env || '';
     document.getElementById(`${prefix}-provider-requires-key`).checked = provider.requires_key !== false;
@@ -2804,12 +2784,13 @@ function applyProviderFormValues(prefix, provider, jsonValues = null) {
     jsonValues = jsonValues || collectProviderJsonObjectValues(prefix);
     if (!jsonValues) return false;
 
-    const protocol = document.getElementById(`${prefix}-provider-protocol`).value;
-    if (protocol && protocol !== 'legacy-openai-compatible') provider.provider_protocol = protocol; else delete provider.provider_protocol;
+    // endpoint_type alone selects the adapter lane; provider_protocol is a
+    // removed legacy field cleared on save.
+    delete provider.provider_protocol;
     delete provider.protocol;
 
     const endpointType = document.getElementById(`${prefix}-provider-endpoint-type`).value;
-    if (protocol === 'newapi' || (endpointType && endpointType !== 'openai-chat')) provider.endpoint_type = endpointType; else delete provider.endpoint_type;
+    if (endpointType && endpointType !== 'openai-chat') provider.endpoint_type = endpointType; else delete provider.endpoint_type;
     delete provider.endpoint;
 
     const keyEnv = document.getElementById(`${prefix}-provider-key-env`).value.trim();
@@ -2938,12 +2919,11 @@ async function saveProvidersToServer() {
 }
 
 const providerDefaults = {
-    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
-    newapi: { url: 'https://newapi.example', model: 'gpt-5.5', provider_protocol: 'newapi', endpoint_type: 'openai-responses', supports_reasoning: true },
-    anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514', provider_protocol: 'newapi', endpoint_type: 'anthropic-messages', supports_reasoning: true },
-    google: { url: 'https://generativelanguage.googleapis.com', model: 'gemini-1.5-pro', provider_protocol: 'newapi', endpoint_type: 'gemini', supports_vision: true },
-    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat' },
-    local: { url: 'http://localhost:5000/v1', model: 'local-model', provider_protocol: 'legacy-openai-compatible', endpoint_type: 'openai-chat', requires_key: false }
+    openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o', endpoint_type: 'openai-chat' },
+    anthropic: { url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514', endpoint_type: 'anthropic-messages', supports_reasoning: true },
+    google: { url: 'https://generativelanguage.googleapis.com', model: 'gemini-1.5-pro', endpoint_type: 'gemini', supports_vision: true },
+    openrouter: { url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o', endpoint_type: 'openai-chat' },
+    local: { url: 'http://localhost:5000/v1', model: 'local-model', endpoint_type: 'openai-chat', requires_key: false }
 };
 
 function updateProviderDefaults() {

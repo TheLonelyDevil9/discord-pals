@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, mock_open, patch
 
 import module_stubs  # noqa: F401
 import config
-import newapi_adapters
+import endpoint_adapters
 import provider_contracts as contracts
 import providers
 
@@ -29,9 +29,9 @@ class _PostRecorder:
 
 def _descriptor(endpoint_type, *, base_url="https://gateway.example", capabilities=None):
     return contracts.ProviderDescriptor(
-        name="NewAPI",
+        name="Endpoint Provider",
         tier="primary",
-        protocol=contracts.ProviderProtocol.NEWAPI,
+        protocol=contracts.ProviderProtocol.OPENAI_COMPATIBLE,
         endpoint_type=endpoint_type,
         base_url=base_url,
         model="test-model",
@@ -43,7 +43,7 @@ def _descriptor(endpoint_type, *, base_url="https://gateway.example", capabiliti
     )
 
 
-class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
+class EndpointAdapterContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_openai_chat_uses_bearer_auth_and_keeps_reasoning_separate(self):
         post = _PostRecorder({
             "choices": [{
@@ -55,7 +55,7 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             }],
             "usage": {"total_tokens": 12},
         })
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
         result = await adapter.generate(
             descriptor=_descriptor(contracts.EndpointType.CHAT_COMPLETIONS),
@@ -70,13 +70,13 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             api_key="sk-test",
             timeout=20,
             include_body="top_p: 0.9",
-            include_headers="X-Lane: newapi",
+            include_headers="X-Lane: endpoint",
         )
 
         call = post.calls[0]
         self.assertEqual(call["url"], "https://gateway.example/v1/chat/completions")
         self.assertEqual(call["headers"]["Authorization"], "Bearer sk-test")
-        self.assertEqual(call["headers"]["X-Lane"], "newapi")
+        self.assertEqual(call["headers"]["X-Lane"], "endpoint")
         self.assertTrue(
             contracts.provider_bodies_equal(
                 call["body"],
@@ -99,7 +99,7 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             "output_text": "Final answer.",
             "reasoning": {"summary": [{"text": "Reasoning summary."}]},
         })
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
         result = await adapter.generate(
             descriptor=_descriptor(contracts.EndpointType.RESPONSES),
@@ -146,7 +146,7 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             ],
             "usage": {"input_tokens": 4, "output_tokens": 2},
         })
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
         result = await adapter.generate(
             descriptor=_descriptor(contracts.EndpointType.ANTHROPIC_MESSAGES),
@@ -181,7 +181,7 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_anthropic_messages_does_not_double_append_v1(self):
         post = _PostRecorder({"content": [{"type": "text", "text": "ok"}]})
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
         await adapter.generate(
             descriptor=_descriptor(
@@ -209,7 +209,7 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
             }],
             "usageMetadata": {"totalTokenCount": 5},
         })
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
         result = await adapter.generate(
             descriptor=_descriptor(contracts.EndpointType.GEMINI),
@@ -247,9 +247,9 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_generation_modeled_but_disabled_rejects_before_http(self):
         post = _PostRecorder({})
-        adapter = newapi_adapters.NewAPIProviderAdapter(post_json=post)
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
 
-        with self.assertRaises(newapi_adapters.NewAPIAdapterError) as raised:
+        with self.assertRaises(endpoint_adapters.EndpointAdapterError) as raised:
             await adapter.generate(
                 descriptor=_descriptor(
                     contracts.EndpointType.IMAGE_GENERATIONS,
@@ -268,11 +268,11 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(post.calls, [])
 
     async def test_http_status_errors_map_to_typed_provider_errors(self):
-        adapter = newapi_adapters.NewAPIProviderAdapter(
-            post_json=_PostRecorder(newapi_adapters.NewAPIHTTPStatusError(429, "rate limited"))
+        adapter = endpoint_adapters.EndpointProviderAdapter(
+            post_json=_PostRecorder(endpoint_adapters.EndpointHTTPStatusError(429, "rate limited"))
         )
 
-        with self.assertRaises(newapi_adapters.NewAPIAdapterError) as raised:
+        with self.assertRaises(endpoint_adapters.EndpointAdapterError) as raised:
             await adapter.generate(
                 descriptor=_descriptor(contracts.EndpointType.CHAT_COMPLETIONS),
                 request=contracts.ProviderRequest(
@@ -288,11 +288,11 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(raised.exception.provider_error.retryable)
 
     async def test_http_400_safety_errors_map_to_content_filter(self):
-        adapter = newapi_adapters.NewAPIProviderAdapter(
-            post_json=_PostRecorder(newapi_adapters.NewAPIHTTPStatusError(400, "blocked by safety policy"))
+        adapter = endpoint_adapters.EndpointProviderAdapter(
+            post_json=_PostRecorder(endpoint_adapters.EndpointHTTPStatusError(400, "blocked by safety policy"))
         )
 
-        with self.assertRaises(newapi_adapters.NewAPIAdapterError) as raised:
+        with self.assertRaises(endpoint_adapters.EndpointAdapterError) as raised:
             await adapter.generate(
                 descriptor=_descriptor(contracts.EndpointType.CHAT_COMPLETIONS),
                 request=contracts.ProviderRequest(
@@ -307,28 +307,27 @@ class NewAPIAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.provider_error.code, "content_filter")
 
 
-class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_generate_routes_explicit_newapi_provider_without_legacy_sdk_client(self):
+class EndpointProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generate_routes_explicit_endpoint_provider_without_legacy_sdk_client(self):
         manager = object.__new__(providers.AIProviderManager)
         manager.providers = {"primary": object()}
         manager.status = {}
         manager._vision_support_overrides = {}
         manager._build_tier_order = lambda preferred_tier="": ["primary"]
-        manager._newapi_adapter = types.SimpleNamespace(
+        manager._endpoint_adapter = types.SimpleNamespace(
             generate=AsyncMock(return_value=contracts.GenerationResult(
-                text="NewAPI says hi.",
+                text="Endpoint provider says hi.",
                 reasoning_text="Private reasoning.",
-                provider_name="NewAPI",
+                provider_name="Endpoint Provider",
                 tier="primary",
                 model="responses-model",
             ))
         )
         provider_cfg = {
-            "name": "NewAPI",
+            "name": "Endpoint Provider",
             "url": "https://gateway.example",
             "key": "sk-test",
             "requires_key": True,
-            "provider_protocol": "newapi",
             "endpoint_type": "openai-responses",
             "model": "responses-model",
             "max_tokens": 256,
@@ -347,35 +346,34 @@ class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 req_id="req-1",
             )
 
-        self.assertEqual(result, "NewAPI says hi.")
-        call = manager._newapi_adapter.generate.await_args.kwargs
+        self.assertEqual(result, "Endpoint provider says hi.")
+        call = manager._endpoint_adapter.generate.await_args.kwargs
         self.assertIs(call["descriptor"].endpoint_type, contracts.EndpointType.RESPONSES)
         self.assertEqual(
             call["request"].messages,
             [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}],
         )
 
-    async def test_generate_result_preserves_newapi_reasoning_outside_visible_text(self):
+    async def test_generate_result_preserves_endpoint_reasoning_outside_visible_text(self):
         manager = object.__new__(providers.AIProviderManager)
         manager.providers = {"primary": object()}
         manager.status = {}
         manager._vision_support_overrides = {}
         manager._build_tier_order = lambda preferred_tier="": ["primary"]
-        manager._newapi_adapter = types.SimpleNamespace(
+        manager._endpoint_adapter = types.SimpleNamespace(
             generate=AsyncMock(return_value=contracts.GenerationResult(
                 text="<thinking>draft</thinking>Visible reply.",
                 reasoning_text="Private reasoning.",
-                provider_name="NewAPI",
+                provider_name="Endpoint Provider",
                 tier="primary",
                 model="responses-model",
             ))
         )
         provider_cfg = {
-            "name": "NewAPI",
+            "name": "Endpoint Provider",
             "url": "https://gateway.example",
             "key": "sk-test",
             "requires_key": True,
-            "provider_protocol": "newapi",
             "endpoint_type": "openai-responses",
             "model": "responses-model",
             "max_tokens": 256,
@@ -405,15 +403,14 @@ class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return contracts.GenerationResult(text="ok")
 
         manager = object.__new__(providers.AIProviderManager)
-        manager._newapi_adapter = types.SimpleNamespace(generate=AsyncMock(side_effect=fake_generate))
+        manager._endpoint_adapter = types.SimpleNamespace(generate=AsyncMock(side_effect=fake_generate))
 
-        await manager._try_generate_newapi(
+        await manager._try_generate_endpoint(
             {
-                "name": "Local NewAPI",
+                "name": "Local Endpoint",
                 "url": "http://localhost:3000",
                 "key": "not-needed",
                 "requires_key": False,
-                "provider_protocol": "newapi",
                 "endpoint_type": "openai-chat",
                 "model": "local-model",
             },
@@ -428,30 +425,29 @@ class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["api_key"], "")
         self.assertFalse(captured["requires_key"])
 
-    async def test_newapi_rate_limit_retries_before_fallback(self):
+    async def test_endpoint_rate_limit_retries_before_fallback(self):
         provider_error = contracts.ProviderError(
             code="rate_limit",
             message="rate limited",
-            provider_name="NewAPI",
+            provider_name="Endpoint Provider",
             tier="primary",
             endpoint_type=contracts.EndpointType.CHAT_COMPLETIONS,
             retryable=True,
         )
         manager = object.__new__(providers.AIProviderManager)
-        manager._newapi_adapter = types.SimpleNamespace(
+        manager._endpoint_adapter = types.SimpleNamespace(
             generate=AsyncMock(side_effect=[
-                newapi_adapters.NewAPIAdapterError(provider_error),
+                endpoint_adapters.EndpointAdapterError(provider_error),
                 contracts.GenerationResult(text="Recovered."),
             ])
         )
 
         with patch.object(providers.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
-            result = await manager._try_generate_newapi(
+            result = await manager._try_generate_endpoint(
                 {
-                    "name": "NewAPI",
+                    "name": "Endpoint Provider",
                     "url": "https://gateway.example",
                     "key": "sk-test",
-                    "provider_protocol": "newapi",
                     "endpoint_type": "openai-chat",
                     "model": "chat-model",
                 },
@@ -466,15 +462,31 @@ class NewAPIProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result, "Recovered.")
-        self.assertEqual(manager._newapi_adapter.generate.await_count, 2)
+        self.assertEqual(manager._endpoint_adapter.generate.await_count, 2)
         sleep_mock.assert_awaited_once_with(providers.RETRY_DELAYS[0])
 
 
-class NewAPIProviderConfigTests(unittest.TestCase):
-    def test_load_providers_preserves_newapi_runtime_fields(self):
+class EndpointAdapterRoutingTests(unittest.TestCase):
+    def test_uses_endpoint_adapter_routes_by_endpoint_type(self):
+        self.assertTrue(endpoint_adapters.uses_endpoint_adapter({"endpoint_type": "openai-responses"}))
+        self.assertTrue(endpoint_adapters.uses_endpoint_adapter({"endpoint_type": "anthropic-messages"}))
+        self.assertTrue(endpoint_adapters.uses_endpoint_adapter({"endpoint_type": "gemini"}))
+        self.assertFalse(endpoint_adapters.uses_endpoint_adapter({"endpoint_type": "openai-chat"}))
+        self.assertFalse(endpoint_adapters.uses_endpoint_adapter({}))
+        self.assertFalse(endpoint_adapters.uses_endpoint_adapter({"endpoint_type": "bogus"}))
+
+    def test_uses_endpoint_adapter_accepts_deprecated_newapi_alias(self):
+        self.assertTrue(endpoint_adapters.uses_endpoint_adapter({"provider_protocol": "newapi"}))
+        self.assertTrue(endpoint_adapters.uses_endpoint_adapter({"protocol": "new-api"}))
+
+
+class EndpointProviderConfigTests(unittest.TestCase):
+    def test_load_providers_preserves_endpoint_runtime_fields(self):
+        # provider_protocol "newapi" is a deprecated alias; loading must keep
+        # preserving it so existing configs continue to route to the adapter.
         payload = {
             "providers": [{
-                "name": "Local NewAPI",
+                "name": "Local Endpoint",
                 "url": "http://localhost:3000",
                 "model": "local-model",
                 "provider_protocol": "newapi",

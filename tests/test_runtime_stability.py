@@ -1048,7 +1048,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
         generation = bot_instance_module.GenerationResult(
             text="Visible reply.",
             reasoning_text="Private reasoning must stay private.",
-            provider_name="NewAPI",
+            provider_name="Endpoint Provider",
             tier="primary",
             model="gpt-5.5",
         )
@@ -1069,7 +1069,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, "Visible reply.")
         self.assertEqual(context["provider_tier"], "primary")
-        self.assertEqual(context["provider_name"], "NewAPI")
+        self.assertEqual(context["provider_name"], "Endpoint Provider")
         self.assertEqual(context["provider_model"], "gpt-5.5")
         self.assertIs(context["provider_has_reasoning"], True)
         self.assertEqual(metrics_response.call_args.kwargs["provider_tier"], "primary")

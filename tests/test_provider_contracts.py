@@ -36,25 +36,25 @@ class ProviderContractTests(unittest.TestCase):
             contracts.EndpointType.MESSAGES,
         )
 
-    def test_newapi_base_url_policy_by_protocol(self):
+    def test_provider_base_url_policy_by_protocol(self):
         self.assertEqual(
-            contracts.newapi_base_url("https://gateway.example", contracts.ProviderProtocol.OPENAI_COMPATIBLE),
+            contracts.provider_base_url("https://gateway.example", contracts.ProviderProtocol.OPENAI_COMPATIBLE),
             "https://gateway.example/v1",
         )
         self.assertEqual(
-            contracts.newapi_base_url("https://gateway.example/v1", contracts.ProviderProtocol.OPENAI),
+            contracts.provider_base_url("https://gateway.example/v1", contracts.ProviderProtocol.OPENAI),
             "https://gateway.example/v1",
         )
         self.assertEqual(
-            contracts.newapi_base_url("https://gateway.example", contracts.ProviderProtocol.GEMINI),
+            contracts.provider_base_url("https://gateway.example", contracts.ProviderProtocol.GEMINI),
             "https://gateway.example/v1beta",
         )
         self.assertEqual(
-            contracts.newapi_base_url("https://gateway.example", contracts.ProviderProtocol.ANTHROPIC),
+            contracts.provider_base_url("https://gateway.example", contracts.ProviderProtocol.ANTHROPIC),
             "https://gateway.example",
         )
         self.assertEqual(
-            contracts.newapi_base_url(
+            contracts.provider_base_url(
                 "https://gateway.example/proxy/",
                 contracts.ProviderProtocol.GEMINI,
                 append_base_path=False,
@@ -62,21 +62,21 @@ class ProviderContractTests(unittest.TestCase):
             "https://gateway.example/proxy",
         )
 
-    def test_newapi_base_url_policy_by_endpoint_type(self):
+    def test_provider_base_url_policy_by_endpoint_type(self):
         self.assertEqual(
-            contracts.newapi_base_url_for_endpoint("https://gateway.example", "openai-chat"),
+            contracts.provider_base_url_for_endpoint("https://gateway.example", "openai-chat"),
             "https://gateway.example/v1",
         )
         self.assertEqual(
-            contracts.newapi_base_url_for_endpoint("https://gateway.example", "gemini"),
+            contracts.provider_base_url_for_endpoint("https://gateway.example", "gemini"),
             "https://gateway.example/v1beta",
         )
         self.assertEqual(
-            contracts.newapi_base_url_for_endpoint("https://gateway.example", "anthropic-messages"),
+            contracts.provider_base_url_for_endpoint("https://gateway.example", "anthropic-messages"),
             "https://gateway.example",
         )
         self.assertEqual(
-            contracts.newapi_base_url_for_endpoint(
+            contracts.provider_base_url_for_endpoint(
                 "https://gateway.example/custom/",
                 "anthropic-messages",
                 append_base_path=False,
@@ -86,9 +86,9 @@ class ProviderContractTests(unittest.TestCase):
 
     def test_auth_header_policy_redacts_diagnostics(self):
         secret = "sk-test-secret-value"
-        openai_auth = contracts.select_newapi_auth_headers(secret, contracts.ProviderProtocol.OPENAI_COMPATIBLE)
-        gemini_auth = contracts.select_newapi_auth_headers(secret, contracts.ProviderProtocol.GEMINI)
-        anthropic_auth = contracts.select_newapi_auth_headers(secret, contracts.ProviderProtocol.ANTHROPIC)
+        openai_auth = contracts.select_auth_headers(secret, contracts.ProviderProtocol.OPENAI_COMPATIBLE)
+        gemini_auth = contracts.select_auth_headers(secret, contracts.ProviderProtocol.GEMINI)
+        anthropic_auth = contracts.select_auth_headers(secret, contracts.ProviderProtocol.ANTHROPIC)
 
         self.assertEqual(openai_auth.headers, {"Authorization": f"Bearer {secret}"})
         self.assertEqual(gemini_auth.headers, {"x-goog-api-key": secret})
@@ -127,13 +127,13 @@ class ProviderContractTests(unittest.TestCase):
         self.assertTrue(capabilities.image_generation_modeled)
         self.assertFalse(capabilities.image_generation)
 
-    def test_newapi_endpoint_auth_defaults(self):
+    def test_endpoint_auth_defaults(self):
         secret = "sk-test-secret-value"
-        responses_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "openai-responses")
-        anthropic_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "anthropic-messages")
-        gemini_auth = contracts.select_newapi_auth_headers_for_endpoint(secret, "gemini")
-        no_key_auth = contracts.select_newapi_auth_headers_for_endpoint("", "openai-chat", requires_key=False)
-        not_needed_auth = contracts.select_newapi_auth_headers_for_endpoint("not-needed", "openai-chat", requires_key=False)
+        responses_auth = contracts.select_auth_headers_for_endpoint(secret, "openai-responses")
+        anthropic_auth = contracts.select_auth_headers_for_endpoint(secret, "anthropic-messages")
+        gemini_auth = contracts.select_auth_headers_for_endpoint(secret, "gemini")
+        no_key_auth = contracts.select_auth_headers_for_endpoint("", "openai-chat", requires_key=False)
+        not_needed_auth = contracts.select_auth_headers_for_endpoint("not-needed", "openai-chat", requires_key=False)
 
         self.assertEqual(responses_auth.headers, {"Authorization": f"Bearer {secret}"})
         self.assertEqual(anthropic_auth.headers, {"x-api-key": secret})

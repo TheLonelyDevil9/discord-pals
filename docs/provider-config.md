@@ -134,32 +134,29 @@ When a user sends an image, vision providers receive multimodal content. Text-on
 
 Emoji and shortcode context remains text-only.
 
-## NewAPI Provider Lane
+## Endpoint Types
 
-NewAPI providers are opt-in. Existing providers keep the legacy OpenAI-compatible Chat Completions path unless `provider_protocol` is set to `newapi`.
+Providers default to the OpenAI-compatible Chat Completions path through the OpenAI SDK, which supports custom params (`include_body`, `exclude_body`, `include_headers`, `extra_body`). Setting `endpoint_type` to another endpoint family routes that provider through the native endpoint adapter instead:
 
 ```json
 {
   "providers": [
     {
-      "name": "NewAPI Responses",
-      "url": "https://newapi.example",
-      "key_env": "NEWAPI_API_KEY",
-      "provider_protocol": "newapi",
-      "endpoint_type": "openai-responses",
-      "model": "gpt-5.5",
+      "name": "Anthropic (native Messages API)",
+      "url": "https://api.anthropic.com",
+      "key_env": "ANTHROPIC_API_KEY",
+      "endpoint_type": "anthropic-messages",
+      "model": "claude-sonnet-5",
       "supports_reasoning": true,
-      "supports_vision": true,
-      "reasoning_effort": "high",
-      "reasoning_format": "openai_responses"
+      "supports_vision": true
     }
   ]
 }
 ```
 
-Supported `endpoint_type` values are `openai-chat`, `openai-responses`, `anthropic-messages`, and `gemini`.
+Supported `endpoint_type` values are `openai-chat` (default, SDK lane), `openai-responses`, `anthropic-messages`, and `gemini`. The adapter lane also honors `include_body`, `exclude_body`, `include_headers`, and `extra_body`.
 
-NewAPI endpoint defaults:
+Endpoint defaults:
 
 | Endpoint type | URL policy | Auth header |
 | --- | --- | --- |
@@ -168,7 +165,9 @@ NewAPI endpoint defaults:
 | `anthropic-messages` | Does not append a base version; posts `/v1/messages` unless the base already ends in `/v1`. | `x-api-key` |
 | `gemini` | Appends `/v1beta`, then posts `/models/{model}:generateContent`. | `x-goog-api-key` |
 
-Set `append_base_path` to `false` when `url` is already the exact base path the adapter should use. Set `requires_key` to `false` for local NewAPI gateways that do not need authentication.
+Set `append_base_path` to `false` when `url` is already the exact base path the adapter should use. Set `requires_key` to `false` for local gateways that do not need authentication.
+
+`provider_protocol: newapi` is a removed legacy field: configs that still carry it keep routing through the endpoint adapter, and the dashboard clears the field the next time the provider is saved.
 
 ## Image Generation Providers
 

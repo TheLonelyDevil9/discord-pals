@@ -17,6 +17,7 @@ from config import (
     LORE_FILE, DM_MEMORIES_DIR, USER_MEMORIES_DIR, GLOBAL_USER_PROFILES_FILE,
     AUTO_MEMORIES_FILE, MANUAL_LORE_FILE, MEMORY_STATE_FILE
 )
+import attribution
 from discord_utils import safe_json_load, safe_json_save, remove_thinking_tags
 from scopes import auto_memory_key, dm_auto_memory_key as scoped_dm_auto_memory_key, dm_memory_server_id
 from constants import (
@@ -1687,12 +1688,14 @@ Final memory profile:"""
             return None
         self._channel_memory_cooldown[channel_key] = now
 
-        # Build context with explicit user attribution
+        # Build context with explicit user attribution. Sanitize bodies so a
+        # quoted or impersonated "Name:" line cannot be memorized as another
+        # speaker's statement.
         context_lines = []
         for m in messages[-20:]:
             author = m.get('author', 'Unknown')
             role = m.get('role', 'user')
-            content = m.get('content', '')[:200]
+            content = attribution.sanitize_speaker_lookalikes(m.get('content', ''))[:200]
             if role == 'assistant':
                 context_lines.append(f"[{character_name}]: {content}")
             else:
