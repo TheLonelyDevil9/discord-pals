@@ -4,6 +4,36 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.5.0] - 2026-07-09
+
+Hardens multi-user speaker attribution for mid-tier models and replaces the NewAPI provider lane with endpoint-type routing.
+
+### Added
+
+- Added a shared attribution renderer (`attribution.py`) so history formatting, single-user flattening, `/interact` isolation, and memory extraction all render speaker turns identically.
+- Added a speaker-lookalike sanitizer that neutralizes column-0 `Name:` shapes on continuation lines so quoted or impersonated text cannot forge a transcript turn.
+- Added native endpoint examples for OpenAI Responses, Anthropic Messages, and Gemini to `providers.json.example`, `.env.example`, and the provider docs.
+- Added adversarial attribution regression tests covering colon-leading content, in-message impersonation, renamed users, duplicate display names, and time-gap markers.
+
+### Changed
+
+- Selected the multi-endpoint provider adapter by `endpoint_type` alone (`openai-responses`, `anthropic-messages`, `gemini`); OpenAI-compatible Chat Completions stays on the SDK lane with custom params.
+- Replaced single-user mode's author-prefix content sniffing with an explicit attribution flag set by the shared renderer.
+- Rendered renamed users under one current display name across the context window and disambiguated duplicate display names deterministically.
+- Declared chatroom participants as a categorized roster and strengthened the anti-impersonation wording for other bots.
+- Added a negative addressing clause to the current-speaker anchor naming third parties that must not be addressed as "you".
+- Extended the identity guard to block structural speech attributed to human participants, not just other bot characters.
+- Polished the dashboard: compact Logs filter row, fixed Memories filter widths, static mobile navigation, 2x2 mobile stats, config tab scroll-into-view, and collapsed advanced provider override editors.
+
+### Removed
+
+- Removed the NewAPI-branded provider lane, dashboard protocol selects, and examples; `provider_protocol: newapi` remains a deprecated alias so existing configs keep routing through the endpoint adapter.
+
+### Fixed
+
+- Fixed single-user mode misattributing colon-leading messages (for example `Note: ...`) to a phantom speaker.
+- Fixed doubled author prefixes when a time-gap marker preceded a message in single-user mode.
+
 ## [v2.4.0] - 2026-06-20
 
 Adds non-interactive Docker/startup configuration so container deployments can use process environment secrets without a populated .env file.
