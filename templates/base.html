@@ -843,6 +843,9 @@
 
         @media (max-width: 768px) {
             nav {
+                /* The wrapped nav is ~3 rows tall; sticky would cost a quarter
+                   of a phone viewport on every scroll. */
+                position: static;
                 flex-wrap: wrap;
                 height: auto;
                 padding: 16px;

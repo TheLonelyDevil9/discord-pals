@@ -313,10 +313,22 @@
 }
 
 .memory-filter-grid {
-    display: grid;
-    grid-template-columns: 180px minmax(220px, 1fr) 160px;
+    /* Flex instead of fixed grid tracks: the Server select toggles with
+       display:none, and a hidden middle track used to shove Sort into the
+       flexible column, stretching it across the panel. */
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
-    align-items: end;
+    align-items: flex-end;
+}
+
+.memory-filter-grid .form-group {
+    flex: 0 1 180px;
+}
+
+.memory-filter-grid #server-filter-group {
+    flex: 1 1 240px;
+    max-width: 360px;
 }
 
 .memory-search-panel .form-group,
@@ -648,10 +660,15 @@
 }
 
 @media (max-width: 900px) {
-    .memory-filter-grid,
     .advanced-form-row,
     .lore-toolbar {
         grid-template-columns: 1fr;
+    }
+
+    .memory-filter-grid .form-group,
+    .memory-filter-grid #server-filter-group {
+        flex: 1 1 100%;
+        max-width: none;
     }
 }
 

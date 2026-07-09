@@ -252,8 +252,15 @@
     font-size: 0.8125rem;
 }
 
-.logs-controls input {
-    width: 160px;
+/* Specificity must beat base.html's global `input:not(...)` width: 100% rule
+   so the controls stay a compact filter row like Reminders/Channels. */
+.logs-controls input[type="text"] {
+    width: 200px;
+}
+
+.logs-controls select {
+    width: auto;
+    max-width: 200px;
 }
 
 .logs-controls input:focus,
@@ -580,9 +587,10 @@
         gap: 8px;
     }
 
-    .logs-controls input,
+    .logs-controls input[type="text"],
     .logs-controls select {
         width: 100%;
+        max-width: none;
     }
 
     .log-count {

@@ -350,8 +350,14 @@
 }
 
 @media (max-width: 768px) {
+    /* Keep stats 2x2 on phones so the Control Panel stays near the fold. */
     .stats-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .stat-card .stat-value {
+        font-size: 1.5rem;
     }
 
     .controls-grid {

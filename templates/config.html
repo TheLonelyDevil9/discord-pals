@@ -906,35 +906,40 @@
                                 </select>
                             </div>
                             <div class="form-group"><label for="new-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="new-provider-timeout" min="5" max="3600"></div>
-                            <div class="form-group">
-                                <label for="new-provider-extra-body">Extra Body (JSON)</label>
-                                <textarea id="new-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-include-body">Include Body (YAML)</label>
-                                <textarea id="new-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-exclude-body">Exclude Body (YAML)</label>
-                                <textarea id="new-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-include-headers">Include Headers (YAML)</label>
-                                <textarea id="new-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-reasoning">Reasoning (JSON)</label>
-                                <textarea id="new-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-output-config">Output Config (JSON)</label>
-                                <textarea id="new-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="new-provider-thinking">Thinking (JSON)</label>
-                                <textarea id="new-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
-                            </div>
-                            <div class="form-group">
+                            <details class="advanced-panel span-full" id="new-provider-advanced-panel">
+                                <summary>Advanced request overrides (JSON/YAML)</summary>
+                                <div class="advanced-panel-body settings-grid">
+                                    <div class="form-group">
+                                        <label for="new-provider-extra-body">Extra Body (JSON)</label>
+                                        <textarea id="new-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-include-body">Include Body (YAML)</label>
+                                        <textarea id="new-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-exclude-body">Exclude Body (YAML)</label>
+                                        <textarea id="new-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-include-headers">Include Headers (YAML)</label>
+                                        <textarea id="new-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-reasoning">Reasoning (JSON)</label>
+                                        <textarea id="new-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-output-config">Output Config (JSON)</label>
+                                        <textarea id="new-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="new-provider-thinking">Thinking (JSON)</label>
+                                        <textarea id="new-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                                    </div>
+                                </div>
+                            </details>
+                            <div class="form-group span-full">
                                 <label>Provider Capabilities</label>
                                 <div class="provider-toggle-grid">
                                     <label class="checkbox-label"><input type="checkbox" id="new-provider-requires-key" checked><span>Requires Key</span></label>
@@ -1271,35 +1276,40 @@
                     </select>
                 </div>
                 <div class="form-group"><label for="edit-provider-timeout">Timeout (seconds, optional)</label><input type="number" id="edit-provider-timeout" min="5" max="3600"></div>
-                <div class="form-group">
-                    <label for="edit-provider-extra-body">Extra Body (JSON)</label>
-                    <textarea id="edit-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-include-body">Include Body (YAML)</label>
-                    <textarea id="edit-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-exclude-body">Exclude Body (YAML)</label>
-                    <textarea id="edit-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-include-headers">Include Headers (YAML)</label>
-                    <textarea id="edit-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-reasoning">Reasoning (JSON)</label>
-                    <textarea id="edit-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-output-config">Output Config (JSON)</label>
-                    <textarea id="edit-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="edit-provider-thinking">Thinking (JSON)</label>
-                    <textarea id="edit-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
-                </div>
-                <div class="form-group">
+                <details class="advanced-panel span-full" id="edit-provider-advanced-panel">
+                    <summary>Advanced request overrides (JSON/YAML)</summary>
+                    <div class="advanced-panel-body settings-grid">
+                        <div class="form-group">
+                            <label for="edit-provider-extra-body">Extra Body (JSON)</label>
+                            <textarea id="edit-provider-extra-body" rows="4" class="small-code-textarea" placeholder='{"top_k": 20}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-include-body">Include Body (YAML)</label>
+                            <textarea id="edit-provider-include-body" rows="4" class="small-code-textarea" placeholder="thinking:&#10;  type: disabled"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-exclude-body">Exclude Body (YAML)</label>
+                            <textarea id="edit-provider-exclude-body" rows="4" class="small-code-textarea" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-include-headers">Include Headers (YAML)</label>
+                            <textarea id="edit-provider-include-headers" rows="4" class="small-code-textarea" placeholder="X-Provider-Route: primary"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-reasoning">Reasoning (JSON)</label>
+                            <textarea id="edit-provider-reasoning" rows="4" class="small-code-textarea" placeholder='{"effort": "high"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-output-config">Output Config (JSON)</label>
+                            <textarea id="edit-provider-output-config" rows="4" class="small-code-textarea" placeholder='{"effort": "medium"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-provider-thinking">Thinking (JSON)</label>
+                            <textarea id="edit-provider-thinking" rows="4" class="small-code-textarea" placeholder='{"type": "adaptive", "effort": "low"}'></textarea>
+                        </div>
+                    </div>
+                </details>
+                <div class="form-group span-full">
                     <label>Provider Capabilities</label>
                     <div class="provider-toggle-grid">
                         <label class="checkbox-label"><input type="checkbox" id="edit-provider-requires-key" checked><span>Requires Key</span></label>
@@ -1603,6 +1613,11 @@ function switchConfigTab(tabName) {
         const active = btn.dataset.configTab === tabName;
         btn.classList.toggle('active', active);
         btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (active && typeof btn.scrollIntoView === 'function') {
+            // The tab strip scrolls horizontally on small screens; keep the
+            // active tab visible so off-screen tabs stay discoverable.
+            btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
     });
     document.querySelectorAll('[data-config-panel]').forEach(panel => {
         const active = panel.id === 'tab-' + tabName;
@@ -2417,6 +2432,14 @@ function setProviderCustomFieldValues(prefix, provider) {
     providerYamlTextFields.forEach(field => {
         setTextareaValue(providerFieldId(prefix, field), provider[field] || '');
     });
+    // Overrides live in a collapsed panel; open it when this provider has any
+    // so existing configuration is never hidden behind the fold.
+    const advancedPanel = document.getElementById(`${prefix}-provider-advanced-panel`);
+    if (advancedPanel) {
+        const hasAdvanced = providerJsonObjectFields.concat(providerYamlTextFields)
+            .some(field => provider[field] !== undefined && String(provider[field] ?? '').trim() !== '');
+        advancedPanel.open = hasAdvanced;
+    }
 }
 
 function collectProviderJsonObjectValues(prefix) {
