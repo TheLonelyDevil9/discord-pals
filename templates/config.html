@@ -2497,7 +2497,7 @@ function applyImageProviderCustomFieldValues(prefix, provider, parsedExtraBody) 
 }
 
 function providerCapabilityBadges(provider) {
-    const badges = [providerProtocol(provider), providerEndpointType(provider)];
+    const badges = [providerEndpointType(provider)];
     if (provider.supports_vision === false) badges.push('text-only');
     if (provider.supports_reasoning === true) badges.push('reasoning');
     if (provider.requires_key === false) badges.push('no-auth');
