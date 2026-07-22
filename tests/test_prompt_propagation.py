@@ -603,6 +603,12 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         for removed_key in runtime_config_module.REMOVED_CONFIG_KEYS:
             self.assertNotIn(removed_key, config)
 
+    def test_provider_badges_do_not_call_removed_protocol_helper(self):
+        page = self.client.get("/config").get_data(as_text=True)
+
+        self.assertIn("const badges = [providerEndpointType(provider)];", page)
+        self.assertNotIn("providerProtocol(", page)
+
     def test_provider_save_api_preserves_passthrough_payload_shape(self):
         saved_payloads = []
         payload = {
