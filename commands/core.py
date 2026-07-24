@@ -11,6 +11,7 @@ from discord_utils import clear_history, remove_assistant_from_history, dm_histo
 from character import character_manager
 from .registry import maintenance_visibility, register_command_metadata
 import logger as log
+import runtime_config
 import user_ignores
 
 
@@ -20,8 +21,16 @@ _owner_cache_populated: bool = False
 
 
 async def is_owner(interaction: discord.Interaction) -> bool:
-    """Check if the user is the application owner (cached after first call)."""
+    """Check if the user may run owner-only commands on this bot.
+
+    Operators configured on the dashboard run the whole deployment, so they pass
+    on every bot here. The Discord application owner keeps working unchanged, so
+    a host with no operators configured behaves exactly as before.
+    """
     global _owner_ids_cache, _owner_cache_populated
+
+    if runtime_config.is_operator(interaction.user.id):
+        return True
 
     if not _owner_cache_populated:
         app_info = await interaction.client.application_info()
@@ -154,7 +163,7 @@ def setup_core_commands(bot_instance) -> None:
         # Owner-only check
         if not await is_owner(interaction):
             await interaction.response.send_message(
-                "❌ Only the bot owner can use this command", ephemeral=True
+                "❌ Only the bot owner or a dashboard operator can use this command", ephemeral=True
             )
             return
 
@@ -203,7 +212,7 @@ def setup_core_commands(bot_instance) -> None:
         # Owner-only check
         if not await is_owner(interaction):
             await interaction.response.send_message(
-                "❌ Only the bot owner can use this command", ephemeral=True
+                "❌ Only the bot owner or a dashboard operator can use this command", ephemeral=True
             )
             return
 
@@ -305,7 +314,7 @@ def setup_core_commands(bot_instance) -> None:
     ) -> None:
         if not await is_owner(interaction):
             await interaction.response.send_message(
-                "Only the bot owner can use this command", ephemeral=True
+                "Only the bot owner or a dashboard operator can use this command", ephemeral=True
             )
             return
 

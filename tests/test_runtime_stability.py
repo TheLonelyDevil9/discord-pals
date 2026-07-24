@@ -1413,8 +1413,8 @@ class BotLifecycleTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.Event().wait()
 
-        task = asyncio.create_task(background_loop())
-        instance._background_tasks = {task}
+        instance._background_tasks = bot_instance_module.BackgroundTaskRegistry("Nahida")
+        task = instance._track_background_task(background_loop(), name="test-loop")
         await started.wait()
 
         await instance.close()

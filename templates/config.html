@@ -566,6 +566,17 @@
                                     {% endfor %}
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="operator_user_ids">Operators</label>
+                                <textarea id="operator_user_ids" class="id-list-textarea" spellcheck="false" placeholder="123456789012345678">{{ (config.operator_user_ids or []) | join('\n') }}</textarea>
+                                <p class="form-hint">Discord user IDs that may run owner-only slash commands on every bot hosted here, whoever owns each Discord application. Each application's own owner always keeps access.</p>
+                                <select class="known-target-select" data-target-textarea="operator_user_ids" title="Known user for operators">
+                                    <option value="">Add known user...</option>
+                                    {% for user in known_access_targets.users %}
+                                    <option value="{{ user.id }}">{{ user.name }}{% if user.aliases %} ({{ user.aliases | join(', ') }}){% endif %}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Response Access</button>
                     </form>
@@ -2071,7 +2082,8 @@ document.getElementById('response-access-form')?.addEventListener('submit', asyn
         response_channel_whitelist_only: document.getElementById('response_channel_whitelist_only').checked,
         response_channel_whitelist: parseIdList('response_channel_whitelist'),
         response_channel_blacklist: parseIdList('response_channel_blacklist'),
-        dm_user_blacklist: parseIdList('dm_user_blacklist')
+        dm_user_blacklist: parseIdList('dm_user_blacklist'),
+        operator_user_ids: parseIdList('operator_user_ids')
     }, 'Response access saved');
 });
 

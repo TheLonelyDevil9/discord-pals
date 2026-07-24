@@ -15,6 +15,7 @@ from typing import Optional, Dict
 
 from config import ERROR_DELETE_AFTER, CHARACTER_PROVIDERS
 import attribution
+from background_tasks import BackgroundTaskRegistry
 from context_builder import ContextBuilder
 from provider_gateway import provider_gateway as provider_manager
 from provider_contracts import GenerationResult
@@ -167,7 +168,7 @@ class BotInstance:
 
         # DM follow-up state
         self._dm_followup_state: Dict[int, dict] = {}  # user_id -> {last_user_msg, followups_sent, last_followup, channel_id}
-        self._background_tasks: set[asyncio.Task] = set()
+        self._background_tasks = BackgroundTaskRegistry(name)
 
         # Processed message tracking (prevents duplicate responses to queued messages)
         self._processed_message_ids: set = set()
@@ -528,27 +529,20 @@ class BotInstance:
             self.post_response_tasks = tasks
         return tasks
 
+    def _background_task_registry(self) -> BackgroundTaskRegistry:
+        """Return the task registry, creating it lazily for tests."""
+        registry = getattr(self, "_background_tasks", None)
+        if not isinstance(registry, BackgroundTaskRegistry):
+            registry = BackgroundTaskRegistry(self.name)
+            self._background_tasks = registry
+        return registry
+
     def _track_background_task(self, coro, *, name: str) -> asyncio.Task:
-        """Create and remember a background task so shutdown can cancel it."""
-        task = asyncio.create_task(coro, name=f"{self.name}:{name}")
-        background_tasks = getattr(self, "_background_tasks", None)
-        if background_tasks is None:
-            background_tasks = set()
-            self._background_tasks = background_tasks
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
-        return task
+        """Start one background task per name so reconnects cannot duplicate loops."""
+        return self._background_task_registry().start_once(coro, name=name)
 
     async def _cancel_background_tasks(self) -> None:
-        tasks = [
-            task for task in getattr(self, "_background_tasks", set())
-            if not task.done()
-        ]
-        if not tasks:
-            return
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._background_task_registry().cancel_all()
 
     def _dm_memory_server_id(self) -> str:
         """Return this bot's private DM memory namespace."""

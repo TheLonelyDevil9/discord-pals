@@ -39,6 +39,7 @@ DEFAULTS = {
     "response_channel_whitelist": [],  # Server channel IDs allowed when whitelist-only mode is on
     "response_channel_blacklist": [],  # Server channel IDs where all replies are blocked
     "dm_user_blacklist": [],  # User IDs whose DMs are blocked for replies and follow-ups
+    "operator_user_ids": [],  # User IDs who may run owner-only commands on every bot in this deployment
     "use_single_user": False,  # Message format: True = SillyTavern-style single user message, False = multi-role (system/user/assistant)
     "prose_polisher_enabled": False,  # Run a post-generation provider pass to clean repetitive prose patterns
     "prose_polisher_max_tokens": 8192,  # Max tokens for the post-generation polish pass
@@ -105,6 +106,7 @@ CONFIG_FIELDS = {
     "response_channel_whitelist": ConfigField(list, DEFAULTS["response_channel_whitelist"]),
     "response_channel_blacklist": ConfigField(list, DEFAULTS["response_channel_blacklist"]),
     "dm_user_blacklist": ConfigField(list, DEFAULTS["dm_user_blacklist"]),
+    "operator_user_ids": ConfigField(list, DEFAULTS["operator_user_ids"]),
     "use_single_user": ConfigField(bool, DEFAULTS["use_single_user"]),
     "prose_polisher_enabled": ConfigField(bool, DEFAULTS["prose_polisher_enabled"]),
     "prose_polisher_max_tokens": ConfigField(int, DEFAULTS["prose_polisher_max_tokens"], 16, 16000),
@@ -393,6 +395,18 @@ def is_server_response_allowed(channel_id, config: dict | None = None) -> tuple[
             return False, "response_channel_not_whitelisted"
 
     return True, None
+
+
+def is_operator(user_id, config: dict | None = None) -> bool:
+    """Check whether a Discord user runs this deployment.
+
+    Operators are configured once for the whole host, so they can drive every
+    bot here regardless of who owns each individual Discord application.
+    """
+    if user_id is None:
+        return False
+    config = config or load_config()
+    return str(user_id) in _configured_id_set(config, "operator_user_ids")
 
 
 def is_dm_response_allowed(user_id, config: dict | None = None) -> tuple[bool, str | None]:
