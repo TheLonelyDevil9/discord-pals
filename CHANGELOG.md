@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.6.0] - 2026-07-25
+
+Replies now stay attached to the message they answer, and provider outages retry quietly before anything is announced in chat.
+
+### Added
+
+- Added silent whole-generation retries when every provider fails, spread evenly across a configurable window so a short outage recovers without a public failure notice.
+- Added `provider_retry_attempts` and `provider_retry_window_seconds` to the dashboard Performance tab; set attempts to 1 to announce the first failure as before.
+
+### Fixed
+
+- Fixed replies being attached to the wrong person's message when several people addressed a bot at once. Shared channel history keeps growing while a request waits in the queue, so the model was answering whichever message arrived last instead of the one the reply targeted. Each triggering message now gets its own reply.
+- Fixed a second asker going unanswered in that same situation, where the near-identical follow-up was dropped by the duplicate-response guard.
+- Fixed the provider capability badges showing a stale protocol label after the provider protocol field was removed.
+
 ## [v2.5.0] - 2026-07-09
 
 Hardens multi-user speaker attribution for mid-tier models and replaces the NewAPI provider lane with endpoint-type routing.
