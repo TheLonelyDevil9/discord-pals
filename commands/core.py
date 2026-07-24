@@ -115,7 +115,7 @@ def setup_core_commands(bot_instance) -> None:
         else:
             history_key = interaction.channel_id
         clear_history(history_key)
-        await interaction.response.send_message("? Conversation history cleared", ephemeral=True)
+        await interaction.response.send_message("✅ Conversation history cleared", ephemeral=True)
 
     tree.add_command(history_group)
     register_command_metadata(

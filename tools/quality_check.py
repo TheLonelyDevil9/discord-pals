@@ -24,6 +24,8 @@ TRACKED_LARGE_MODULES = {
     "discord_utils.py": 1777,
 }
 LARGE_MODULE_GROWTH_BUDGET = 250
+# Assembled at runtime so this checker's own source does not match the pattern.
+LOSSY_STATUS_PREFIX = "?" + " "
 
 
 def _read(path: str) -> str:
@@ -100,6 +102,39 @@ def check_large_module_growth(errors: list[str]) -> None:
             )
 
 
+def _source_files() -> list[Path]:
+    skip = {"venv", "__pycache__", ".git", "bot_data"}
+    return sorted(
+        path for path in ROOT.rglob("*.py")
+        if not skip.intersection(path.relative_to(ROOT).parts)
+    )
+
+
+def check_status_prefix_encoding(errors: list[str]) -> None:
+    """Catch status prefixes whose emoji was replaced by '?' in an encoding round-trip.
+
+    `? Conversation history cleared` shipped for months because a lossy write
+    turned a leading status emoji into a plain question mark, which reads as a
+    broken message rather than a failure.
+    """
+    for path in _source_files():
+        relative = path.relative_to(ROOT).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            errors.append(f"{relative} could not be parsed for status prefixes: {exc}")
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if node.value.startswith(LOSSY_STATUS_PREFIX):
+                errors.append(
+                    f"{relative}:{node.lineno} status string starts with '? '; "
+                    "restore the intended status emoji instead of a lossy replacement."
+                )
+
+
 def main() -> int:
     errors: list[str] = []
     checks = (
@@ -107,6 +142,7 @@ def main() -> int:
         check_docs_map,
         check_runtime_config_schema,
         check_large_module_growth,
+        check_status_prefix_encoding,
     )
     for check in checks:
         try:

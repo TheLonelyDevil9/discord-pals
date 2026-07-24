@@ -4,6 +4,16 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.7.1] - 2026-07-25
+
+### Fixed
+
+- Fixed `/history clear` replying with `? Conversation history cleared`; the leading status emoji had been lost to an encoding round-trip in v1.11.4.
+
+### Added
+
+- Added a quality check that fails on user-facing strings starting with a bare `?`, so a lossy write cannot silently strip a status emoji again.
+
 ## [v2.7.0] - 2026-07-25
 
 Adds host-level operator access for owner-only commands and stops reconnects from duplicating bot-initiated messages.
