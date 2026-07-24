@@ -4,6 +4,23 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.7.0] - 2026-07-25
+
+Adds host-level operator access for owner-only commands and stops reconnects from duplicating bot-initiated messages.
+
+### Added
+
+- Added an `operator_user_ids` list on the dashboard Response Access card. Operators may run owner-only slash commands on every bot hosted here, whoever owns each individual Discord application. Each application's own owner keeps access, so a host with no operators configured behaves as before.
+
+### Changed
+
+- Reworded the owner-only refusal to name both the application owner and dashboard operators.
+- Moved background task ownership into a named registry (`background_tasks.py`) that keeps one live task per name.
+
+### Fixed
+
+- Fixed bots sending the same DM follow-up twice. Discord fires `on_ready` again after any reconnect that cannot resume, and each one started another copy of the follow-up loop; two copies then read the send-once state before either wrote it. Durable reminders had the same exposure.
+
 ## [v2.6.0] - 2026-07-25
 
 Replies now stay attached to the message they answer, and provider outages retry quietly before anything is announced in chat.
