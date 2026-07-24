@@ -18,6 +18,7 @@ import attribution
 from context_builder import ContextBuilder
 from provider_gateway import provider_gateway as provider_manager
 from provider_contracts import GenerationResult
+from provider_retry import ProviderRetryPolicy, generate_with_silent_retry
 from character import character_manager, Character
 from identity_policy import IDENTITY_GUARD_RETRY_INSTRUCTION, IdentityPolicy
 from message_routing import InboundMessage, TriggerDecision
@@ -2116,7 +2117,8 @@ Return exactly one JSON object with this shape:
                 channel_id,
                 total_limit=total_limit,
                 immediate_count=immediate_count,
-                current_bot_name=self.character.name
+                current_bot_name=self.character.name,
+                up_to_message_id=message_id
             )
 
         # Build chatroom context (use target user for split replies)
@@ -2661,8 +2663,15 @@ Return exactly one JSON object with this shape:
                     if await self._maybe_handle_dm_image_request(context, message):
                         return
 
-                    # Generate AI response (handles provider call, sanitization)
-                    response = await self._generate_ai_response(context, message)
+                    # Generate AI response (handles provider call, sanitization).
+                    # Provider outages retry quietly before any public notice.
+                    response = await generate_with_silent_retry(
+                        lambda: self._generate_ai_response(context, message),
+                        policy=ProviderRetryPolicy.from_runtime_config(runtime_config),
+                        bot_name=self.name,
+                        req_id=req_id,
+                        should_retry=lambda: not context.get("identity_guard_blocked"),
+                    )
                     if response is None:
                         if context.get("identity_guard_blocked"):
                             log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)

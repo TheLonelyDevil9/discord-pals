@@ -948,8 +948,26 @@ def format_history_for_ai(channel_id: int, limit: int = 50) -> List[dict]:
     return formatted
 
 
+def history_through_message(history: List[dict], message_id: int = None) -> List[dict]:
+    """Drop history entries newer than one Discord message.
+
+    Channel history is shared across every bot in the process and keeps growing
+    while a queued request waits its turn. Cutting the window at the message a
+    request was queued for keeps the model's newest turn identical to the
+    message the reply will be attached to.
+    """
+    if not message_id:
+        return history
+
+    for index in range(len(history) - 1, -1, -1):
+        if history[index].get("message_id") == message_id:
+            return history[:index + 1]
+    return history
+
+
 def format_history_split(channel_id: int, total_limit: int = 200, immediate_count: int = 5,
-                         current_bot_name: str = None) -> Tuple[List[dict], List[dict]]:
+                         current_bot_name: str = None,
+                         up_to_message_id: int = None) -> Tuple[List[dict], List[dict]]:
     """
     Split history into two parts for the context structure:
     - history: older messages (background context)
@@ -958,9 +976,12 @@ def format_history_split(channel_id: int, total_limit: int = 200, immediate_coun
     If current_bot_name is provided, other bots' messages will be tagged with
     their name (like user messages) to prevent personality bleed.
 
+    If up_to_message_id is provided and present in history, messages newer than
+    it are excluded so the newest turn matches the message being replied to.
+
     Returns: (history_messages, immediate_messages)
     """
-    all_history = get_history(channel_id)
+    all_history = history_through_message(get_history(channel_id), up_to_message_id)
 
     # Include all messages with bot personality bleed prevention.
     all_history = all_history[-total_limit:]

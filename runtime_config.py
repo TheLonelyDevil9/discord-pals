@@ -62,6 +62,9 @@ DEFAULTS = {
     "split_replies_enabled": False,  # Enable split replies to multiple mentioned users
     "split_replies_max_targets": 5,  # Max users to split replies for (prevents spam)
     "concurrency_limit": 4,  # GLOBAL: Max concurrent AI requests across all bots
+    # Provider failure retries
+    "provider_retry_attempts": 4,  # Total silent generation attempts before the public failure notice
+    "provider_retry_window_seconds": 30,  # Seconds the silent retries are spread across
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
@@ -123,6 +126,8 @@ CONFIG_FIELDS = {
     "split_replies_enabled": ConfigField(bool, DEFAULTS["split_replies_enabled"]),
     "split_replies_max_targets": ConfigField(int, DEFAULTS["split_replies_max_targets"], 1, 25),
     "concurrency_limit": ConfigField(int, DEFAULTS["concurrency_limit"], 1, 20),
+    "provider_retry_attempts": ConfigField(int, DEFAULTS["provider_retry_attempts"], 1, 10),
+    "provider_retry_window_seconds": ConfigField(int, DEFAULTS["provider_retry_window_seconds"], 0, 300),
     "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
     "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),

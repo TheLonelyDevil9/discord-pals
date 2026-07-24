@@ -994,6 +994,37 @@
             </div>
             <div class="card">
                 <div class="card-header">
+                    <span class="card-title">Provider Failure Retries</span>
+                    <span class="impact-pill">Delays failure notices</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="provider_retry_attempts">Generation Attempts</label>
+                        <div class="slider-row">
+                            <input type="range" id="provider_retry_attempts" min="1" max="10" step="1"
+                                value="{{ config.provider_retry_attempts or 4 }}"
+                                oninput="document.getElementById('provider_retry_attempts_val').textContent = this.value"
+                                title="Total attempts before the channel sees a failure notice">
+                            <span class="slider-val" id="provider_retry_attempts_val">{{ config.provider_retry_attempts or 4 }}</span>
+                        </div>
+                        <p class="form-hint">Attempts after every provider fails. Retries stay silent; only the last failure posts a notice in the channel. Set to 1 to announce the first failure.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="provider_retry_window_seconds">Retry Window (seconds)</label>
+                        <div class="slider-row">
+                            <input type="range" id="provider_retry_window_seconds" min="0" max="120" step="5"
+                                value="{{ config.provider_retry_window_seconds if config.provider_retry_window_seconds is not none else 30 }}"
+                                oninput="document.getElementById('provider_retry_window_val').textContent = this.value"
+                                title="Seconds the retries are spread across">
+                            <span class="slider-val" id="provider_retry_window_val">{{ config.provider_retry_window_seconds if config.provider_retry_window_seconds is not none else 30 }}</span>
+                        </div>
+                        <p class="form-hint">Retries are spaced evenly across this window, so the channel stays quiet for up to this long before a failure notice appears.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveProviderRetrySettings()">Save Retry Settings</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <span class="card-title">Dashboard Footprint</span>
                 </div>
                 <div class="card-body">
@@ -2083,6 +2114,13 @@ async function saveAutomationSettings() {
 
 async function saveConcurrencySettings() {
     await postConfig({ concurrency_limit: parseInt(document.getElementById('concurrency_limit').value) }, 'Performance settings saved');
+}
+
+async function saveProviderRetrySettings() {
+    await postConfig({
+        provider_retry_attempts: parseInt(document.getElementById('provider_retry_attempts').value),
+        provider_retry_window_seconds: parseInt(document.getElementById('provider_retry_window_seconds').value)
+    }, 'Provider retry settings saved');
 }
 
 async function toggleRawLogging(enabled) {
