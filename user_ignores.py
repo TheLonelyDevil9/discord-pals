@@ -3,16 +3,21 @@ Discord Pals - User Ignore List Management
 Allows users to block specific bots from responding to them.
 """
 
-import json
 import threading
 from pathlib import Path
 from typing import List, Set
 
 import logger as log
+from config import DATA_DIR as _DATA_DIR_NAME
+from discord_utils import safe_json_load, safe_json_save
 
-# Storage file
-DATA_DIR = Path("data")
+# Storage file. This lives under bot_data with the rest of the runtime state so
+# that update snapshots and backups actually capture it; installs created before
+# that move keep their list in the legacy ./data directory and are migrated on
+# first load.
+DATA_DIR = Path(_DATA_DIR_NAME)
 IGNORES_FILE = DATA_DIR / "user_ignores.json"
+LEGACY_IGNORES_FILE = Path("data") / "user_ignores.json"
 
 # In-memory cache with thread lock
 _ignores: dict[str, Set[str]] = {}
@@ -20,16 +25,22 @@ _lock = threading.Lock()
 
 
 def _load() -> None:
-    """Load ignores from disk into memory."""
+    """Load ignores from disk into memory, migrating the legacy path once."""
     global _ignores
     try:
-        if IGNORES_FILE.exists():
-            with open(IGNORES_FILE, 'r') as f:
-                data = json.load(f)
-                # Convert lists to sets for faster lookup
-                _ignores = {k: set(v) for k, v in data.items()}
-        else:
-            _ignores = {}
+        source = IGNORES_FILE
+        migrating = False
+        if not IGNORES_FILE.exists() and LEGACY_IGNORES_FILE.exists():
+            source = LEGACY_IGNORES_FILE
+            migrating = True
+
+        data = safe_json_load(str(source), default={})
+        # Convert lists to sets for faster lookup
+        _ignores = {k: set(v) for k, v in data.items()}
+
+        if migrating and _ignores:
+            _save()
+            log.info(f"Migrated user ignores from {LEGACY_IGNORES_FILE} to {IGNORES_FILE}")
     except Exception as e:
         log.error(f"Failed to load user ignores: {e}")
         _ignores = {}
@@ -38,11 +49,10 @@ def _load() -> None:
 def _save() -> None:
     """Save ignores from memory to disk."""
     try:
-        DATA_DIR.mkdir(exist_ok=True)
-        with open(IGNORES_FILE, 'w') as f:
-            # Convert sets to lists for JSON serialization
-            data = {k: list(v) for k, v in _ignores.items()}
-            json.dump(data, f, indent=2)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # Convert sets to lists for JSON serialization
+        data = {k: sorted(v) for k, v in _ignores.items()}
+        safe_json_save(str(IGNORES_FILE), data)
     except Exception as e:
         log.error(f"Failed to save user ignores: {e}")
 

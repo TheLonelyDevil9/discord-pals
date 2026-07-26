@@ -66,6 +66,7 @@ DEFAULTS = {
     # Provider failure retries
     "provider_retry_attempts": 4,  # Total silent generation attempts before the public failure notice
     "provider_retry_window_seconds": 30,  # Seconds the silent retries are spread across
+    "provider_total_deadline_seconds": 300,  # Wall-clock cap on one reply across every tier, cycle and retry (0 disables)
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
@@ -130,6 +131,7 @@ CONFIG_FIELDS = {
     "concurrency_limit": ConfigField(int, DEFAULTS["concurrency_limit"], 1, 20),
     "provider_retry_attempts": ConfigField(int, DEFAULTS["provider_retry_attempts"], 1, 10),
     "provider_retry_window_seconds": ConfigField(int, DEFAULTS["provider_retry_window_seconds"], 0, 300),
+    "provider_total_deadline_seconds": ConfigField(int, DEFAULTS["provider_total_deadline_seconds"], 0, 3600),
     "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
     "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),
@@ -341,11 +343,24 @@ def invalidate_cache():
 
 
 def save_config(config: dict):
-    """Save runtime config to file and invalidate cache."""
+    """Save runtime config to file and invalidate cache.
+
+    Written via a temp file and os.replace: a truncated runtime_config.json
+    would drop every dashboard-managed setting back to its default.
+    """
     ensure_data_dir()
     config = _normalize_config(config)
-    with open(RUNTIME_CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2)
+    tmp_path = f"{RUNTIME_CONFIG_FILE}.tmp"
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp_path, RUNTIME_CONFIG_FILE)
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
     invalidate_cache()
     _apply_logging_config(config)
 

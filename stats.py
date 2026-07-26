@@ -4,6 +4,7 @@ Tracks message counts, response times, and user activity.
 With debounced saving to reduce disk I/O.
 """
 
+import copy
 import heapq
 import json
 import os
@@ -41,28 +42,39 @@ class StatsManager:
             try:
                 with open(STATS_FILE, 'r', encoding='utf-8') as f:
                     stats = json.load(f)
-                    # Merge with defaults for any missing keys
+                    # Merge with defaults for any missing keys. Deep-copy so the
+                    # nested containers are never shared with DEFAULT_STATS.
                     for key, value in DEFAULT_STATS.items():
                         if key not in stats:
-                            stats[key] = value
+                            stats[key] = copy.deepcopy(value)
                     return stats
             except (json.JSONDecodeError, IOError):
                 pass
 
-        stats = DEFAULT_STATS.copy()
+        stats = copy.deepcopy(DEFAULT_STATS)
         stats["created_at"] = datetime.now().isoformat()
         return stats
 
     def _save_stats(self):
-        """Save stats to file (internal, always saves)."""
+        """Save stats to file (internal, always saves).
+
+        Written via a temp file and os.replace so an interrupted write cannot
+        leave a truncated stats.json behind.
+        """
         os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = f"{STATS_FILE}.tmp"
         try:
-            with open(STATS_FILE, 'w', encoding='utf-8') as f:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.stats, f, indent=2)
+            os.replace(tmp_path, STATS_FILE)
             self._dirty = False
             self._last_save = time.time()
         except (IOError, OSError):
-            pass  # Silently fail, will retry on next interval
+            # Silently fail, will retry on next interval
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     def _maybe_save(self):
         """Save if dirty and enough time has passed (debounced)."""
