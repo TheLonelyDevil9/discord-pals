@@ -1031,6 +1031,17 @@
                         </div>
                         <p class="form-hint">Retries are spaced evenly across this window, so the channel stays quiet for up to this long before a failure notice appears.</p>
                     </div>
+                    <div class="form-group">
+                        <label for="provider_total_deadline_seconds">Total Time Limit (seconds)</label>
+                        <div class="slider-row">
+                            <input type="range" id="provider_total_deadline_seconds" min="0" max="900" step="30"
+                                value="{{ config.provider_total_deadline_seconds if config.provider_total_deadline_seconds is not none else 300 }}"
+                                oninput="document.getElementById('provider_total_deadline_val').textContent = this.value == '0' ? 'off' : this.value"
+                                title="Wall-clock cap on one reply across every tier, cycle and retry">
+                            <span class="slider-val" id="provider_total_deadline_val">{{ 'off' if config.provider_total_deadline_seconds == 0 else (config.provider_total_deadline_seconds if config.provider_total_deadline_seconds is not none else 300) }}</span>
+                        </div>
+                        <p class="form-hint">Hard ceiling on how long one reply may spend across every provider tier, cycle and retry. Set to 0 to disable. Without it a provider outage can occupy a reply slot for tens of minutes.</p>
+                    </div>
                     <button type="button" class="btn btn-primary" onclick="saveProviderRetrySettings()">Save Retry Settings</button>
                 </div>
             </div>
@@ -2131,7 +2142,8 @@ async function saveConcurrencySettings() {
 async function saveProviderRetrySettings() {
     await postConfig({
         provider_retry_attempts: parseInt(document.getElementById('provider_retry_attempts').value),
-        provider_retry_window_seconds: parseInt(document.getElementById('provider_retry_window_seconds').value)
+        provider_retry_window_seconds: parseInt(document.getElementById('provider_retry_window_seconds').value),
+        provider_total_deadline_seconds: parseInt(document.getElementById('provider_total_deadline_seconds').value)
     }, 'Provider retry settings saved');
 }
 

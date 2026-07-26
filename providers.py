@@ -35,6 +35,23 @@ except ImportError:
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff: 1s, 2s, 4s
 
+
+def _total_deadline_from_now() -> float | None:
+    """Monotonic deadline for one generation, or None when disabled."""
+    try:
+        import runtime_config
+
+        seconds = float(runtime_config.get("provider_total_deadline_seconds", 0) or 0)
+    except Exception:
+        return None
+    if seconds <= 0:
+        return None
+    return time.monotonic() + seconds
+
+
+def _deadline_passed(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
 SDK_PASSTHROUGH_KEYS = {
     "thinking",
     "tools",
@@ -494,7 +511,10 @@ class AIProviderManager:
                     base_url=cfg["url"],
                     api_key=cfg["key"],
                     timeout=cfg.get("timeout") or API_TIMEOUT,
-                    default_headers=default_headers or None
+                    default_headers=default_headers or None,
+                    # Retries are owned by the tier/cycle loops below; the SDK's
+                    # own default would silently multiply them.
+                    max_retries=0,
                 )
 
         for tier, cfg in IMAGE_PROVIDERS.items():
@@ -509,6 +529,7 @@ class AIProviderManager:
                     api_key=key,
                     timeout=cfg.get("timeout") or API_TIMEOUT,
                     default_headers=default_headers or None,
+                    max_retries=0,
                 )
 
     def reload(self) -> None:
@@ -1210,9 +1231,24 @@ class AIProviderManager:
             use_single_user=use_single_user,
         )
 
+        # Wall-clock cap for this whole call. Without it, cycles x tiers x
+        # per-attempt timeouts can pin a coordinator slot for tens of minutes.
+        deadline = _total_deadline_from_now()
+
         # Retry all providers up to 3 full cycles
         for cycle in range(3):
+            if _deadline_passed(deadline):
+                log.warn(
+                    "Provider deadline reached; abandoning remaining cycles",
+                    component="provider",
+                    event="provider_deadline_exceeded",
+                    req_id=req_id,
+                    cycle=cycle,
+                )
+                break
             for tier in tier_order:
+                if _deadline_passed(deadline):
+                    break
                 if tier not in self.providers:
                     self.status[tier] = "no key"
                     continue

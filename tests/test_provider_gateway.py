@@ -211,6 +211,9 @@ extra_body:
                 "HTTP-Referer": "https://github.com/TheLonelyDevil9/discord-pals",
                 "X-OpenRouter-Title": "Router",
             },
+            # Retry policy is owned by the tier/cycle loops; the SDK default of 2
+            # would multiply them invisibly.
+            max_retries=0,
         )
 
     def test_preferred_tier_order_preserves_existing_order(self):
