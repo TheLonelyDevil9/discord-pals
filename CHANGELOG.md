@@ -4,6 +4,30 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.7.2] - 2026-07-26
+
+### Added
+
+- Continuous integration: the quality checks and the full test suite now run on every push and pull request, on Python 3.10 and 3.12. Development dependencies live in `requirements-dev.txt`.
+- `DASHBOARD_HOST` and `DASHBOARD_PORT` environment variables select where the dashboard listens. The port no longer requires editing `main.py`; an unusable value logs a warning and falls back to `0.0.0.0:5000`.
+- Optional Prometheus metrics exporter, enabled with `METRICS_ENABLED` and bound to `127.0.0.1:9090` unless `METRICS_HOST`/`METRICS_PORT` say otherwise. Response, provider API, memory-generation, and history-save latency histograms were already recorded; they are now scrapeable at `/metrics`.
+- Total provider time limit (`provider_total_deadline_seconds`, with a slider under the dashboard's provider retry settings) caps the wall-clock time one reply may spend across all provider tiers, cycles, and retries. Defaults to 300 seconds; 0 disables the cap.
+
+### Changed
+
+- Update snapshots no longer copy `bot_data/logs`. The rotated logs are already size-capped on their own, and including them made each retained backup roughly the size of the whole log rotation instead of a few megabytes.
+- `user_ignores.json` moved from `data/` to `bot_data/`, so backups and update snapshots now capture it. An existing file in the old location migrates automatically on first load.
+- Provider SDK clients are created with their built-in retries disabled. Retry policy belongs to the provider tier and cycle loops; the SDK default silently multiplied every configured retry.
+- The circuit-breaker trip metric is labelled per bot only. The previous per-channel label created one metric series for every channel that ever tripped.
+- The tracked module size baselines in the quality checks were re-snapshotted together so the growth budget means the same thing for every tracked file.
+
+### Fixed
+
+- Native Anthropic Messages API requests now send the required `anthropic-version` header. The Anthropic example provider entry previously failed with HTTP 400 on every call, while the provider test button reported the configuration as valid.
+- Stopping or restarting the bot under systemd now runs the graceful shutdown: conversation history, memories, reminders, and statistics are flushed before exit, and each store is saved independently so one failure cannot drop the rest. SIGTERM previously bypassed the shutdown path entirely, and statistics were never flushed on any path.
+- `stats.json` and `runtime_config.json` are written atomically, so an interrupted write can no longer leave a truncated file that silently resets dashboard-managed settings or recorded statistics.
+- Fresh installs no longer mutate the module-level statistics defaults through shared nested structures.
+
 ## [v2.7.1] - 2026-07-25
 
 ### Fixed
