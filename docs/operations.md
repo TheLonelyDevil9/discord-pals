@@ -4,7 +4,16 @@ This page covers local operations, deployment, update recovery, file layout, and
 
 ## Dashboard Security
 
-The dashboard starts automatically with `python main.py` and listens on `0.0.0.0:5000`. That can be reachable from other devices if the firewall or host allows it.
+The dashboard starts automatically with `python main.py` and listens on `0.0.0.0:5000` by default. That can be reachable from other devices if the firewall or host allows it.
+
+Set the bind address and port with environment variables rather than editing `main.py`:
+
+```env
+DASHBOARD_HOST=127.0.0.1
+DASHBOARD_PORT=5000
+```
+
+The dashboard can read and write Discord tokens and provider API keys, so bind it to `127.0.0.1` or a private/VPN address unless the host firewalls the port. An invalid or out-of-range `DASHBOARD_PORT` logs a warning and falls back to 5000.
 
 Set a password before exposing the dashboard outside a trusted machine or private network:
 
@@ -29,7 +38,7 @@ python update.py
 
 If `update.py` is missing in an old install, download the latest `update.py` from the repository into the Discord Pals folder and run it with Python.
 
-Before Git mutations, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. Backups include bot/provider config, runtime data, characters, and local prompt files. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
+Before Git mutations, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: they are already size-capped by their own rotation, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
 
 Release tags should be cut only after the release commit is on `main` or an approved release branch. The `bump_version.py --tag` flow updates the version, writes changelog content, creates the tag, and publishes `main` plus the tag.
 
@@ -82,6 +91,8 @@ sudo systemctl start discord-pals
 sudo systemctl status discord-pals
 sudo journalctl -u discord-pals -f
 ```
+
+`systemctl stop` and `systemctl restart` send SIGTERM. The bot handles it as a graceful shutdown and flushes conversation history, memories, reminders, and statistics before exiting, so a restart does not discard buffered state.
 
 ### Docker
 
@@ -218,6 +229,18 @@ discord-pals/
 |-- images/                  # Dashboard/readme images
 `-- bot_data/                # Runtime state
 ```
+
+## Metrics
+
+Response times, provider API latency, memory-generation and history-save durations are recorded as Prometheus histograms during normal operation. They are not exposed unless the exporter is turned on:
+
+```env
+METRICS_ENABLED=true
+METRICS_HOST=127.0.0.1
+METRICS_PORT=9090
+```
+
+Metrics are then scrapeable at `http://METRICS_HOST:METRICS_PORT/metrics`. The endpoint is unauthenticated and carries no message content, but it does reveal bot names and traffic volume — keep it on localhost or a private address.
 
 ## Troubleshooting
 

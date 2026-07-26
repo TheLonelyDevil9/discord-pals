@@ -24,6 +24,9 @@ PIP_TIMEOUT = 300
 BACKUP_RETENTION = 3
 BACKUP_FILES = (".env", "bots.json", "providers.json")
 BACKUP_DIRS = ("bot_data", "characters", "prompts")
+# Rotated logs live under bot_data/logs and are already size-capped; copying them
+# into every snapshot multiplied retained backups by the whole log budget.
+BACKUP_DIR_IGNORES = {"bot_data": ("logs",)}
 
 
 def info(message: str) -> None:
@@ -166,7 +169,7 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     raise RuntimeError(command_output(result) or "merge-base failed")
 
 
-def copy_backup_item(source: Path, destination: Path) -> None:
+def copy_backup_item(source: Path, destination: Path, extra_ignores: tuple[str, ...] = ()) -> None:
     if not source.exists():
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +177,7 @@ def copy_backup_item(source: Path, destination: Path) -> None:
         shutil.copytree(
             source,
             destination,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "update_backups"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "update_backups", *extra_ignores),
         )
     else:
         shutil.copy2(source, destination)
@@ -206,7 +209,7 @@ def create_state_backup(repo: Path) -> Path | None:
     for name in BACKUP_DIRS:
         source = repo / name
         if source.exists():
-            copy_backup_item(source, backup_dir / name)
+            copy_backup_item(source, backup_dir / name, BACKUP_DIR_IGNORES.get(name, ()))
             copied = True
 
     if not copied:

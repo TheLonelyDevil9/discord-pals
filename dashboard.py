@@ -60,6 +60,9 @@ _UPDATE_BACKUP_ROOT = DATA_DIR / "update_backups"
 _UPDATE_LOG_FILE = DATA_DIR / "update_log.json"
 _UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
 _UPDATE_BACKUP_DIRS = ("bot_data", "characters", "prompts")
+# Rotated logs live under bot_data/logs and are already size-capped; copying them
+# into every snapshot multiplied retained backups by the whole log budget.
+_UPDATE_BACKUP_DIR_IGNORES = {"bot_data": ("logs",)}
 _UPDATE_BRANCH_CHOICES = ("main", "staging")
 UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
@@ -3700,7 +3703,7 @@ def _tracked_worktree_status(repo_dir: str) -> str:
     return result.stdout.strip()
 
 
-def _copy_update_backup_item(source: Path, destination: Path) -> None:
+def _copy_update_backup_item(source: Path, destination: Path, extra_ignores: tuple[str, ...] = ()) -> None:
     if not source.exists():
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -3709,6 +3712,7 @@ def _copy_update_backup_item(source: Path, destination: Path) -> None:
             "__pycache__",
             "*.pyc",
             "update_backups",
+            *extra_ignores,
         )
         shutil.copytree(source, destination, ignore=ignore)
     else:
@@ -3744,7 +3748,7 @@ def _create_update_state_backup(repo_dir: str) -> str | None:
     for name in _UPDATE_BACKUP_DIRS:
         source = Path(repo_dir) / name
         if source.exists():
-            _copy_update_backup_item(source, backup_dir / name)
+            _copy_update_backup_item(source, backup_dir / name, _UPDATE_BACKUP_DIR_IGNORES.get(name, ()))
             copied = True
 
     if not copied:
