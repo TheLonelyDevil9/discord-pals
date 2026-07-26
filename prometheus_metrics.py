@@ -88,10 +88,12 @@ errors_total = Counter(
 )
 
 # Circuit breaker trips
+# Deliberately not labelled by channel_id: that is unbounded and would add one
+# time series per channel that ever trips.
 circuit_breaker_trips = Counter(
     'discord_pals_circuit_breaker_trips_total',
     'Number of times circuit breaker was triggered',
-    ['bot_name', 'channel_id']
+    ['bot_name']
 )
 
 # Rate limit hits
@@ -161,19 +163,29 @@ memory_file_saves = Counter(
 class MetricsManager:
     """Centralized metrics management for Discord Pals."""
 
-    def __init__(self, metrics_port: int = 8000):
+    def __init__(self, metrics_port: int = 9090, metrics_host: str = '127.0.0.1'):
         self.metrics_port = metrics_port
+        self.metrics_host = metrics_host
         self._started = False
 
-    def start_metrics_server(self):
-        """Start the Prometheus metrics HTTP server."""
+    def start_metrics_server(self, host: str | None = None, port: int | None = None):
+        """Start the Prometheus metrics HTTP server.
+
+        The exporter is unauthenticated, so it binds to localhost unless the
+        operator points it at another interface.
+        """
         if self._started:
             return
 
+        if host is not None:
+            self.metrics_host = host
+        if port is not None:
+            self.metrics_port = port
+
         try:
-            start_http_server(self.metrics_port)
+            start_http_server(self.metrics_port, addr=self.metrics_host)
             self._started = True
-            log.info(f"Prometheus metrics server started on port {self.metrics_port}")
+            log.info(f"Prometheus metrics server started on {self.metrics_host}:{self.metrics_port}")
         except Exception as e:
             log.error(f"Failed to start metrics server: {e}")
 
@@ -219,9 +231,13 @@ class MetricsManager:
         """Record an error."""
         errors_total.labels(bot_name=bot_name, error_type=error_type).inc()
 
-    def record_circuit_breaker_trip(self, bot_name: str, channel_id: int):
-        """Record a circuit breaker trip."""
-        circuit_breaker_trips.labels(bot_name=bot_name, channel_id=str(channel_id)).inc()
+    def record_circuit_breaker_trip(self, bot_name: str, channel_id: int | None = None):
+        """Record a circuit breaker trip.
+
+        channel_id is accepted for call-site compatibility but not used as a
+        label; per-channel series are unbounded.
+        """
+        circuit_breaker_trips.labels(bot_name=bot_name).inc()
 
     def record_rate_limit_hit(self, bot_name: str, limit_type: str):
         """Record a rate limit hit."""
