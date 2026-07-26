@@ -338,6 +338,38 @@ def reload_character_providers() -> dict:
 CHARACTERS_DIR = "characters"
 DEFAULT_CHARACTER = os.getenv('DEFAULT_CHARACTER', 'firefly')
 
+
+def _port_from_env(key: str, default: int) -> int:
+    """Read a TCP port from the environment, falling back on anything unusable."""
+    raw = os.getenv(key, '').strip()
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        log.warn(f"{key} is not a number ({raw!r}); using {default}")
+        return default
+    if not 1 <= port <= 65535:
+        log.warn(f"{key} out of range ({port}); using {default}")
+        return default
+    return port
+
+
+# Dashboard Bind
+# DASHBOARD_HOST controls which interface the dashboard listens on. It defaults to
+# 0.0.0.0 to preserve existing deployments; bind it to 127.0.0.1 or a private/VPN
+# address when the host does not firewall the port.
+DASHBOARD_HOST = os.getenv('DASHBOARD_HOST', '0.0.0.0').strip() or '0.0.0.0'
+DASHBOARD_PORT = _port_from_env('DASHBOARD_PORT', 5000)
+
+# Prometheus Metrics
+# The exporter is unauthenticated, so it is off by default and binds to
+# localhost when enabled. prometheus_metrics.py already records request and
+# generation latency histograms; this only exposes them for scraping.
+METRICS_ENABLED = os.getenv('METRICS_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+METRICS_HOST = os.getenv('METRICS_HOST', '127.0.0.1').strip() or '127.0.0.1'
+METRICS_PORT = _port_from_env('METRICS_PORT', 9090)
+
 # Data Storage
 DATA_DIR = "bot_data"
 MEMORIES_FILE = os.path.join(DATA_DIR, "memories.json")

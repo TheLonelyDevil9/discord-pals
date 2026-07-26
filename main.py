@@ -24,8 +24,45 @@ from bot_instance import BotInstance
 from discord_utils import save_history
 from memory import memory_manager
 from reminders import reminder_manager
+from stats import stats_manager
 import logger as log
 import runtime_config
+
+
+def _persist_runtime_state() -> None:
+    """Flush buffered runtime state to disk during shutdown.
+
+    Each save is attempted independently so one failure cannot drop the rest.
+    """
+    for label, save in (
+        ("history", lambda: save_history(force=True)),
+        ("memories", memory_manager.save_all),
+        ("reminders", reminder_manager.save),
+        ("stats", stats_manager.flush),
+    ):
+        try:
+            save()
+        except Exception as e:
+            log.warn(f"Failed to persist {label} during shutdown: {e}")
+
+
+def _install_shutdown_handlers() -> None:
+    """Route SIGTERM through the existing KeyboardInterrupt shutdown path.
+
+    systemd stops the service with SIGTERM, which Python terminates on without
+    raising, so none of the shutdown persistence ran on `systemctl restart`.
+    """
+    import signal
+
+    def _handle_sigterm(signum, frame):
+        log.info("Received SIGTERM, shutting down...")
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (ValueError, OSError, AttributeError) as e:
+        # Not the main thread, or the platform has no SIGTERM.
+        log.warn(f"Could not install SIGTERM handler: {e}")
 
 
 # --- Bot Loading ---
@@ -97,27 +134,40 @@ async def run_bots():
         import time
         import urllib.request
 
-        dashboard_thread = start_dashboard(bots=instances, host='0.0.0.0', port=5000)
+        from config import DASHBOARD_HOST, DASHBOARD_PORT
+
+        dashboard_thread = start_dashboard(bots=instances, host=DASHBOARD_HOST, port=DASHBOARD_PORT)
 
         if dashboard_thread and dashboard_thread.is_alive():
             time.sleep(1)  # Give server time to fully start
             try:
-                urllib.request.urlopen('http://127.0.0.1:5000/', timeout=2)
-                log.online("Dashboard running at http://localhost:5000")
+                urllib.request.urlopen(f'http://127.0.0.1:{DASHBOARD_PORT}/', timeout=2)
+                log.online(f"Dashboard running at http://localhost:{DASHBOARD_PORT}")
             except Exception:
                 log.warn("Dashboard started but health check failed - may still be initializing")
         else:
             log.warn("Dashboard failed to start - check logs for errors")
     except Exception as e:
         log.warn(f"Dashboard failed to start: {e}")
-    
+
+    # Expose the latency/throughput histograms that are already being recorded.
+    try:
+        from config import METRICS_ENABLED, METRICS_HOST, METRICS_PORT
+
+        if METRICS_ENABLED:
+            from prometheus_metrics import metrics_manager
+
+            metrics_manager.start_metrics_server(host=METRICS_HOST, port=METRICS_PORT)
+    except Exception as e:
+        log.warn(f"Metrics exporter failed to start: {e}")
+
+    _install_shutdown_handlers()
+
     try:
         await asyncio.gather(*[bot.start() for bot in instances])
     except KeyboardInterrupt:
         log.info("Shutting down...")
-        save_history(force=True)  # Persist conversation history
-        memory_manager.save_all()  # Persist memories
-        reminder_manager.save()  # Persist reminders and drafts
+        _persist_runtime_state()
         for bot in instances:
             await bot.close()
 
