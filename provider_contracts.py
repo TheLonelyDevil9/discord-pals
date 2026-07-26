@@ -24,6 +24,11 @@ class _UnsetType:
 
 UNSET = _UnsetType()
 
+# The Anthropic Messages API rejects any request that omits this header.
+# Providers can pin a newer version via include_headers in providers.json.
+ANTHROPIC_VERSION_HEADER = "anthropic-version"
+ANTHROPIC_VERSION = "2023-06-01"
+
 
 class ProviderProtocol(Enum):
     """Provider wire protocol families understood by the gateway contract."""
@@ -513,6 +518,7 @@ def select_auth_headers(
             },
         )
 
+    protocol_headers: dict[str, str] = {}
     if resolved_protocol is ProviderProtocol.GEMINI:
         header_name = "x-goog-api-key"
         header_value = key
@@ -521,12 +527,13 @@ def select_auth_headers(
         header_name = "x-api-key"
         header_value = key
         scheme = "anthropic_api_key"
+        protocol_headers[ANTHROPIC_VERSION_HEADER] = ANTHROPIC_VERSION
     else:
         header_name = "Authorization"
         header_value = f"Bearer {key}" if key else ""
         scheme = "bearer"
 
-    headers = {header_name: header_value} if key else {}
+    headers = {header_name: header_value, **protocol_headers} if key else {}
     return AuthHeaderSelection(
         headers=headers,
         diagnostics={

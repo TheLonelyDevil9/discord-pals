@@ -162,8 +162,10 @@ Endpoint defaults:
 | --- | --- | --- |
 | `openai-chat` | Appends `/v1`, then posts `/chat/completions`. | `Authorization: Bearer ...` |
 | `openai-responses` | Appends `/v1`, then posts `/responses`. | `Authorization: Bearer ...` |
-| `anthropic-messages` | Does not append a base version; posts `/v1/messages` unless the base already ends in `/v1`. | `x-api-key` |
+| `anthropic-messages` | Does not append a base version; posts `/v1/messages` unless the base already ends in `/v1`. | `x-api-key`, plus `anthropic-version: 2023-06-01` |
 | `gemini` | Appends `/v1beta`, then posts `/models/{model}:generateContent`. | `x-goog-api-key` |
+
+The Anthropic Messages API rejects any request without `anthropic-version`, so the adapter always sends it. To pin a different version, set `include_headers` on that provider (for example `anthropic-version: 2026-01-01`) — `include_headers` is applied after the auth headers, so it overrides the default.
 
 Set `append_base_path` to `false` when `url` is already the exact base path the adapter should use. Set `requires_key` to `false` for local gateways that do not need authentication.
 

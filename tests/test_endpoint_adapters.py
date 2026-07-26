@@ -173,6 +173,8 @@ class EndpointAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         call = post.calls[0]
         self.assertEqual(call["url"], "https://gateway.example/v1/messages")
         self.assertEqual(call["headers"]["x-api-key"], "anthropic-key")
+        # The Messages API 400s without this header.
+        self.assertEqual(call["headers"]["anthropic-version"], "2023-06-01")
         self.assertEqual(call["body"]["system"], "be careful")
         self.assertEqual(call["body"]["messages"][0]["role"], "user")
         self.assertEqual(call["body"]["messages"][0]["content"][1]["source"]["type"], "base64")

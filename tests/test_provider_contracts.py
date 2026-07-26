@@ -92,7 +92,11 @@ class ProviderContractTests(unittest.TestCase):
 
         self.assertEqual(openai_auth.headers, {"Authorization": f"Bearer {secret}"})
         self.assertEqual(gemini_auth.headers, {"x-goog-api-key": secret})
-        self.assertEqual(anthropic_auth.headers, {"x-api-key": secret})
+        # The Messages API 400s without anthropic-version.
+        self.assertEqual(
+            anthropic_auth.headers,
+            {"x-api-key": secret, "anthropic-version": contracts.ANTHROPIC_VERSION},
+        )
 
         for selection in (openai_auth, gemini_auth, anthropic_auth):
             self.assertNotIn(secret, repr(selection))
@@ -136,7 +140,10 @@ class ProviderContractTests(unittest.TestCase):
         not_needed_auth = contracts.select_auth_headers_for_endpoint("not-needed", "openai-chat", requires_key=False)
 
         self.assertEqual(responses_auth.headers, {"Authorization": f"Bearer {secret}"})
-        self.assertEqual(anthropic_auth.headers, {"x-api-key": secret})
+        self.assertEqual(
+            anthropic_auth.headers,
+            {"x-api-key": secret, "anthropic-version": contracts.ANTHROPIC_VERSION},
+        )
         self.assertEqual(gemini_auth.headers, {"x-goog-api-key": secret})
         self.assertEqual(no_key_auth.headers, {})
         self.assertEqual(not_needed_auth.headers, {})
