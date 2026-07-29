@@ -113,8 +113,8 @@ def _format_activity_time(timestamp: float | None) -> str:
 @app.before_request
 def check_login():
     """Check authentication for all routes (if enabled)."""
-    # Skip auth check for login/logout routes and static files
-    if request.endpoint in ('login', 'logout', 'static'):
+    # Skip auth check for login/logout, the liveness probe, and static files
+    if request.endpoint in ('login', 'logout', 'healthz', 'static'):
         return None
     if request.path.startswith('/static/'):
         return None
@@ -647,6 +647,17 @@ def logout():
     """Log out and redirect to login page."""
     logout_user()
     return redirect('/login')
+
+
+@app.route('/healthz')
+def healthz():
+    """Liveness probe for host monitoring, reachable without logging in.
+
+    Host health checks previously polled /api/version, which redirects to the
+    login page once DASHBOARD_PASS is set. This returns no version, config, or
+    runtime detail so it stays safe to leave open.
+    """
+    return jsonify({'status': 'ok'})
 
 
 # --- Routes ---
