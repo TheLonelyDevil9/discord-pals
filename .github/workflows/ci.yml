@@ -2,23 +2,67 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 # A newer push to the same branch supersedes an in-flight run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Repository guardrails
+        run: python tools/quality_check.py
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      # Only the rules that catch real breakage: undefined and redefined names,
+      # syntax errors, and identity comparisons against literals. The codebase
+      # has hundreds of pre-existing style findings, so a full default rule set
+      # would fail every run and teach everyone to ignore this job.
+      - name: Correctness lint
+        run: ruff check . --exclude venv,bot_data --select E9,F821,F811,F822,F823,F632
+
   test:
+    name: Tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 matches the deployment host; 3.12 is the version README recommends.
-        python-version: ['3.10', '3.12']
+        # Quoted so YAML keeps them as strings; bare 3.10 parses as the float
+        # 3.1. 3.10 matches the deployment host, 3.12 is the version the README
+        # recommends, and 3.13 is the audioop-lts compatibility path.
+        python-version: ["3.10", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -31,11 +75,55 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Quality checks
-        run: python tools/quality_check.py
-
       # Run via `python -m` from the repo root: there is no conftest.py,
       # no tests/__init__.py and no pytest.ini, so the suite relies on the
       # working directory being on sys.path.
       - name: Tests
         run: python -m pytest -q
+
+  smoke:
+    name: Dashboard smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Boots the real Waitress server with DASHBOARD_PASS set and checks that
+      # the liveness probe answers while every dashboard page and API still
+      # demands a login. The unit tests only exercise the Flask test client.
+      - name: Dashboard access boundary
+        run: python tools/dashboard_smoke.py
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install scanners
+        run: pip install bandit pip-audit
+
+      # High severity and high confidence only. The repo has known medium
+      # findings (urllib calls to fixed URLs, subprocess use in the updater)
+      # that are deliberate, so a lower threshold would block every PR.
+      - name: Static analysis
+        run: bandit -q -r . -x ./venv,./tests,./bot_data -lll -iii
+
+      # Advisory: the pinned Flask, Waitress, and python-dotenv versions have
+      # open advisories, so this reports without failing the build until those
+      # pins are bumped.
+      - name: Dependency advisories
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --progress-spinner off
