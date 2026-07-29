@@ -4,6 +4,21 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.7.3] - 2026-07-29
+
+Adds a login-free liveness probe so host monitoring survives turning dashboard authentication on, and expands continuous integration to cover the branch where work actually lands.
+
+### Added
+
+- `GET /healthz` answers `{"status": "ok"}` without a login, so uptime checks keep working once `DASHBOARD_PASS` is set. It reports no version, config, or runtime detail. Host monitoring should point here rather than at `/api/version`, which redirects to the login page when authentication is enabled.
+- `tools/dashboard_smoke.py` starts the real Waitress server with a password configured and fails if `/healthz` is unreachable or if any dashboard page or API answers without a login. The existing tests exercise the login gate through Flask's test client, which never binds a socket, so a gate that worked in process but not against a running server would have passed them.
+- Continuous integration runs a security scan: Bandit at high severity and high confidence, plus an advisory-only `pip-audit`.
+
+### Changed
+
+- Continuous integration now runs on `staging` as well as `main`, for both pushes and pull requests. It previously triggered only on `main`, so pull requests targeting `staging` merged without any checks.
+- The pipeline is split into separate quality, lint, test, smoke, and security jobs, and the test matrix adds Python 3.13 alongside 3.10 and 3.12.
+
 ## [v2.7.2] - 2026-07-26
 
 ### Added
