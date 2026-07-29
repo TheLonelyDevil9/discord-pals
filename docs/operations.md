@@ -24,6 +24,8 @@ DASHBOARD_PASS=your_secure_password
 
 When `DASHBOARD_PASS` is set, dashboard pages require login and sessions persist until logout or browser close. When it is unset, authentication is disabled.
 
+`GET /healthz` returns `{"status": "ok"}` without a login so host monitoring keeps working after you set a password. It reports nothing else. Point uptime checks at it rather than `/api/version`, which redirects to the login page once authentication is on.
+
 Dashboard write routes use CSRF tokens. If a custom script calls dashboard APIs, send the token with the form field `csrf_token` or header `X-CSRF-Token`.
 
 ## Updates And Recovery
