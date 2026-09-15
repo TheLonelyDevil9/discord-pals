@@ -62,7 +62,7 @@ _UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
 _UPDATE_BACKUP_DIRS = ("bot_data", "characters", "prompts")
 # Rotated logs live under bot_data/logs and are already size-capped; copying them
 # into every snapshot multiplied retained backups by the whole log budget.
-_UPDATE_BACKUP_DIR_IGNORES = {"bot_data": ("logs",)}
+_UPDATE_BACKUP_DIR_IGNORES = {"bot_data": ("logs", "project_automation.sqlite3*")}
 _UPDATE_BRANCH_CHOICES = ("main", "staging")
 UNIFIED_MEMORY_FILES = {"auto_memories", "manual_lore"}
 
@@ -114,7 +114,7 @@ def _format_activity_time(timestamp: float | None) -> str:
 def check_login():
     """Check authentication for all routes (if enabled)."""
     # Skip auth check for login/logout, the liveness probe, and static files
-    if request.endpoint in ('login', 'logout', 'healthz', 'static'):
+    if request.endpoint in ('login', 'logout', 'healthz', 'static', 'project_github_webhook'):
         return None
     if request.path.startswith('/static/'):
         return None
@@ -189,6 +189,16 @@ def get_character_files():
             if f.name != "template.md":
                 files.append(f.name.replace(".md", ""))
     return files
+
+
+# Project routes inherit dashboard authentication; only the exact signed webhook
+# endpoint is exempt above. Its handler validates the raw body before queuing it.
+from project_automation import get_automation
+from project_automation_dashboard import register_project_routes
+from project_automation_webhook import register_github_webhook
+
+register_project_routes(app, get_automation, get_character_names=get_character_files)
+register_github_webhook(app, get_automation)
 
 
 def _serialize_command_sync_status(bot) -> dict:
@@ -3765,6 +3775,8 @@ def _create_update_state_backup(repo_dir: str) -> str | None:
     if not copied:
         return None
 
+    from update import backup_project_database
+    backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
     _prune_update_backups(backup_root)
     return str(backup_dir)
 

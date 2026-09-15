@@ -12,8 +12,10 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -26,7 +28,7 @@ BACKUP_FILES = (".env", "bots.json", "providers.json")
 BACKUP_DIRS = ("bot_data", "characters", "prompts")
 # Rotated logs live under bot_data/logs and are already size-capped; copying them
 # into every snapshot multiplied retained backups by the whole log budget.
-BACKUP_DIR_IGNORES = {"bot_data": ("logs",)}
+BACKUP_DIR_IGNORES = {"bot_data": ("logs", "project_automation.sqlite3*")}
 
 
 def info(message: str) -> None:
@@ -195,6 +197,16 @@ def prune_backups(root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def backup_project_database(source: Path, destination: Path) -> None:
+    """Snapshot committed SQLite/WAL state without copying live journal files."""
+    if not source.is_file():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as original:
+        with closing(sqlite3.connect(str(destination))) as snapshot:
+            original.backup(snapshot, pages=128)
+
+
 def create_state_backup(repo: Path) -> Path | None:
     backup_root = repo / "bot_data" / "update_backups"
     backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -215,6 +227,7 @@ def create_state_backup(repo: Path) -> Path | None:
     if not copied:
         return None
 
+    backup_project_database(repo / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
     prune_backups(backup_root)
     return backup_dir
 

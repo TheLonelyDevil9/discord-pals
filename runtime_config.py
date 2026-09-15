@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from config import RUNTIME_CONFIG_FILE, DATA_DIR
+from project_automation_config import normalize_project_config
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ DEFAULTS = {
     "dm_image_generation_preferred_tier": "",  # Optional preferred image provider tier
     "dm_image_generation_prompt": "A weird, low-stakes, incomprehensible AI-generated meme image that looks like something a friend would send without context.",
     "bot_nicknames": {},  # Single-bot nickname fallback, edited through dashboard nickname controls
+    "project_automation": {},  # Expanded by the dedicated project-helper boundary normalizer
 }
 REMOVED_CONFIG_KEYS = {
     "context_message_count",
@@ -157,6 +159,7 @@ CONFIG_FIELDS = {
     "dm_image_generation_preferred_tier": ConfigField(str, DEFAULTS["dm_image_generation_preferred_tier"]),
     "dm_image_generation_prompt": ConfigField(str, DEFAULTS["dm_image_generation_prompt"]),
     "bot_nicknames": ConfigField(dict, DEFAULTS["bot_nicknames"]),
+    "project_automation": ConfigField(dict, DEFAULTS["project_automation"]),
 }
 
 # Config cache to avoid repeated file reads
@@ -223,6 +226,8 @@ def _coerce_id_list(value) -> list[str]:
 
 def _coerce_config_value(key: str, value):
     """Parse a known runtime config value at the storage/API boundary."""
+    if key == "project_automation":
+        return normalize_project_config(value)
     field = CONFIG_FIELDS.get(key)
     if field is None:
         return value
@@ -275,6 +280,8 @@ def _coerce_config_value(key: str, value):
 
 def _default_value(key: str):
     """Return a fresh default value for mutable runtime settings."""
+    if key == "project_automation":
+        return normalize_project_config({})
     value = DEFAULTS[key]
     if isinstance(value, dict):
         return dict(value)

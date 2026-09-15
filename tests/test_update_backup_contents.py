@@ -1,4 +1,6 @@
 import tempfile
+import sqlite3
+from contextlib import closing
 import unittest
 from pathlib import Path
 
@@ -67,6 +69,25 @@ class UpdateBackupContentsTests(unittest.TestCase):
 
             self.assertIsNotNone(backup)
             self.assert_backup_shape(Path(backup))
+
+    def test_both_updaters_snapshot_committed_wal_without_copying_journals(self):
+        for backup_fn in (update_module.create_state_backup, dashboard_module._create_update_state_backup):
+            with self.subTest(updater=backup_fn.__name__), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                build_repo(repo)
+                database = repo / "bot_data" / "project_automation.sqlite3"
+                with closing(sqlite3.connect(str(database))) as live:
+                    live.execute("PRAGMA journal_mode=WAL")
+                    live.execute("CREATE TABLE evidence (value TEXT)")
+                    live.execute("INSERT INTO evidence VALUES ('approved draft')")
+                    live.commit()
+                    self.assertTrue(Path(str(database) + "-wal").exists())
+                    backup = Path(backup_fn(repo)) / "bot_data" / database.name
+                    with closing(sqlite3.connect(str(backup))) as copied:
+                        self.assertEqual(copied.execute("SELECT value FROM evidence").fetchone()[0], "approved draft")
+                        self.assertEqual(copied.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                    self.assertFalse(Path(str(backup) + "-wal").exists())
+                    self.assertFalse(Path(str(backup) + "-shm").exists())
 
 
 if __name__ == "__main__":

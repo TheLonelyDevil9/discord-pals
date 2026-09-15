@@ -1469,6 +1469,8 @@ Return exactly one JSON object with this shape:
                 online=True
             )
 
+            from project_automation import get_automation
+            await get_automation().attach(self)
             await self._sync_slash_commands()
 
             log.online(f"{self.client.user} is online!", self.name)
@@ -1477,6 +1479,9 @@ Return exactly one JSON object with this shape:
         async def on_message(message: discord.Message):
             route_req_id = log.new_request_id()
             if message.author == self.client.user:
+                return
+            from project_automation import get_automation
+            if await get_automation().handle_message(self, message):
                 return
             if message.content.startswith('/'):  # Slash commands and // OOC messages
                 return
@@ -3350,6 +3355,8 @@ Return exactly one JSON object with this shape:
     
     async def close(self):
         """Close the bot connection."""
+        from project_automation import detach_automation
+        await detach_automation(self)
         drained = False
         try:
             drained = await self.request_queue.drain(timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS)

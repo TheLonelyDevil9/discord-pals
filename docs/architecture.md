@@ -10,6 +10,7 @@ Discord Pals is a single-process Discord bot with a local Flask dashboard. The p
 | Discord orchestration | `bot_instance.py`, `coordinator.py`, `commands/` | Discord events, slash commands, request concurrency | raw provider config parsing |
 | Provider calls | `providers.py`, `request_queue.py` | OpenAI-compatible requests, fallback order, provider runtime behavior | memory persistence |
 | Memory and reminders | `memory.py`, `reminders.py`, `time_utils.py` | unified stores, reminder scheduling, timezone resolution | dashboard template structure |
+| Project automation | `project_automation*.py` | isolated feedback cases, human decisions, GitHub events, durable SQLite outbox | character-chat memories or autonomous code changes |
 | Dashboard | `dashboard.py`, `templates/`, `images/`, `security.py` | local UI, dashboard APIs, auth and CSRF | Discord event decisions |
 | Shared utilities | `discord_utils.py`, `logger.py`, `response_sanitizer.py`, `scopes.py`, `constants.py` | history helpers, logging, output cleanup, identifier parsing | feature-specific business logic |
 
