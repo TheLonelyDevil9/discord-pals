@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 PORT = int(os.getenv("SMOKE_PORT", "8731"))
-GUARDED_PATHS = ("/", "/api/version", "/api/config", "/config", "/logs")
+GUARDED_PATHS = ("/", "/api/version", "/api/config", "/config", "/logs", "/project-automation", "/api/project-automation", "/api/project-automation/cases", "/api/project-automation/jobs")
 
 
 def main() -> int:

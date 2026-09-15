@@ -7,6 +7,7 @@ This directory is the repo-local knowledge base for agents and maintainers. Keep
 - [User README](../README.md) is the short first-run guide.
 - [Provider Configuration](provider-config.md) covers provider JSON, fallback tiers, local models, reasoning options, vision, and OpenRouter.
 - [Feature Guide](features.md) covers dashboard behavior, commands, memory, reminders, automation, characters, and multi-bot behavior.
+- [Project Helper](project-automation.md) covers character-aware feedback, human approval, GitHub synchronization, and recovery. [OCI deployment](project-automation-oci.md) covers its bot, App, and webhook setup.
 - [Runtime Configuration](runtime-config.md) lists the live settings stored in `bot_data/runtime_config.json`.
 - [Operations](operations.md) covers dashboard security, updates, deployment, file layout, and troubleshooting.
 - [Architecture](architecture.md) maps the runtime domains and where code belongs.
