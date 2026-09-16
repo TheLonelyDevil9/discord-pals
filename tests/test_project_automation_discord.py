@@ -33,7 +33,7 @@ def _native_suite():
     import discord
     from discord import app_commands
     from project_automation import WorkflowError
-    from project_automation_discord import DecisionView, DiscordTransport, NO_MENTIONS, message_text
+    from project_automation_discord import DecisionView, DiscordTransport, HumanReportModal, NO_MENTIONS, message_text
     from project_automation_store import Conflict
 
     async def iterate(items):
@@ -65,7 +65,7 @@ def _native_suite():
     def message(channel_value=None, message_id=999, author_id=456, bot=False, **attributes):
         value = MagicMock(spec=discord.Message)
         value.id = message_id
-        value.author = SimpleNamespace(id=author_id, bot=bot, roles=[])
+        value.author = SimpleNamespace(id=author_id, name="reporter", bot=bot, roles=[])
         value.guild = SimpleNamespace(id=100)
         value.channel = channel_value or channel()
         value.content = "Settings fail to save."
@@ -83,8 +83,8 @@ def _native_suite():
         return SimpleNamespace(
             id=800, guild_id=guild_id, channel_id=channel_id,
             channel=channel(channel_id=channel_id),
-            user=SimpleNamespace(id=user_id, roles=[SimpleNamespace(id=value) for value in role_ids]),
-            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            user=SimpleNamespace(id=user_id, name="reporter", roles=[SimpleNamespace(id=value) for value in role_ids]),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), send_modal=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()),
         )
 
@@ -93,6 +93,8 @@ def _native_suite():
             "id": "12345678-1234-1234-1234-123456789abc", "revision": 4,
             "bot_name": "Project Helper", "guild_id": "100", "channel_id": "102",
             "reporter_id": "456", "repository": "SillyBunnyTeam/SillyBunny",
+            "delivery_key": "12345678-1234-1234-1234-123456789abc:42",
+            "reply": "That sounds ready. Have a look at your words below before you send them.",
             "state": "awaiting_submission", "gate": {"kind": "review", "options": [
                 {"key": "submit", "label": "Publish this draft"}, {"key": "edit", "label": "Edit draft"}]},
             "draft": {"kind": "issue", "title": "Settings fail to save", "body": "Exact **Markdown**\n\n@everyone <@456> `trace`."},
@@ -150,6 +152,8 @@ def _native_suite():
                 bots={self.bot.name: self.bot}, get_case=lambda identifier: self.cases.get(identifier),
                 choose=Mock(), check_new_report=Mock(), receive_report=Mock(), add_detail=Mock(), recover=AsyncMock(return_value=False),
                 retry=AsyncMock(return_value="Draft returned for fresh approval."),
+                validate_report_author=Mock(), submit_report=Mock(),
+                say=AsyncMock(side_effect=lambda item, event: "Character reply: " + event["facts"].get("error", event["action"])),
             )
             self.transport = DiscordTransport(self.service)
             self.access_patch = patch("response_access.message_access", return_value=(True, None))
@@ -185,10 +189,12 @@ def _native_suite():
             view = DecisionView(self.service, item)
             self.assertIsNone(view.timeout)
             self.assertTrue(view.is_persistent())
-            self.assertEqual([child.custom_id for child in view.children], [
+            self.assertEqual([child.custom_id for child in view.children if child.custom_id], [
                 f"project:{item['id']}:4:submit", f"project:{item['id']}:4:edit"])
-            self.assertTrue(all(len(child.custom_id) <= 100 for child in view.children))
+            self.assertTrue(all(len(child.custom_id) <= 100 for child in view.children if child.custom_id))
             self.assertIs(view.children[0].style, discord.ButtonStyle.primary)
+            self.assertEqual(view.children[0].label, "Approve and post")
+            self.assertEqual(view.children[-1].label, "Review report")
             view.stop()
 
         async def test_callback_defers_before_authorization_and_passes_exact_actor(self):
@@ -225,11 +231,117 @@ def _native_suite():
                 click = interaction(user_id=888)
                 await view.children[0].callback(click)
                 delivery = click.followup.send.await_args
-                self.assertEqual(delivery.args[0], str(failure))
+                self.assertEqual(delivery.args[0], "Character reply: " + str(failure))
                 self.assertTrue(delivery.kwargs["ephemeral"])
                 self.assertIs(delivery.kwargs["allowed_mentions"], NO_MENTIONS)
                 self.assertNotIn("Choice saved", delivery.args[0])
             view.stop()
+
+        async def test_write_opens_empty_modal_after_local_authorization_without_defer(self):
+            item = case(state="awaiting_report", gate={"options": [{"key": "write", "label": "Write report"}]})
+            self.cases[item["id"]] = item
+            view = DecisionView(self.service, item)
+            click = interaction(role_ids=[900])
+            await view.children[0].callback(click)
+            self.service.validate_report_author.assert_called_once_with(item["id"], 4, 456, ["900"])
+            click.response.defer.assert_not_awaited()
+            self.service.say.assert_not_awaited()
+            self.service.choose.assert_not_called()
+            modal = click.response.send_modal.await_args.args[0]
+            self.assertIsInstance(modal, HumanReportModal)
+            self.assertEqual(modal.report_title.value, "")
+            self.assertEqual(modal.report_body.value, "")
+            self.assertEqual(modal.report_title.max_length, 180)
+            self.assertEqual(modal.report_body.max_length, 2800)
+            self.assertIn("wrote this myself", modal.authorship.label)
+            modal.stop()
+            view.stop()
+
+        async def test_edit_prefills_only_attested_human_text_never_generated_draft(self):
+            item = case(submitted_report={"title": "My title", "body": "My own report.", "human_authored": True})
+            modal = HumanReportModal(self.service, item)
+            self.assertEqual(modal.report_title.value, "My title")
+            self.assertEqual(modal.report_body.value, "My own report.")
+            self.assertEqual(modal.authorship.value, "")
+            modal.stop()
+            item["submitted_report"]["human_authored"] = False
+            modal = HumanReportModal(self.service, item)
+            self.assertEqual(modal.report_title.value, "")
+            self.assertEqual(modal.report_body.value, "")
+            modal.stop()
+
+        async def test_unauthorized_or_stale_edit_never_opens_the_modal(self):
+            item = case()
+            self.cases[item["id"]] = item
+            view = DecisionView(self.service, item)
+            for error in (WorkflowError("Only the original reporter may write this report."), Conflict("This report changed.")):
+                self.service.validate_report_author.side_effect = error
+                click = interaction(user_id=888)
+                await view.children[1].callback(click)
+                click.response.send_modal.assert_not_awaited()
+                click.response.defer.assert_awaited_once_with(ephemeral=True)
+                self.assertIn(str(error), click.followup.send.await_args.args[0])
+            view.stop()
+
+        async def test_modal_saves_exact_human_text_only_after_authorship_confirmation(self):
+            item = case()
+            self.cases[item["id"]] = item
+            modal = HumanReportModal(self.service, item)
+            modal.report_title._value = "The title I typed"
+            modal.report_body._value = "My **own** words.\n\nNothing rewritten."
+            modal.authorship._value = "YES"
+            click = interaction(role_ids=[900])
+            order = []
+            click.response.defer.side_effect = lambda **kwargs: order.append("defer")
+            self.service.submit_report.side_effect = lambda *args, **kwargs: order.append("save")
+            await modal.on_submit(click)
+            self.assertEqual(order, ["defer", "save"])
+            self.service.validate_report_author.assert_called_once_with(
+                item["id"], 4, 456, ["900"], report_revision=0, issue_number=None,
+            )
+            self.service.submit_report.assert_called_once_with(
+                item["id"], 4, user_id=456, username="reporter", title=modal.report_title.value,
+                body=modal.report_body.value, role_ids=["900"], human_authored=True,
+                report_revision=0, issue_number=None,
+            )
+            self.assertEqual(self.service.say.await_args.args[1]["facts"], {"saved": True, "published": False})
+            self.assertEqual(click.followup.send.await_args.args[0], "Character reply: report_saved")
+            self.assertIs(click.followup.send.await_args.kwargs["allowed_mentions"], NO_MENTIONS)
+            modal.stop()
+
+        async def test_modal_without_authorship_confirmation_does_not_save(self):
+            item = case()
+            self.cases[item["id"]] = item
+            modal = HumanReportModal(self.service, item)
+            modal.authorship._value = "no"
+            await modal.on_submit(interaction())
+            self.service.submit_report.assert_not_called()
+            self.assertIn("typing YES", self.service.say.await_args.args[1]["facts"]["error"])
+            modal.stop()
+
+        async def test_modal_revalidates_after_the_report_changed_while_form_was_open(self):
+            item = case()
+            self.cases[item["id"]] = item
+            modal = HumanReportModal(self.service, item)
+            modal.authorship._value = "YES"
+            self.service.validate_report_author.side_effect = Conflict("This report changed.")
+            click = interaction()
+            await modal.on_submit(click)
+            self.service.submit_report.assert_not_called()
+            self.assertIn("This report changed", click.followup.send.await_args.args[0])
+            modal.stop()
+
+        async def test_modal_cannot_cross_server_or_thread_boundaries(self):
+            item = case()
+            self.cases[item["id"]] = item
+            modal = HumanReportModal(self.service, item)
+            for click in (interaction(guild_id=200), interaction(channel_id=103)):
+                await modal.on_submit(click)
+                self.assertIsNone(self.service.say.await_args.args[0])
+                self.assertIn("another feedback thread", click.followup.send.await_args.args[0])
+            self.service.validate_report_author.assert_not_called()
+            self.service.submit_report.assert_not_called()
+            modal.stop()
 
         async def test_attach_restores_persistent_views_and_registers_commands_once(self):
             item = case()
@@ -254,19 +366,70 @@ def _native_suite():
                 self.assertEqual(kwargs["embed"].description, item["draft"]["body"])
                 self.assertIs(kwargs["allowed_mentions"], NO_MENTIONS)
                 self.assertTrue(kwargs["view"].is_persistent())
-                self.assertIn(item["repository"], kwargs["content"])
-                self.assertIn("Approve issue" if kind == "issue" else "Approve comment on #17", kwargs["content"])
+                self.assertEqual(kwargs["content"], item["reply"])
+                self.assertEqual(kwargs["embed"].footer.text, f"Feedback {item['delivery_key']}")
+                self.assertEqual(kwargs["view"].children[-1].url, sent.jump_url)
+                self.assertEqual(set(sent.edit.await_args.kwargs), {"view", "allowed_mentions"})
                 self.assertEqual(self.store.get_link("feedback", item["id"])["message_id"], str(sent.id))
                 self.store.links.clear()
 
-        async def test_existing_feedback_is_edited_without_an_extra_message(self):
+        async def test_new_conversation_turn_preserves_the_previous_message(self):
             item, thread, sent = self.configure_feedback()
-            self.store.put_link("feedback", item["id"], {"channel_id": "102", "message_id": str(sent.id)})
+            previous = message(thread, message_id=998, author_id=777, bot=True)
+            previous.embeds = [discord.Embed().set_footer(text=f"Feedback {item['id']}:41")]
+            self.store.put_link("feedback", item["id"], {"channel_id": "102", "message_id": str(previous.id),
+                                                        "delivery_key": f"{item['id']}:41", "revision": 3})
+            thread.fetch_message.return_value = previous
+            await self.transport.notify(item)
+            thread.send.assert_awaited_once()
+            previous.edit.assert_awaited_once_with(view=None, allowed_mentions=NO_MENTIONS)
+            self.assertEqual(self.store.get_link("feedback_delivery", item["delivery_key"])["message_id"], str(sent.id))
+
+        async def test_failure_to_retire_older_controls_does_not_fail_the_new_reply(self):
+            item, thread, sent = self.configure_feedback()
+            previous = message(thread, message_id=998, author_id=777, bot=True)
+            previous.embeds = [discord.Embed().set_footer(text=f"Feedback {item['id']}:41")]
+            previous.edit.side_effect = OSError("Permission changed")
+            self.store.put_link("feedback", item["id"], {"channel_id": "102", "message_id": str(previous.id),
+                                                        "delivery_key": f"{item['id']}:41", "revision": 3})
+            thread.fetch_message.return_value = previous
+            with patch("project_automation_discord.warn") as warning:
+                self.assertTrue(await self.transport.notify(item))
+            warning.assert_called_once()
+            self.assertEqual(self.store.get_link("feedback", item["id"])["message_id"], str(sent.id))
+
+        async def test_recovering_an_old_reply_keeps_the_newer_control_receipt(self):
+            for revision in (4, 5):
+                self.store.links.clear()
+                item, thread, sent = self.configure_feedback()
+                latest = {"channel_id": "102", "message_id": "1001", "revision": revision, "delivery_key": f"{item['id']}:43"}
+                self.store.put_link("feedback", item["id"], latest)
+                sent.embeds = [discord.Embed().set_footer(text=f"Feedback {item['delivery_key']}")]
+                thread.history.side_effect = lambda **kwargs: iterate([sent])
+                self.assertTrue(await self.transport.notify(item, recover_only=True))
+                self.assertEqual(self.store.get_link("feedback", item["id"]), latest)
+                self.assertEqual(self.store.get_link("feedback_delivery", item["delivery_key"])["message_id"], str(sent.id))
+
+        async def test_retry_of_the_same_conversation_turn_does_not_resend_or_rewrite_it(self):
+            item, thread, sent = self.configure_feedback()
+            embed = discord.Embed().set_footer(text=f"Feedback {item['delivery_key']}")
+            sent.embeds = [embed]
+            self.store.put_link("feedback_delivery", item["delivery_key"], {"channel_id": "102", "message_id": str(sent.id)})
             thread.fetch_message.return_value = sent
             await self.transport.notify(item)
-            sent.edit.assert_awaited_once()
             thread.send.assert_not_awaited()
-            self.assertIs(sent.edit.await_args.kwargs["allowed_mentions"], NO_MENTIONS)
+            sent.edit.assert_not_awaited()
+            self.assertEqual(self.store.get_link("feedback", item["id"])["message_id"], str(sent.id))
+
+        async def test_discussion_is_plain_generated_text_without_state_cards(self):
+            item, thread, _ = self.configure_feedback(case(state="discussing", draft=None, gate=None, reply="Does it happen with a new preset too?"))
+            await self.transport.notify(item)
+            kwargs = thread.send.await_args.kwargs
+            self.assertEqual(kwargs["content"], item["reply"])
+            self.assertIsNone(kwargs["embed"].title)
+            self.assertIsNone(kwargs["embed"].description)
+            self.assertEqual(kwargs["embed"].fields, [])
+            self.service.say.assert_not_awaited()
 
         async def test_failed_feedback_send_does_not_save_a_phantom_delivery(self):
             item, thread, _ = self.configure_feedback()
@@ -274,11 +437,64 @@ def _native_suite():
             with self.assertRaises(OSError):
                 await self.transport.notify(item)
             self.assertIsNone(self.store.get_link("feedback", item["id"]))
+            self.assertIsNone(self.store.get_link("feedback_delivery", item["delivery_key"]))
+
+        async def test_recovery_of_one_turn_does_not_adopt_a_previous_turn(self):
+            item, thread, sent = self.configure_feedback()
+            sent.embeds = [discord.Embed().set_footer(text=f"Feedback {item['id']}:41")]
+            thread.history.side_effect = lambda **kwargs: iterate([sent])
+            self.store.put_link("feedback", item["id"], {"channel_id": "102", "message_id": str(sent.id)})
+            self.assertFalse(await self.transport.notify(item, recover_only=True))
+            thread.send.assert_not_awaited()
+            sent.edit.assert_not_awaited()
+            self.assertIsNone(self.store.get_link("feedback_delivery", item["delivery_key"]))
+
+        async def test_recovery_restores_local_controls_without_public_writes(self):
+            item, thread, sent = self.configure_feedback()
+            thread.archived = True
+            sent.embeds = [discord.Embed().set_footer(text=f"Feedback {item['delivery_key']}")]
+            thread.history.side_effect = lambda **kwargs: iterate([sent])
+            self.assertTrue(await self.transport.notify(item, recover_only=True))
+            thread.edit.assert_not_awaited()
+            thread.send.assert_not_awaited()
+            sent.edit.assert_not_awaited()
+            self.bot.client.add_view.assert_called_once()
+            self.assertEqual(self.bot.client.add_view.call_args.kwargs["message_id"], sent.id)
+
+        async def test_failed_preview_link_edit_preserves_receipt_and_retry_does_not_duplicate(self):
+            item, thread, sent = self.configure_feedback()
+            sent.edit.side_effect = OSError("Lost edit acknowledgement")
+            with self.assertRaises(OSError):
+                await self.transport.notify(item)
+            self.assertEqual(self.store.get_link("feedback_delivery", item["delivery_key"])["message_id"], str(sent.id))
+            sent.embeds = [thread.send.await_args.kwargs["embed"]]
+            thread.fetch_message.return_value = sent
+            self.assertTrue(await self.transport.notify(item, recover_only=True))
+            self.assertEqual(thread.send.await_count, 1)
+            self.assertEqual(sent.edit.await_count, 1)
+
+        async def test_feedback_does_not_recover_a_saved_message_owned_by_someone_else(self):
+            item, thread, sent = self.configure_feedback()
+            sent.author.id = 888
+            sent.embeds = [discord.Embed().set_footer(text=f"Feedback {item['delivery_key']}")]
+            self.store.put_link("feedback_delivery", item["delivery_key"], {"channel_id": "102", "message_id": str(sent.id)})
+            thread.fetch_message.return_value = sent
+            with self.assertRaisesRegex(WorkflowError, "different Discord author"):
+                await self.transport.notify(item, recover_only=True)
+            thread.send.assert_not_awaited()
+            sent.edit.assert_not_awaited()
+
+        async def test_missing_or_oversized_generated_reply_is_not_replaced_with_a_template(self):
+            for reply in (None, "", "x" * 2001):
+                item, thread, _ = self.configure_feedback(case(reply=reply))
+                with self.assertRaisesRegex(WorkflowError, "missing or too long"):
+                    await self.transport.notify(item)
+                thread.send.assert_not_awaited()
 
         async def test_feedback_recovery_only_finds_receipt_without_resending(self):
             item, thread, sent = self.configure_feedback()
             embed = discord.Embed(description="Prior send")
-            embed.set_footer(text=f"Feedback {item['id']}")
+            embed.set_footer(text=f"Feedback {item['delivery_key']}")
             sent.embeds = [embed]
             thread.history.side_effect = lambda **kwargs: iterate([sent])
             self.assertTrue(await self.transport.notify(item, recover_only=True))
@@ -290,7 +506,7 @@ def _native_suite():
             item, thread, _ = self.configure_feedback()
             copied = message(thread, author_id=888)
             embed = discord.Embed(description="Copied marker")
-            embed.set_footer(text=f"Feedback {item['id']}")
+            embed.set_footer(text=f"Feedback {item['delivery_key']}")
             copied.embeds = [embed]
             thread.history.side_effect = lambda **kwargs: iterate([copied])
             self.assertFalse(await self.transport.notify(item, recover_only=True))
@@ -344,7 +560,7 @@ def _native_suite():
             self.assertTrue(await self.transport.handle_message(self.bot, incoming))
             self.service.add_detail.assert_called_once_with(
                 item["id"], user_id=456, content=incoming.content, message_id=999,
-                source_url=incoming.jump_url, role_ids=[],
+                source_url=incoming.jump_url, role_ids=[], username="reporter",
             )
 
         async def test_new_feedback_text_message_gets_one_thread_and_report(self):
@@ -354,6 +570,7 @@ def _native_suite():
             self.service.receive_report.assert_called_once_with(
                 source_key="discord:100:999", channel_id=102, reporter_id=456,
                 content=incoming.content, source_url=incoming.jump_url, message_id=999,
+                reporter_name="reporter", title="Feedback",
             )
             self.service.check_new_report.assert_called_once_with(456, incoming.content)
 
@@ -441,6 +658,7 @@ def _native_suite():
             self.service.receive_report.assert_called_once_with(
                 source_key="interaction:800", channel_id=302, reporter_id=456, content=report,
                 source_url="https://discord.com/channels/100/302", message_id=800,
+                reporter_name="reporter", title=report,
             )
             self.assertTrue(click.followup.send.await_args.kwargs["ephemeral"])
             self.assertIs(click.followup.send.await_args.kwargs["allowed_mentions"], NO_MENTIONS)
@@ -451,8 +669,8 @@ def _native_suite():
             for click in (interaction(guild_id=999, channel_id=110), interaction(channel_id=999)):
                 click.channel.parent_id = None
                 await command.callback(click, "A report")
-                click.response.send_message.assert_awaited_once()
-                click.response.defer.assert_not_awaited()
+                click.followup.send.assert_awaited_once()
+                click.response.defer.assert_awaited_once_with(ephemeral=True)
             self.config["bot_name"] = "Different Helper"
             await command.callback(interaction(channel_id=110), "A report")
             self.service.receive_report.assert_not_called()

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+import re
 import threading
 import time
 from pathlib import Path
@@ -13,9 +15,9 @@ from project_automation_store import AutomationStore, Conflict
 
 
 CHOICES = {
-    "investigate": "Answer a question", "draft": "Draft now", "human": "Ask a maintainer",
-    "link": "Use existing issue", "submit": "Publish this draft", "edit": "Edit draft",
-    "back": "Choose another path", "cancel": "Close feedback",
+    "write": "Write my report", "human": "Ask a maintainer",
+    "link": "Add to existing issue", "submit": "Approve and post", "edit": "Edit my report",
+    "back": "Keep discussing", "cancel": "Close feedback",
 }
 
 
@@ -93,6 +95,26 @@ class AutomationService:
             raise WorkflowError("Only the reporter or a configured maintainer can choose for this report.")
         self._check_case_access(case)
 
+    def validate_report_author(self, case_id, revision, user_id, role_ids=(), *, report_revision=None, issue_number=None):
+        case = self.get_case(case_id)
+        if not case:
+            raise WorkflowError("Feedback was not found.")
+        self._authorize(case, user_id, role_ids)
+        if str(user_id) != case["reporter_id"]:
+            raise WorkflowError("The reporter writes and approves their own report. You can help in the thread.")
+        if report_revision is None:
+            if case["revision"] != revision:
+                raise Conflict("The conversation changed. Use the latest report controls.")
+            if not {"write", "edit"}.intersection(option["key"] for option in (case.get("gate") or {}).get("options", [])):
+                raise WorkflowError("Continue the conversation before submitting a report.")
+        else:
+            if (type(report_revision) is not int or report_revision != case.get("report_revision", 0)
+                    or issue_number != (case.get("target_issue_number") or case.get("linked_issue_number"))):
+                raise Conflict("A newer report or destination replaced this form. Open the current report to edit it.")
+            if case["state"] in {"processing", "queued", "publishing", "recovery", "filed", "closed"}:
+                raise WorkflowError("This report is busy or closed. Use its current controls when it is ready.")
+        return case
+
     def _check_case_access(self, case):
         import runtime_config
         if not runtime_config.is_server_response_allowed(case["feedback_channel_id"])[0]:
@@ -104,8 +126,68 @@ class AutomationService:
                 "key": f"{kind}:{case['id']}:{case['revision'] + 1}"}
 
     def _save(self, case, patch, notify=True):
+        patch = {"reply": "", **patch}
         return self.store.update_case(case["id"], patch, expected_revision=case["revision"],
-                                      job=self._job("notify", case) if notify else None)
+                                      job=self._job("notify", case, revision=case["revision"] + 1) if notify else None)
+
+    @staticmethod
+    def _transcript(entries):
+        entries = entries[:1] + entries[-19:] if len(entries) > 20 else list(entries)
+        while sum(len(entry.get("content", "")) for entry in entries) > 24000 and len(entries) > 2:
+            del entries[1]
+        return entries
+
+    def _context(self, case):
+        delivered = self.store.get_link("conversation", case["id"]) or {}
+        entries = case.get("transcript", []) + delivered.get("turns", [])
+        entries.sort(key=lambda item: item.get("created_at", 0))
+        return {**case, "transcript": self._transcript(entries),
+                "controls": dict(CHOICES),
+                "maintainer_question": self.store.get_link("maintainer_question", case["id"])}
+
+    async def say(self, case, event):
+        context = self._context(case) if case else {"id": "project-command", "repository": self.settings()["repository"]}
+        try:
+            return await self.ai.speak(context, event, self.bots[self.settings()["bot_name"]], self.settings())
+        except Exception:
+            # A provider outage is an operational fact, not an invented character line.
+            detail = event.get("facts", {}).get("error") or event.get("next_step") or "Try again in this thread."
+            return "System notice: character response unavailable. " + str(detail)[:600]
+
+    async def _notify(self, case, job, *, recover_only=False):
+        key = f"{case['id']}:{job['id']}"
+        snapshot = self.store.get_link("notification", key)
+        if snapshot is None:
+            if recover_only:
+                # Before conversational turns, one receipt represented the case's status card.
+                if "revision" in job["payload"]:
+                    return False
+                return await self.transport.notify({**case, "gate": None}, recover_only=True)
+            event = job["payload"].get("event") or case.get("notice_event")
+            reply = await self.say(case, event) if event else case.get("reply", "")
+            if not reply:
+                reply = await self.say(case, {"action": "resume_conversation", "facts": {"state": case["state"]},
+                                              "next_step": "Continue this report in the Discord thread."})
+            keys = ("id", "revision", "bot_name", "guild_id", "channel_id", "reporter_id", "repository",
+                    "state", "gate", "draft", "submitted_report", "github_url", "review_url")
+            snapshot = {name: deepcopy(case[name]) for name in keys if name in case}
+            if self.get_case(case["id"])["revision"] != case["revision"]:
+                return False
+            snapshot.update(reply=reply, delivery_key=key, prepared_at=time.time())
+            self.store.put_link("notification", key, snapshot)
+        if not recover_only:
+            self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        found = await self.transport.notify(snapshot, recover_only=recover_only)
+        if not recover_only or found:
+            receipt = self.store.get_link("feedback_delivery", key) or {}
+            delivered_at = receipt.get("created_at", snapshot.get("prepared_at", case["created_at"]))
+            history = self.store.get_link("conversation", case["id"]) or {"turns": []}
+            if not any(turn.get("delivery_key") == key for turn in history["turns"]):
+                history["turns"].append({"role": "assistant", "content": snapshot["reply"],
+                    "author_name": self.settings().get("character_name", ""), "created_at": delivered_at, "delivery_key": key})
+                history["turns"] = sorted(history["turns"], key=lambda turn: turn["created_at"])[-8:]
+                self.store.put_link("conversation", case["id"], history)
+        return found
 
     def check_new_report(self, reporter_id, content):
         if self.paused():
@@ -115,7 +197,8 @@ class AutomationService:
         if self.store.count_active_cases(str(reporter_id), self.settings()["guild_id"]) >= 3:
             raise WorkflowError("You already have three open reports. Finish or close one before starting another.")
 
-    def receive_report(self, *, source_key, channel_id, reporter_id, content, source_url, message_id) -> dict:
+    def receive_report(self, *, source_key, channel_id, reporter_id, content, source_url, message_id,
+                       reporter_name="", title="") -> dict:
         cfg = self.settings()
         existing = self.store.get_case_by_source(source_key)
         if existing:
@@ -126,19 +209,24 @@ class AutomationService:
         case = self.store.create_case({
             **{key: cfg[key] for key in ("repository", "bot_name", "guild_id", "feedback_channel_id")},
             "channel_id": str(channel_id), "reporter_id": str(reporter_id),
+            "reporter_name": str(reporter_name)[:80], "title": str(title)[:180], "workflow_version": 2,
+            "report_revision": 0,
             "state": "assessing", "source_url": source_url, "question_count": 0,
-            "transcript": [{"author_id": str(reporter_id), "content": content,
+            "transcript": [{"role": "user", "author_id": str(reporter_id), "author_name": str(reporter_name)[:80],
+                            "content": content, "created_at": time.time(),
                             "message_id": str(message_id), "source_url": source_url}],
         }, source_key=source_key)
         self.store.enqueue("assess", {"case_id": case["id"], "revision": case["revision"]},
                            key=f"initial:{case['id']}")
         return case
 
-    def add_detail(self, case_id, *, user_id, content, message_id, source_url, role_ids=()) -> dict:
+    def add_detail(self, case_id, *, user_id, content, message_id, source_url, role_ids=(), username="") -> dict:
         case = self.get_case(case_id)
         if not case:
             raise WorkflowError("Feedback was not found.")
-        self._authorize(case, user_id, role_ids)
+        if self.paused() or not self._bound(case):
+            raise WorkflowError("Feedback is paused or its project configuration has changed.")
+        self._check_case_access(case)
         if case["state"] in {"processing", "queued", "publishing", "recovery", "closed"}:
             raise WorkflowError("This report is busy or closed. Its current status is shown above.")
         transcript = case.get("transcript", [])
@@ -146,25 +234,52 @@ class AutomationService:
             return case
         if not isinstance(content, str) or not 1 <= len(content.strip()) <= 8000:
             raise WorkflowError("Please keep this update within 8,000 characters.")
-        transcript = transcript + [{"author_id": str(user_id), "content": content,
+        transcript = transcript + [{"role": "user", "author_id": str(user_id), "author_name": str(username)[:80],
+                                    "content": content, "created_at": time.time(),
                                     "message_id": str(message_id), "source_url": source_url}]
-        if len(transcript) > 20:
-            transcript = transcript[:1] + transcript[-19:]
-        while sum(len(entry["content"]) for entry in transcript) > 24000 and len(transcript) > 2:
-            del transcript[1]
+        transcript = self._transcript(transcript)
         question = self.store.get_link("maintainer_question", case_id) or {}
         return self.store.update_case(case_id, {"transcript": transcript, "state": "assessing", "gate": None,
+                                               "workflow_version": 2, "draft": None, "reply": "", "notice_event": None,
+                                               "submitted_report": None if case["state"] == "filed" else case.get("submitted_report"),
+                                               "report_revision": case.get("report_revision", 0) + (case["state"] == "filed"),
+                                               "question_count": 0 if case["state"] == "filed" else case.get("question_count", 0),
                                                "answering_question_key": question.get("key")},
                                       expected_revision=case["revision"],
                                       job=self._job("assess", case, revision=case["revision"] + 1))
+
+    def submit_report(self, case_id, revision, *, user_id, username, title, body, role_ids=(), human_authored=False,
+                      report_revision=None, issue_number=None):
+        case = self.validate_report_author(case_id, revision, user_id, role_ids,
+                                          report_revision=report_revision, issue_number=issue_number)
+        if human_authored is not True:
+            raise WorkflowError("Confirm that you wrote the report contents yourself.")
+        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 180:
+            raise WorkflowError("Write a report title within 180 characters.")
+        if not isinstance(body, str) or not 1 <= len(body.strip()) <= 2800:
+            raise WorkflowError("Write the report contents in your own words, within 2,800 characters.")
+        if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_.]{2,32}", username):
+            raise WorkflowError("Your Discord username could not be verified for attribution.")
+        report = {"title": title, "body": body, "author_id": str(user_id), "author_name": username,
+                  "human_authored": True, "submitted_at": time.time()}
+        return self.store.update_case(case_id, {"workflow_version": 2, "submitted_report": report,
+            "report_revision": case.get("report_revision", 0) + 1,
+            "draft": None, "state": "assessing", "gate": None, "reply": "", "notice_event": None},
+            expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
 
     def choose(self, case_id, revision, action, *, user_id, role_ids=()) -> dict:
         case = self.get_case(case_id)
         if not case:
             raise WorkflowError("Feedback was not found.")
         self._authorize(case, user_id, role_ids)
-        if action == "submit" and (not case.get("draft") or (case.get("gate") or {}).get("kind") != "review"):
-            raise WorkflowError("Review the current draft before publishing.")
+        if action in {"write", "edit", "draft", "investigate"}:
+            raise WorkflowError("Use the current report form, or reply directly in this thread.")
+        if action == "submit":
+            if str(user_id) != case["reporter_id"]:
+                raise WorkflowError("Only the reporter can approve publication of their own text.")
+            if (case.get("workflow_version") != 2 or not self._human_draft(case)
+                    or (case.get("gate") or {}).get("kind") != "review"):
+                raise WorkflowError("Write and review your own report before approving publication.")
         # The decision and job are one transaction: double-clicks cannot publish twice.
         return self.store.consume_gate(case_id, revision, action, str(user_id),
                                        job=self._job("branch", case, action=action, revision=revision + 1))
@@ -215,64 +330,106 @@ class AutomationService:
         search_unavailable = False
         try:
             client = await self.client()
-            if case.get("linked_issue_number"):
-                candidates = [await client.get_issue(case["linked_issue_number"])]
+            target = case.get("target_issue_number") or case.get("linked_issue_number")
+            if target:
+                candidates = [await client.get_issue(target)]
             else:
-                query = search_terms(case["transcript"][0]["content"])
+                report = case.get("submitted_report") or {}
+                query = search_terms(report.get("title", "") + " " + report.get("body", "")) if report else search_terms(
+                    case.get("title", "") + " " + " ".join(item["content"] for item in case.get("transcript", [])[-4:]))
                 if query:
                     candidates = await client.search_issues(query, limit=5)
+                else:
+                    search_unavailable = True
         except GitHubError:
             search_unavailable = True
         candidates = [{**item, "body": item.get("body", "")[:2000]} for item in candidates[:5]]
-        context = {**case, "maintainer_question": self.store.get_link("maintainer_question", case["id"])}
+        context = {**self._context(case), "search_unavailable": search_unavailable,
+                   "linked_issue_number": case.get("target_issue_number") or case.get("linked_issue_number")}
         result = await self.ai.assess(context, candidates, self.bots[case["bot_name"]], self.settings())
-        actions = ["draft", "human", "cancel"]
-        if case.get("question_count", 0) < self.settings()["max_questions"]:
-            actions.insert(0, "investigate")
-        if result.get("duplicate_number") and not case.get("linked_issue_number"):
-            actions.insert(2, "link")
-        self._save(case, {"assessment": result, "candidates": candidates,
+        eligible = (result.get("kind") in {"bug", "feature"}
+                    and result.get("recommendation") in {"ready", "link"} and not search_unavailable)
+        report = case.get("submitted_report") or {}
+        count = case.get("question_count", 0)
+        state, actions, draft = "discussing", ["human", "cancel"], None
+        if report.get("human_authored") is True:
+            actions.insert(0, "edit")
+        if eligible:
+            if result.get("duplicate_number") and not (case.get("target_issue_number") or case.get("linked_issue_number")):
+                state = "awaiting_report"
+                actions.insert(0, "link")
+            elif report.get("human_authored") is True:
+                state, actions = "awaiting_submission", ["submit", "edit", "back", "cancel"]
+                draft = self._draft_from_report(case)
+            else:
+                state, actions = "awaiting_report", ["write", "human", "cancel"]
+        elif result.get("recommendation") == "human" or search_unavailable:
+            state = "needs_maintainer"
+        elif result.get("recommendation") == "investigate":
+            count += 1
+            if count > self.settings()["max_questions"]:
+                state = "needs_maintainer"
+                result["reply"] = await self.say(case, {"action": "clarification_limit", "facts": {"report_saved": True},
+                    "next_step": "Ask a maintainer for help in this thread; the reporter can still add or edit their own details."})
+        self._save(case, {"workflow_version": 2, "assessment": result, "candidates": candidates,
                           "assessment_question_key": case.get("answering_question_key"),
-                          "search_unavailable": search_unavailable,
-                          "state": "awaiting_choice", "gate": gate("direction", actions)})
+                          "search_unavailable": search_unavailable, "question_count": count,
+                          "reply": result["reply"], "notice_event": None, "draft": draft,
+                          "review_url": f"https://discord.com/channels/{case['guild_id']}/{case['channel_id']}",
+                          "state": state, "gate": gate("review" if draft else "conversation", actions)})
+
+    @staticmethod
+    def _draft_from_report(case):
+        report = case.get("submitted_report") or {}
+        if report.get("human_authored") is not True or report.get("author_id") != case["reporter_id"]:
+            raise WorkflowError("A human-written report from its reporter is required.")
+        number = case.get("target_issue_number") or case.get("linked_issue_number")
+        body = prepare_public_text(f"Forwarded from Discord\n@{report['author_name']}\n\n{report['body']}", 3800)
+        return {"kind": "comment" if number else "issue", "title": prepare_public_text(report["title"], 180),
+                "body": body, "issue_number": number, "question_key": case.get("answering_question_key"),
+                "author_id": report["author_id"], "human_authored": True}
+
+    def _human_draft(self, case):
+        try:
+            return case.get("draft") == self._draft_from_report(case)
+        except (WorkflowError, KeyError, TypeError):
+            return False
 
     async def _branch(self, case, action):
+        if case.get("workflow_version") != 2:
+            self.store.update_case(case["id"], {"workflow_version": 2, "state": "assessing", "gate": None,
+                "draft": None, "submitted_report": None, "reply": "", "notice_event": None},
+                expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
+            return
         assessment = case.get("assessment", {})
-        if action == "investigate":
-            question = assessment["question"]
-            self._save(case, {"state": "awaiting_details", "notice": question,
-                              "question_count": case.get("question_count", 0) + 1,
-                              "asked_questions": case.get("asked_questions", []) + [question],
-                              "gate": gate("direction", ["draft", "human", "cancel"])})
-        elif action in {"draft", "link"}:
-            number = case.get("linked_issue_number")
-            if action == "link":
-                number = assessment["duplicate_number"]
-                if number not in {item["number"] for item in case.get("candidates", [])}:
-                    raise WorkflowError("The suggested issue is no longer available.")
-            body = prepare_public_text(assessment["body"] + f"\n\nSource: {case['source_url']}", 3800)
-            draft = {"kind": "comment" if number else "issue", "title": prepare_public_text(assessment["title"], 180),
-                     "body": body, "issue_number": number, "question_key": case.get("assessment_question_key")}
-            self._save(case, {"state": "awaiting_submission", "draft": draft,
-                              "gate": gate("review", ["submit", "edit", "back", "cancel"])})
+        if action == "link":
+            number = assessment.get("duplicate_number")
+            if (type(number) is not int or number not in {item["number"] for item in case.get("candidates", [])}
+                    or case.get("search_unavailable")):
+                raise WorkflowError("The suggested issue is no longer available.")
+            self.store.update_case(case["id"], {"target_issue_number": number, "state": "assessing", "gate": None},
+                expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
         elif action == "submit":
+            if case.get("workflow_version") != 2 or not self._human_draft(case):
+                raise WorkflowError("The reporter must write and approve their own report.")
             marker = f"{case['id']}-{case['revision']}"
             self.store.update_case(case["id"], {"state": "queued", "publication_marker": marker}, expected_revision=case["revision"],
                                    job=self._job("publish", case, draft=case["draft"],
                                                  marker=marker))
-        elif action == "edit":
-            self._save(case, {"state": "awaiting_details", "notice": "Tell me what to change. I’ll prepare a new preview for approval.",
-                              "gate": gate("direction", ["back", "human", "cancel"])})
         elif action == "back":
-            actions = ["draft", "human", "cancel"]
-            if case.get("question_count", 0) < self.settings()["max_questions"]:
-                actions.insert(0, "investigate")
-            self._save(case, {"state": "awaiting_choice", "gate": gate("direction", actions)})
+            actions = (["edit"] if case.get("submitted_report") else []) + ["human", "cancel"]
+            self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", actions),
+                "notice_event": {"action": "continue_discussion", "facts": {"published": False},
+                                 "next_step": "Reply in this thread with what you want to work through."}})
         elif action == "human":
-            self._save(case, {"state": "needs_maintainer", "notice": "A maintainer can review this report here. You can still add useful details.",
-                              "gate": gate("direction", ["draft", "back", "cancel"])})
+            actions = (["edit"] if case.get("submitted_report") else []) + ["back", "cancel"]
+            self._save(case, {"state": "needs_maintainer", "draft": None, "gate": gate("conversation", actions),
+                "notice_event": {"action": "ask_maintainer", "facts": {"thread_url": case.get("review_url", case["source_url"])},
+                                 "next_step": "Share this Discord thread with a maintainer for help. You can keep discussing it here."}})
         elif action == "cancel":
-            self._save(case, {"state": "closed", "notice": "Feedback closed by request.", "gate": None})
+            self._save(case, {"state": "closed", "gate": None,
+                "notice_event": {"action": "close_feedback", "facts": {"closed_by_request": True},
+                                 "next_step": "The feedback conversation is closed."}})
         else:
             raise WorkflowError("Unknown feedback action.")
 
@@ -280,6 +437,13 @@ class AutomationService:
         if case["state"] != "queued":
             return
         draft, marker = job["payload"]["draft"], job["payload"]["marker"]
+        if case.get("workflow_version") != 2 or not self._human_draft(case):
+            self.store.update_case(case["id"], {"workflow_version": 2, "state": "assessing", "gate": None,
+                "draft": None, "submitted_report": None}, expected_revision=case["revision"],
+                job=self._job("assess", case, revision=case["revision"] + 1))
+            return
+        if draft != case["draft"] or marker != case.get("publication_marker"):
+            raise WorkflowError("The queued publication does not match the approved report.")
         client = await self.client()
         self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
         try:
@@ -288,14 +452,17 @@ class AutomationService:
             else:
                 result = await client.add_comment(draft["issue_number"], draft["body"], marker)
         except (GitHubAmbiguousWrite, asyncio.CancelledError):
-            self._save(case, {"state": "recovery", "notice": "GitHub may have accepted this draft. A maintainer must check its delivery before anything is sent again."})
+            self._save(case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
+                "facts": {"publication_confirmed": False}, "next_step": "A maintainer must check GitHub before another attempt."}})
             raise
         number = draft.get("issue_number") or result["number"]
         question = self.store.get_link("maintainer_question", case["id"]) or {}
         if draft.get("question_key") and question.get("key") == draft["question_key"]:
             self.store.put_link("maintainer_question", case["id"], {})
         self._save(case, {"state": "filed", "linked_issue_number": number,
-                          "github_url": result["html_url"], "notice": "Published to GitHub. Updates will appear here.", "gate": None})
+                          "github_url": result["html_url"], "gate": None,
+                          "notice_event": {"action": "published", "facts": {"github_url": result["html_url"], "number": number},
+                                           "next_step": "You can follow the report on GitHub; updates will also appear in this thread."}})
 
     async def recover(self, job_id, *, user_id, role_ids=()) -> bool:
         """Read-only marker lookup; a missing match never authorizes a second POST."""
@@ -309,12 +476,13 @@ class AutomationService:
                 case = self.get_case(job["payload"]["case_id"])
                 if not self._bound(case):
                     raise WorkflowError("Restore the report's project configuration before recovery.")
-                found = await self.transport.notify(case, recover_only=True)
+                found = await self._notify(case, job, recover_only=True)
             else:
                 self._check_event_binding(job["payload"])
                 found = await self.transport.mirror(job["payload"], recover_only=True)
             if found:
-                self.store.resolve_recovery(job_id, outcome="retry", actor=str(user_id), note="Found existing Discord delivery; retry will edit its saved message")
+                self.store.resolve_recovery(job_id, outcome="complete" if job["kind"] == "notify" else "retry",
+                    actor=str(user_id), note="Found existing Discord delivery")
             return found
         if job["kind"] != "publish":
             raise WorkflowError("This job requires operator inspection in the dashboard.")
@@ -332,7 +500,9 @@ class AutomationService:
         if not result:
             return False
         self._save(case, {"state": "filed", "linked_issue_number": draft.get("issue_number") or result["number"],
-                          "github_url": result["html_url"], "notice": "Existing GitHub publication recovered.", "gate": None})
+                          "github_url": result["html_url"], "gate": None,
+                          "notice_event": {"action": "publication_recovered", "facts": {"github_url": result["html_url"]},
+                                           "next_step": "Follow the existing report on GitHub."}})
         self.store.resolve_recovery(job_id, outcome="complete", actor=str(user_id), note="Matched GitHub publication marker")
         return True
 
@@ -367,12 +537,19 @@ class AutomationService:
         if not confirmed_not_delivered:
             raise WorkflowError("No delivery was found. Check GitHub or Discord, then rerun with confirmed_not_delivered:true only if the original was not delivered.")
         if job["kind"] == "publish":
+            fresh_report = case.get("workflow_version") == 2 and self._human_draft(case)
+            patch = ({"state": "awaiting_submission", "draft": job["payload"]["draft"], "reply": "",
+                      "gate": gate("review", ["submit", "edit", "back", "cancel"]),
+                      "notice_event": {"action": "review_again", "facts": {"publication_confirmed_absent": True},
+                                       "next_step": "The reporter must review and approve their exact text again."}}
+                     if fresh_report else {"workflow_version": 2, "state": "assessing", "draft": None,
+                                           "submitted_report": None, "gate": None, "reply": "", "notice_event": None})
             self.store.resolve_recovery(job_id, outcome="cancel", actor=str(user_id),
                                         note="Maintainer confirmed no delivery; returned draft for fresh approval",
                                         case_update={"case_id": case["id"], "expected_revision": case["revision"],
-                                                     "patch": {"state": "awaiting_submission", "draft": job["payload"]["draft"],
-                                                               "gate": gate("review", ["submit", "edit", "back", "cancel"])},
-                                                     "job": self._job("notify", case)})
+                                                     "patch": patch,
+                                                     "job": self._job("notify" if fresh_report else "assess", case,
+                                                                      revision=case["revision"] + 1)})
             return "Draft returned to Discord for a fresh approval. Nothing has been published."
         self.store.resolve_recovery(job_id, outcome="retry", actor=str(user_id), note="Maintainer inspected destination and explicitly confirmed no delivery")
         return "Discord delivery retry queued after your confirmation."
@@ -401,7 +578,10 @@ class AutomationService:
                 if self._bound(case):
                     # Preserve any current draft approval. The question is an independent status note.
                     self.store.put_link("maintainer_question", case["id"], {"key": event["key"], "body": event["body"], "url": event["html_url"]})
-                    self.store.enqueue("notify", {"case_id": case["id"]}, key=f"question:{case['id']}:{event['key']}")
+                    self.store.enqueue("notify", {"case_id": case["id"], "event": {"action": "maintainer_question",
+                        "facts": {"question": event["body"], "github_url": event["html_url"]},
+                        "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
+                        key=f"question:{case['id']}:{event['key']}")
         else:
             self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
@@ -410,7 +590,10 @@ class AutomationService:
                     if self._bound(case):
                         # Status is separate from draft/gate state; no pending approval is lost.
                         self.store.put_link("case_status", case["id"], {"state": event["state"], "url": event["html_url"]})
-                        self.store.enqueue("notify", {"case_id": case["id"]}, key=f"status:{case['id']}:{event['state']}:{event.get('updated_at', time.time())}")
+                        self.store.enqueue("notify", {"case_id": case["id"], "event": {"action": "issue_status",
+                            "facts": {"state": event["state"], "github_url": event["html_url"]},
+                            "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
+                            key=f"status:{case['id']}:{event['state']}:{event.get('updated_at', time.time())}")
 
     async def process_job(self, job):
         payload = job["payload"]
@@ -427,8 +610,8 @@ class AutomationService:
         elif job["kind"] == "publish":
             await self._publish(case, job)
         elif job["kind"] == "notify":
-            self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
-            await self.transport.notify(case)
+            if payload.get("revision", case["revision"]) == case["revision"]:
+                await self._notify(case, job)
         elif job["kind"] == "event":
             await self._event(payload, job)
         elif job["kind"] == "sync":
@@ -479,11 +662,14 @@ class AutomationService:
             if job["kind"] == "publish":
                 case = self.get_case(job["payload"]["case_id"])
                 if case and case["state"] == "queued" and self.store.get_job(job["id"])["state"] == "recovery":
-                    self._save(case, {"state": "recovery", "notice": "Publication needs a maintainer to check its delivery. This draft will not be sent again automatically."})
+                    self._save(case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
+                        "facts": {"publication_confirmed": False}, "next_step": "A maintainer must check GitHub before another attempt."}})
             if permanent and job["kind"] == "assess":
                 case = self.get_case(job["payload"]["case_id"])
                 if case and case["state"] == "assessing" and case["revision"] == job["payload"].get("revision"):
-                    self._save(case, {"state": "needs_maintainer", "notice": "I couldn’t complete the assessment. Your report is saved; add detail to retry or ask a maintainer."})
+                    self._save(case, {"state": "needs_maintainer", "gate": gate("conversation", ["human", "cancel"]),
+                        "notice_event": {"action": "assessment_failed", "facts": {"report_saved": True},
+                                         "next_step": "Add details in this thread to retry, or ask a maintainer for help."}})
         return True
 
     async def _run(self):
