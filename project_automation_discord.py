@@ -8,6 +8,7 @@ import weakref
 import discord
 from discord import app_commands
 
+from logger import warn
 from project_automation import WorkflowError
 from project_automation_github import GitHubError
 from project_automation_store import Conflict
@@ -27,6 +28,75 @@ def message_text(message):
     return (text + ("\n" + "\n".join(links) if links else ""))[:8000]
 
 
+async def say(service, case, action, facts, next_step):
+    return await service.say(case, {"action": action, "facts": facts, "next_step": next_step})
+
+
+def in_case_thread(interaction, case):
+    return bool(case and str(interaction.guild_id) == case["guild_id"]
+                and str(interaction.channel_id) == case["channel_id"])
+
+
+def feedback_order(receipt):
+    job_id = str(receipt.get("delivery_key", "")).rsplit(":", 1)[-1]
+    return receipt.get("revision", -1), int(job_id) if job_id.isdecimal() else -1
+
+
+class HumanReportModal(discord.ui.Modal):
+    """Collect the reporter's own public text separately from the conversation."""
+
+    def __init__(self, service, case):
+        super().__init__(title="Write your report", timeout=1800)
+        self.service = service
+        self.case_id = case["id"]
+        self.revision = case["revision"]
+        self.report_revision = case.get("report_revision", 0)
+        self.issue_number = case.get("target_issue_number") or case.get("linked_issue_number")
+        previous = case.get("submitted_report") or {}
+        if not previous.get("human_authored"):
+            previous = {}
+        self.report_title = discord.ui.TextInput(
+            label="Issue title (your own words)", max_length=180,
+            default=previous.get("title"), required=True,
+        )
+        self.report_body = discord.ui.TextInput(
+            label="Report (your own words)", style=discord.TextStyle.paragraph,
+            placeholder="What happened, what you expected, and how to reproduce it.",
+            max_length=2800, default=previous.get("body"), required=True,
+        )
+        self.authorship = discord.ui.TextInput(
+            label="I wrote this myself: type YES", placeholder="YES", max_length=3, required=True,
+        )
+        for item in (self.report_title, self.report_body, self.authorship):
+            self.add_item(item)
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        case = self.service.get_case(self.case_id)
+        if not in_case_thread(interaction, case):
+            text = await say(self.service, None, "error", {"error": "This form belongs to another feedback thread."},
+                             "Open the current report controls in its original thread.")
+        else:
+            try:
+                self.service.validate_report_author(self.case_id, self.revision, interaction.user.id, roles(interaction.user),
+                                                    report_revision=self.report_revision, issue_number=self.issue_number)
+                if self.authorship.value.strip().upper() != "YES":
+                    raise WorkflowError("Confirm that you wrote the report yourself by typing YES.")
+                updated = self.service.submit_report(
+                    self.case_id, self.revision, user_id=interaction.user.id, username=interaction.user.name,
+                    title=self.report_title.value, body=self.report_body.value,
+                    role_ids=roles(interaction.user), human_authored=True,
+                    report_revision=self.report_revision, issue_number=self.issue_number,
+                )
+            except (WorkflowError, Conflict) as exc:
+                text = await say(self.service, case, "error", {"error": str(exc)},
+                                 "Use the current Write report or Edit report button to try again.")
+            else:
+                text = await say(self.service, updated, "report_saved", {"saved": True, "published": False},
+                                 "Keep talking here while the report is checked; review your exact text before approving a post.")
+        await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
+
+
 class DecisionView(discord.ui.View):
     def __init__(self, service, case):
         super().__init__(timeout=None)
@@ -35,24 +105,46 @@ class DecisionView(discord.ui.View):
         self.revision = case["revision"]
         for option in (case.get("gate") or {}).get("options", []):
             action = option["key"]
-            button = discord.ui.Button(label=option["label"], custom_id=f"project:{case['id']}:{case['revision']}:{action}",
+            label = "Approve and post" if action == "submit" else option["label"]
+            button = discord.ui.Button(label=label, custom_id=f"project:{case['id']}:{case['revision']}:{action}",
                                        style=discord.ButtonStyle.primary if action == "submit" else discord.ButtonStyle.secondary)
             button.callback = self._callback(action)
             self.add_item(button)
+        if case["state"] == "awaiting_submission" and case.get("draft"):
+            self.add_item(discord.ui.Button(label="Review report", style=discord.ButtonStyle.link,
+                                           url=f"https://discord.com/channels/{case['guild_id']}/{case['channel_id']}"))
 
     def _callback(self, action):
         async def callback(interaction):
-            await interaction.response.defer(ephemeral=True)
             case = self.service.get_case(self.case_id)
-            if not case or str(interaction.guild_id) != case["guild_id"] or str(interaction.channel_id) != case["channel_id"]:
-                await interaction.followup.send("These controls belong to another feedback thread.", ephemeral=True)
+            if not in_case_thread(interaction, case):
+                await interaction.response.defer(ephemeral=True)
+                text = await say(self.service, None, "error", {"error": "These controls belong to another feedback thread."},
+                                 "Open the current controls in the original feedback thread.")
+                await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
                 return
+            if action in {"write", "edit"}:
+                try:
+                    self.service.validate_report_author(self.case_id, self.revision, interaction.user.id, roles(interaction.user))
+                except (WorkflowError, Conflict) as exc:
+                    await interaction.response.defer(ephemeral=True)
+                    text = await say(self.service, case, "error", {"error": str(exc)},
+                                     "The original reporter can use the current report controls.")
+                    await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
+                else:
+                    # Modal responses cannot follow a defer. Local authorization is synchronous.
+                    await interaction.response.send_modal(HumanReportModal(self.service, case))
+                return
+            await interaction.response.defer(ephemeral=True)
             try:
-                self.service.choose(self.case_id, self.revision, action, user_id=interaction.user.id, role_ids=roles(interaction.user))
+                updated = self.service.choose(self.case_id, self.revision, action, user_id=interaction.user.id, role_ids=roles(interaction.user))
             except (WorkflowError, Conflict) as exc:
-                await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=NO_MENTIONS)
+                text = await say(self.service, case, "error", {"error": str(exc)},
+                                 "Use the latest controls in this feedback thread after resolving the error.")
             else:
-                await interaction.followup.send("Choice saved. I’ll update this report here.", ephemeral=True)
+                text = await say(self.service, updated, "choice_saved", {"choice": action, "saved": True},
+                                 "Continue in this thread; the next update will appear here.")
+            await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
         return callback
 
 
@@ -82,7 +174,7 @@ class DiscordTransport:
                 channel = await message.create_thread(name=(message.content.strip() or "Project feedback")[:90])
             return self.service.receive_report(source_key=f"discord:{message.guild.id}:{message.id}", channel_id=channel.id,
                                                reporter_id=message.author.id, content=content, source_url=message.jump_url,
-                                               message_id=message.id)
+                                               message_id=message.id, reporter_name=message.author.name, title=channel.name)
 
     async def _new_command_report(self, interaction, report):
         async with self._intake_lock(interaction.user.id):
@@ -90,8 +182,9 @@ class DiscordTransport:
             cfg = self.service.settings()
             channel = await self._channel(cfg["feedback_channel_id"])
             title = report.strip().splitlines()[0][:90]
-            original = {"content": "**Original report**\n" + report[:1750], "allowed_mentions": NO_MENTIONS}
-            if len(report) > 1750:
+            quoted = ">>> " + report[:1500]
+            original = {"content": f"**@{discord.utils.escape_markdown(interaction.user.name)}**\n{quoted}", "allowed_mentions": NO_MENTIONS}
+            if len(report) > 1500:
                 original["file"] = discord.File(io.BytesIO(report.encode("utf-8")), filename="feedback.txt")
             if isinstance(channel, discord.ForumChannel):
                 created = await channel.create_thread(name=title, **original)
@@ -103,7 +196,7 @@ class DiscordTransport:
                 raise WorkflowError("The feedback destination must be a forum or text channel.")
             self.service.receive_report(source_key=f"interaction:{interaction.id}", channel_id=thread.id, reporter_id=interaction.user.id,
                                         content=report, source_url=f"https://discord.com/channels/{interaction.guild_id}/{thread.id}",
-                                        message_id=interaction.id)
+                                        message_id=interaction.id, reporter_name=interaction.user.name, title=title)
             return thread
 
     async def attach(self, bot):
@@ -114,13 +207,19 @@ class DiscordTransport:
             if case["bot_name"] == bot.name and case.get("gate"):
                 self._register_view(bot, case)
 
-    def _register_view(self, bot, case):
+    def _register_view(self, bot, case, *, view=None, message_id=None):
         previous = self._views.pop(case["id"], None)
-        if previous:
+        if previous and previous is not view:
             previous.stop()
-        view = DecisionView(self.service, case)
+        view = view or DecisionView(self.service, case)
         link = self.service.store.get_link("feedback", case["id"])
-        bot.client.add_view(view, message_id=int(link["message_id"]) if link else None)
+        if message_id is None and link:
+            message_id = int(link["message_id"])
+        if message_id:
+            for item in view.children:
+                if item.url:
+                    item.url = f"https://discord.com/channels/{case['guild_id']}/{case['channel_id']}/{message_id}"
+        bot.client.add_view(view, message_id=message_id)
         self._views[case["id"]] = view
         return view
 
@@ -148,59 +247,84 @@ class DiscordTransport:
 
     async def notify(self, case, *, recover_only=False):
         channel = await self._channel(case["channel_id"])
-        marker = f"Feedback {case['id']}"
-        link = self.service.store.get_link("feedback", case["id"])
+        delivery_key = case.get("delivery_key") or case["id"]
+        marker = f"Feedback {delivery_key}"
+        link = self.service.store.get_link("feedback_delivery", delivery_key)
+        if not link and "delivery_key" not in case:
+            link = self.service.store.get_link("feedback", case["id"])
         message = None
-        if link:
+        if link and str(link["channel_id"]) == str(channel.id):
             try:
                 message = await channel.fetch_message(int(link["message_id"]))
+                if message.author.id != self._bot().client.user.id:
+                    raise WorkflowError("The saved feedback reply belongs to a different Discord author.")
+                if not any(embed.footer.text == marker for embed in message.embeds):
+                    message = None
             except discord.NotFound:
                 pass
         if message is None:
             message = await self._find_message(channel, marker)
+        if message:
+            current = self._record_feedback(case, channel, message, delivery_key)
+            latest = self.service.get_case(case["id"])
+            if (current and case.get("gate") and latest and latest["revision"] == case["revision"]
+                    and latest.get("gate") == case["gate"]):
+                self._register_view(self._bot(), case, message_id=message.id)
+            return True
         if recover_only:
-            if message:
-                self.service.store.put_link("feedback", case["id"], {"channel_id": str(channel.id), "message_id": str(message.id)})
-            return message is not None
+            return False
+        reply = case.get("reply")
+        if not isinstance(reply, str) or not reply.strip() or len(reply) > 2000:
+            raise WorkflowError("The feedback reply is missing or too long. Retry its preparation before sending it.")
         if isinstance(channel, discord.Thread) and channel.archived:
             await channel.edit(archived=False, locked=False)
-        assessment = case.get("assessment", {})
-        status = case["state"].replace("_", " ").capitalize()
         draft = case.get("draft") if case["state"] == "awaiting_submission" else None
         if draft:
-            heading = "Approve issue" if draft["kind"] == "issue" else f"Approve comment on #{draft['issue_number']}"
             embed = discord.Embed(title=draft["title"], description=draft["body"], color=COLOUR)
-            content = f"**{heading} · {case['repository']}**\nThis is the complete public draft. Choose Publish to send it to GitHub."
         else:
-            text = assessment.get("reply", "") if case["state"] == "awaiting_choice" else case.get("notice", "Preparing your feedback…")
-            embed = discord.Embed(title=status, description=text[:3800], color=COLOUR)
-            content = None
-            if case.get("github_url"):
-                embed.add_field(name="GitHub", value=case["github_url"], inline=False)
-            remote = self.service.store.get_link("case_status", case["id"])
-            if remote:
-                embed.add_field(name="Issue status", value=remote["state"].capitalize(), inline=False)
-            if case["state"] == "awaiting_choice":
-                embed.add_field(name="Suggested next step", value=assessment.get("recommendation", "draft").capitalize(), inline=False)
-                for candidate in case.get("candidates", []):
-                    if candidate["number"] == assessment.get("duplicate_number"):
-                        embed.add_field(name=f"Possible match · #{candidate['number']}", value=f"{candidate['title']}\n{candidate['html_url']}", inline=False)
-                if case.get("search_unavailable"):
-                    embed.add_field(name="Search unavailable", value="GitHub duplicate checks could not run. A draft can still be reviewed.", inline=False)
-        question = self.service.store.get_link("maintainer_question", case["id"])
-        if question:
-            label = "Maintainer question (outside this draft)" if draft else "Maintainer question · reply in this thread"
-            embed.add_field(name=label, value=f"{question['body'][:850]}\n{question['url']}", inline=False)
+            # The footer is a delivery receipt, not a generated state card.
+            embed = discord.Embed(color=COLOUR)
         embed.set_footer(text=marker)
-        view = self._register_view(self._bot(), case) if case.get("gate") else None
-        if not view and case["id"] in self._views:
+        previous = self.service.store.get_link("feedback", case["id"])
+        current = not previous or feedback_order(previous) <= feedback_order(case)
+        view = DecisionView(self.service, case) if current and case.get("gate") else None
+        message = await channel.send(content=reply, embed=embed, view=view, allowed_mentions=NO_MENTIONS)
+        self._record_feedback(case, channel, message, delivery_key)
+        if view:
+            self._register_view(self._bot(), case, view=view, message_id=message.id)
+            if any(item.url for item in view.children):
+                await message.edit(view=view, allowed_mentions=NO_MENTIONS)
+        elif current and case["id"] in self._views:
             self._views.pop(case["id"]).stop()
-        if message:
-            await message.edit(content=content, embed=embed, view=view, allowed_mentions=NO_MENTIONS)
-        else:
-            message = await channel.send(content=content, embed=embed, view=view, allowed_mentions=NO_MENTIONS)
-        self.service.store.put_link("feedback", case["id"], {"channel_id": str(channel.id), "message_id": str(message.id)})
+        if current:
+            await self._retire_controls(case, channel, previous, message.id)
         return True
+
+    def _record_feedback(self, case, channel, message, delivery_key):
+        receipt = {"channel_id": str(channel.id), "message_id": str(message.id),
+                   "revision": case["revision"], "delivery_key": delivery_key,
+                   "created_at": discord.utils.snowflake_time(message.id).timestamp()}
+        self.service.store.put_link("feedback_delivery", delivery_key, receipt)
+        current = self.service.store.get_link("feedback", case["id"])
+        if not current or feedback_order(current) <= feedback_order(receipt):
+            self.service.store.put_link("feedback", case["id"], receipt)
+            return True
+        return False
+
+    async def _retire_controls(self, case, channel, previous, message_id):
+        if not previous or str(previous["channel_id"]) != str(channel.id) or str(previous["message_id"]) == str(message_id):
+            return
+        try:
+            message = await channel.fetch_message(int(previous["message_id"]))
+            if message.author.id != self._bot().client.user.id:
+                return
+            markers = {f"Feedback {case['id']}", f"Feedback {previous.get('delivery_key', '')}"}
+            if any(embed.footer.text in markers for embed in message.embeds):
+                # Keep the earlier conversation and exact public preview intact.
+                await message.edit(view=None, allowed_mentions=NO_MENTIONS)
+        except (discord.HTTPException, OSError) as exc:
+            warn("Could not remove older feedback controls.", bot=case["bot_name"],
+                 case_id=case["id"], error_type=type(exc).__name__)
 
     async def handle_message(self, bot, message):
         cfg = self.service.settings()
@@ -220,11 +344,14 @@ class DiscordTransport:
         try:
             if case:
                 self.service.add_detail(case["id"], user_id=message.author.id, content=message_text(message),
-                                        message_id=message.id, source_url=message.jump_url, role_ids=roles(message.author))
+                                        message_id=message.id, source_url=message.jump_url, role_ids=roles(message.author),
+                                        username=message.author.name)
             else:
                 await self._new_message_report(message)
         except (WorkflowError, Conflict) as exc:
-            await message.reply(str(exc), allowed_mentions=NO_MENTIONS, mention_author=False)
+            text = await say(self.service, case, "error", {"error": str(exc)},
+                             "Continue in this thread after resolving the error.")
+            await message.reply(text, allowed_mentions=NO_MENTIONS, mention_author=False)
         return True
 
     def _commands(self, bot):
@@ -234,38 +361,47 @@ class DiscordTransport:
         @app_commands.guild_only()
         @app_commands.describe(report="Describe the problem or desired outcome. This creates a feedback thread.")
         async def feedback(interaction: discord.Interaction, report: str):
+            await interaction.response.defer(ephemeral=True)
             cfg = self.service.settings()
             current = str(getattr(interaction.channel, "parent_id", None) or interaction.channel_id)
             if bot.name != cfg.get("bot_name") or str(interaction.guild_id) != cfg.get("guild_id") or current not in {cfg.get("support_channel_id"), cfg.get("feedback_channel_id")}:
-                await interaction.response.send_message("Use the project helper’s /feedback command in its support or feedback channel.", ephemeral=True)
-                return
-            await interaction.response.defer(ephemeral=True)
-            if self.service.paused():
-                await interaction.followup.send("Project feedback is paused.", ephemeral=True)
-                return
-            if not 1 <= len(report.strip()) <= 7000:
-                await interaction.followup.send("Describe your report in 1–7,000 characters.", ephemeral=True)
-                return
-            try:
-                thread = await self._new_command_report(interaction, report)
-            except (WorkflowError, Conflict) as exc:
-                await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=NO_MENTIONS)
-                return
-            await interaction.followup.send(f"Feedback started: {thread.mention}", ephemeral=True, allowed_mentions=NO_MENTIONS)
+                text = await say(self.service, None, "error", {"error": "This command is outside the configured feedback channels."},
+                                 "Use the project helper's /feedback command in its support or feedback channel.")
+            elif self.service.paused():
+                text = await say(self.service, None, "error", {"error": "Project feedback is paused."},
+                                 "Ask a project maintainer to resume feedback before starting a report.")
+            elif not 1 <= len(report.strip()) <= 7000:
+                text = await say(self.service, None, "error", {"error": "The report must contain 1–7,000 characters."},
+                                 "Send a shorter description of the problem or desired outcome.")
+            else:
+                try:
+                    thread = await self._new_command_report(interaction, report)
+                except (WorkflowError, Conflict) as exc:
+                    text = await say(self.service, None, "error", {"error": str(exc)},
+                                     "Resolve the error before starting another feedback thread.")
+                else:
+                    text = await say(self.service, None, "feedback_started", {
+                        "thread_url": f"https://discord.com/channels/{interaction.guild_id}/{thread.id}", "published": False,
+                    }, "Open this feedback thread and talk through what happened; you will write and approve any public report.")
+            await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
         @bot.tree.command(name="project-recover", description="Check a delivery that needs recovery without sending it again")
         @app_commands.guild_only()
         @app_commands.default_permissions(manage_guild=True)
         async def project_recover(interaction: discord.Interaction, job_id: int):
-            if bot.name != self.service.settings().get("bot_name") or str(interaction.guild_id) != self.service.settings().get("guild_id"):
-                await interaction.response.send_message("Use the configured helper in its project server.", ephemeral=True)
-                return
             await interaction.response.defer(ephemeral=True)
-            try:
-                found = await self.service.recover(job_id, user_id=interaction.user.id, role_ids=roles(interaction.user))
-                text = "Existing delivery found and recovered." if found else "No matching delivery found. It remains held; check the destination before any manual resubmission."
-            except (WorkflowError, GitHubError, Conflict) as exc:
-                text = str(exc)
+            if bot.name != self.service.settings().get("bot_name") or str(interaction.guild_id) != self.service.settings().get("guild_id"):
+                text = await say(self.service, None, "error", {"error": "This command belongs to another project helper or server."},
+                                 "Use the configured helper in its project server.")
+            else:
+                try:
+                    found = await self.service.recover(job_id, user_id=interaction.user.id, role_ids=roles(interaction.user))
+                except (WorkflowError, GitHubError, Conflict) as exc:
+                    text = await say(self.service, None, "error", {"error": str(exc), "job_id": job_id},
+                                     "Resolve the error before retrying this delivery.")
+                else:
+                    text = await say(self.service, None, "delivery_recovered", {"job_id": job_id, "found": found, "resent": False},
+                                     "No further action is needed." if found else "The delivery remains held; check its destination before any retry.")
             await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
         @bot.tree.command(name="project-retry", description="Retry failed work or return a held draft for fresh approval")
@@ -273,14 +409,19 @@ class DiscordTransport:
         @app_commands.default_permissions(manage_guild=True)
         @app_commands.describe(confirmed_not_delivered="Confirm you checked the destination and the held write was not delivered")
         async def project_retry(interaction: discord.Interaction, job_id: int, confirmed_not_delivered: bool = False):
-            if bot.name != self.service.settings().get("bot_name") or str(interaction.guild_id) != self.service.settings().get("guild_id"):
-                await interaction.response.send_message("Use the configured helper in its project server.", ephemeral=True)
-                return
             await interaction.response.defer(ephemeral=True)
-            try:
-                text = await self.service.retry(job_id, user_id=interaction.user.id, role_ids=roles(interaction.user), confirmed_not_delivered=confirmed_not_delivered)
-            except (WorkflowError, GitHubError, Conflict) as exc:
-                text = str(exc)
+            if bot.name != self.service.settings().get("bot_name") or str(interaction.guild_id) != self.service.settings().get("guild_id"):
+                text = await say(self.service, None, "error", {"error": "This command belongs to another project helper or server."},
+                                 "Use the configured helper in its project server.")
+            else:
+                try:
+                    result = await self.service.retry(job_id, user_id=interaction.user.id, role_ids=roles(interaction.user), confirmed_not_delivered=confirmed_not_delivered)
+                except (WorkflowError, GitHubError, Conflict) as exc:
+                    text = await say(self.service, None, "error", {"error": str(exc), "job_id": job_id},
+                                     "Resolve the error before retrying this delivery.")
+                else:
+                    text = await say(self.service, None, "delivery_retry", {"job_id": job_id, "result": result},
+                                     "Follow the result; any returned report needs a fresh approval before publication.")
             await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
         for name, description, audience in (("feedback", "Start project feedback", "user"), ("project-recover", "Inspect uncertain delivery", "maintenance"), ("project-retry", "Resume failed work", "maintenance")):

@@ -51,12 +51,12 @@ def test_reporter_cannot_authorize_retry_of_an_uncertain_write(harness):
 
 def test_failed_branch_job_can_resume_the_original_human_choice(harness):
     case = harness.ready()
-    harness.service.choose(case["id"], case["revision"], "draft", user_id="456")
+    harness.service.choose(case["id"], case["revision"], "human", user_id="456")
     job = harness.store.claim_job(kinds=["branch"])
     harness.store.fail_job(job["id"], "Local interruption", permanent=True)
     asyncio.run(harness.service.retry(job["id"], user_id="700"))
     asyncio.run(harness.drain())
-    assert harness.store.get_case(case["id"])["state"] == "awaiting_submission"
+    assert harness.store.get_case(case["id"])["state"] == "needs_maintainer"
     assert harness.github.posts == []
 
 
@@ -73,8 +73,8 @@ def test_old_failed_assessment_cannot_cancel_new_reporter_details(harness):
     harness.ai.assess = receive_then_fail
     asyncio.run(harness.drain())
     updated = harness.store.get_case(case["id"])
-    assert updated["state"] == "awaiting_choice"
-    assert "permission denied" in updated["assessment"]["body"]
+    assert updated["state"] == "awaiting_report"
+    assert "permission denied" in updated["transcript"][-1]["content"]
 
 
 def test_startup_recovers_initial_intake_interrupted_before_queue_insert(harness):
@@ -96,9 +96,7 @@ def test_startup_recovers_initial_intake_interrupted_before_queue_insert(harness
 
 def test_exact_preview_is_normalized_before_publication(harness):
     case = harness.ready()
-    assessment = dict(case["assessment"], title="Settings @team\r\n", body="Details\r\n<#123>\x00 @team")
-    case = harness.store.update_case(case["id"], {"assessment": assessment}, expected_revision=case["revision"])
-    preview = harness.choose(case, "draft")
+    preview = harness.submit(case, title="Settings @team\r\n", body="Details\r\n<#123>\x00 @team")
     assert "\r" not in preview["draft"]["body"]
     assert "\x00" not in preview["draft"]["body"]
     assert "@\u200bteam" in preview["draft"]["body"]
@@ -136,7 +134,7 @@ def test_stale_failed_assessment_cannot_erase_a_later_approval(harness):
     harness.store.fail_job(failed["id"], "Model error", permanent=True)
     harness.service.add_detail(case["id"], user_id="456", content="More detail", message_id="104", source_url="source")
     asyncio.run(harness.drain())
-    preview = harness.choose(harness.store.get_case(case["id"]), "draft")
+    preview = harness.submit(harness.store.get_case(case["id"]))
     with pytest.raises(WorkflowError, match="progressed"):
         asyncio.run(harness.service.retry(failed["id"], user_id="700"))
     assert harness.store.get_case(case["id"]) == preview

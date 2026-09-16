@@ -13,9 +13,16 @@ class FakeService:
     def __init__(self):
         self.case = {
             "id": "case-one", "state": "awaiting_submission", "reporter_id": "100000000000000019",
+            "reporter_name": "reporter", "title": "My original feedback topic",
             "guild_id": "100000000000000001", "channel_id": "100000000000000002",
             "repository": "SillyBunnyTeam/SillyBunny",
-            "draft": {"title": "A useful report", "body": "The exact issue preview."},
+            "submitted_report": {
+                "title": "Text size resets on reload", "body": "I choose 18px, reload, and get 14px again.\nI expected 18px to stay selected.",
+                "author_id": "100000000000000019", "author_name": "reporter", "human_authored": True,
+            },
+            "draft": {"title": "Text size resets on reload", "body": "Forwarded from Discord\n@reporter\n\nI choose 18px, reload, and get 14px again.\nI expected 18px to stay selected."},
+            "gate": {"kind": "review", "options": [{"key": "submit", "label": "Approve and post"}, {"key": "edit", "label": "Edit my report"}]},
+            "notice_event": {"action": "report_ready", "facts": {"published": False}},
         }
         self.limit = None
         self.jobs = [{"id": 1, "kind": "publish", "status": "recovery", "attempts": 1,
@@ -171,8 +178,39 @@ def test_cases_keep_exact_preview_and_limit_is_bounded(setup):
     assert service.limit == 100
     assert response.get_json()["cases"][0]["reporter_id"] == "100000000000000019"
     response = client.get("/api/project-automation/cases/case-one")
-    assert response.get_json()["case"]["draft"]["body"] == "The exact issue preview."
+    case = response.get_json()["case"]
+    assert case["draft"]["body"] == "Forwarded from Discord\n@reporter\n\nI choose 18px, reload, and get 14px again.\nI expected 18px to stay selected."
+    assert case["submitted_report"] == service.case["submitted_report"]
+    assert case["reporter_name"] == "reporter"
+    assert case["gate"]["options"][0]["label"] == "Approve and post"
     assert client.get("/api/project-automation/cases/missing").status_code == 404
+
+
+def test_case_inspection_preserves_human_punctuation_and_untrusted_text(setup):
+    client, _, service = setup
+    text = 'My <input> literally says "YES".\n\nSteps:\n1. Open settings.\n2. Reload.\n<script>alert(1)</script>'
+    service.case["submitted_report"]["body"] = text
+    service.case["draft"]["body"] = "Forwarded from Discord\n@reporter\n\n" + text
+    case = client.get("/api/project-automation/cases/case-one").get_json()["case"]
+    assert case["submitted_report"]["body"] == text
+    assert case["draft"]["body"] == "Forwarded from Discord\n@reporter\n\n" + text
+    page = client.get("/project-automation").get_data(as_text=True)
+    assert text not in page
+    assert "innerHTML" not in page[page.index("const initial ="):].split("</script>", 1)[0]
+
+
+def test_legacy_case_remains_inspectable_without_human_authorship_claim(setup):
+    client, _, service = setup
+    service.case.pop("submitted_report")
+    service.case.pop("reporter_name")
+    service.case.pop("notice_event")
+    service.case.update(state="awaiting_choice", notice="An earlier decision is pending.",
+                        assessment={"title": "Earlier generated title", "reply": "Can you add the version?"})
+    case = client.get("/api/project-automation/cases/case-one").get_json()["case"]
+    assert "submitted_report" not in case
+    assert case["draft"] == service.case["draft"]
+    assert case["notice"] == "An earlier decision is pending."
+    assert client.get("/project-automation").status_code == 200
 
 
 def test_jobs_expose_recovery_metadata_without_internal_payload(setup):

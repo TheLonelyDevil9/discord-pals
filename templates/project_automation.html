@@ -26,6 +26,9 @@
     .project-case-detail h4 { font-size: 0.875rem; margin: 20px 0 6px; }
     .project-case-detail p { margin-top: 8px; overflow-wrap: anywhere; }
     .project-case-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 440px; }
+    .project-case-detail .project-report { font: inherit; line-height: 1.6; }
+    .project-case-detail details { margin-top: 20px; }
+    .project-case-detail summary { cursor: pointer; font-weight: 600; }
     .project-case-detail a { display: inline-block; margin-top: 10px; color: var(--text-primary); text-decoration: underline; text-underline-offset: 3px; }
     .project-audit { padding-left: 18px; color: var(--text-secondary); }
     .project-audit li { margin: 6px 0; overflow-wrap: anywhere; }
@@ -78,7 +81,7 @@
 <header class="project-header">
     <div>
         <h1>Project automation</h1>
-        <p class="project-intro">Useful feedback, human decisions, and GitHub progress in Discord.</p>
+        <p class="project-intro">Conversation in Discord. Reporter-written issues on GitHub.</p>
     </div>
     <div class="project-controls">
         <span id="project-status" class="project-status">Loading status</span>
@@ -92,12 +95,12 @@
         <h2 id="feedback-heading">Feedback cases</h2>
         <button type="button" class="btn btn-secondary" id="project-refresh">Refresh activity</button>
     </div>
-    <p class="project-hint">Open a case to inspect its draft and decisions. Reporters and maintainers choose the next step in Discord.</p>
+    <p class="project-hint">Inspect a report, its checks, and who acts next. The reporter writes the public text and approves posting it in Discord.</p>
     <div class="project-feedback-grid">
         <ul id="project-cases" class="project-cases" aria-label="Feedback cases"><li class="project-empty">Loading feedback cases…</li></ul>
         <section id="project-case-detail" class="project-case-detail" aria-label="Selected feedback case" aria-live="polite" tabindex="-1">
             <h3>Select a feedback case</h3>
-            <p class="project-hint">Drafts, source links, and the decision history appear here. Waiting for a person never becomes automatic approval.</p>
+            <p class="project-hint">The reporter’s text, exact GitHub preview, and decision history appear here.</p>
         </section>
     </div>
 </section>
@@ -111,7 +114,7 @@
             <input id="project-enabled" name="enabled" type="checkbox" {% if project.config.enabled %}checked{% endif %}>
             <span>Enable project automation</span>
         </label>
-        <p class="form-hint">New activity can run after saving. Every GitHub issue or comment still needs an explicit approval in Discord.</p>
+        <p class="form-hint">New activity can run after saving. Posting a report requires the reporter’s own text and explicit approval.</p>
         <fieldset>
             <legend>Identity and conversation</legend>
             <div class="project-form-grid">
@@ -131,7 +134,7 @@
                         {% for name in project.choices.characters %}<option value="{{ name }}" {% if name == project.config.character_name %}selected{% endif %}>{{ name }}</option>{% endfor %}
                         {% if project.config.character_name and project.config.character_name not in project.choices.characters %}<option value="{{ project.config.character_name }}" selected>{{ project.config.character_name }} (not installed)</option>{% endif %}
                     </select>
-                    <p class="form-hint">Choose Firefly to use her voice in feedback conversations.</p>
+                    <p class="form-hint">This character speaks in every feedback reply. The reporter writes the GitHub text.</p>
                 </div>
                 <div class="form-group">
                     <label for="project-provider-tier">Provider tier (optional)</label>
@@ -147,9 +150,9 @@
                     <input id="project-guild-id" name="guild_id" value="{{ project.config.guild_id }}" inputmode="numeric" pattern="[0-9]*" maxlength="20" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label for="project-max-questions">Maximum follow-up questions</label>
+                    <label for="project-max-questions">Clarification limit</label>
                     <input id="project-max-questions" name="max_questions" value="{{ project.config.max_questions }}" type="number" min="1" max="10" step="1">
-                    <p class="form-hint">Then offer a draft or a maintainer handoff.</p>
+                    <p class="form-hint">After this many questions, ask a maintainer to help. Reaching the limit never approves a report.</p>
                 </div>
             </div>
         </fieldset>
@@ -158,7 +161,7 @@
             <p class="form-hint" style="margin-bottom: 14px">Enable Developer Mode in Discord, then copy each channel’s ID. Use a separate channel for each function.</p>
             <div class="project-form-grid">
                 {% for key, label, hint in [
-                    ('feedback_channel_id', '#submit-feedback', 'Feedback intake and human decision gates.'),
+                    ('feedback_channel_id', '#submit-feedback', 'Conversation, reporter-written reports, and approval.'),
                     ('issues_channel_id', '#issue-tracker', 'GitHub issues and their current state.'),
                     ('reviews_channel_id', '#review-please', 'Pull requests and review progress.'),
                     ('commits_channel_id', '#commit-log', 'Grouped commit updates from pushes.'),
@@ -179,12 +182,12 @@
                 <div class="form-group">
                     <label for="project-maintainer-roles">Maintainer role IDs</label>
                     <textarea id="project-maintainer-roles" name="maintainer_role_ids" rows="2" spellcheck="false">{{ project.config.maintainer_role_ids | join(', ') }}</textarea>
-                    <p class="form-hint">Comma-separated IDs. These roles may handle any feedback case.</p>
+                    <p class="form-hint">Comma-separated IDs. These roles can help with cases and recover deliveries.</p>
                 </div>
                 <div class="form-group project-span">
                     <label for="project-maintainer-users">Maintainer user IDs</label>
                     <textarea id="project-maintainer-users" name="maintainer_user_ids" rows="2" spellcheck="false">{{ project.config.maintainer_user_ids | join(', ') }}</textarea>
-                    <p class="form-hint">Optional when a maintainer role is set. Reporters may handle their own cases.</p>
+                    <p class="form-hint">Optional when a maintainer role is set. The original reporter controls their report and publication.</p>
                 </div>
             </div>
         </fieldset>
@@ -227,7 +230,7 @@
 <section class="project-section" aria-labelledby="jobs-heading">
     <h2 id="jobs-heading">Delivery activity</h2>
     <p class="project-hint">Queued work survives restarts. A recovery state means a public write may already exist; check GitHub or Discord before retrying it.</p>
-    <p class="project-hint">Maintainers can use <code>/project-recover job_id</code> in Discord to find an existing delivery, or <code>/project-retry job_id</code> to resume failed work. An uncertain publication requires a destination check and a fresh draft approval.</p>
+    <p class="project-hint">Maintainers can use <code>/project-recover job_id</code> in Discord to find an existing delivery, or <code>/project-retry job_id</code> to resume failed work. An uncertain publication requires a destination check and the reporter’s fresh approval.</p>
     <div class="table-responsive project-jobs">
         <table>
             <thead><tr><th scope="col">Work</th><th scope="col">Destination</th><th scope="col">State</th><th scope="col">Attempts</th></tr></thead>
@@ -243,14 +246,38 @@ document.addEventListener('DOMContentLoaded', function () {
     let selectedId = null;
     const form = document.getElementById('project-form');
     const labels = {
-        awaiting_choice: 'Waiting for a direction', awaiting_details: 'Waiting for details',
-        awaiting_submission: 'Waiting for approval', needs_maintainer: 'Maintainer needed',
+        discussing: 'In conversation', awaiting_report: 'Waiting for the reporter’s text',
+        awaiting_choice: 'Earlier decision pending', awaiting_details: 'Waiting for details',
+        awaiting_submission: 'Waiting for reporter approval', needs_maintainer: 'Maintainer needed',
         assessing: 'Reading feedback', processing: 'Processing', queued: 'Queued', filed: 'Filed on GitHub',
         closed: 'Closed', pending: 'Queued', running: 'In progress', done: 'Delivered',
         completed: 'Delivered', failed: 'Failed', recovery: 'Check before retrying', uncertain: 'Check before retrying',
         inflight: 'Sending', leased: 'In progress', publishing: 'Publishing'
     };
     function readable(value) { return labels[value] || String(value || 'Unknown').replaceAll('_', ' '); }
+    function caseTitle(item) { return (item.submitted_report || {}).title || (item.draft || {}).title || item.title || 'Feedback case'; }
+    function reporterName(item) { return item.reporter_name ? '@' + item.reporter_name : 'Reporter ' + item.reporter_id; }
+    function authoredReport(item) {
+        const report = item.submitted_report || {};
+        return report.human_authored === true && String(report.author_id) === String(item.reporter_id) && Boolean(report.title && report.body);
+    }
+    function nextStep(item) {
+        if (item.state === 'awaiting_submission') return authoredReport(item)
+            ? 'Reporter: review the exact preview in Discord, then choose Approve and post or Edit my report.'
+            : 'Reporter: write and confirm your own report in Discord before approving publication.';
+        if (item.state === 'awaiting_report') {
+            const actions = ((item.gate || {}).options || []).map(option => typeof option === 'string' ? option : option.key);
+            return actions.includes('link')
+                ? 'Reporter: review the suggested issue in Discord and choose Add to existing issue to prepare a follow-up.'
+                : 'Reporter: use Write my report or Edit my report in Discord to enter your own title and details.';
+        }
+        if (item.state === 'needs_maintainer') return 'Maintainer: review the conversation and help resolve the open question. The reporter keeps control of publication.';
+        if (['discussing', 'awaiting_details', 'awaiting_choice'].includes(item.state)) return 'Reporter: reply in the Discord thread. The helper will ask for the details needed next.';
+        if (item.state === 'filed') return 'Posted to GitHub. Follow the linked issue for progress.';
+        if (item.state === 'closed') return 'This feedback case is closed.';
+        if (['recovery', 'uncertain'].includes(item.state)) return 'Maintainer: check the destination and use the delivery recovery controls before retrying.';
+        return 'Helper: processing this case. Refresh activity to see the result.';
+    }
     function element(tag, text, className) {
         const node = document.createElement(tag);
         if (text !== undefined) node.textContent = String(text);
@@ -291,7 +318,7 @@ document.addEventListener('DOMContentLoaded', function () {
             : !data.ready ? 'Complete the setup items below before automation can run.'
             : offline ? 'Settings are ready. Start the dedicated helper bot to process project activity.'
             : workerStopped ? 'The helper is connected, but its worker is stopped. Check the logs before resuming activity.'
-            : 'Tracking ' + data.config.repository + ' with ' + data.config.bot_name + '. Human decisions happen in Discord.';
+            : 'Tracking ' + data.config.repository + ' with ' + data.config.bot_name + '. Reporters review and approve their text in Discord.';
         errorsAt('project-setup-errors', data.errors);
         const credentials = document.getElementById('project-credentials');
         credentials.replaceChildren(
@@ -320,20 +347,42 @@ document.addEventListener('DOMContentLoaded', function () {
             if (selectedId !== id) return;
             const item = data.case;
             const draft = item.draft || {};
-            const title = draft.title || (item.assessment || {}).title || 'Feedback case';
-            detail.replaceChildren(element('h3', title), element('p', readable(item.state), 'project-hint'));
-            if (item.notice) detail.append(element('p', item.notice));
+            const report = item.submitted_report || {};
+            detail.replaceChildren(element('h3', caseTitle(item)), element('p', readable(item.state) + ' · ' + reporterName(item), 'project-hint'));
+            detail.append(element('h4', 'Next step'), element('p', nextStep(item)));
+            // Old cases can contain a human-readable notice. New notice_event records are internal workflow data.
+            if (typeof item.notice === 'string' && item.notice) detail.append(element('p', item.notice, 'project-hint'));
             if (item.gate) {
-                detail.append(element('h4', 'Waiting for a person'));
+                detail.append(element('h4', 'Available in Discord'));
                 const options = item.gate.options || [];
                 detail.append(element('p', options.map(option => typeof option === 'string' ? readable(option) : option.label || readable(option.key)).join(' · ') || readable(item.gate.kind)));
             }
+            if (report.body) {
+                detail.append(element('h4', 'Reporter’s text'));
+                detail.append(element('pre', report.body, 'project-report'));
+                detail.append(element('p', authoredReport(item)
+                    ? 'The reporter confirmed that they wrote this title and report themselves.'
+                    : 'Reporter authorship has not been confirmed. This text is not ready for approval.', 'project-hint'));
+            } else {
+                detail.append(element('p', item.state === 'filed'
+                    ? 'This earlier publication has no saved reporter-written report.'
+                    : 'The reporter has not submitted a final report yet. Conversation alone is never published.', 'project-hint'));
+            }
             if (draft.body) {
-                detail.append(element('h4', draft.kind === 'comment' ? 'Comment preview' : 'Issue preview'));
-                detail.append(element('pre', draft.body));
-                detail.append(element('p', 'Publication is approved from this case’s Discord controls.', 'project-hint'));
-            } else if ((item.assessment || {}).reply) {
-                detail.append(element('p', item.assessment.reply));
+                const preview = element('details');
+                preview.open = item.state === 'awaiting_submission';
+                preview.append(element('summary', draft.kind === 'comment' ? 'Exact GitHub comment preview' : 'Exact GitHub issue preview'));
+                if (draft.title && draft.kind !== 'comment') preview.append(element('h4', draft.title));
+                preview.append(element('pre', draft.body, 'project-report'));
+                preview.append(element('p', authoredReport(item)
+                    ? 'Only the reporter can approve this text from the Discord thread.'
+                    : 'Earlier preview. The reporter must submit their own text before it can be posted.', 'project-hint'));
+                detail.append(preview);
+            }
+            if ((item.assessment || {}).reply) {
+                const assessment = element('details');
+                assessment.append(element('summary', 'Helper assessment'), element('p', item.assessment.reply));
+                detail.append(assessment);
             }
             const source = item.source_url || ('https://discord.com/channels/' + item.guild_id + '/' + item.channel_id);
             const sourceLink = safeLink(source, 'Open feedback in Discord');
@@ -364,9 +413,8 @@ document.addEventListener('DOMContentLoaded', function () {
             button.type = 'button';
             button.dataset.caseId = item.id;
             button.setAttribute('aria-pressed', String(item.id === selectedId));
-            const title = (item.draft || {}).title || (item.assessment || {}).title || 'Feedback case';
-            button.append(element('span', title, 'project-case-title'));
-            button.append(element('span', readable(item.state) + ' · Reporter ' + item.reporter_id, 'project-case-meta'));
+            button.append(element('span', caseTitle(item), 'project-case-title'));
+            button.append(element('span', readable(item.state) + ' · ' + reporterName(item), 'project-case-meta'));
             button.addEventListener('click', () => inspectCase(item.id));
             row.append(button);
             list.append(row);

@@ -26,6 +26,8 @@ Invite it with `bot` and `applications.commands` scopes. In the intended channel
 - Create Public Threads and Manage Threads, for creating, reopening, archiving, and locking project posts.
 - Attach Files, for complete long reports submitted through `/feedback`.
 
+For forum channels, **Send Messages** permits creating posts; **Create Public Threads** alone does not. Check channel overrides as well as the bot role, especially when a forum is read-only for `@everyone`.
+
 Enable Message Content Intent for ordinary feedback posts. The existing Discord Pals client also requests Server Members Intent, so enable that for this application. Administrator permission is not required. Ensure the configured maintainer role/users can see feedback threads and the project commands.
 
 Use forum channels for `issue-tracker` and `review-please`; forum or text for feedback; text channels for commit/general feeds. The channel IDs come from Discord Developer Mode → Copy Channel ID. Keep the IDs as strings.
@@ -93,14 +95,16 @@ The implementation adds `PyJWT[crypto]` for GitHub App signing. Other components
 
 ## Live acceptance
 
-- Submit a vague report. Verify Firefly asks for a direction, then asks one useful question after that choice.
-- Restart with a choice pending. Verify its buttons still work and do not approve themselves.
-- Try another user and an old button. Verify neither can approve the current draft.
-- Approve a draft once. Verify exactly one issue, its source link, and the Discord issue mirror.
-- Suggest an existing issue, review the comment, and publish it. Verify the case stays linked to that issue.
+- Submit a vague report. Verify the character asks a useful question directly and the reporter can answer in the same thread.
+- Submit an explicit test or a support question. Verify the helper explains the appropriate next step and offers no direct publication approval.
+- Write a complete report through **Write my report** and confirm authorship. Verify its title and body stay human-written through assessment and preview.
+- Restart with a report awaiting approval. Verify its current controls still work and do not approve themselves.
+- Try another user, a maintainer acting as approver, and an old button. Verify only the original reporter can approve the current report.
+- Approve once. Verify exactly one GitHub issue, the minimal forwarded body, a link back in Discord, and the Discord issue mirror.
+- Suggest an existing issue or interrupt the duplicate search. Verify a new issue cannot bypass the duplicate check.
 - Close/reopen an issue and close/merge separate PRs. Verify accurate labels, archived/locked posts, and reopened access.
 - Redeliver the same webhook. Verify no extra forum post or commit message.
-- Run `/ask-reporter` as a maintainer on a linked issue. Verify the question, answer, and approved comment round trip.
+- Run `/ask-reporter` as a maintainer on a linked issue. Verify the question is relayed in character and any public response still requires the reporter’s own text and approval.
 - Pause automation. Verify queued work waits and pending human choices remain saved.
 
 Use a test server and an App installation on an appropriate test repository before enabling the production mapping if the team requires a staging pass. Automated tests use fakes and do not prove live credentials or Discord permissions.
