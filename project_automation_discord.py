@@ -64,7 +64,7 @@ class HumanReportModal(discord.ui.Modal):
         )
         self.report_body = discord.ui.TextInput(
             label="Report (your own words)", style=discord.TextStyle.paragraph,
-            placeholder="What happened, what you expected, and how to reproduce it.",
+            placeholder="Describe the problem or improvement you want. Add details if you have them.",
             max_length=2800, default=previous.get("body"), required=True,
         )
         self.authorship = discord.ui.TextInput(
@@ -96,7 +96,7 @@ class HumanReportModal(discord.ui.Modal):
                                  "Use the current Write report or Edit report button to try again.")
             else:
                 text = await say(self.service, updated, "report_saved", {"saved": True, "published": False},
-                                 "Keep talking here while the report is checked; review your exact text before approving a post.")
+                                 "Your report will get a completeness check; review your exact text before approving a post.")
         await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
 
@@ -368,7 +368,7 @@ class DiscordTransport:
 
         @bot.tree.command(name="feedback", description="Start a project feedback report from this channel")
         @app_commands.guild_only()
-        @app_commands.describe(report="Describe the problem or desired outcome. This creates a feedback thread.")
+        @app_commands.describe(report="Describe a problem or improvement you want. This creates a feedback thread.")
         async def feedback(interaction: discord.Interaction, report: str):
             await interaction.response.defer(ephemeral=True)
             cfg = self.service.settings()
@@ -391,7 +391,7 @@ class DiscordTransport:
                 else:
                     text = await say(self.service, None, "feedback_started", {
                         "thread_url": f"https://discord.com/channels/{interaction.guild_id}/{thread.id}", "published": False,
-                    }, "Open this feedback thread and talk through what happened; you will write and approve any public report.")
+                    }, "Open this feedback thread to discuss your problem or idea; you will write and approve any public report.")
             await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
         @bot.tree.command(name="project-recover", description="Check a delivery that needs recovery without sending it again")

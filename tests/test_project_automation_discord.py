@@ -212,6 +212,32 @@ def _native_suite():
             self.assertTrue(click.followup.send.await_args.kwargs["ephemeral"])
             view.stop()
 
+        async def test_reporter_without_roles_can_request_a_report_check(self):
+            item = case(state="discussing", draft=None, gate={"kind": "conversation", "options": [
+                {"key": "edit", "label": "Edit my report"},
+                {"key": "check", "label": "Check my report"},
+                {"key": "cancel", "label": "Close feedback"},
+            ]})
+            self.cases[item["id"]] = item
+            view = DecisionView(self.service, item)
+            button = view.children[1]
+            self.assertEqual(button.label, "Check my report")
+            self.assertEqual(button.custom_id, f"project:{item['id']}:4:check")
+            self.assertTrue(view.is_persistent())
+            click = interaction()
+            await button.callback(click)
+            click.response.defer.assert_awaited_once_with(ephemeral=True)
+            self.service.choose.assert_called_once_with(item["id"], 4, "check", user_id=456, role_ids=[])
+            click.response.send_modal.assert_not_awaited()
+            self.assertTrue(click.followup.send.await_args.kwargs["ephemeral"])
+            self.assertIs(click.followup.send.await_args.kwargs["allowed_mentions"], NO_MENTIONS)
+            self.service.choose.side_effect = WorkflowError("Only the original reporter can check this report.")
+            other = interaction(user_id=888, role_ids=[900])
+            await button.callback(other)
+            self.assertIn("Only the original reporter", other.followup.send.await_args.args[0])
+            self.assertTrue(other.followup.send.await_args.kwargs["ephemeral"])
+            view.stop()
+
         async def test_wrong_guild_or_channel_never_calls_choose(self):
             item = case()
             self.cases[item["id"]] = item
@@ -241,9 +267,9 @@ def _native_suite():
             item = case(state="awaiting_report", gate={"options": [{"key": "write", "label": "Write report"}]})
             self.cases[item["id"]] = item
             view = DecisionView(self.service, item)
-            click = interaction(role_ids=[900])
+            click = interaction()
             await view.children[0].callback(click)
-            self.service.validate_report_author.assert_called_once_with(item["id"], 4, 456, ["900"])
+            self.service.validate_report_author.assert_called_once_with(item["id"], 4, 456, [])
             click.response.defer.assert_not_awaited()
             self.service.say.assert_not_awaited()
             self.service.choose.assert_not_called()
@@ -253,9 +279,44 @@ def _native_suite():
             self.assertEqual(modal.report_body.value, "")
             self.assertEqual(modal.report_title.max_length, 180)
             self.assertEqual(modal.report_body.max_length, 2800)
+            self.assertTrue(modal.report_title.required)
+            self.assertTrue(modal.report_body.required)
+            self.assertIn("problem or improvement", modal.report_body.placeholder)
+            self.assertIn("if you have them", modal.report_body.placeholder)
+            self.assertNotIn("reproduce", modal.report_body.placeholder)
             self.assertIn("wrote this myself", modal.authorship.label)
             modal.stop()
             view.stop()
+
+        async def test_discussion_and_failed_check_modals_remain_author_only(self):
+            def validate_author(case_id, revision, user_id, role_ids):
+                if user_id != 456:
+                    raise WorkflowError("Only the original reporter may write this report.")
+
+            self.service.validate_report_author.side_effect = validate_author
+            for action, failed in (("write", False), ("edit", False), ("edit", True)):
+                with self.subTest(action=action, failed=failed):
+                    previous = {"title": "Keyboard setting", "body": "Let me choose a shortcut.", "human_authored": True}
+                    item = case(state="discussing", draft=None,
+                                submitted_report=previous if action == "edit" else None,
+                                notice_event={"action": "assessment_failed"} if failed else None,
+                                gate={"options": [{"key": action, "label": "Edit my report" if action == "edit" else "Write my report"}]})
+                    self.cases[item["id"]] = item
+                    view = DecisionView(self.service, item)
+                    click = interaction()
+                    await view.children[0].callback(click)
+                    self.service.validate_report_author.assert_called_with(item["id"], 4, 456, [])
+                    click.response.defer.assert_not_awaited()
+                    modal = click.response.send_modal.await_args.args[0]
+                    self.assertEqual(modal.report_body.value, previous["body"] if action == "edit" else "")
+                    modal.stop()
+                    other = interaction(user_id=888, role_ids=[900])
+                    await view.children[0].callback(other)
+                    other.response.send_modal.assert_not_awaited()
+                    self.assertIn("original reporter", other.followup.send.await_args.args[0])
+                    self.assertTrue(other.followup.send.await_args.kwargs["ephemeral"])
+                    self.service.choose.assert_not_called()
+                    view.stop()
 
         async def test_edit_prefills_only_attested_human_text_never_generated_draft(self):
             item = case(submitted_report={"title": "My title", "body": "My own report.", "human_authored": True})

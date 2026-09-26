@@ -28,7 +28,7 @@ Invite it with `bot` and `applications.commands` scopes. In the intended channel
 
 For forum channels, **Send Messages** permits creating posts; **Create Public Threads** alone does not. Check channel overrides as well as the bot role, especially when a forum is read-only for `@everyone`.
 
-Enable Message Content Intent for ordinary feedback posts. The existing Discord Pals client also requests Server Members Intent, so enable that for this application. Administrator permission is not required. Ensure the configured maintainer role/users can see feedback threads and the project commands.
+Enable Message Content Intent for ordinary feedback posts. The existing Discord Pals client also requests Server Members Intent, so enable that for this application. Administrator permission is not required. Ensure the configured maintainer role/users can see feedback threads and the recovery commands. Regular users can submit reports without a maintainer role.
 
 Use forums for **Issue tracking** and **Pull requests**, forum or text for **Feedback intake**, and text for **Commit updates**, **Repository updates**, and optional **Support handoff**. Channel names are unrestricted; keep one destination per purpose. The Project page lists servers and channels visible to the selected helper. Use the advanced ID fields when it is offline; Discord Developer Mode → Copy Channel ID provides the value. IDs remain strings.
 
@@ -87,7 +87,7 @@ Install a reviewed Discord Pals revision containing the project helper. Schedule
    ```
 
 5. Configure the GitHub secret environment and private-key file. Start the service. Keep **Enable project automation** off during configuration.
-6. Open **Project**, select the dedicated helper, server, destinations, and Firefly entry, and enter maintainer IDs. Run **Check setup** on the draft. Resolve **Needs attention** results and inspect **Not verified** results, then save while paused. The check is read-only and does not send test posts. Confirm Discord Developer Portal intents separately.
+6. Open **Project**, select the dedicated helper, server, destinations, and Firefly entry, and enter maintainer IDs for delivery recovery. Run **Check setup** on the draft. Resolve **Needs attention** results and inspect **Not verified** results, then save while paused. The check is read-only and does not send test posts. Confirm Discord Developer Portal intents separately.
 7. Enable automation and send/redeliver GitHub’s test delivery. Valid events should receive `202`; a valid ping receives `200`. Paused or incomplete setup returns `503`; GitHub delivery history is the recovery path for those events. Verify the page records an accepted webhook and eventually a completed sync. A successful setup check alone does not verify the public webhook URL.
 8. Run the acceptance checks below before using normal community traffic.
 
@@ -97,13 +97,14 @@ PR discussion begins at the mapping's first activation; enabling it does not imp
 
 ## Live acceptance
 
-- Submit a vague report. Verify the character asks a useful question directly and the reporter can answer in the same thread.
-- Submit an explicit test or a support question. Verify the helper explains the appropriate next step and offers no direct publication approval.
-- Write a complete report through **Write my report** and confirm authorship. Verify its title and body stay human-written through assessment and preview.
+- Submit a vague report. Verify the character asks a useful question directly and keeps **Write my report** available. Reach the clarification limit and verify the reporter can still write or edit a report without a maintainer handoff.
+- Submit an explicit test or a support question. Verify the helper's advice keeps **Write my report** available. A submitted report needs an understandable problem or desired improvement before it reaches preview.
+- As a regular user with no maintainer role, write a problem or improvement through **Write my report** and confirm authorship. Verify its title and body stay human-written through assessment and preview, without requiring reproduction steps, logs, a version, or contributor experience.
+- Submit a report whose problem or improvement is unclear. Verify it remains unpublished with **Edit my report**, **Check my report**, and cancel controls. Interrupt a report check and verify the saved text can be edited or checked again by its original reporter.
 - Restart with a report awaiting approval. Verify its current controls still work and do not approve themselves.
 - Try another user, a maintainer acting as approver, and an old button. Verify only the original reporter can approve the current report.
 - Approve once. Verify exactly one GitHub issue, the minimal forwarded body, a link back in Discord, and the Discord issue mirror.
-- Suggest an existing issue or interrupt the duplicate search. Verify a new issue cannot bypass the duplicate check.
+- Suggest an existing issue and verify the complete report still has a new issue preview alongside optional linking. Interrupt the duplicate search and verify it is reported as unavailable while the reporter can approve the complete report.
 - Close/reopen an issue and close/merge separate PRs. Verify accurate labels, archived/locked posts, and reopened access.
 - Redeliver the same webhook. Verify no extra forum post or commit message.
 - Add human and bot PR comments, code review replies, and a published review. Edit/delete a comment, edit/dismiss a review, and resolve/reopen a review thread. Verify source attribution and links in the existing PR post, explicit change labels, and no mention notifications.

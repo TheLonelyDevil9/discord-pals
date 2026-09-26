@@ -24,6 +24,7 @@ class FakeAI:
         self.duplicate_number = None
         self.recommendation = "ready"
         self.kind = "bug"
+        self.report_complete = True
 
     async def assess(self, case, candidates, bot, settings):
         self.calls.append(deepcopy({"case": case, "candidates": candidates, "bot": bot.name}))
@@ -32,6 +33,7 @@ class FakeAI:
             "kind": self.kind,
             "recommendation": "link" if self.duplicate_number else self.recommendation,
             "duplicate_number": self.duplicate_number,
+            "report_complete": self.report_complete,
         }
 
     async def speak(self, case, event, bot, settings):
@@ -210,10 +212,10 @@ def test_other_contributors_can_discuss_but_cannot_choose_for_reporter(harness, 
 
 
 @pytest.mark.parametrize("user_id,role_ids", [("700", []), ("800", []), ("999", ["900"])])
-def test_configured_maintainers_and_operators_can_choose(harness, user_id, role_ids):
-    preview = harness.choose(harness.ready(), "human", user_id=user_id, role_ids=role_ids)
-    assert preview["state"] == "needs_maintainer"
-    assert preview["decisions"][-1]["actor"] == user_id
+def test_configured_maintainers_and_operators_can_close_feedback(harness, user_id, role_ids):
+    closed = harness.choose(harness.ready(), "cancel", user_id=user_id, role_ids=role_ids)
+    assert closed["state"] == "closed"
+    assert closed["decisions"][-1]["actor"] == user_id
     assert harness.github.posts == []
 
 
@@ -281,7 +283,7 @@ def test_details_replay_does_not_schedule_another_assessment(harness):
     assert len(harness.ai.calls) == 2
 
 
-def test_investigation_asks_directly_and_question_limit_never_creates_a_report(harness):
+def test_investigation_question_limit_keeps_reporter_in_control_without_handoff(harness):
     harness.cfg["max_questions"] = 1
     harness.ai.recommendation = "investigate"
     pending = harness.ready()
@@ -291,9 +293,16 @@ def test_investigation_asks_directly_and_question_limit_never_creates_a_report(h
     harness.service.add_detail(pending["id"], user_id="456", content="Changing the theme.", message_id="104", source_url="source")
     asyncio.run(harness.drain())
     assessed = harness.store.get_case(pending["id"])
-    assert assessed["state"] == "needs_maintainer"
-    assert not {"write", "submit"}.intersection(item["key"] for item in assessed["gate"]["options"])
+    assert assessed["state"] != "needs_maintainer"
+    assert assessed["question_count"] == 1
+    assert "?" not in harness.transport.notifications[-1]["reply"]
+    assert "Write my report" in harness.transport.notifications[-1]["reply"]
+    actions = {item["key"] for item in assessed["gate"]["options"]}
+    assert "write" in actions
+    assert not {"human", "submit"}.intersection(actions)
     assert harness.github.posts == []
+    preview = harness.submit(assessed, body="Changing the theme shows an error instead of saving it.")
+    assert preview["state"] == "awaiting_submission"
 
 
 def test_duplicate_link_is_a_reviewed_comment_not_a_second_issue(harness):
@@ -307,6 +316,35 @@ def test_duplicate_link_is_a_reviewed_comment_not_a_second_issue(harness):
     assert filed["linked_issue_number"] == 17
     assert harness.github.posts[0]["kind"] == "comment"
     assert harness.github.posts[0]["body"] == linked_preview["draft"]["body"]
+
+
+def test_reporter_can_submit_a_new_issue_despite_a_suggested_duplicate(harness):
+    harness.ai.duplicate_number = 17
+    harness.github.candidates = [{"number": 17, "title": "A different save error", "body": "Existing report", "state": "open"}]
+    preview = harness.submit(harness.ready(), body="Saving a custom theme shows an error. This happens with every custom theme I try.")
+    assert preview["draft"]["kind"] == "issue"
+    assert preview["draft"]["issue_number"] is None
+    assert {"submit", "link"}.issubset(item["key"] for item in preview["gate"]["options"])
+    assert harness.github.posts == []
+    harness.choose(preview, "submit")
+    assert [post["kind"] for post in harness.github.posts] == ["issue"]
+
+
+def test_linking_from_preview_requires_a_fresh_assessment_and_approval(harness):
+    harness.ai.duplicate_number = 17
+    harness.github.candidates = [{"number": 17, "title": "Theme save error", "body": "Existing report", "state": "open"}]
+    original = harness.preview()
+    original_report = deepcopy(original["submitted_report"])
+    linked = harness.choose(original, "link")
+    assert linked["draft"]["kind"] == "comment"
+    assert linked["draft"]["issue_number"] == 17
+    assert linked["submitted_report"] == original_report
+    assert len(harness.ai.calls) == 3
+    with pytest.raises((Conflict, WorkflowError)):
+        harness.service.choose(original["id"], original["revision"], "submit", user_id="456")
+    assert harness.github.posts == []
+    harness.choose(linked, "submit")
+    assert [post["kind"] for post in harness.github.posts] == ["comment"]
 
 
 def test_followup_for_filed_feedback_requires_approved_comment(harness):
@@ -447,8 +485,8 @@ def test_offline_selected_bot_does_not_claim_feedback(harness):
 
 
 def test_stale_branch_replay_cannot_replace_a_newer_human_gate(harness):
-    pending = harness.ready()
-    harness.choose(pending, "human")
+    pending = harness.preview()
+    harness.choose(pending, "back")
     previous_job = next(job for job in harness.store.list_jobs() if job["kind"] == "branch")
     detail = harness.store.get_case(pending["id"])
     harness.service.add_detail(detail["id"], user_id="456", content="Changing themes causes it.", message_id="104", source_url="source")
@@ -571,17 +609,43 @@ def test_question_arriving_after_preview_is_preserved_when_older_draft_is_publis
     assert harness.store.get_link("maintainer_question", filed["id"]) == question
 
 
-@pytest.mark.parametrize("kind,recommendation", [("other", "no_issue"), ("support", "investigate"), ("bug", "investigate")])
-def test_test_support_and_incomplete_reports_have_no_publication_shortcut(harness, kind, recommendation):
+@pytest.mark.parametrize("kind,recommendation", [("other", "no_issue"), ("support", "investigate"), ("bug", "investigate"), ("feature", "human")])
+def test_discussion_advice_never_hides_the_report_form_or_publishes_by_itself(harness, kind, recommendation):
     harness.ai.kind, harness.ai.recommendation = kind, recommendation
     case = harness.service.receive_report(source_key="test:852", channel_id="102", reporter_id="456",
         reporter_name="reporter", content="This is just a test to check how an issue is created.",
         message_id="852", source_url="https://discord.com/channels/100/102/852")
     asyncio.run(harness.drain())
     case = harness.store.get_case(case["id"])
-    assert not {"write", "submit", "draft"}.intersection(item["key"] for item in case["gate"]["options"])
+    actions = {item["key"] for item in case["gate"]["options"]}
+    assert "write" in actions
+    assert not {"human", "submit", "draft"}.intersection(actions)
+    assert case["state"] != "needs_maintainer"
     assert case.get("draft") is None
     assert harness.github.posts == []
+
+
+@pytest.mark.parametrize("kind,recommendation,title,body", [
+    ("bug", "investigate", "Font size resets", "I choose a larger font, but opening the app again returns it to the small size."),
+    ("feature", "human", "Collapse the sidebar by keyboard", "I want a keyboard shortcut to hide the sidebar while I am writing."),
+    ("support", "investigate", "Saved theme disappears", "The theme I save disappears when I reopen the page."),
+    ("other", "no_issue", "Search field loses my text", "My search text vanishes when I switch tabs and return."),
+])
+def test_regular_reporter_can_preview_and_post_a_clear_short_report_without_technical_requirements(
+    harness, kind, recommendation, title, body,
+):
+    harness.ai.kind, harness.ai.recommendation = kind, recommendation
+    pending = harness.ready()
+    assert not harness.service.is_maintainer("456")
+    preview = harness.submit(pending, title=title, body=body)
+    assert preview["state"] == "awaiting_submission"
+    assert preview["draft"]["title"] == title
+    assert preview["draft"]["body"] == "Forwarded from Discord\n@\u200breporter\n\n" + body
+    assert "human" not in {item["key"] for item in preview["gate"]["options"]}
+    assert harness.github.posts == []
+    filed = harness.choose(preview, "submit")
+    assert filed["state"] == "filed"
+    assert harness.github.posts[0]["body"] == preview["draft"]["body"]
 
 
 def test_github_body_contains_only_attribution_and_human_contents(harness):
@@ -623,25 +687,98 @@ def test_authorship_confirmation_must_be_explicit(harness, confirmation):
 def test_reporter_gets_nudges_without_the_model_rewriting_their_report(harness):
     case = harness.ready()
     harness.ai.recommendation = "investigate"
-    case = harness.submit(case, body="It broke.")
+    harness.ai.report_complete = False
+    case = harness.submit(case, title="A problem", body="It broke.")
     assert case["submitted_report"]["body"] == "It broke."
     assert case["draft"] is None
-    assert "edit" in {option["key"] for option in case["gate"]["options"]}
-    assert "submit" not in {option["key"] for option in case["gate"]["options"]}
+    assert case["state"] == "discussing"
+    assert {option["key"] for option in case["gate"]["options"]} == {"edit", "check", "cancel"}
     with pytest.raises(WorkflowError):
         harness.service.choose(case["id"], case["revision"], "submit", user_id="456")
 
 
-def test_failed_duplicate_check_holds_approval_even_if_model_says_ready(harness):
+def test_ready_advice_cannot_override_an_incomplete_submitted_report(harness):
+    harness.ai.report_complete = False
+    case = harness.submit(harness.ready(), title="Something is wrong", body="It does not work.")
+    assert case["assessment"]["recommendation"] == "ready"
+    assert case["state"] == "discussing"
+    assert case["draft"] is None
+    assert "submit" not in {option["key"] for option in case["gate"]["options"]}
+    assert harness.github.posts == []
+
+
+def test_repeated_incomplete_reports_stay_editable_without_a_maintainer_handoff(harness):
+    harness.cfg["max_questions"] = 1
+    harness.ai.recommendation = "investigate"
+    harness.ai.report_complete = False
+    case = harness.ready()
+    for body in ("It broke.", "It is still broken.", "The same thing happened."):
+        case = harness.submit(case, title="A problem", body=body)
+        assert case["state"] == "discussing"
+        assert case["submitted_report"]["body"] == body
+        assert {option["key"] for option in case["gate"]["options"]} == {"edit", "check", "cancel"}
+        assert case["draft"] is None
+        assert case["question_count"] == 1
+        assert "?" not in harness.transport.notifications[-1]["reply"]
+        assert "Check my report" in harness.transport.notifications[-1]["reply"]
+    harness.ai.report_complete = True
+    preview = harness.submit(case, title="Saving a theme fails", body="Saving my theme shows an error and loses my changes.")
+    assert preview["state"] == "awaiting_submission"
+    assert harness.github.posts == []
+
+
+def test_reporter_can_recheck_the_same_report_without_rewriting_or_publishing_it(harness):
+    harness.ai.report_complete = False
+    pending = harness.submit(harness.ready(), title="Saved theme disappears", body="My saved theme disappears when I reopen the page.")
+    report = deepcopy(pending["submitted_report"])
+    calls = len(harness.ai.calls)
+    harness.ai.report_complete = True
+    preview = harness.choose(pending, "check")
+    assert len(harness.ai.calls) == calls + 1
+    assert preview["submitted_report"] == report
+    assert preview["state"] == "awaiting_submission"
+    assert harness.github.posts == []
+
+
+@pytest.mark.parametrize("actor,roles", [("700", []), ("800", []), ("999", ["900"]), ("999", [])])
+def test_only_the_reporter_can_request_a_report_recheck(harness, actor, roles):
+    harness.ai.report_complete = False
+    case = harness.submit(harness.ready(), title="A problem", body="It broke.")
+    with pytest.raises(WorkflowError):
+        harness.service.choose(case["id"], case["revision"], "check", user_id=actor, role_ids=roles)
+    assert harness.store.get_case(case["id"]) == case
+    assert harness.github.posts == []
+
+
+@pytest.mark.parametrize("barrier", ["global_pause", "channel_access", "destination_change"])
+def test_report_recheck_preserves_pause_access_and_destination_guards(harness, runtime, barrier):
+    harness.ai.report_complete = False
+    case = harness.submit(harness.ready(), title="A problem", body="It broke.")
+    if barrier == "global_pause":
+        runtime["global_paused"] = True
+    elif barrier == "channel_access":
+        runtime["channel_blocked"] = True
+    else:
+        harness.cfg["repository"] = "Other/Project"
+    with pytest.raises(WorkflowError):
+        harness.service.choose(case["id"], case["revision"], "check", user_id="456")
+    assert harness.store.get_case(case["id"]) == case
+    assert harness.github.posts == []
+
+
+def test_failed_duplicate_search_does_not_block_a_complete_report(harness):
     preview = harness.preview()
     async def unavailable(*args, **kwargs):
         raise GitHubError("Search unavailable", status=503)
     harness.github.search_issues = unavailable
-    held = harness.submit(preview)
-    assert held["state"] == "needs_maintainer"
-    assert held["search_unavailable"] is True
-    assert held["draft"] is None
-    assert "submit" not in {item["key"] for item in held["gate"]["options"]}
+    checked = harness.submit(preview)
+    assert checked["state"] == "awaiting_submission"
+    assert checked["search_unavailable"] is True
+    assert checked["draft"]["kind"] == "issue"
+    assert "submit" in {item["key"] for item in checked["gate"]["options"]}
+    assert harness.github.posts == []
+    harness.choose(checked, "submit")
+    assert len(harness.github.posts) == 1
 
 
 def test_new_report_form_invalidates_older_approval(harness):
@@ -706,7 +843,7 @@ def test_legacy_queued_publication_cannot_post_an_ai_draft(harness):
     assert harness.store.get_case(case["id"])["state"] == "awaiting_report"
 
 
-@pytest.mark.parametrize("action", ["draft", "investigate", "submit", "edit"])
+@pytest.mark.parametrize("action", ["draft", "investigate", "submit", "edit", "human"])
 def test_legacy_queued_decision_resumes_conversation_instead_of_getting_stuck(harness, action):
     case = harness.ready()
     legacy = harness.store.update_case(case["id"], {"workflow_version": 1,
@@ -765,7 +902,11 @@ def test_missing_search_terms_cannot_be_reported_as_a_successful_duplicate_check
     asyncio.run(harness.drain())
     case = harness.store.get_case(case["id"])
     assert case["search_unavailable"] is True
-    assert case["state"] == "needs_maintainer"
+    assert case["state"] != "needs_maintainer"
+    assert "write" in {item["key"] for item in case["gate"]["options"]}
+    preview = harness.submit(case, title="保存できません", body="設定を保存しても、ページを開き直すと元に戻ります。")
+    assert preview["state"] == "awaiting_submission"
+    assert preview["search_unavailable"] is True
     assert harness.github.searches == []
 
 

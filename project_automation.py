@@ -16,7 +16,7 @@ from project_automation_activity import PRActivity, activate, mapping_key
 
 
 CHOICES = {
-    "write": "Write my report", "human": "Ask a maintainer",
+    "write": "Write my report", "check": "Check my report",
     "link": "Add to existing issue", "submit": "Approve and post", "edit": "Edit my report",
     "back": "Keep discussing", "cancel": "Close feedback",
 }
@@ -24,6 +24,11 @@ CHOICES = {
 
 def gate(kind: str, actions: list[str]) -> dict:
     return {"kind": kind, "options": [{"key": action, "label": CHOICES[action]} for action in actions]}
+
+
+def reporter_actions(case):
+    return (["edit", "check"] if (case.get("submitted_report") or {}).get("human_authored") is True
+            else ["write"]) + ["cancel"]
 
 
 class WorkflowError(ValueError):
@@ -279,6 +284,9 @@ class AutomationService:
         self._authorize(case, user_id, role_ids)
         if action in {"write", "edit", "draft", "investigate"}:
             raise WorkflowError("Use the current report form, or reply directly in this thread.")
+        if action == "check":
+            if str(user_id) != case["reporter_id"] or (case.get("submitted_report") or {}).get("human_authored") is not True:
+                raise WorkflowError("Only the reporter can request a check of their own report.")
         if action == "submit":
             if str(user_id) != case["reporter_id"]:
                 raise WorkflowError("Only the reporter can approve publication of their own text.")
@@ -305,6 +313,20 @@ class AutomationService:
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
+        if bot.name == self.settings().get("bot_name"):
+            for case in self.store.list_pending_cases():
+                if not self._bound(case) or case["state"] not in {"needs_maintainer", "discussing", "awaiting_report"}:
+                    continue
+                actions = {option["key"] for option in (case.get("gate") or {}).get("options", [])}
+                expected = reporter_actions(case)
+                if case["state"] == "needs_maintainer" or "human" in actions or not set(expected).issubset(actions):
+                    try:
+                        self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", expected),
+                            "notice_event": {"action": "reporter_controls", "facts": {"published": False},
+                                "next_step": "Write or edit your report here. Describe the problem or improvement; no maintainer handoff is required."}})
+                    except Conflict:
+                        # A reporter action won the race; do not replace its controls.
+                        continue
         await self.transport.attach(bot)
         for case in self.store.list_pending_cases():
             if case["revision"] == 1 and case["state"] == "assessing":
@@ -352,30 +374,27 @@ class AutomationService:
         context = {**self._context(case), "search_unavailable": search_unavailable,
                    "linked_issue_number": case.get("target_issue_number") or case.get("linked_issue_number")}
         result = await self.ai.assess(context, candidates, self.bots[case["bot_name"]], self.settings())
-        eligible = (result.get("kind") in {"bug", "feature"}
-                    and result.get("recommendation") in {"ready", "link"} and not search_unavailable)
         report = case.get("submitted_report") or {}
         count = case.get("question_count", 0)
-        state, actions, draft = "discussing", ["human", "cancel"], None
-        if report.get("human_authored") is True:
-            actions.insert(0, "edit")
-        if eligible:
-            if result.get("duplicate_number") and not (case.get("target_issue_number") or case.get("linked_issue_number")):
-                state = "awaiting_report"
-                actions.insert(0, "link")
-            elif report.get("human_authored") is True:
-                state, actions = "awaiting_submission", ["submit", "edit", "back", "cancel"]
-                draft = self._draft_from_report(case)
-            else:
-                state, actions = "awaiting_report", ["write", "human", "cancel"]
-        elif result.get("recommendation") == "human" or search_unavailable:
-            state = "needs_maintainer"
+        state, actions, draft = "discussing", reporter_actions(case), None
+        if report.get("human_authored") is True and result.get("report_complete") is True:
+            state, actions = "awaiting_submission", ["submit", "edit", "back", "cancel"]
+            draft = self._draft_from_report(case)
+        elif not report and result.get("recommendation") in {"ready", "link"}:
+            state = "awaiting_report"
         elif result.get("recommendation") == "investigate":
-            count += 1
-            if count > self.settings()["max_questions"]:
-                state = "needs_maintainer"
-                result["reply"] = await self.say(case, {"action": "clarification_limit", "facts": {"report_saved": True},
-                    "next_step": "Ask a maintainer for help in this thread; the reporter can still add or edit their own details."})
+            if count >= self.settings()["max_questions"]:
+                result["reply"] = (
+                    "You can keep discussing this here. Use Edit my report to describe the problem or improvement, "
+                    "then Check my report when you're ready."
+                    if report else
+                    "You can keep discussing this here. When you're ready, use Write my report "
+                    "to describe the problem or improvement."
+                )
+            count = min(count + 1, self.settings()["max_questions"])
+        if (result.get("duplicate_number") and not search_unavailable
+                and not (case.get("target_issue_number") or case.get("linked_issue_number"))):
+            actions.insert(1, "link")
         self._save(case, {"workflow_version": 2, "assessment": result, "candidates": candidates,
                           "assessment_question_key": case.get("answering_question_key"),
                           "search_unavailable": search_unavailable, "question_count": count,
@@ -414,6 +433,10 @@ class AutomationService:
                 raise WorkflowError("The suggested issue is no longer available.")
             self.store.update_case(case["id"], {"target_issue_number": number, "state": "assessing", "gate": None},
                 expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
+        elif action == "check":
+            self.store.update_case(case["id"], {"state": "assessing", "draft": None, "gate": None,
+                "reply": "", "notice_event": None}, expected_revision=case["revision"],
+                job=self._job("assess", case, revision=case["revision"] + 1))
         elif action == "submit":
             if case.get("workflow_version") != 2 or not self._human_draft(case):
                 raise WorkflowError("The reporter must write and approve their own report.")
@@ -421,16 +444,11 @@ class AutomationService:
             self.store.update_case(case["id"], {"state": "queued", "publication_marker": marker}, expected_revision=case["revision"],
                                    job=self._job("publish", case, draft=case["draft"],
                                                  marker=marker))
-        elif action == "back":
-            actions = (["edit"] if case.get("submitted_report") else []) + ["human", "cancel"]
-            self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", actions),
+        elif action in {"back", "human"}:
+            # Previously queued handoffs resume with reporter controls too.
+            self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", reporter_actions(case)),
                 "notice_event": {"action": "continue_discussion", "facts": {"published": False},
-                                 "next_step": "Reply in this thread with what you want to work through."}})
-        elif action == "human":
-            actions = (["edit"] if case.get("submitted_report") else []) + ["back", "cancel"]
-            self._save(case, {"state": "needs_maintainer", "draft": None, "gate": gate("conversation", actions),
-                "notice_event": {"action": "ask_maintainer", "facts": {"thread_url": case.get("review_url", case["source_url"])},
-                                 "next_step": "Share this Discord thread with a maintainer for help. You can keep discussing it here."}})
+                                 "next_step": "Keep discussing the problem or improvement here, or use the report controls when ready."}})
         elif action == "cancel":
             self._save(case, {"state": "closed", "gate": None,
                 "notice_event": {"action": "close_feedback", "facts": {"closed_by_request": True},
@@ -534,7 +552,7 @@ class AutomationService:
                 raise WorkflowError("This report has progressed beyond that decision.")
             if job["kind"] == "assess" and not (
                 (case["state"] == "assessing" and case["revision"] == job["payload"]["revision"])
-                or (case["state"] == "needs_maintainer" and case["revision"] == job["payload"]["revision"] + 1)
+                or (case["state"] in {"needs_maintainer", "discussing"} and case["revision"] == job["payload"]["revision"] + 1)
             ):
                 raise WorkflowError("This report has progressed beyond that assessment.")
             if job["kind"] == "assess" and case["state"] != "assessing":
@@ -706,9 +724,9 @@ class AutomationService:
             if permanent and job["kind"] == "assess":
                 case = self.get_case(job["payload"]["case_id"])
                 if case and case["state"] == "assessing" and case["revision"] == job["payload"].get("revision"):
-                    self._save(case, {"state": "needs_maintainer", "gate": gate("conversation", ["human", "cancel"]),
+                    self._save(case, {"state": "discussing", "gate": gate("conversation", reporter_actions(case)),
                         "notice_event": {"action": "assessment_failed", "facts": {"report_saved": True},
-                                         "next_step": "Add details in this thread to retry, or ask a maintainer for help."}})
+                                         "next_step": "The check could not finish. Write or edit your report, or choose Check my report to retry a saved report. Nothing was published."}})
         return True
 
     async def _run(self):

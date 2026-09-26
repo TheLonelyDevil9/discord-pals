@@ -189,7 +189,7 @@
                 <div class="form-group">
                     <label for="project-max-questions">Clarification limit</label>
                     <input id="project-max-questions" name="max_questions" value="{{ project.config.max_questions }}" type="number" min="1" max="10" step="1">
-                    <p class="form-hint">After this many questions, ask a maintainer to help. Reaching the limit never approves a report.</p>
+                    <p class="form-hint">Limit automated questions. Reporters can still write or edit their report and run Check my report.</p>
                 </div>
             </div>
         </fieldset>
@@ -236,12 +236,12 @@
                 <div class="form-group">
                     <label for="project-maintainer-roles">Maintainer role IDs</label>
                     <textarea id="project-maintainer-roles" name="maintainer_role_ids" rows="2" spellcheck="false">{{ project.config.maintainer_role_ids | join(', ') }}</textarea>
-                    <p class="form-hint">Comma-separated IDs. These roles can help with cases and recover deliveries.</p>
+                    <p class="form-hint">Comma-separated IDs. These roles can recover failed or uncertain deliveries.</p>
                 </div>
                 <div class="form-group project-span">
                     <label for="project-maintainer-users">Maintainer user IDs</label>
                     <textarea id="project-maintainer-users" name="maintainer_user_ids" rows="2" spellcheck="false">{{ project.config.maintainer_user_ids | join(', ') }}</textarea>
-                    <p class="form-hint">Optional when a maintainer role is set. The original reporter controls their report and publication.</p>
+                    <p class="form-hint">Optional when a maintainer role is set. Reporters can submit without a maintainer role.</p>
                 </div>
             </div>
         </fieldset>

@@ -25,14 +25,14 @@ Treat unsupported attachments as links only. You cannot approve or publish anyth
 """
 
 INSTRUCTIONS = VOICE_INSTRUCTIONS + """
-Help the people in this feedback thread decide whether they have a useful project issue.
+Help people describe a project problem or proposed improvement in their own words.
 Respond to their latest contribution in context, including your own earlier turns. Ask at
-most one useful follow-up directly in reply, only when it changes the next decision. Avoid
-repeating answered questions. For bugs, seek enough observed behavior, expected result,
-reproduction, and environment to act; for features, seek the task, obstacle, and desired
-outcome. Use judgment about relevance rather than imposing a checklist or questionnaire.
-Honor a pending maintainer question when relevant. At max_questions, offer human help
-instead of another investigative question.
+most one short follow-up when the problem or desired change cannot be understood. Avoid
+repeating answered questions. A regular user or prospective contributor does not need
+technical expertise, an existing contributor role, a diagnosis, a fix, or maintainer permission.
+Reproduction steps, logs, versions, and implementation plans are helpful when known, never
+prerequisites. Honor a pending maintainer question when relevant. At max_questions, stop
+automated questioning and leave the reporter free to write or edit; do not require a handoff.
 
 publication_status, issue_search, and controls are application-owned facts. This assessment
 is advice only: the current submission is unapproved and unpublished. A linked or candidate
@@ -41,43 +41,46 @@ When linked_issue_number is null, this report has no existing filed issue. Never
 testing the bot created an issue or completed publication. issue_search.status=completed
 with candidate_count=0 means the search succeeded and found no candidates; it does not mean
 search was unavailable or candidates were withheld. Unavailable search leaves duplicates
-unknown and needs human help before approval. Mention search only when a candidate or a
+unknown but does not block a complete report. Mention search only when a candidate or a
 search failure changes the next step, rather than narrating a successful empty search.
 
 Humans write the final issue title and contents. Guide their understanding; do not draft,
-rewrite, or supply a proposed issue or comment, including inside reply. When the discussion
-is actionable, invite them to submit their own wording. If submitted_report is present,
-assess that exact title and body as a standalone report or follow-up comment: ready and link
-require the needed facts in the submitted text itself, not just elsewhere in the transcript.
-Point out a useful gap or contradiction without rewriting it. The reporter then reviews the
+rewrite, or supply a proposed issue or comment, including inside reply. Invite them to submit
+their own wording at any point. If submitted_report is present, check only basic completeness:
+its title and body must describe an understandable problem or desired improvement. A short,
+concrete description is enough. A follow-up can instead give a meaningful update or answer
+to the linked issue or maintainer question. Set report_complete=true when that minimum is
+met, regardless of classification, duplicate suggestions, feasibility, priority, project
+acceptance, or readiness to implement a fix. Set it false when the submitted text is missing,
+only a bot test, or too vague to identify the problem, desired change, or follow-up. Use the
+submitted text itself for this check; do not silently fill gaps from the discussion.
+Without submitted_report it is always false. Point out the one missing basic detail without
+rewriting their report. A maintainer handoff is never required. The reporter reviews the
 exact text and explicitly approves forwarding it to GitHub. Ready does not mean approved,
-published, reproduced, or certified human-written; maintainer review is optional help.
+published, reproduced, or certified human-written.
 human_authored records a human's declaration, not an AI-detection result. You cannot
 determine human-versus-AI authorship from prose or confirm authorship on anyone's behalf.
 
 Choose one recommendation:
 - investigate: one missing detail would help determine whether or what to report.
-- ready: an actionable bug or feature with no proposed duplicate; any submitted report is
-  itself ready for final review. duplicate_number must be null for ready.
-- human: a maintainer decision is needed, or further investigation exceeds the question budget.
-- link: a supplied candidate fits this bug or feature; any submitted follow-up is actionable.
+- ready: the problem or improvement is understandable enough to report.
+- link: a supplied candidate may cover the same problem or improvement.
   Explain overlap and uncertainty. duplicate_number may accompany investigate while narrowing it.
 - no_issue: an explicit test, non-report, or conversation resolved without remaining work.
-Support questions can be discussed or handed to a human; they are not ready issues by default.
+These recommendations and kind labels guide conversation, not publication eligibility.
 Only suggest duplicates from the supplied candidates. Do not turn a bot test into a bug report.
-Guide the matching next step without reciting the whole process: ready without submitted_report
-means writing their own report; ready with a human-authored submitted_report and completed
-search means reviewing the exact preview, then approving it. investigate with submitted_report
-means editing their own report to add the missing detail. link means selecting the existing
-issue, then preparing their own follow-up; use investigate while a possible duplicate needs
-clarification. no_issue leaves them free to keep chatting or close the feedback.
-Name a button only by the matching controls label: write, edit, submit, link, human, or cancel.
+Without submitted_report, they can write their own report or keep discussing it. A complete
+human-authored report goes to exact preview and reporter approval; an incomplete one stays
+editable. A duplicate suggestion leaves both choices open: post a separate issue, or explicitly
+select Add to existing issue and review a comment preview. Never silently change destinations.
+If checks are unavailable, preserve their text and let them retry through Check my report.
+Name a button only by the matching controls label: write, edit, check, submit, link, or cancel.
 If its label is absent, describe the action without inventing a control. Chatting needs no
 button. Preserve the approval-before-publication order without claiming approval occurred.
 Return only one JSON object with these fields, without a code fence or extra fields:
 reply (nonempty conversational text, at most 1600 characters, including any follow-up),
-kind (bug, feature, support, or other), recommendation (investigate, ready, human, link,
-or no_issue), duplicate_number (an integer from the candidates, or null).
+kind (bug, feature, support, or other), recommendation (investigate, ready, link, or no_issue),
+report_complete (boolean), duplicate_number (an integer from the candidates, or null).
 """
 
 SPEAK_INSTRUCTIONS = VOICE_INSTRUCTIONS + """
@@ -134,19 +137,17 @@ def parse_assessment(raw: str, candidates: list[dict]) -> dict:
         raise AssessmentError("Unknown feedback kind")
     if not isinstance(data.get("recommendation"), str) or data["recommendation"] not in {"investigate", "ready", "human", "link", "no_issue"}:
         raise AssessmentError("Unknown recommendation")
-    if data["recommendation"] in {"ready", "link"} and data["kind"] not in {"bug", "feature"}:
-        raise AssessmentError("Only a bug or feature can be ready for issue review")
+    if type(data.get("report_complete")) is not bool:
+        raise AssessmentError("Report completeness must be a boolean")
     number = data.get("duplicate_number")
     allowed = {item.get("number") for item in candidates
                if isinstance(item, dict) and type(item.get("number")) is int and item["number"] > 0}
     if number is not None and (type(number) is not int or number not in allowed):
         raise AssessmentError("Duplicate was not in the search results")
-    if data["recommendation"] == "ready" and number is not None:
-        raise AssessmentError("A possible duplicate needs linking or further discussion")
     if data["recommendation"] == "link" and number is None:
         raise AssessmentError("Link recommendation has no candidate")
     return {"reply": reply, "kind": data["kind"], "recommendation": data["recommendation"],
-            "duplicate_number": number}
+            "duplicate_number": number, "report_complete": data["report_complete"]}
 
 
 def parse_reply(raw: str) -> str:
@@ -206,7 +207,7 @@ def _evidence(case: dict, settings: dict) -> dict:
         "question_count": _count(case.get("question_count"), 0, 100),
         "max_questions": _count(settings.get("max_questions"), 3, 10),
         "controls": _fields(case.get("controls"), {key: 80 for key in (
-            "write", "edit", "submit", "back", "cancel", "human", "link",
+            "write", "edit", "check", "submit", "back", "cancel", "human", "link",
         )}),
     }
 

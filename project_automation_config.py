@@ -164,7 +164,7 @@ def config_errors(config) -> list[str]:
     if len(channels) != len(set(channels)):
         errors.append("Use a separate Discord channel for each project function.")
     if not normalized["maintainer_role_ids"] and not normalized["maintainer_user_ids"]:
-        errors.append("Set at least one maintainer role or user ID for human handoffs.")
+        errors.append("Set at least one maintainer role or user ID for delivery recovery.")
     if any(not normalized[key] for key in ENV_FIELDS):
         errors.append("Set valid environment variable names for GitHub credentials.")
     return errors
