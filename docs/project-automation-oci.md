@@ -30,7 +30,7 @@ For forum channels, **Send Messages** permits creating posts; **Create Public Th
 
 Enable Message Content Intent for ordinary feedback posts. The existing Discord Pals client also requests Server Members Intent, so enable that for this application. Administrator permission is not required. Ensure the configured maintainer role/users can see feedback threads and the project commands.
 
-Use forum channels for `issue-tracker` and `review-please`; forum or text for feedback; text channels for commit/general feeds. The channel IDs come from Discord Developer Mode → Copy Channel ID. Keep the IDs as strings.
+Use forums for **Issue tracking** and **Pull requests**, forum or text for **Feedback intake**, and text for **Commit updates**, **Repository updates**, and optional **Support handoff**. Channel names are unrestricted; keep one destination per purpose. The Project page lists servers and channels visible to the selected helper. Use the advanced ID fields when it is offline; Discord Developer Mode → Copy Channel ID provides the value. IDs remain strings.
 
 ## GitHub App
 
@@ -40,11 +40,11 @@ Create an App and install it for **SillyBunnyTeam/SillyBunny**. Use repository p
 | --- | --- | --- |
 | Metadata | Read | Repository identity |
 | Issues | Read and write | Search/read issues, create approved issues/comments |
-| Pull requests | Read | PR state and merge information |
+| Pull requests | Read | PR state, reviews, review comments/threads, and code updates |
 | Contents | Read | Push notifications |
 | Actions | Read | Workflow-run notifications |
 
-Subscribe to **Issues**, **Issue comment**, **Pull request**, **Push**, **Release**, and **Workflow run** events. Configure the App’s webhook URL as `https://YOUR_WEBHOOK_HOST/webhooks/github`. Set a strong random webhook secret and retain its value in the service environment. Enter the App ID and installation ID in Project setup.
+Subscribe to **Issues**, **Issue comment**, **Pull request**, **Pull request review**, **Pull request review comment**, **Pull request review thread**, **Push**, **Release**, and **Workflow run** events. Existing installations need the three review subscriptions added for immediate PR discussion updates. Configure the App’s webhook URL as `https://YOUR_WEBHOOK_HOST/webhooks/github`. Set a strong random webhook secret and retain its value in the service environment. Enter the App ID and installation ID in Project setup.
 
 Place the generated private key in a file readable only by the service account. Configure one of:
 
@@ -87,11 +87,13 @@ Install a reviewed Discord Pals revision containing the project helper. Schedule
    ```
 
 5. Configure the GitHub secret environment and private-key file. Start the service. Keep **Enable project automation** off during configuration.
-6. Open **Project**, select the dedicated helper and Firefly entry, and save all channel/maintainer IDs. Verify the bot is online and can use the intended channels.
-7. Enable automation and send/redeliver GitHub’s test delivery. Valid events should receive `202`; a valid ping receives `200`. Paused or incomplete setup returns `503`; GitHub delivery history is the recovery path for those events.
+6. Open **Project**, select the dedicated helper, server, destinations, and Firefly entry, and enter maintainer IDs. Run **Check setup** on the draft. Resolve **Needs attention** results and inspect **Not verified** results, then save while paused. The check is read-only and does not send test posts. Confirm Discord Developer Portal intents separately.
+7. Enable automation and send/redeliver GitHub’s test delivery. Valid events should receive `202`; a valid ping receives `200`. Paused or incomplete setup returns `503`; GitHub delivery history is the recovery path for those events. Verify the page records an accepted webhook and eventually a completed sync. A successful setup check alone does not verify the public webhook URL.
 8. Run the acceptance checks below before using normal community traffic.
 
 The implementation adds `PyJWT[crypto]` for GitHub App signing. Other components reuse the existing dependencies.
+
+PR discussion begins at the mapping's first activation; enabling it does not import the entire earlier discussion. The baseline survives restarts and pauses. Back up the SQLite database consistently along with configuration before upgrading, so source checkpoints and delivery receipts remain available for recovery. Changing the helper/server/repository/PR forum gives the new mapping its own baseline and leaves older queued work bound to its original destination.
 
 ## Live acceptance
 
@@ -104,6 +106,11 @@ The implementation adds `PyJWT[crypto]` for GitHub App signing. Other components
 - Suggest an existing issue or interrupt the duplicate search. Verify a new issue cannot bypass the duplicate check.
 - Close/reopen an issue and close/merge separate PRs. Verify accurate labels, archived/locked posts, and reopened access.
 - Redeliver the same webhook. Verify no extra forum post or commit message.
+- Add human and bot PR comments, code review replies, and a published review. Edit/delete a comment, edit/dismiss a review, and resolve/reopen a review thread. Verify source attribution and links in the existing PR post, explicit change labels, and no mention notifications.
+- Push commits and force-push a fork PR. Verify the PR post receives its code update and no second PR post is created.
+- Deliver activity on a closed PR. Verify its post returns to the correct archive/lock state after the message appears.
+- Interrupt and restart a PR activity delivery. Verify recovery finds its receipt or holds the uncertain job instead of posting a duplicate. Pause across a later source update, resume, and verify accessible missed activity is recovered by reconciliation without importing old discussion.
+- In Project setup, change the helper/server and verify choices belong to the selected helper, forums appear for Issue tracking/Pull requests, and an unavailable saved ID is preserved. Remove a channel permission and run **Check setup** to verify the actionable result; restore it before enabling.
 - Run `/ask-reporter` as a maintainer on a linked issue. Verify the question is relayed in character and any public response still requires the reporter’s own text and approval.
 - Pause automation. Verify queued work waits and pending human choices remain saved.
 

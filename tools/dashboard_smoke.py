@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 PORT = int(os.getenv("SMOKE_PORT", "8731"))
-GUARDED_PATHS = ("/", "/api/version", "/api/config", "/config", "/logs", "/project-automation", "/api/project-automation", "/api/project-automation/cases", "/api/project-automation/jobs")
+GUARDED_PATHS = ("/", "/api/version", "/api/config", "/config", "/logs", "/project-automation", "/api/project-automation", "/api/project-automation/cases", "/api/project-automation/jobs", "/api/project-automation/discord-options")
 
 
 def main() -> int:
@@ -61,6 +61,15 @@ def main() -> int:
             print(f"FAIL: {path} served without a login; landed on {landed}")
             return 1
         print(f"ok   {path} -> login required")
+
+    request = urllib.request.Request(f"{base}/api/project-automation/check", data=b"{}",
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    with opener.open(request, timeout=5) as response:
+        landed = response.geturl()
+    if "/login" not in landed:
+        print("FAIL: setup check served without a login")
+        return 1
+    print("ok   POST /api/project-automation/check -> login required")
 
     print("dashboard smoke test passed")
     return 0

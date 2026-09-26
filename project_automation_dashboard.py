@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 import re
 from urllib.parse import unquote, urlsplit, urlunsplit
@@ -10,8 +12,9 @@ from flask import jsonify, render_template, request
 
 import runtime_config
 from project_automation_config import (
-    config_errors, config_input_errors, credential_status, normalize_project_config,
+    CHANNEL_PURPOSES, config_errors, config_input_errors, credential_status, normalize_project_config,
 )
+import project_automation_setup as setup
 from security import requires_auth, requires_csrf
 
 
@@ -35,10 +38,12 @@ def _limit() -> int:
         return 100
 
 
-def _discord_url(guild_id, channel_id) -> str:
+def _discord_url(guild_id, channel_id, message_id=None) -> str:
     ids = (str(guild_id or ""), str(channel_id or ""))
+    if message_id is not None:
+        ids += (str(message_id),)
     if all(re.fullmatch(r"[0-9]{1,20}", value) and int(value) > 0 for value in ids):
-        return f"https://discord.com/channels/{ids[0]}/{ids[1]}"
+        return "https://discord.com/channels/" + "/".join(ids)
     return ""
 
 
@@ -97,11 +102,19 @@ def _job_target(job: dict, service) -> dict:
                 target["publication_marker"] = marker_comment(payload["marker"])
             except GitHubError:
                 pass
-    elif job.get("kind") == "event":
+    elif job.get("kind") in {"event", "pr_activity"}:
         repository = _repository(payload.get("repository"))
         binding = payload.get("_binding") if isinstance(payload.get("_binding"), dict) else {}
-        fields = {"issue": "issues_channel_id", "pull": "reviews_channel_id", "commit": "commits_channel_id", "general": "github_channel_id"}
-        field = fields.get(payload.get("kind"))
+        store = getattr(service, "store", None)
+        activity = job.get("kind") == "pr_activity" or payload.get("kind") == "pr_activity"
+        if activity and store is not None:
+            prepared = store.get_link("pr_prepared", str(job.get("id")))
+            if (isinstance(prepared, dict) and prepared.get("kind") == "pr_activity"
+                    and prepared.get("_binding") == binding and prepared.get("repository") == repository
+                    and prepared.get("key") == payload.get("key")):
+                payload = prepared
+        fields = {"issue": "issues_channel_id", "pull": "reviews_channel_id", "pr_activity": "reviews_channel_id", "commit": "commits_channel_id", "general": "github_channel_id"}
+        field = "reviews_channel_id" if activity else fields.get(payload.get("kind"))
         if repository:
             target["repository"] = repository
             target["github_url"] = _github_url(payload.get("html_url") or payload.get("url"), repository)
@@ -111,9 +124,36 @@ def _job_target(job: dict, service) -> dict:
         if field and repository and binding.get("repository") == repository:
             target["discord_url"] = _discord_url(binding.get("guild_id"), binding.get(field))
             # If a receipt exists, open its exact thread instead of the parent forum.
-            store = getattr(service, "store", None)
             if store is not None:
                 key = f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get(field)}:{repository}:{payload.get('key')}"
+                if activity:
+                    if (not isinstance(payload.get("key"), str) or not all(isinstance(binding.get(name), str)
+                            for name in ("guild_id", "bot_name", "reviews_channel_id", "repository"))):
+                        return {key: value for key, value in target.items() if value not in (None, "")}
+                    from project_automation_activity import activity_receipt_key
+                    key = activity_receipt_key(binding, payload)
+                link = store.get_link("pr_activity_delivery", key + ":" + str(payload.get("source_version", ""))) if activity else store.get_link("mirror", key)
+                if activity and not link:
+                    link = store.get_link("pr_activity", key)
+                    if not isinstance(link, dict) or link.get("source_version") != payload.get("source_version"):
+                        link = store.get_link("mirror", f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get(field)}:{repository}:pull:{number}")
+                        if isinstance(link, dict) and all(link.get(name) == binding.get(name) for name in ("guild_id", "bot_name", "repository")):
+                            target["discord_url"] = _discord_url(binding.get("guild_id"), link.get("channel_id")) or target["discord_url"]
+                        link = None
+                if isinstance(link, dict) and all(link.get(name) == binding.get(name) for name in ("guild_id", "bot_name", "repository")):
+                    if not activity or link.get("forum_id") == binding.get(field):
+                        target["discord_url"] = _discord_url(binding.get("guild_id"), link.get("channel_id"), link.get("message_id") if activity else None) or target["discord_url"]
+    elif job.get("kind") in {"pr_sync_page", "pr_sync_check", "pr_sync_missing", "pr_sync_discover"}:
+        repository = _repository(payload.get("repository"))
+        binding = payload.get("_binding") if isinstance(payload.get("_binding"), dict) else {}
+        if repository and repository == binding.get("repository"):
+            number = _issue_number(payload.get("number"))
+            target.update(repository=repository, issue_number=number,
+                          github_url=f"https://github.com/{repository}/pull/{number}" if number else f"https://github.com/{repository}/pulls",
+                          discord_url=_discord_url(binding.get("guild_id"), binding.get("reviews_channel_id")))
+            store = getattr(service, "store", None)
+            if number and store is not None:
+                key = f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get('reviews_channel_id')}:{repository}:pull:{number}"
                 link = store.get_link("mirror", key)
                 if isinstance(link, dict) and all(link.get(name) == binding.get(name) for name in ("guild_id", "bot_name", "repository")):
                     target["discord_url"] = _discord_url(binding.get("guild_id"), link.get("channel_id")) or target["discord_url"]
@@ -124,13 +164,39 @@ def _job_summary(job: dict, service) -> dict:
     # Outbox payloads can include provider context; expose only recovery locations.
     keys = ("id", "kind", "state", "status", "attempts", "created_at", "updated_at",
             "available_at", "lease_until", "error", "last_error")
-    return {**{key: job[key] for key in keys if key in job}, "target": _job_target(job, service)}
+    summary = {**{key: job[key] for key in keys if key in job}, "target": _job_target(job, service)}
+    if isinstance(job.get("payload"), dict) and job["payload"].get("kind") == "pr_activity":
+        summary["activity"] = "pr_activity"
+    return summary
 
 
-def register_project_routes(app, get_service, *, get_bot_names=None, get_character_names=None):
+def register_project_routes(app, get_service, *, get_bot_names=None, get_character_names=None, get_bot_instances=None):
     """Register routes without importing the Discord service or creating a worker."""
     bot_names = get_bot_names or _bot_names
     character_names = get_character_names or _character_names
+    bot_instances = get_bot_instances or (lambda: ())
+
+    def selected_bot(config):
+        return next((bot for bot in bot_instances() if getattr(bot, "name", None) == config["bot_name"]), None)
+
+    def on_bot_loop(bot, factory, timeout):
+        """Bound a read-only request without borrowing another helper's loop."""
+        loop = getattr(getattr(bot, "client", None), "loop", None)
+        if not callable(getattr(loop, "is_running", None)) or not loop.is_running():
+            return None
+        coroutine = factory()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        except Exception:
+            coroutine.close()
+            return None
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeout:
+            future.cancel()
+            return None
+        except Exception:
+            return None
 
     def snapshot():
         config = normalize_project_config(runtime_config.get("project_automation"))
@@ -148,6 +214,7 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
             "ready": not errors,
             "service": service.status(),
             "choices": {"bots": _names(bot_names), "characters": _names(character_names)},
+            "channel_purposes": CHANNEL_PURPOSES,
         }
 
     @app.route("/project-automation")
@@ -182,7 +249,53 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
                 if errors:
                     return jsonify({"message": "Settings were not saved. Complete setup before enabling.", "errors": errors}), 400
             runtime_config.set("project_automation", config)
+            if config["enabled"]:
+                # The mapping starts when the operator enables it, even when
+                # its helper/worker has not connected yet. Re-saves preserve it.
+                from project_automation_activity import activate
+                activate(get_service().store, config)
         return jsonify({"status": "ok", **snapshot()})
+
+    @app.route("/api/project-automation/discord-options")
+    @requires_auth
+    def project_automation_discord_options():
+        existing = normalize_project_config(runtime_config.get("project_automation"))
+        draft = {key: request.args.get(key, existing[key]) for key in ("bot_name", "guild_id")}
+        errors = config_input_errors(draft)
+        if errors:
+            return jsonify({"message": "Discord choices could not be loaded.", "errors": errors}), 400
+        config = normalize_project_config({**existing, **draft})
+        if config["bot_name"] not in _names(bot_names):
+            result = setup.unavailable_options(config, "Choose a configured helper bot to load its servers and channels.")
+            result["status"] = "attention"
+            return jsonify(result)
+        bot = selected_bot(config)
+        result = on_bot_loop(bot, lambda: setup.discord_options(config, bot), setup.OPTIONS_TIMEOUT)
+        if result is None:
+            result = setup.unavailable_options(config, "The selected helper is offline or did not respond. Start it and retry; saved IDs are preserved.")
+        return jsonify(result)
+
+    @app.route("/api/project-automation/check", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_check():
+        payload = request.get_json(silent=True)
+        if isinstance(payload, dict) and set(payload) == {"config"}:
+            payload = payload["config"]
+        errors = config_input_errors(payload)
+        if errors:
+            return jsonify({"message": "Setup was not checked. Fix the draft fields and retry.", "errors": errors}), 400
+        existing = normalize_project_config(runtime_config.get("project_automation"))
+        config = normalize_project_config({**existing, **payload})
+        checks = setup.local_checks(config)
+        bot = selected_bot(config)
+        result = on_bot_loop(bot, lambda: setup.setup_checks(config, bot), setup.CHECK_TIMEOUT)
+        checks.extend(result if result is not None else setup.unavailable_checks("The selected helper is offline or did not respond. Start it and run Check setup again."))
+        if config["bot_name"] not in _names(bot_names):
+            checks.append(setup.check("helper_configured", "Helper configuration", "attention", "Add the dedicated helper in Config and select it here."))
+        if config["character_name"] and config["character_name"] not in _names(character_names):
+            checks.append(setup.check("character", "Personality", "attention", "Choose an installed character or use this bot's character."))
+        return jsonify({"checks": checks, "saved": False})
 
     @app.route("/api/project-automation/cases")
     @requires_auth

@@ -10,6 +10,9 @@ from discord import app_commands
 
 from logger import warn
 from project_automation import WorkflowError
+from project_automation_discord_activity import (
+    activity_version, confirm_not_delivered, mirror_activity, receipt_key,
+)
 from project_automation_github import GitHubError
 from project_automation_store import Conflict
 
@@ -154,6 +157,12 @@ class DiscordTransport:
         self._registered = set()
         self._views = {}
         self._intake_locks = weakref.WeakValueDictionary()
+
+    async def mirror_activity(self, event, *, recover_only=False):
+        return await mirror_activity(self, event, recover_only=recover_only)
+
+    def confirm_not_delivered(self, event):
+        confirm_not_delivered(self, event)
 
     def _intake_lock(self, user_id):
         key = str(user_id)
@@ -433,7 +442,7 @@ class DiscordTransport:
         key = f"{cfg['guild_id']}:{cfg['bot_name']}:{cfg[field]}:{cfg['repository']}:{event['key']}"
         channel = await self._channel(cfg[field])
         if event["kind"] in {"issue", "pull"} and not isinstance(channel, discord.ForumChannel):
-            raise WorkflowError("Issue tracker and review destinations must be forum channels.")
+            raise WorkflowError("Issue tracking and Pull requests require forum channels.")
         marker = f"Project {key}"
         link = self.service.store.get_link("mirror", key)
         thread, message = None, None
@@ -465,24 +474,40 @@ class DiscordTransport:
         if recover_only:
             if message:
                 self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]})
+                self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
             return message is not None
         state = "Merged" if event.get("merged") else ("Draft" if event.get("draft") and event.get("state") == "open" else str(event.get("state", "Update")).capitalize())
         embed = discord.Embed(title=f"{state} · {event['title']}"[:250], description=event.get("body", "")[:3800],
                               url=event.get("html_url") or event.get("url"), color=COLOUR)
         embed.set_footer(text=marker)
         name = f"{state} · {event['title']}"[:75] + f" · #{event.get('number')}"
-        if message:
-            if isinstance(thread, discord.Thread) and (thread.archived or (thread.locked and not event.get("closed"))):
-                await thread.edit(archived=False, locked=False)
-            await message.edit(embed=embed, allowed_mentions=NO_MENTIONS)
+        attempt = self.service.store.get_link("mirror_attempt", key)
+        if not message and attempt and attempt.get("state") == "pending":
+            raise WorkflowError("An earlier project mirror send needs recovery before it can be repeated.")
+        original = (bool(thread.archived), bool(thread.locked)) if isinstance(thread, discord.Thread) else (False, False)
+        opened, complete = False, False
+        try:
+            if message:
+                if isinstance(thread, discord.Thread) and any(original):
+                    opened = True
+                    await thread.edit(archived=False, locked=False)
+                await message.edit(embed=embed, allowed_mentions=NO_MENTIONS)
+                if isinstance(thread, discord.Thread):
+                    await thread.edit(name=name)
+            else:
+                self.service.store.put_link("mirror_attempt", key, {"state": "pending"})
+                if isinstance(channel, discord.ForumChannel):
+                    created = await channel.create_thread(name=name, embed=embed, allowed_mentions=NO_MENTIONS)
+                    thread, message = created.thread, created.message
+                else:
+                    thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
+            self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]})
+            self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
+            complete = True
+        finally:
             if isinstance(thread, discord.Thread):
-                await thread.edit(name=name)
-        elif isinstance(channel, discord.ForumChannel):
-            created = await channel.create_thread(name=name, embed=embed, allowed_mentions=NO_MENTIONS)
-            thread, message = created.thread, created.message
-        else:
-            thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
-        self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]})
-        if event.get("closed") and isinstance(thread, discord.Thread):
-            await thread.edit(archived=True, locked=True)
+                if event.get("closed"):
+                    await thread.edit(archived=True, locked=True)
+                elif opened and not complete:
+                    await thread.edit(archived=original[0], locked=original[1])
         return True

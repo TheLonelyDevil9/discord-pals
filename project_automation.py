@@ -12,6 +12,7 @@ from pathlib import Path
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_store import AutomationStore, Conflict
+from project_automation_activity import PRActivity, activate, mapping_key
 
 
 CHOICES = {
@@ -42,6 +43,7 @@ class AutomationService:
         self._github_config = None
         self._last_sync = 0.0
         self._last_error = None
+        self.pr_activity = PRActivity(self)
 
     def settings(self) -> dict:
         if self._settings:
@@ -62,11 +64,14 @@ class AutomationService:
 
     def status(self) -> dict:
         cfg = self.settings()
+        persisted = self.store.get_link("project_status", mapping_key(cfg)) or {}
         return {"enabled": cfg.get("enabled", False), "paused": self.paused(),
                 "bot_online": cfg.get("bot_name") in self.bots,
                 "worker_running": bool(self._worker and not self._worker.done()),
                 "last_error": self._last_error,
-                "repository": cfg.get("repository", "")}
+                "repository": cfg.get("repository", ""),
+                **{name: persisted.get(name) for name in ("last_webhook_at", "last_sync_at", "last_activity_at")},
+                "job_counts": self.store.job_counts()}
 
     def list_cases(self, limit=100):
         return self.store.list_cases(limit=limit)
@@ -479,7 +484,13 @@ class AutomationService:
                 found = await self._notify(case, job, recover_only=True)
             else:
                 self._check_event_binding(job["payload"])
-                found = await self.transport.mirror(job["payload"], recover_only=True)
+                if job["payload"].get("kind") == "pr_activity":
+                    prepared = self.store.get_link("pr_prepared", str(job_id))
+                    if not prepared:
+                        raise WorkflowError("The uncertain PR activity has no saved delivery version.")
+                    found = await self.transport.mirror_activity(prepared, recover_only=True)
+                else:
+                    found = await self.transport.mirror(job["payload"], recover_only=True)
             if found:
                 self.store.resolve_recovery(job_id, outcome="complete" if job["kind"] == "notify" else "retry",
                     actor=str(user_id), note="Found existing Discord delivery")
@@ -551,6 +562,12 @@ class AutomationService:
                                                      "job": self._job("notify" if fresh_report else "assess", case,
                                                                       revision=case["revision"] + 1)})
             return "Draft returned to Discord for a fresh approval. Nothing has been published."
+        if job["kind"] == "event":
+            prepared = (self.store.get_link("pr_prepared", str(job_id))
+                        if job["payload"].get("kind") == "pr_activity" else job["payload"])
+            if not prepared:
+                raise WorkflowError("The uncertain PR activity has no saved delivery version.")
+            self.transport.confirm_not_delivered(prepared)
         self.store.resolve_recovery(job_id, outcome="retry", actor=str(user_id), note="Maintainer inspected destination and explicitly confirmed no delivery")
         return "Discord delivery retry queued after your confirmation."
 
@@ -563,6 +580,9 @@ class AutomationService:
 
     async def _event(self, event, job):
         self._check_event_binding(event)
+        if event["kind"] == "pr_activity":
+            await self.pr_activity.deliver(event, job)
+            return
         client = await self.client()
         if event["kind"] in {"issue", "pull"}:
             # Fetch current state so out-of-order delivery cannot reopen a closed mirror.
@@ -614,7 +634,18 @@ class AutomationService:
                 await self._notify(case, job)
         elif job["kind"] == "event":
             await self._event(payload, job)
+        elif job["kind"] == "pr_sync_page":
+            await self.pr_activity.sync_page(payload)
+        elif job["kind"] == "pr_sync_check":
+            await self.pr_activity.sync_check(payload)
+        elif job["kind"] == "pr_sync_missing":
+            await self.pr_activity.sync_missing(payload)
+        elif job["kind"] == "pr_sync_discover":
+            await self.pr_activity.sync_discover(payload)
         elif job["kind"] == "sync":
+            if "_binding" in payload:
+                self._check_event_binding(payload)
+            activate(self.store, self.settings())
             client = await self.client()
             seen = set()
             for kind in ("issue", "pull"):
@@ -626,24 +657,32 @@ class AutomationService:
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
                     self._enqueue_sync_item(await client.get_issue(data["number"]), data["kind"], job["id"])
+            self.pr_activity.enqueue_discovery(job["id"])
         else:
             raise WorkflowError("Unknown job type.")
 
     def _enqueue_sync_item(self, item, kind, sync_id):
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"], "_binding": webhook_binding(cfg)}
+        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
+                 "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
         self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        if kind == "pull":
+            self.pr_activity.enqueue_sync(item, sync_id)
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:
             return False
+        activate(self.store, self.settings())
         job = self.store.claim_job(lease_seconds=600)
         if not job:
             return False
         try:
             await asyncio.wait_for(self.process_job(job), timeout=480)
             self.store.complete_job(job["id"], lease_token=job["lease_token"])
+            cycle = job["id"] if job["kind"] == "sync" else job["payload"].get("_sync_cycle")
+            if cycle is not None:
+                self.pr_activity.complete_cycle(cycle)
             self._last_error = None
         except asyncio.CancelledError:
             raise
@@ -678,7 +717,11 @@ class AutomationService:
                 if not self.paused() and self.settings().get("bot_name") in self.bots:
                     if not self._last_sync or time.monotonic() - self._last_sync > 900:
                         self._last_sync = time.monotonic()
-                        self.store.enqueue("sync", {}, key=f"sync:{int(time.time() // 900)}")
+                        from project_automation_webhook import webhook_binding
+                        cfg = self.settings()
+                        activate(self.store, cfg)
+                        self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
+                                           key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
                     await self.run_once()
             except asyncio.CancelledError:
                 raise

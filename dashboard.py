@@ -197,7 +197,8 @@ from project_automation import get_automation
 from project_automation_dashboard import register_project_routes
 from project_automation_webhook import register_github_webhook
 
-register_project_routes(app, get_automation, get_character_names=get_character_files)
+register_project_routes(app, get_automation, get_character_names=get_character_files,
+                        get_bot_instances=lambda: bot_instances)
 register_github_webhook(app, get_automation)
 
 

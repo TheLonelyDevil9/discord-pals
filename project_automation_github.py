@@ -176,6 +176,12 @@ def normalize_event(event: str, payload: Any, repository: str) -> dict[str, Any]
     action = _text(action, 60)
     base = {"event": event, "action": _text(action, 60), "repository": repository,
             **_sender(payload)}
+    if (event in {"pull_request_review", "pull_request_review_comment", "pull_request_review_thread"}
+            or (event == "pull_request" and action == "synchronize")
+            or (event == "issue_comment" and isinstance(payload.get("issue"), dict)
+                and "pull_request" in payload["issue"])):
+        from project_automation_github_activity import normalize_pr_activity
+        return normalize_pr_activity(event, payload, repository, base)
     if event in {"issues", "pull_request"}:
         kind = "issue" if event == "issues" else "pull"
         raw = payload.get("issue" if kind == "issue" else "pull_request")
@@ -460,6 +466,26 @@ class GitHubClient:
                 if item is not None:
                     result.append(item)
         return result
+
+    async def get_pr_activity(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """Read current PR discussion state before delivering a queued event."""
+        from project_automation_github_activity import get_pr_activity
+        return await get_pr_activity(self, event)
+
+    async def list_pr_activity(self, number: int, source: str, cursor: str | None = None) -> dict:
+        """Read one bounded page; persist next_cursor to resume reconciliation."""
+        from project_automation_github_activity import list_pr_activity
+        return await list_pr_activity(self, number, source, cursor)
+
+    async def list_updated_pulls(self, since: float, cursor: str | None = None) -> dict:
+        """Discover recently updated PRs in every state, one resumable page at a time."""
+        from project_automation_github_activity import list_updated_pulls
+        return await list_updated_pulls(self, since, cursor)
+
+    async def setup_checks(self) -> list[dict[str, str]]:
+        """Inspect App access without a public write or exposing credentials."""
+        from project_automation_github_activity import setup_checks
+        return await setup_checks(self)
 
     async def find_issue_by_marker(self, marker: str) -> dict[str, Any] | None:
         needle = marker_comment(marker)

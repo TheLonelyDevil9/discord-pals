@@ -98,6 +98,8 @@ class AutomationStore:
                 );
                 CREATE INDEX IF NOT EXISTS jobs_ready
                     ON jobs(state, available_at, id);
+                CREATE INDEX IF NOT EXISTS jobs_sync_cycle
+                    ON jobs(json_extract(payload, '$._sync_cycle'), state);
                 CREATE TABLE IF NOT EXISTS links (
                     kind TEXT NOT NULL,
                     key TEXT NOT NULL,
@@ -105,6 +107,10 @@ class AutomationStore:
                     updated_at REAL NOT NULL,
                     PRIMARY KEY(kind, key)
                 );
+                CREATE INDEX IF NOT EXISTS pr_sources_scope
+                    ON links(substr(key, 1, 64), json_extract(document, '$.event.number'),
+                             json_extract(document, '$.event.activity_type'), key)
+                    WHERE kind = 'pr_source';
             """)
 
     @contextmanager
@@ -454,6 +460,17 @@ class AutomationStore:
             rows = connection.execute("SELECT key, document FROM links WHERE kind = ? ORDER BY key", (kind,)).fetchall()
             return [{"key": row["key"], "data": json.loads(row["document"])} for row in rows]
 
+    def list_pr_sources(self, mapping, number, source, *, after="", limit=100):
+        """Read a bounded, indexed page from one PR's observed source history."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT key, document FROM links WHERE kind = 'pr_source' "
+                "AND substr(key, 1, 64) = ? AND json_extract(document, '$.event.number') = ? "
+                "AND json_extract(document, '$.event.activity_type') = ? AND key > ? ORDER BY key LIMIT ?",
+                (mapping, number, source, after, _limit(limit)),
+            ).fetchall()
+            return [{"key": row["key"], "data": json.loads(row["document"])} for row in rows]
+
     def put_link(self, kind, key, data):
         _text(kind, "Link kind", 80)
         _text(str(key), "Link key")
@@ -465,3 +482,63 @@ class AutomationStore:
                 (kind, str(key), document, time.time()),
             )
         return json.loads(document)
+
+    def ensure_link(self, kind, key, data):
+        """Create a durable baseline once, including concurrent webhook arrivals."""
+        _text(kind, "Link kind", 80)
+        _text(str(key), "Link key")
+        document = _json_object(data, MAX_LINK_BYTES)
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO links(kind, key, document, updated_at) VALUES (?, ?, ?, ?)",
+                (kind, str(key), document, time.time()),
+            )
+            row = connection.execute("SELECT document FROM links WHERE kind = ? AND key = ?",
+                                     (kind, str(key))).fetchone()
+            return json.loads(row["document"])
+
+    def save_links_with_jobs(self, links, jobs=()):
+        """Commit source checkpoints together with their outbound work."""
+        with self._connection(write=True) as connection:
+            for kind, key, data in links:
+                _text(kind, "Link kind", 80)
+                _text(str(key), "Link key")
+                document = _json_object(data, MAX_LINK_BYTES)
+                connection.execute(
+                    "INSERT INTO links(kind, key, document, updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(kind, key) DO UPDATE SET document = excluded.document, updated_at = excluded.updated_at",
+                    (kind, str(key), document, time.time()),
+                )
+            return [self._enqueue_spec(connection, job) for job in jobs]
+
+    def record_status(self, key, field, timestamp=None):
+        if field not in {"last_webhook_at", "last_sync_at", "last_activity_at"}:
+            raise ValueError("Unknown activity status field")
+        timestamp = time.time() if timestamp is None else timestamp
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+            raise ValueError("Invalid status timestamp")
+        with self._connection(write=True) as connection:
+            row = connection.execute("SELECT document FROM links WHERE kind = 'project_status' AND key = ?",
+                                     (key,)).fetchone()
+            data = json.loads(row["document"]) if row else {}
+            data[field] = max(timestamp, data.get(field, 0))
+            connection.execute(
+                "INSERT INTO links(kind, key, document, updated_at) VALUES ('project_status', ?, ?, ?) "
+                "ON CONFLICT(kind, key) DO UPDATE SET document = excluded.document, updated_at = excluded.updated_at",
+                (key, _json_object(data, MAX_LINK_BYTES), time.time()),
+            )
+
+    def job_counts(self):
+        with self._connection(write=True) as connection:
+            self._expire_leases(connection)
+            counts = dict(connection.execute("SELECT state, COUNT(*) FROM jobs GROUP BY state").fetchall())
+        return {"pending": sum(counts.get(state, 0) for state in ("pending", "running", "inflight")),
+                "failed": counts.get("failed", 0), "recovery": counts.get("recovery", 0)}
+
+    def unfinished_sync_jobs(self, cycle_id):
+        """A sync is successful only after its child deliveries complete."""
+        with self._connection() as connection:
+            return connection.execute(
+                "SELECT 1 FROM jobs WHERE json_extract(payload, '$._sync_cycle') = ? AND state != 'done' LIMIT 1",
+                (cycle_id,),
+            ).fetchone() is not None

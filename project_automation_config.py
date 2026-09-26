@@ -33,6 +33,14 @@ CHANNEL_FIELDS = (
     "feedback_channel_id", "support_channel_id", "issues_channel_id",
     "reviews_channel_id", "commits_channel_id", "github_channel_id",
 )
+CHANNEL_PURPOSES = (
+    ("feedback_channel_id", "Feedback intake", ("forum", "text"), "Conversation, reporter-written reports, and approval."),
+    ("issues_channel_id", "Issue tracking", ("forum",), "GitHub issues and their current state."),
+    ("reviews_channel_id", "Pull requests", ("forum",), "PR discussion, reviews, and code updates in one post per PR."),
+    ("commits_channel_id", "Commit updates", ("text",), "Grouped commit updates from pushes."),
+    ("github_channel_id", "Repository updates", ("text",), "Release and workflow notifications."),
+    ("support_channel_id", "Support handoff (optional)", ("text",), "Explicit handoff to feedback from support."),
+)
 ID_FIELDS = ("guild_id", "github_app_id", "github_installation_id") + CHANNEL_FIELDS
 ID_LIST_FIELDS = ("maintainer_role_ids", "maintainer_user_ids")
 ENV_FIELDS = (
@@ -141,13 +149,13 @@ def config_errors(config) -> list[str]:
     normalized = normalize_project_config(config)
     required = {
         "bot_name": "Choose the dedicated helper bot.",
-        "guild_id": "Set the Discord server ID.",
+        "guild_id": "Choose the Discord server.",
         "repository": "Set a GitHub owner/repository.",
-        "feedback_channel_id": "Set the #submit-feedback channel ID.",
-        "issues_channel_id": "Set the #issue-tracker channel ID.",
-        "reviews_channel_id": "Set the #review-please channel ID.",
-        "commits_channel_id": "Set the #commit-log channel ID.",
-        "github_channel_id": "Set the #github channel ID.",
+        "feedback_channel_id": "Choose a Feedback intake channel.",
+        "issues_channel_id": "Choose an Issue tracking forum.",
+        "reviews_channel_id": "Choose a Pull requests forum.",
+        "commits_channel_id": "Choose a Commit updates text channel.",
+        "github_channel_id": "Choose a Repository updates text channel.",
         "github_app_id": "Set the GitHub App ID.",
         "github_installation_id": "Set the GitHub App installation ID.",
     }

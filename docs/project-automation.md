@@ -4,20 +4,34 @@ Project automation connects Discord feedback to a GitHub repository. The selecte
 
 ## Channel behavior
 
-| Channel | Type | Behavior |
+| Purpose | Type | Behavior |
 | --- | --- | --- |
-| `submit-feedback` | Forum recommended; text supported | Each report gets a conversation with the helper. The reporter writes and approves the public text after the checks pass. |
-| `issue-tracker` | Forum | One post per GitHub issue. Edits and current state are synchronized; closed issues archive and lock their posts; reopening unlocks them. |
-| `review-please` | Forum | One post per pull request, with distinct draft, open, closed, and merged states. |
-| `commit-log` | Text | Grouped push summaries, including a link to the comparison. |
-| `github` | Text | Release and workflow-run notifications. |
-| `support` | Text, optional | A user explicitly runs `/feedback report:…` to start a feedback thread. Ordinary support conversations are not copied automatically. |
+| Feedback intake | Forum recommended; text supported | Each report gets a conversation with the helper. The reporter writes and approves the public text after the checks pass. |
+| Issue tracking | Forum | One post per GitHub issue. Edits and current state are synchronized; closed issues archive and lock their posts; reopening unlocks them. |
+| Pull requests | Forum | One post per PR, with draft, open, closed, and merged states, plus PR discussion and code updates. |
+| Commit updates | Text | Grouped push summaries, including a link to the comparison. |
+| Repository updates | Text | Release and workflow-run notifications. |
+| Support handoff (optional) | Text | A user explicitly runs `/feedback report:…` to start a feedback thread. Ordinary support conversations are not copied automatically. |
 
-The configured project channels are reserved for the helper. Other character bots yield those channels. The existing global pause and channel response policy still apply.
+These are purpose labels; existing channel names can stay unchanged. Each purpose needs a distinct destination. The configured project channels are reserved for the helper. Other character bots yield those channels. The existing global pause and channel response policy still apply.
+
+## Pull request activity
+
+The helper adds GitHub activity to the PR's existing forum post:
+
+- PR comments, code review comments and replies, including edits and deletions.
+- Published reviews, edited or dismissed reviews, and resolved or reopened review threads.
+- Code updates from PR synchronization, including fork branches and force pushes, with source commit/comparison links when available.
+
+Human and bot authors are included and attributed. Messages retain source text, timestamps, and GitHub links; long text is marked as an excerpt with a link to the complete source. Edits, deletions, and bot authors are labelled. Discord mentions are disabled. No language model rewrites this activity, and Discord replies are not sent back to GitHub.
+
+The helper creates or recovers the PR post before delivering its activity. A closed or merged PR's post returns to its archived/locked state after delivery. Source identities and delivery receipts prevent webhook redelivery and reconciliation from producing duplicate copies.
+
+Activity starts at the mapping's first activation. Earlier discussion is not imported as a backlog, though later changes to it can appear. The activation time and reconciliation checkpoints survive restarts and pauses. Changing the repository, server, helper, or PR forum creates a separate mapping; returning to an earlier mapping retains its saved baseline.
 
 ## Feedback and personality
 
-1. Post a problem or feature idea in `submit-feedback`, or run `/feedback report:…` in support. A rough description is enough to start.
+1. Post a problem or feature idea in the Feedback intake channel, or run `/feedback report:…` in the Support handoff channel. A rough description is enough to start.
 2. Reply in the thread. The helper asks a useful question directly, in character, and helps establish whether the report belongs on GitHub. For a bug, this may include the steps, expected result, actual result, and version. Each reply builds on the conversation.
 3. When ready, choose **Write my report**. Enter the title and report in your own words, then type **YES** to confirm you wrote them yourself. The helper can suggest missing details in conversation; it does not write the public report for you.
 4. The helper checks the submitted report for actionable details and searches for duplicates. Tests, support requests, non-issues, incomplete reports, and unsuccessful duplicate checks cannot proceed directly to publication. Keep talking or ask a maintainer when help is needed.
@@ -50,15 +64,19 @@ In **Project → Feedback cases**, inspect the reporter’s text, authorship con
 ## Setup
 
 1. Add a dedicated bot identity through **Config**, using the existing bot configuration flow. Select its existing character and configure a text provider.
-2. Open **Project**. Set the bot, personality, server, repository, channels, and maintainer roles/users. Save with automation paused.
+2. Open **Project**. Select the helper and a server it has joined, then choose the channels for each purpose, personality, repository, and maintainer roles/users. Channel choices come only from that helper and server. Issue tracking and Pull requests require forums; the other selectors show their supported types.
 3. Configure the GitHub App credential environment variables described in [OCI deployment](project-automation-oci.md). The dashboard contains variable names and presence checks, never private keys or webhook secrets.
-4. Enable automation after credentials, bot permissions, channel types, and webhook delivery have been checked.
+4. Choose **Check setup**. It checks the current draft without saving it or posting to Discord/GitHub. Results identify required settings, helper/server access, channel types and effective permissions, GitHub repository access, App permissions, and event subscriptions. **Passed**, **Needs attention**, and **Not verified** are separate outcomes; unavailable data and timeouts are not a pass.
+5. Resolve actionable results and save with automation paused. If the helper is offline or a channel is no longer available, its selected ID stays visible. **Advanced: enter Discord IDs manually** supports setup before the helper connects. Re-run checks after changing the draft.
+6. Enable automation when ready, then verify a signed webhook delivery and the live acceptance cases. Setup checks cannot prove webhook reachability, Developer Portal intent grants, future permissions, or a successful public delivery.
 
 The initial repository default is `SillyBunnyTeam/SillyBunny`. One configured server/repository/helper combination is supported per Discord Pals process.
 
 ## Recovery and operations
 
-**Project → Delivery activity** shows job IDs and failure/recovery states. Normal reads retry up to three attempts. An uncertain public write is held: a timeout or process crash does not cause another issue to be created automatically.
+The Project page shows the last accepted webhook, completed sync, and delivered PR activity for the current mapping, plus pending, failed, and held job counts. Status refreshes every 30 seconds while the page is visible. A quiet repository can have old or missing timestamps without an error. **Refresh activity** also reloads feedback cases and delivery rows.
+
+**Project → Delivery activity** shows job IDs, failure/recovery states, and recorded GitHub/Discord destinations. When a delivery receipt exists, PR activity links open its exact Discord message. Normal reads retry up to three attempts. An uncertain public write is held: a timeout or process crash does not cause another issue or activity message to be created automatically.
 
 - `/project-recover job_id:123` checks the destination for the existing delivery. GitHub matches must bear the configured App’s attribution and the recovery marker.
 - `/project-retry job_id:123` resumes failed work or checks a held delivery first.
@@ -66,7 +84,7 @@ The initial repository default is `SillyBunnyTeam/SillyBunny`. One configured se
 
 These commands require a configured maintainer or operator and the configured project server/helper. Their default Discord visibility requires Manage Server; administrators can grant command access to the maintainer role. Job and case revisions prevent a stale recovery action from replacing a newer decision.
 
-GitHub issues and PRs reconcile on startup and every 15 minutes, including previously tracked items that closed while the webhook was unavailable. Push, release, workflow, and maintainer-question events depend on webhooks; use GitHub’s delivery history to redeliver missed events. Repository and channel changes hold older jobs for their original configuration. New mirror destinations get separate mappings.
+GitHub issues, PRs, and accessible PR activity reconcile on startup and every 15 minutes. PR discovery includes recently updated open, closed, and merged PRs, so discussion can be recovered even when a PR opened and closed during an outage. PR activity scans use bounded, resumable jobs. They recover the source's available current state, not every intermediate edit; deletion checks can only recover comments the helper previously observed. Repository push feeds, release, workflow, and maintainer-question events still depend on webhooks; use GitHub’s delivery history to redeliver missed events. Repository and channel changes hold older jobs for their original configuration. New mirror destinations get separate mappings.
 
 The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
 
@@ -75,12 +93,14 @@ The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent 
 - `project_automation.py`: decisions, durable jobs, recovery, and lifecycle synchronization.
 - `project_automation_ai.py`: character-aware conversation, assessment, and validated model responses; no public report authorship.
 - `project_automation_discord.py`: persistent buttons, thread intake, commands, and mirrors.
+- `project_automation_activity.py` and `project_automation_discord_activity.py`: PR activity checkpoints, delivery orchestration, formatting, and receipts.
 - `project_automation_github.py`: repository-scoped GitHub App access, event parsing, and marker reconciliation.
+- `project_automation_github_activity.py`: PR activity normalization, source reads, and GitHub setup diagnostics.
 - `project_automation_store.py`: SQLite cases, decision audit, mappings, and jobs.
 - `project_automation_webhook.py`: signed webhook ingress.
-- `project_automation_config.py` and `project_automation_dashboard.py`: normalized settings and operator UI.
+- `project_automation_config.py`, `project_automation_setup.py`, and `project_automation_dashboard.py`: normalized settings, read-only setup checks, and operator UI.
 
-One worker processes jobs serially and shares the existing LLM concurrency coordinator. Waiting for people consumes no model calls. The initial active-report cap is three per reporter/server. GitHub list/recovery scans have a bounded 2,000-item ceiling; exceeding it produces a visible failure requiring inspection. Discord recovery searches recent messages/posts and never treats an absent result as permission to republish.
+One worker processes jobs serially and shares the existing LLM concurrency coordinator. Waiting for people consumes no model calls. The initial active-report cap is three per reporter/server. PR discovery, discussion, and missing-comment scans process at most 100 records per job and persist continuation work. Legacy issue listing and publication-recovery scans retain their 2,000-item ceiling; exceeding it produces a visible failure requiring inspection. Discord recovery searches recent messages/posts and never treats an absent result as permission to republish.
 
 ## Verification
 

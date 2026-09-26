@@ -3,9 +3,19 @@ import json
 import pytest
 
 from project_automation_config import (
-    PROJECT_DEFAULTS, config_errors, config_input_errors, credential_status,
+    CHANNEL_FIELDS, CHANNEL_PURPOSES, PROJECT_DEFAULTS, config_errors, config_input_errors, credential_status,
     normalize_project_config,
 )
+
+
+def test_purpose_labels_keep_existing_configuration_keys_and_types():
+    assert {row[0] for row in CHANNEL_PURPOSES} == set(CHANNEL_FIELDS)
+    assert [row[1] for row in CHANNEL_PURPOSES] == [
+        "Feedback intake", "Issue tracking", "Pull requests", "Commit updates",
+        "Repository updates", "Support handoff (optional)",
+    ]
+    assert dict((row[0], row[2]) for row in CHANNEL_PURPOSES)["reviews_channel_id"] == ("forum",)
+    assert not any("#" in message for message in config_errors({}))
 
 
 def complete_config():

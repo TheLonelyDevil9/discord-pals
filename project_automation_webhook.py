@@ -10,6 +10,7 @@ from flask import jsonify, request
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from project_automation_config import CHANNEL_FIELDS
+from project_automation_activity import activate, compact_event, mapping_key
 from project_automation_github import (
     GitHubError, normalize_event, validate_repository, validate_webhook_signature,
 )
@@ -18,7 +19,8 @@ from project_automation_github import (
 MAX_WEBHOOK_BYTES = 1024 * 1024
 _DELIVERY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,127}\Z")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
-_EVENTS = {"issues", "pull_request", "issue_comment", "push", "release", "workflow_run"}
+_EVENTS = {"issues", "pull_request", "issue_comment", "push", "release", "workflow_run",
+           "pull_request_review", "pull_request_review_comment", "pull_request_review_thread"}
 _BINDING_FIELDS = ("repository", "bot_name", "guild_id") + CHANNEL_FIELDS
 
 
@@ -88,17 +90,25 @@ def register_github_webhook(app, get_service) -> None:
 
         event = request.headers.get("X-GitHub-Event", "")
         if event == "ping":
+            try:
+                service.store.record_status(mapping_key(config), "last_webhook_at")
+            except Exception:
+                return jsonify(status="unavailable"), 503
             return jsonify(status="ok"), 200
         if event not in _EVENTS:
             return jsonify(status="ignored"), 202
         normalized = normalize_event(event, payload, repository)
         if normalized is None:
             return jsonify(status="ignored"), 202
+        if normalized.get("kind") == "pr_activity":
+            normalized = compact_event(normalized)
         normalized["_binding"] = binding
         try:
             # SQLite's unique key makes simultaneous GitHub redeliveries one job.
             # Conflicting payloads never replace previously accepted work.
+            activate(service.store, config)
             service.store.enqueue("event", normalized, key=f"github:{delivery}")
+            service.store.record_status(mapping_key(config), "last_webhook_at")
         except Exception:
             return jsonify(status="unavailable"), 503
         return jsonify(status="accepted"), 202

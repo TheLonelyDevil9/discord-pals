@@ -1,5 +1,8 @@
 import json
+import asyncio
 from pathlib import Path
+import threading
+from types import SimpleNamespace
 
 import pytest
 from flask import Flask
@@ -25,6 +28,12 @@ class FakeService:
             "notice_event": {"action": "report_ready", "facts": {"published": False}},
         }
         self.limit = None
+        self.bots = []
+        self.links = {}
+        self.store = SimpleNamespace(
+            get_link=lambda kind, key: self.links.get((kind, key)),
+            ensure_link=lambda kind, key, value: self.links.setdefault((kind, key), value),
+        )
         self.jobs = [{"id": 1, "kind": "publish", "status": "recovery", "attempts": 1,
                       "error": "Write result unknown.", "payload": {"provider_context": "private-internal-context"}}]
 
@@ -57,7 +66,8 @@ def setup(monkeypatch):
     service = FakeService()
     dashboard.register_project_routes(app, lambda: service,
                                      get_bot_names=lambda: ["Project Helper"],
-                                     get_character_names=lambda: ["firefly"])
+                                     get_character_names=lambda: ["firefly"],
+                                     get_bot_instances=lambda: service.bots)
     client = app.test_client()
     with client.session_transaction() as session:
         session["csrf_token"] = "test-csrf"
@@ -79,7 +89,8 @@ def valid_config():
 
 
 @pytest.mark.parametrize("path", ["/project-automation", "/api/project-automation", "/api/project-automation/cases",
-                                 "/api/project-automation/cases/case-one", "/api/project-automation/jobs"])
+                                 "/api/project-automation/cases/case-one", "/api/project-automation/jobs",
+                                 "/api/project-automation/discord-options"])
 def test_routes_require_auth_when_password_is_set(setup, monkeypatch, path):
     client, _, _ = setup
     monkeypatch.setenv("DASHBOARD_PASS", "test-password")
@@ -136,6 +147,33 @@ def test_enable_known_bot_with_ready_connection_then_pause(setup, monkeypatch):
     assert response.status_code == 200
     assert not saved["config"]["enabled"]
     assert saved["config"]["bot_name"] == "Project Helper"
+
+
+def test_offline_enable_persists_activity_baseline_and_later_activation_preserves_it(setup, monkeypatch):
+    from project_automation_activity import activate, mapping_key
+    client, saved, service = setup
+    monkeypatch.setenv("PROJECT_GITHUB_PRIVATE_KEY", "test-key")
+    monkeypatch.setenv("PROJECT_GITHUB_WEBHOOK_SECRET", "test-webhook")
+    monkeypatch.setattr("project_automation_activity.time", SimpleNamespace(time=lambda: 100.0))
+    assert service.bots == []
+    response = client.post("/api/project-automation", json=valid_config(), headers=csrf())
+    assert response.status_code == 200
+    key = ("pr_activation", mapping_key(saved["config"]))
+    assert service.links[key] == {"since": 100.0}
+    monkeypatch.setattr("project_automation_activity.time", SimpleNamespace(time=lambda: 200.0))
+    # The same persistent store is consulted by a worker after startup/restart.
+    assert activate(service.store, saved["config"]) == {"since": 100.0}
+    assert client.post("/api/project-automation", json={"max_questions": 4}, headers=csrf()).status_code == 200
+    assert service.links[key] == {"since": 100.0}
+    assert client.post("/api/project-automation", json={"enabled": False}, headers=csrf()).status_code == 200
+    assert client.post("/api/project-automation", json={"enabled": True}, headers=csrf()).status_code == 200
+    assert service.links[key] == {"since": 100.0}
+    response = client.post("/api/project-automation", json={"reviews_channel_id": "100000000000000090"}, headers=csrf())
+    assert response.status_code == 200
+    new_key = ("pr_activation", mapping_key(saved["config"]))
+    assert new_key != key
+    assert service.links[new_key] == {"since": 200.0}
+    assert service.links[key] == {"since": 100.0}
 
 
 def test_enable_rejects_unknown_bot_or_personality(setup, monkeypatch):
@@ -310,3 +348,198 @@ def test_job_target_rejects_unexpected_github_locations(setup, url):
     }}]
     target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
     assert "github_url" not in target
+
+
+@pytest.fixture
+def bot_loop():
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_forever()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert started.wait(2)
+    try:
+        yield loop
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(2)
+        loop.close()
+
+
+def test_check_requires_auth_and_csrf_and_does_not_save(setup, monkeypatch):
+    client, saved, _ = setup
+    before = dict(saved["config"])
+    monkeypatch.setenv("DASHBOARD_PASS", "test-password")
+    assert client.post("/api/project-automation/check", json={}, headers=csrf()).status_code == 401
+    with client.session_transaction() as session:
+        session["logged_in"] = True
+    assert client.post("/api/project-automation/check", json={}).status_code == 403
+    response = client.post("/api/project-automation/check", json=valid_config(), headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json()["saved"] is False
+    assert saved["config"] == before
+
+
+@pytest.mark.parametrize("payload", [None, [], {"guild_id": 1e18}, {"private_key": "do-not-echo-secret"}, {"enabled": "true"}])
+def test_check_rejects_malformed_draft_without_echoing_values(setup, payload):
+    client, saved, _ = setup
+    before = dict(saved["config"])
+    response = client.post("/api/project-automation/check", data=json.dumps(payload), content_type="application/json", headers=csrf())
+    assert response.status_code == 400
+    assert "do-not-echo-secret" not in response.get_data(as_text=True)
+    assert saved["config"] == before
+
+
+def test_check_executes_only_on_selected_helper_loop_with_normalized_unsaved_draft(setup, bot_loop, monkeypatch):
+    client, saved, service = setup
+    helper = SimpleNamespace(name="Project Helper", client=SimpleNamespace(loop=bot_loop))
+    service.bots = [SimpleNamespace(name="Other helper", client=SimpleNamespace(loop=None)), helper]
+    received = []
+    async def checks(config, bot):
+        assert asyncio.get_running_loop() is bot_loop
+        received.append((config, bot))
+        return [{"key": "test", "label": "Draft check", "status": "passed", "detail": "Read only."}]
+    monkeypatch.setattr(dashboard.setup, "setup_checks", checks)
+    response = client.post("/api/project-automation/check", json={"config": valid_config()}, headers=csrf())
+    assert response.status_code == 200
+    assert received[0][0]["guild_id"] == "100000000000000001"
+    assert received[0][1] is helper
+    assert saved["config"]["bot_name"] == ""
+    assert response.get_json()["checks"][-1]["key"] == "test"
+
+
+def test_offline_selected_helper_never_borrows_another_bots_topology_or_loop(setup, bot_loop, monkeypatch):
+    client, _, service = setup
+    service.bots = [SimpleNamespace(name="Other helper", client=SimpleNamespace(loop=bot_loop))]
+    async def forbidden(*_):
+        pytest.fail("Read another helper's topology")
+    monkeypatch.setattr(dashboard.setup, "discord_options", forbidden)
+    monkeypatch.setattr(dashboard.setup, "setup_checks", forbidden)
+    result = client.get("/api/project-automation/discord-options?bot_name=Project+Helper&guild_id=100000000000000019").get_json()
+    assert result["status"] == "unverified"
+    assert result["guild_id"] == "100000000000000019"
+    assert result["guilds"] == result["channels"] == []
+    assert "Other helper" not in json.dumps(result)
+    result = client.post("/api/project-automation/check", json=valid_config(), headers=csrf()).get_json()
+    assert next(row for row in result["checks"] if row["key"] == "discord_helper")["status"] == "unverified"
+
+
+def test_discord_options_use_exact_selected_helper_and_do_not_save(setup, bot_loop, monkeypatch):
+    client, saved, service = setup
+    helper = SimpleNamespace(name="Project Helper", client=SimpleNamespace(loop=bot_loop))
+    service.bots = [helper]
+    async def options(config, bot):
+        assert bot is helper
+        assert asyncio.get_running_loop() is bot_loop
+        return {"status": "passed", "guild_id": config["guild_id"], "guilds": [], "channels": []}
+    monkeypatch.setattr(dashboard.setup, "discord_options", options)
+    result = client.get("/api/project-automation/discord-options?bot_name=Project+Helper&guild_id=100000000000000019").get_json()
+    assert result["guild_id"] == "100000000000000019"
+    assert saved["config"]["guild_id"] == ""
+    assert client.get("/api/project-automation/discord-options?guild_id=wrong").status_code == 400
+    assert client.get("/api/project-automation/discord-options?bot_name=Unknown").get_json()["status"] == "attention"
+
+
+def test_timed_out_setup_is_cancelled_and_reported_unverified(setup, bot_loop, monkeypatch):
+    client, _, service = setup
+    service.bots = [SimpleNamespace(name="Project Helper", client=SimpleNamespace(loop=bot_loop))]
+    cancelled = threading.Event()
+    async def slow(*_):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+    monkeypatch.setattr(dashboard.setup, "CHECK_TIMEOUT", 0.03)
+    monkeypatch.setattr(dashboard.setup, "setup_checks", slow)
+    result = client.post("/api/project-automation/check", json=valid_config(), headers=csrf()).get_json()
+    assert cancelled.wait(2)
+    assert next(row for row in result["checks"] if row["key"] == "discord_helper")["status"] == "unverified"
+
+
+def test_page_has_generic_selectors_manual_fallback_and_visible_only_status_polling(setup):
+    client, saved, _ = setup
+    saved["config"].update(valid_config())
+    text = client.get("/project-automation").get_data(as_text=True)
+    for label in ("Feedback intake", "Issue tracking", "Pull requests", "Commit updates", "Repository updates", "Support handoff (optional)"):
+        assert label in text
+    assert 'name="reviews_channel_id" data-discord-key="reviews_channel_id"' in text
+    assert 'data-manual-key="reviews_channel_id" value="100000000000000004"' in text
+    assert "setTimeout(pollStatus, 30000)" in text
+    assert "if (!document.hidden)" in text
+    assert "visibilitychange" in text
+    assert "Checks the draft below without saving settings or posting messages." in text
+    assert "#review-please" not in text and "#submit-feedback" not in text
+    assert '<div id="project-destinations"' in text
+
+
+def test_pr_activity_jobs_link_to_exact_recorded_receipt_with_pinned_binding(setup):
+    from unittest.mock import Mock
+    from project_automation_activity import activity_receipt_key
+    client, saved, service = setup
+    saved["config"]["reviews_channel_id"] = "999"
+    receipt = {"channel_id": "789", "message_id": "790", "forum_id": "456",
+               "repository": "team/project", "guild_id": "123", "bot_name": "Helper"}
+    service.store = SimpleNamespace(get_link=Mock(side_effect=lambda kind, key: None if kind == "pr_prepared" else receipt))
+    service.jobs = [{"id": 2, "kind": "pr_activity", "payload": {
+        "kind": "pr_activity", "key": "review:42", "source_version": "version-2", "number": 7,
+        "repository": "team/project", "html_url": "https://github.com/team/project/pull/7#pullrequestreview-42",
+        "body": "private-event-body", "_binding": {"guild_id": "123", "bot_name": "Helper", "reviews_channel_id": "456", "repository": "team/project"},
+    }}]
+    response = client.get("/api/project-automation/jobs")
+    target = response.get_json()["jobs"][0]["target"]
+    assert target["discord_url"] == "https://discord.com/channels/123/789/790"
+    assert target["github_url"] == "https://github.com/team/project/pull/7#pullrequestreview-42"
+    payload = service.jobs[0]["payload"]
+    service.store.get_link.assert_any_call("pr_activity_delivery", activity_receipt_key(payload["_binding"], payload) + ":version-2")
+    assert "private-event-body" not in response.get_data(as_text=True)
+    receipt["forum_id"] = "other-forum"
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["discord_url"] == "https://discord.com/channels/123/456"
+
+
+@pytest.mark.parametrize("kind", ["pr_sync_page", "pr_sync_check", "pr_sync_missing", "pr_sync_discover"])
+def test_failed_reconciliation_links_to_its_original_destination(setup, kind):
+    client, saved, service = setup
+    saved["config"].update(guild_id="999", reviews_channel_id="888")
+    service.jobs = [{"id": 3, "kind": kind, "state": "failed", "payload": {
+        "repository": "Owner/Project", "number": 7,
+        "_binding": {"repository": "Owner/Project", "guild_id": "123", "bot_name": "Helper", "reviews_channel_id": "456"},
+    }}]
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["discord_url"] == "https://discord.com/channels/123/456"
+    assert target["github_url"] == "https://github.com/Owner/Project/pull/7"
+    service.links[("mirror", "123:Helper:456:Owner/Project:pull:7")] = {
+        "repository": "Owner/Project", "guild_id": "123", "bot_name": "Helper", "channel_id": "789",
+    }
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["discord_url"] == "https://discord.com/channels/123/789"
+
+
+def test_pr_activity_target_uses_canonical_prepared_version_and_thread_fallback(setup):
+    from project_automation_activity import activity_receipt_key
+    client, _, service = setup
+    binding = {"guild_id": "123", "bot_name": "Helper", "reviews_channel_id": "456", "repository": "team/project"}
+    payload = {"kind": "pr_activity", "key": "comment:55", "number": 7, "source_version": "old", "repository": "team/project", "_binding": binding}
+    prepared = {**payload, "source_version": "current", "delivery_key": "comment:55:occurrence-9",
+                "html_url": "https://github.com/team/project/pull/7#issuecomment-55"}
+    key = activity_receipt_key(binding, prepared)
+    records = {
+        ("pr_prepared", "11"): prepared,
+        ("pr_activity_delivery", key + ":current"): {
+            **binding, "forum_id": "456", "channel_id": "700", "message_id": "701", "source_version": "current"},
+        ("pr_activity", key): {
+            **binding, "forum_id": "456", "channel_id": "700", "message_id": "702", "source_version": "later"},
+        ("mirror", "123:Helper:456:team/project:pull:7"): {**binding, "channel_id": "700"},
+    }
+    service.store = SimpleNamespace(get_link=lambda kind, key: records.get((kind, key)))
+    service.jobs = [{"id": 11, "kind": "event", "payload": payload}]
+    result = client.get("/api/project-automation/jobs").get_json()["jobs"][0]
+    assert result["activity"] == "pr_activity"
+    assert result["target"]["discord_url"] == "https://discord.com/channels/123/700/701"
+    assert result["target"]["github_url"].endswith("#issuecomment-55")
+    del records[("pr_activity_delivery", key + ":current")]
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["discord_url"] == "https://discord.com/channels/123/700"

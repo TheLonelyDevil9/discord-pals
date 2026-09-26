@@ -42,16 +42,35 @@
     .project-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 24px; }
     .project-form .form-group { margin: 0; min-width: 0; }
     .project-form input, .project-form select, .project-form textarea { width: 100%; }
+    .project-form input:not([type="checkbox"]):not([type="radio"]):focus-visible, .project-form select:focus-visible, .project-form textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .project-form .project-enabled { display: inline-flex; align-items: center; gap: 10px; }
     .project-form .project-enabled input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
     .project-form .form-hint { color: var(--text-secondary); margin-top: 6px; font-size: 0.75rem; }
     .project-form .project-span { grid-column: span 2; }
     .project-form-actions { display: flex; align-items: center; gap: 16px; margin-top: 28px; flex-wrap: wrap; }
-    .project-form-actions .btn-primary { background: oklch(52% 0.18 255); }
+    .project-form-actions .btn-primary { background: oklch(52% 0.18 255); color: var(--on-accent); }
     .project-notice { margin-top: 16px; color: var(--text-secondary); }
     .project-errors { margin-top: 12px; padding-left: 20px; color: var(--text-primary); }
     .project-errors li { margin-top: 4px; }
     .project-credentials { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px 24px; color: var(--text-secondary); }
+    .project-health { display: flex; flex-wrap: wrap; gap: 14px 28px; margin-top: 18px; }
+    .project-health dt { color: var(--text-secondary); font-size: 0.75rem; }
+    .project-health dd { margin: 4px 0 0; font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+    .project-destinations { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 14px; }
+    .project-destinations a, .project-channel-link { color: var(--text-primary); text-decoration: underline; text-underline-offset: 3px; font-size: 0.8125rem; }
+    .project-channel-link { display: inline-block; margin-top: 6px; }
+    .project-channel-link[hidden] { display: none; }
+    .project-check-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+    .project-checks { list-style: none; margin-top: 12px; }
+    .project-checks li { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+    .project-check-heading { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+    .project-checks p { color: var(--text-secondary); margin-top: 5px; font-size: 0.8125rem; overflow-wrap: anywhere; }
+    .project-check-state { font-size: 0.75rem; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; }
+    .project-check-state[data-state="attention"] { background: var(--warning-muted); }
+    .project-check-state[data-state="passed"] { background: var(--accent-muted); }
+    .project-manual { margin-top: 20px; }
+    .project-manual summary { font-size: 0.875rem; }
+    .project-manual .project-form-grid { margin-top: 14px; }
     .project-jobs { margin-top: 14px; }
     .project-jobs td, .project-jobs th { padding: 12px; }
     .project-jobs th { color: var(--text-secondary); }
@@ -89,6 +108,14 @@
     </div>
 </header>
 <p id="project-status-detail" class="project-hint" role="status" aria-live="polite"></p>
+<dl class="project-health" aria-label="Automation activity">
+    <div><dt>Last accepted webhook</dt><dd id="project-last-webhook">Not recorded</dd></div>
+    <div><dt>Last completed sync</dt><dd id="project-last-sync">Not recorded</dd></div>
+    <div><dt>Last PR activity delivered</dt><dd id="project-last-activity">Not recorded</dd></div>
+    <div><dt>Delivery queue</dt><dd id="project-queue">Not available</dd></div>
+</dl>
+<p class="project-hint project-notice">Status refreshes every 30 seconds while this page is visible. A quiet repository may have no recent activity.</p>
+<div id="project-destinations" class="project-destinations" role="navigation" aria-label="Saved Discord destinations"></div>
 
 <section class="project-section" aria-labelledby="feedback-heading">
     <div class="project-toolbar">
@@ -108,6 +135,12 @@
 <details class="project-section project-setup" {% if not project.ready or not project.config.enabled %}open{% endif %}>
     <summary>Helper setup</summary>
     <p class="project-notice">Create the dedicated bot in <a href="/config">Config</a>, then assign its channels and personality here. Save with automation paused while setting up.</p>
+    <div class="project-check-actions">
+        <button type="button" class="btn btn-secondary" id="project-check">Check setup</button>
+        <p class="project-hint" id="project-check-summary" role="status" aria-live="polite">Checks the draft below without saving settings or posting messages.</p>
+    </div>
+    <ul id="project-checks" class="project-checks" aria-label="Setup check results"></ul>
+    <ul id="project-check-errors" class="project-errors" role="alert"></ul>
     <ul class="project-errors" id="project-setup-errors" aria-label="Setup needed"></ul>
     <form id="project-form" class="project-form">
         <label class="project-enabled" for="project-enabled">
@@ -146,8 +179,12 @@
                     <input id="project-repository" name="repository" value="{{ project.config.repository }}" placeholder="owner/repository" maxlength="140" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label for="project-guild-id">Discord server ID</label>
-                    <input id="project-guild-id" name="guild_id" value="{{ project.config.guild_id }}" inputmode="numeric" pattern="[0-9]*" maxlength="20" spellcheck="false">
+                    <label for="project-guild-id">Discord server</label>
+                    <select id="project-guild-id" name="guild_id" data-discord-key="guild_id" aria-describedby="project-discord-options-status">
+                        <option value="">Choose a server</option>
+                        {% if project.config.guild_id %}<option value="{{ project.config.guild_id }}" selected>Saved ID {{ project.config.guild_id }} (loading)</option>{% endif %}
+                    </select>
+                    <p class="form-hint">Only servers joined by the selected helper appear.</p>
                 </div>
                 <div class="form-group">
                     <label for="project-max-questions">Clarification limit</label>
@@ -158,23 +195,40 @@
         </fieldset>
         <fieldset>
             <legend>Discord channels</legend>
-            <p class="form-hint" style="margin-bottom: 14px">Enable Developer Mode in Discord, then copy each channel’s ID. Use a separate channel for each function.</p>
+            <div class="project-check-actions">
+                <p class="form-hint" id="project-discord-options-status" role="status" aria-live="polite">Loading this helper's channels…</p>
+                <button type="button" class="btn btn-secondary" id="project-reload-discord">Refresh choices</button>
+            </div>
+            <p class="form-hint" style="margin: 12px 0 14px">Choose a separate channel for each purpose. Your channel names can be anything.</p>
             <div class="project-form-grid">
-                {% for key, label, hint in [
-                    ('feedback_channel_id', '#submit-feedback', 'Conversation, reporter-written reports, and approval.'),
-                    ('issues_channel_id', '#issue-tracker', 'GitHub issues and their current state.'),
-                    ('reviews_channel_id', '#review-please', 'Pull requests and review progress.'),
-                    ('commits_channel_id', '#commit-log', 'Grouped commit updates from pushes.'),
-                    ('github_channel_id', '#github', 'Release and workflow notifications.'),
-                    ('support_channel_id', '#support (optional)', 'Explicit handoff to feedback from support.')
-                ] %}
+                {% for key, label, types, hint in project.channel_purposes %}
                 <div class="form-group">
                     <label for="project-{{ key }}">{{ label }}</label>
-                    <input id="project-{{ key }}" name="{{ key }}" value="{{ project.config[key] }}" inputmode="numeric" pattern="[0-9]*" maxlength="20" spellcheck="false">
-                    <p class="form-hint">{{ hint }}</p>
+                    <select id="project-{{ key }}" name="{{ key }}" data-discord-key="{{ key }}" aria-describedby="project-hint-{{ key }}">
+                        <option value="">{% if key == 'support_channel_id' %}No support handoff{% else %}Choose a channel{% endif %}</option>
+                        {% if project.config[key] %}<option value="{{ project.config[key] }}" selected>Saved ID {{ project.config[key] }} (loading)</option>{% endif %}
+                    </select>
+                    <p class="form-hint" id="project-hint-{{ key }}">{{ types | join(' or ') | capitalize }}. {{ hint }}</p>
+                    <a class="project-channel-link" id="project-link-{{ key }}" target="_blank" rel="noopener noreferrer" hidden>Open destination</a>
                 </div>
                 {% endfor %}
             </div>
+            <details class="project-manual">
+                <summary>Advanced: enter Discord IDs manually</summary>
+                <p class="form-hint">Use Discord Developer Mode → Copy ID when choices are unavailable. IDs stay unchanged when the helper is offline or access changes.</p>
+                <div class="project-form-grid">
+                    <div class="form-group">
+                        <label for="project-manual-guild_id">Discord server ID</label>
+                        <input id="project-manual-guild_id" data-manual-key="guild_id" value="{{ project.config.guild_id }}" inputmode="numeric" pattern="[0-9]*" maxlength="20" spellcheck="false">
+                    </div>
+                    {% for key, label, types, hint in project.channel_purposes %}
+                    <div class="form-group">
+                        <label for="project-manual-{{ key }}">{{ label }} ID</label>
+                        <input id="project-manual-{{ key }}" data-manual-key="{{ key }}" value="{{ project.config[key] }}" inputmode="numeric" pattern="[0-9]*" maxlength="20" spellcheck="false">
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
         </fieldset>
         <fieldset>
             <legend>Maintainer access</legend>
@@ -244,7 +298,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const initial = {{ project | tojson }};
     let snapshot = initial;
     let selectedId = null;
+    let choicesRequest = 0;
+    let checkRequest = 0;
+    let draftRevision = 0;
+    let hasChecks = false;
+    let statusTimer = null;
+    let statusLoading = false;
     const form = document.getElementById('project-form');
+    const purposes = initial.channel_purposes;
     const labels = {
         discussing: 'In conversation', awaiting_report: 'Waiting for the reporter’s text',
         awaiting_choice: 'Earlier decision pending', awaiting_details: 'Waiting for details',
@@ -252,7 +313,9 @@ document.addEventListener('DOMContentLoaded', function () {
         assessing: 'Reading feedback', processing: 'Processing', queued: 'Queued', filed: 'Filed on GitHub',
         closed: 'Closed', pending: 'Queued', running: 'In progress', done: 'Delivered',
         completed: 'Delivered', failed: 'Failed', recovery: 'Check before retrying', uncertain: 'Check before retrying',
-        inflight: 'Sending', leased: 'In progress', publishing: 'Publishing'
+        inflight: 'Sending', leased: 'In progress', publishing: 'Publishing',
+        pr_activity: 'PR activity', pr_sync_page: 'PR activity sync', pr_sync_check: 'PR activity recovery check',
+        pr_sync_missing: 'PR comment recovery scan', pr_sync_discover: 'PR discovery'
     };
     function readable(value) { return labels[value] || String(value || 'Unknown').replaceAll('_', ' '); }
     function caseTitle(item) { return (item.submitted_report || {}).title || (item.draft || {}).title || item.title || 'Feedback case'; }
@@ -325,7 +388,145 @@ document.addEventListener('DOMContentLoaded', function () {
             element('span', 'Private key: ' + (data.credentials.private_key ? 'available' : 'missing')),
             element('span', 'Webhook secret: ' + (data.credentials.webhook_secret ? 'available' : 'missing'))
         );
+        const timeLabel = value => {
+            if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 'Not recorded';
+            return new Date(value * 1000).toLocaleString();
+        };
+        [['project-last-webhook', 'last_webhook_at'], ['project-last-sync', 'last_sync_at'], ['project-last-activity', 'last_activity_at']].forEach(([id, key]) => {
+            document.getElementById(id).textContent = timeLabel(data.service[key]);
+        });
+        const counts = data.service.job_counts;
+        document.getElementById('project-queue').textContent = counts
+            ? String(counts.pending ?? 0) + ' pending · ' + String(counts.failed ?? 0) + ' failed · ' + String(counts.recovery ?? 0) + ' held for recovery'
+            : 'Not available';
+        const destinations = document.getElementById('project-destinations');
+        destinations.replaceChildren();
+        purposes.forEach(([key, label]) => {
+            const url = discordUrl(data.config.guild_id, data.config[key]);
+            const link = url && safeLink(url, label);
+            if (link) destinations.append(link);
+        });
     }
+    function discordUrl(guild, channel) {
+        return [guild, channel].every(value => typeof value === 'string' && /^[0-9]{1,20}$/.test(value) && /[1-9]/.test(value))
+            ? 'https://discord.com/channels/' + guild + '/' + channel : '';
+    }
+    function draftConfig() {
+        const config = Object.fromEntries(new FormData(form).entries());
+        config.enabled = form.elements.enabled.checked;
+        config.max_questions = Number(config.max_questions);
+        ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });
+        return config;
+    }
+    function setChoice(select, entries, placeholder, selected) {
+        const options = [new Option(placeholder, '')];
+        entries.forEach(entry => options.push(new Option(entry.label, entry.id)));
+        if (selected && !entries.some(entry => entry.id === selected)) {
+            options.push(new Option('ID ' + selected + ' (unavailable)', selected));
+        }
+        select.replaceChildren(...options);
+        select.value = selected;
+        document.querySelector('[data-manual-key="' + select.name + '"]').value = selected;
+    }
+    function updateDraftLinks() {
+        purposes.forEach(([key]) => {
+            const link = document.getElementById('project-link-' + key);
+            const url = discordUrl(form.elements.guild_id.value, form.elements[key].value);
+            link.hidden = !url;
+            if (url) link.href = url;
+            else link.removeAttribute('href');
+        });
+    }
+    async function loadDiscordChoices() {
+        const sequence = ++choicesRequest;
+        const button = document.getElementById('project-reload-discord');
+        const status = document.getElementById('project-discord-options-status');
+        const bot = form.elements.bot_name.value;
+        const guild = form.elements.guild_id.value;
+        const selected = Object.fromEntries(purposes.map(([key]) => [key, form.elements[key].value]));
+        button.disabled = true;
+        status.textContent = 'Loading this helper’s servers and channels…';
+        try {
+            const query = new URLSearchParams({bot_name: bot, guild_id: guild});
+            const data = await requestJson('/api/project-automation/discord-options?' + query);
+            if (sequence !== choicesRequest) return;
+            setChoice(form.elements.guild_id, data.guilds.map(item => ({id: item.id, label: item.name})), 'Choose a server', guild);
+            purposes.forEach(([key, , types]) => {
+                const entries = data.channels.filter(item => types.includes(item.type)).map(item => ({
+                    id: item.id,
+                    label: (item.category ? item.category + ' / ' : '') + '#' + item.name + ' (' + item.type + ')'
+                }));
+                // A manual edit made while loading must win over the request's starting state.
+                const current = form.elements[key].value;
+                setChoice(form.elements[key], entries, key === 'support_channel_id' ? 'No support handoff' : 'Choose a channel', current === selected[key] ? selected[key] : current);
+            });
+            status.textContent = data.detail;
+            updateDraftLinks();
+        } catch (error) {
+            if (sequence !== choicesRequest) return;
+            status.textContent = error.message + ' Saved selections are preserved. Use Advanced IDs if needed.';
+        } finally { if (sequence === choicesRequest) button.disabled = false; }
+    }
+    function draftChanged() {
+        draftRevision += 1;
+        if (hasChecks) document.getElementById('project-check-summary').textContent = 'The draft changed. Run Check setup again for current results.';
+    }
+    form.addEventListener('input', draftChanged);
+    form.addEventListener('change', draftChanged);
+    document.querySelectorAll('[data-discord-key]').forEach(select => {
+        select.addEventListener('change', () => {
+            document.querySelector('[data-manual-key="' + select.name + '"]').value = select.value;
+            updateDraftLinks();
+            if (select.name === 'guild_id') loadDiscordChoices();
+        });
+    });
+    document.querySelectorAll('[data-manual-key]').forEach(input => {
+        input.addEventListener('input', () => {
+            const select = form.elements[input.dataset.manualKey];
+            const value = input.value.trim();
+            if (![...select.options].some(option => option.value === value)) select.add(new Option('ID ' + value + ' (manual)', value));
+            select.value = value;
+            if (input.dataset.manualKey === 'guild_id') choicesRequest += 1;
+            updateDraftLinks();
+        });
+        if (input.dataset.manualKey === 'guild_id') input.addEventListener('change', loadDiscordChoices);
+    });
+    form.elements.bot_name.addEventListener('change', loadDiscordChoices);
+    document.getElementById('project-reload-discord').addEventListener('click', loadDiscordChoices);
+    document.getElementById('project-check').addEventListener('click', async function () {
+        const sequence = ++checkRequest;
+        const revision = draftRevision;
+        const summary = document.getElementById('project-check-summary');
+        this.disabled = true;
+        this.textContent = 'Checking…';
+        summary.textContent = 'Checking the selected helper, destinations, and GitHub App…';
+        errorsAt('project-check-errors', []);
+        try {
+            const data = await requestJson('/api/project-automation/check', 'POST', draftConfig());
+            if (sequence !== checkRequest) return;
+            const list = document.getElementById('project-checks');
+            list.replaceChildren();
+            const stateLabels = {passed: 'Passed', attention: 'Needs attention', unverified: 'Not verified'};
+            data.checks.forEach(item => {
+                const row = element('li');
+                const heading = element('div', undefined, 'project-check-heading');
+                const state = element('span', stateLabels[item.status] || 'Not verified', 'project-check-state');
+                state.dataset.state = item.status;
+                heading.append(element('strong', item.label), state);
+                row.append(heading, element('p', item.detail));
+                list.append(row);
+            });
+            hasChecks = true;
+            const attention = data.checks.filter(item => item.status === 'attention').length;
+            const unverified = data.checks.filter(item => item.status === 'unverified').length;
+            summary.textContent = revision !== draftRevision
+                ? 'The draft changed during checks. Run Check setup again for current results.'
+                : 'Checks complete: ' + attention + ' need attention, ' + unverified + ' not verified. Settings were not saved and no messages were posted.';
+        } catch (error) {
+            summary.textContent = error.message;
+            errorsAt('project-check-errors', error.details);
+        } finally { this.disabled = false; this.textContent = 'Check setup'; }
+    });
     function safeLink(url, title) {
         try {
             const parsed = new URL(url);
@@ -404,7 +605,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const list = document.getElementById('project-cases');
         list.replaceChildren();
         if (!cases.length) {
-            list.append(element('li', 'No feedback cases yet. After setup, a new post in #submit-feedback starts a conversation.', 'project-empty'));
+            list.append(element('li', 'No feedback cases yet. After setup, a new post in your Feedback intake channel starts a conversation.', 'project-empty'));
             return;
         }
         cases.forEach(item => {
@@ -438,7 +639,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const error = job.last_error || job.error;
             if (error) state.append(element('span', error, 'project-job-error'));
             if (['recovery', 'uncertain'].includes(status)) state.append(element('span', 'A public write may already exist. Check the destination before any retry.', 'project-job-error'));
-            const work = element('td', readable(job.kind));
+            const work = element('td', readable(job.activity || job.kind));
             work.append(element('span', 'Job ' + job.id, 'project-job-error'));
             const target = job.target || {};
             const destination = element('td', undefined, 'project-job-target');
@@ -488,10 +689,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     form.addEventListener('submit', async event => {
         event.preventDefault();
-        const config = Object.fromEntries(new FormData(form).entries());
-        config.enabled = form.elements.enabled.checked;
-        config.max_questions = Number(config.max_questions);
-        ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });
+        const config = draftConfig();
         const button = document.getElementById('project-save');
         const message = document.getElementById('project-save-status');
         errorsAt('project-save-errors', []);
@@ -512,8 +710,24 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (error) { document.getElementById('project-status-detail').textContent = error.message; this.disabled = false; }
     });
     document.getElementById('project-refresh').addEventListener('click', refresh);
+    function scheduleStatus() {
+        clearTimeout(statusTimer);
+        if (!document.hidden) statusTimer = setTimeout(pollStatus, 30000);
+    }
+    async function pollStatus() {
+        if (document.hidden || statusLoading) return;
+        statusLoading = true;
+        try { renderStatus(await requestJson('/api/project-automation')); }
+        catch (error) { document.getElementById('project-status-detail').textContent = 'Status could not refresh. ' + error.message; }
+        finally { statusLoading = false; scheduleStatus(); }
+    }
+    document.addEventListener('visibilitychange', scheduleStatus);
+    window.addEventListener('pagehide', () => clearTimeout(statusTimer));
     renderStatus(initial);
+    updateDraftLinks();
+    loadDiscordChoices();
     refresh();
+    scheduleStatus();
 });
 </script>
 {% endblock %}
