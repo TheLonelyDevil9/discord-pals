@@ -4,6 +4,36 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v2.8.0] - 2026-09-26
+
+Adds GitHub project feedback and PR activity in Discord, simpler provider setup, and tests that verify a real model reply.
+
+### Added
+
+- Optional Project helper with a dedicated Discord bot, GitHub App authentication, feedback conversations, issue and PR forum posts, and commit, release, and workflow updates.
+- Reporter-written issue submission with a minimal completeness check, an exact preview, and approval by the original reporter. Regular users can submit without a maintainer handoff. Duplicate suggestions are optional; `/ask-reporter` relays maintainer questions, and follow-up comments also require the reporter's own text and approval.
+- PR activity in the existing forum post: comments, inline replies, published reviews, edits, deletions, discussion resolution, and code updates, including fork PRs and force pushes. Messages show the GitHub author and source link, include bot authors, and suppress Discord mentions. Discord discussion is not copied back to GitHub.
+- Helper-specific server and channel pickers, purpose labels independent of channel names, and a manual ID fallback. **Check setup** verifies access, channel types, permissions, and GitHub App subscriptions without posting test messages.
+- Persistent delivery receipts, recovery controls, and bounded reconciliation for missed PR activity. The Project page shows accepted webhooks, completed syncs, and pending, failed, or held work with destination links.
+
+### Changed
+
+- Chat and image providers now start with Quick setup. Optional Advanced settings retain environment-variable keys, custom API formats, reasoning, timeouts, capabilities, and request overrides. Existing settings, fallback order, and per-character provider choices remain available.
+
+### Fixed
+
+- **Test model** now calls the saved provider with its actual model and request settings, without retries or switching to another configured provider. Native endpoint tests previously passed after local configuration checks alone. Results distinguish saved settings from a usable model reply and reject empty, thinking-only, blocked, malformed, or incomplete responses.
+- Automatic reasoning settings now use the native Gemini and OpenAI Responses request formats. Gemini accepts both bare model IDs and `models/` resource names, and keeps thought parts separate from visible replies.
+- Native response parsers no longer turn malformed text objects into apparent answers or fail on invalid response containers.
+- Built-in update backups take a consistent snapshot of the Project helper's SQLite database, including committed journal data.
+
+### Upgrade notes
+
+- Existing provider and project configuration remain compatible. Update Python dependencies before enabling the Project helper; GitHub App signing adds `PyJWT[crypto]`. See [Project helper setup](docs/project-automation.md#setup).
+- Existing GitHub Apps need `pull_request_review`, `pull_request_review_comment`, and `pull_request_review_thread` subscriptions for immediate review updates. Run **Check setup** after updating the App. Full permissions and subscriptions are listed in [deployment setup](docs/project-automation-oci.md#github-app).
+- PR discussion starts at each mapping's first activation; later edits to older comments count as new activity. Baselines survive restarts and pauses. Keep `bot_data/project_automation.sqlite3` on persistent storage to retain checkpoints and delivery receipts.
+- Re-run **Test model** after saving provider changes. It sends a real request that may consume tokens, uses a maximum 30-second timeout, and verifies text generation only. Images and tools require separate checks; nothing is sent to Discord.
+
 ## [v2.7.3] - 2026-07-29
 
 Adds a login-free liveness probe so host monitoring survives turning dashboard authentication on, and expands continuous integration to cover the branch where work actually lands.

@@ -247,6 +247,222 @@ class EndpointAdapterContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.deliverable_text, "Gemini reply.")
         self.assertEqual(result.usage, {"totalTokenCount": 5})
 
+    async def test_gemini_model_resource_prefix_is_removed_once_and_path_is_quoted(self):
+        models = {
+            "gemini-2.5-pro": "gemini-2.5-pro",
+            "models/gemini-2.5-pro": "gemini-2.5-pro",
+            "models/models/gemini-2.5-pro": "models%2Fgemini-2.5-pro",
+            "models/../gemini?key=unexpected#fragment": "..%2Fgemini%3Fkey%3Dunexpected%23fragment",
+            "/models/gemini-2.5-pro": "%2Fmodels%2Fgemini-2.5-pro",
+        }
+        for model, path_model in models.items():
+            with self.subTest(model=model):
+                post = _PostRecorder({})
+                adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
+                await adapter.generate(
+                    descriptor=_descriptor(contracts.EndpointType.GEMINI),
+                    request=contracts.ProviderRequest(
+                        endpoint_type=contracts.EndpointType.GEMINI, model=model,
+                        messages=[{"role": "user", "content": "hello"}],
+                    ),
+                    api_key="google-key", timeout=20,
+                )
+                self.assertEqual(
+                    post.calls[0]["url"],
+                    f"https://gateway.example/v1beta/models/{path_model}:generateContent",
+                )
+
+    async def _endpoint_result(self, endpoint, payload):
+        adapter = endpoint_adapters.EndpointProviderAdapter(post_json=_PostRecorder(payload))
+        return await adapter.generate(
+            descriptor=_descriptor(endpoint),
+            request=contracts.ProviderRequest(
+                endpoint_type=endpoint,
+                model="test-model",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            api_key="test-key",
+            timeout=20,
+        )
+
+    async def _gemini_result(self, payload):
+        return await self._endpoint_result(contracts.EndpointType.GEMINI, payload)
+
+    async def test_native_nonstring_text_is_not_a_deliverable_reply(self):
+        for text in (None, {}, {"not": "text"}, ["not text"], 7, True):
+            cases = [
+                (contracts.EndpointType.RESPONSES, {"output_text": text}),
+                (contracts.EndpointType.RESPONSES, {"output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": text}]},
+                ]}),
+                (contracts.EndpointType.ANTHROPIC_MESSAGES, {"content": [{"type": "text", "text": text}]}),
+                (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": [
+                    {"message": {"content": [{"type": "text", "text": text}]}},
+                ]}),
+                (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": [
+                    {"message": {"content": {"text": text}}},
+                ]}),
+            ]
+            for endpoint, payload in cases:
+                with self.subTest(endpoint=endpoint, text=text, payload=payload):
+                    result = await self._endpoint_result(endpoint, payload)
+                    self.assertEqual(result.deliverable_text, "")
+                    self.assertIs(result.raw, payload)
+
+    async def test_native_malformed_containers_do_not_generate_answers(self):
+        cases = [
+            (contracts.EndpointType.RESPONSES, {"output": 7}),
+            (contracts.EndpointType.RESPONSES, {"output": [{"type": "message", "content": 7}]}),
+            (contracts.EndpointType.ANTHROPIC_MESSAGES, {"content": 7}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": 7}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": {"message": {"content": "Wrong shape."}}}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": ["Wrong shape."]}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": [{"message": "Wrong shape."}]}),
+        ]
+        for endpoint, payload in cases:
+            with self.subTest(endpoint=endpoint, payload=payload):
+                result = await self._endpoint_result(endpoint, payload)
+                self.assertEqual(result.deliverable_text, "")
+
+    async def test_native_reasoning_does_not_stringify_malformed_text(self):
+        malformed = {"not": "text"}
+        cases = [
+            (contracts.EndpointType.RESPONSES, {"output": [
+                {"type": "reasoning", "summary": [{"text": malformed}]},
+            ]}),
+            (contracts.EndpointType.ANTHROPIC_MESSAGES, {"content": [
+                {"type": "thinking", "thinking": malformed},
+            ]}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": [
+                {"message": {"reasoning": {"content": {"text": malformed}}}},
+            ]}),
+        ]
+        for endpoint, payload in cases:
+            with self.subTest(endpoint=endpoint):
+                result = await self._endpoint_result(endpoint, payload)
+                self.assertEqual(result.deliverable_text, "")
+                self.assertIsNone(result.reasoning_text)
+
+    async def test_native_visible_blocks_and_reasoning_keep_their_exact_text(self):
+        cases = [
+            (contracts.EndpointType.RESPONSES, {"output": [
+                {"type": "reasoning", "summary": [{"text": "Private summary."}]},
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "Hi <@123>!\n"},
+                    {"type": "text", "text": "Welcome. <:wave:456>"},
+                ]},
+            ]}),
+            (contracts.EndpointType.ANTHROPIC_MESSAGES, {"content": [
+                {"type": "thinking", "thinking": "Private summary."},
+                {"type": "text", "text": "Hi <@123>!\n"},
+                {"type": "text", "text": "Welcome. <:wave:456>"},
+            ]}),
+            (contracts.EndpointType.CHAT_COMPLETIONS, {"choices": [{"message": {
+                "reasoning_content": "Private summary.",
+                "content": [{"text": "Hi <@123>!\n"}, {"text": "Welcome. <:wave:456>"}],
+            }}]}),
+        ]
+        for endpoint, payload in cases:
+            with self.subTest(endpoint=endpoint):
+                result = await self._endpoint_result(endpoint, payload)
+                self.assertEqual(result.deliverable_text, "Hi <@123>!\nWelcome. <:wave:456>")
+                self.assertEqual(result.reasoning_text, "Private summary.")
+
+    async def test_gemini_keeps_thoughts_out_of_the_visible_reply(self):
+        result = await self._gemini_result({
+            "candidates": [{
+                "content": {"parts": [
+                    {"thought": True, "text": "First thought."},
+                    {"text": "Hello, <@123>!\n"},
+                    {"thought": True, "text": "Second thought.", "thoughtSignature": "opaque"},
+                    {"thought": False, "text": "Have a lovely day. <:wave:456>"},
+                    {"inlineData": {"mimeType": "image/png", "data": "opaque"}},
+                ]},
+                "finishReason": "STOP",
+            }],
+        })
+
+        self.assertEqual(result.deliverable_text, "Hello, <@123>!\nHave a lovely day. <:wave:456>")
+        self.assertEqual(result.reasoning_text, "First thought.\nSecond thought.")
+
+    async def test_gemini_thought_only_is_not_a_deliverable_reply(self):
+        result = await self._gemini_result({
+            "candidates": [{
+                "content": {"parts": [{"thought": True, "text": "Still thinking."}]},
+                "finishReason": "MAX_TOKENS",
+            }],
+        })
+
+        self.assertEqual(result.deliverable_text, "")
+        self.assertEqual(result.reasoning_text, "Still thinking.")
+
+    async def test_gemini_malformed_or_nontext_content_is_not_an_answer(self):
+        payloads = [
+            None, "not an object", [], 123, {},
+            {"candidates": "not a list"},
+            {"candidates": {"content": {"parts": [{"text": "wrong shape"}]}}},
+            {"candidates": [None]},
+            {"candidates": ["not an object"]},
+            {"candidates": [{"content": "not an object"}]},
+            {"candidates": [{"content": {"parts": "not a list"}}]},
+            {"candidates": [{"content": {"parts": {"text": "wrong shape"}}}]},
+            {"candidates": [{"content": {"parts": [None, "not an object"]}}]},
+        ]
+        for value in (None, {}, {"text": "nested"}, [], ["nested"], 7, True):
+            payloads.append({"candidates": [{"content": {"parts": [{"text": value}]}}]})
+        for thought in ("true", "false", 1, 0, {}, None):
+            payloads.append({"candidates": [{"content": {"parts": [
+                {"text": "Ambiguous thought status.", "thought": thought},
+            ]}}]})
+
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                result = await self._gemini_result(payload)
+                self.assertEqual(result.deliverable_text, "")
+                self.assertIsNone(result.reasoning_text)
+                self.assertIs(result.raw, payload)
+
+    async def test_gemini_blocked_or_invalid_finish_is_not_a_deliverable_reply(self):
+        for reason in ("SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII",
+                       "MALFORMED_RESPONSE", "MALFORMED_FUNCTION_CALL", "OTHER", {"bad": "shape"}):
+            with self.subTest(reason=reason):
+                result = await self._gemini_result({
+                    "candidates": [{
+                        "content": {"parts": [{"text": "Incomplete candidate."}]},
+                        "finishReason": reason,
+                    }],
+                })
+                self.assertEqual(result.deliverable_text, "")
+
+        for candidates in ([], [{"content": {"parts": [{"text": "Blocked candidate."}]}}]):
+            with self.subTest(candidates=candidates):
+                result = await self._gemini_result({
+                    "promptFeedback": {"blockReason": "SAFETY"},
+                    "candidates": candidates,
+                })
+                self.assertEqual(result.deliverable_text, "")
+
+    async def test_gemini_preserves_partial_visible_output_and_finish_metadata(self):
+        result = await self._gemini_result({
+            "candidates": [{
+                "content": {"parts": [{"text": "Partial reply"}]},
+                "finishReason": "MAX_TOKENS",
+            }],
+        })
+
+        self.assertEqual(result.deliverable_text, "Partial reply")
+        self.assertEqual(result.raw["candidates"][0]["finishReason"], "MAX_TOKENS")
+
+    async def test_gemini_invalid_usage_does_not_corrupt_a_valid_answer(self):
+        for usage in ("not an object", [1], 7):
+            with self.subTest(usage=usage):
+                result = await self._gemini_result({
+                    "candidates": [{"content": {"parts": [{"text": "Visible reply."}]}}],
+                    "usageMetadata": usage,
+                })
+                self.assertEqual(result.deliverable_text, "Visible reply.")
+                self.assertEqual(result.usage, {})
+
     async def test_image_generation_modeled_but_disabled_rejects_before_http(self):
         post = _PostRecorder({})
         adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
@@ -310,6 +526,27 @@ class EndpointAdapterContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EndpointProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gemini_runtime_delivers_only_visible_text_and_rejects_thought_only(self):
+        for visible in ("Hello there.", None):
+            with self.subTest(visible=visible):
+                parts = [{"thought": True, "text": "Private thought summary."}]
+                if visible is not None:
+                    parts.append({"text": visible})
+                manager = object.__new__(providers.AIProviderManager)
+                manager._endpoint_adapter = endpoint_adapters.EndpointProviderAdapter(
+                    post_json=_PostRecorder({"candidates": [{"content": {"parts": parts}}]})
+                )
+                with patch.object(providers.log, "diagnostic"), \
+                        patch.object(providers.log, "ok"), patch.object(providers.log, "warn"):
+                    result = await manager._try_generate_endpoint(
+                        {"name": "Gemini", "url": "https://gateway.example", "key": "test",
+                         "endpoint_type": "gemini", "model": "gemini-2.5-pro"},
+                        "gemini-2.5-pro",
+                        [{"role": "user", "content": "Say hello."}],
+                        0.5, 128, "primary", timeout=20,
+                    )
+                self.assertEqual(result, visible)
+
     async def test_generate_routes_explicit_endpoint_provider_without_legacy_sdk_client(self):
         manager = object.__new__(providers.AIProviderManager)
         manager.providers = {"primary": object()}

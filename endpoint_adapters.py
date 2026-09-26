@@ -132,7 +132,8 @@ class EndpointProviderAdapter:
             path = "messages" if base_url.rstrip("/").lower().endswith("/v1") else "v1/messages"
             return _join_url(base_url, path), _anthropic_messages_body(request)
         if endpoint is EndpointType.GEMINI:
-            model = quote(request.model or descriptor.model, safe="")
+            model = (request.model or descriptor.model).removeprefix("models/")
+            model = quote(model, safe="")
             return _join_url(base_url, f"models/{model}:generateContent"), _gemini_body(request)
         raise EndpointAdapterError(
             ProviderError(
@@ -153,24 +154,26 @@ class EndpointProviderAdapter:
         payload: Mapping[str, Any],
     ) -> GenerationResult:
         endpoint = EndpointType.parse(request.endpoint_type)
+        response = payload if isinstance(payload, Mapping) else {}
         if endpoint is EndpointType.CHAT_COMPLETIONS:
-            text, reasoning = _parse_openai_chat_response(payload)
+            text, reasoning = _parse_openai_chat_response(response)
         elif endpoint is EndpointType.RESPONSES:
-            text, reasoning = _parse_openai_responses_response(payload)
+            text, reasoning = _parse_openai_responses_response(response)
         elif endpoint in (EndpointType.MESSAGES, EndpointType.ANTHROPIC_MESSAGES):
-            text, reasoning = _parse_anthropic_messages_response(payload)
+            text, reasoning = _parse_anthropic_messages_response(response)
         elif endpoint is EndpointType.GEMINI:
-            text, reasoning = _parse_gemini_response(payload)
+            text, reasoning = _parse_gemini_response(response)
         else:
             text, reasoning = "", None
 
+        usage = response.get("usage") or response.get("usageMetadata")
         return GenerationResult(
             text=text,
             reasoning_text=reasoning,
             provider_name=descriptor.name,
             tier=descriptor.tier,
             model=request.model or descriptor.model,
-            usage=dict(payload.get("usage") or payload.get("usageMetadata") or {}),
+            usage=dict(usage) if isinstance(usage, Mapping) else {},
             raw=payload,
         )
 
@@ -457,27 +460,33 @@ def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> None:
 
 
 def _parse_openai_chat_response(payload: Mapping[str, Any]) -> tuple[str, str | None]:
-    choices = payload.get("choices") or []
-    if not choices:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
         return "", None
-    message = (choices[0] or {}).get("message") or {}
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping):
+        return "", None
     return _response_content_text(message.get("content")), _reasoning_text(message)
 
 
 def _parse_openai_responses_response(payload: Mapping[str, Any]) -> tuple[str, str | None]:
-    if payload.get("output_text"):
-        return str(payload.get("output_text") or ""), _reasoning_text(payload)
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text:
+        return output_text, _reasoning_text(payload)
 
     text_parts = []
     reasoning_parts = []
-    for item in payload.get("output") or []:
+    output = payload.get("output")
+    for item in output if isinstance(output, list) else []:
         if not isinstance(item, Mapping):
             continue
         item_type = item.get("type")
         if item_type == "message":
-            for content in item.get("content") or []:
-                if isinstance(content, Mapping) and content.get("type") in ("output_text", "text"):
-                    text_parts.append(str(content.get("text") or ""))
+            contents = item.get("content")
+            for content in contents if isinstance(contents, list) else []:
+                if (isinstance(content, Mapping) and content.get("type") in ("output_text", "text")
+                        and isinstance(content.get("text"), str)):
+                    text_parts.append(content["text"])
         elif item_type in ("reasoning", "thinking"):
             reasoning_parts.append(_response_content_text(item.get("summary") or item.get("content")))
     return "".join(text_parts), "\n".join(part for part in reasoning_parts if part) or None
@@ -486,27 +495,49 @@ def _parse_openai_responses_response(payload: Mapping[str, Any]) -> tuple[str, s
 def _parse_anthropic_messages_response(payload: Mapping[str, Any]) -> tuple[str, str | None]:
     text_parts = []
     reasoning_parts = []
-    for part in payload.get("content") or []:
+    content = payload.get("content")
+    for part in content if isinstance(content, list) else []:
         if not isinstance(part, Mapping):
             continue
-        if part.get("type") == "text":
-            text_parts.append(str(part.get("text") or ""))
+        if part.get("type") == "text" and isinstance(part.get("text"), str):
+            text_parts.append(part["text"])
         elif part.get("type") in ("thinking", "reasoning"):
-            reasoning_parts.append(str(part.get("thinking") or part.get("text") or ""))
+            thinking = part.get("thinking") or part.get("text")
+            if isinstance(thinking, str):
+                reasoning_parts.append(thinking)
     return "".join(text_parts), "\n".join(part for part in reasoning_parts if part) or None
 
 
 def _parse_gemini_response(payload: Mapping[str, Any]) -> tuple[str, str | None]:
-    candidates = payload.get("candidates") or []
-    if not candidates:
+    feedback = payload.get("promptFeedback")
+    if isinstance(feedback, Mapping) and feedback.get("blockReason") not in (
+        None, "", "BLOCK_REASON_UNSPECIFIED",
+    ):
         return "", None
-    content = (candidates[0] or {}).get("content") or {}
-    text_parts = [
-        str(part.get("text") or "")
-        for part in content.get("parts") or []
-        if isinstance(part, Mapping) and part.get("text") is not None
-    ]
-    return "".join(text_parts), None
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], Mapping):
+        return "", None
+    candidate = candidates[0]
+    # A filtered or failed candidate is not a reply, even if a gateway includes text.
+    if candidate.get("finishReason") not in (None, "", "STOP", "MAX_TOKENS"):
+        return "", None
+    content = candidate.get("content")
+    if not isinstance(content, Mapping) or not isinstance(content.get("parts"), list):
+        return "", None
+
+    text_parts = []
+    reasoning_parts = []
+    for part in content["parts"]:
+        if not isinstance(part, Mapping) or not isinstance(part.get("text"), str):
+            continue
+        thought = part.get("thought", False)
+        if not isinstance(thought, bool):
+            continue
+        if thought:
+            reasoning_parts.append(part["text"])
+        else:
+            text_parts.append(part["text"])
+    return "".join(text_parts), "\n".join(part for part in reasoning_parts if part) or None
 
 
 def _response_content_text(content: Any) -> str:
@@ -514,13 +545,13 @@ def _response_content_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            str(part.get("text") or "")
+            part["text"]
             for part in content
-            if isinstance(part, Mapping)
+            if isinstance(part, Mapping) and isinstance(part.get("text"), str)
         )
     if isinstance(content, Mapping):
-        if content.get("text") is not None:
-            return str(content.get("text") or "")
+        if isinstance(content.get("text"), str):
+            return content["text"]
         if content.get("summary") is not None:
             return _response_content_text(content.get("summary"))
     return ""

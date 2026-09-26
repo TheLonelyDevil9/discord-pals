@@ -4,7 +4,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Discord.py](https://img.shields.io/badge/discord.py-2.3.2-7289da)
 
-Discord Pals is a local Discord bot project for running one or more character bots from Markdown character files. It works with OpenAI-compatible cloud providers, local LLM servers, fallback provider chains, image-aware models, reminders, memory, and a browser dashboard.
+Discord Pals is a local Discord bot project for running one or more character bots from Markdown character files. It works with OpenAI-compatible providers, native Anthropic and Gemini APIs, local LLM servers, fallback provider chains, image-aware models, reminders, memory, and a browser dashboard.
 
 It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy). The system prompt was authored by Geechan.
 
@@ -14,8 +14,9 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 
 ## Start Here
 
-- [Provider Configuration](docs/provider-config.md) covers `providers.json`, local models, fallback chains, reasoning options, vision support, and OpenRouter.
+- [Provider Configuration](docs/provider-config.md) covers Quick setup, saved-model tests, advanced settings, local models, fallback chains, reasoning, and vision.
 - [Feature Guide](docs/features.md) covers the dashboard, commands, memory, reminders, auto replies, characters, and multi-bot behavior.
+- [Project Helper](docs/project-automation.md) covers reporter-approved GitHub issues, PR activity in Discord, setup checks, and delivery recovery.
 - [Runtime Configuration](docs/runtime-config.md) lists the live settings in `bot_data/runtime_config.json`.
 - [Operations](docs/operations.md) covers dashboard security, updates, deployment, file layout, and troubleshooting.
 - [Engineering Map](docs/README.md) is for maintainers and coding agents.
@@ -23,12 +24,14 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 ## Features
 
 - Markdown character files with persona, example dialogue, and per-user context blocks.
-- OpenAI-compatible provider support, including local LLM servers and fallback tiers.
+- OpenAI-compatible, native Anthropic, and Gemini provider support, including local LLM servers and fallback tiers.
+- Quick provider setup with optional advanced controls and a test that calls the saved model.
 - Vision-capable request handling with text-only fallback for non-vision models.
 - Web dashboard for characters, prompts, providers, runtime settings, memories, reminders, channels, logs, stats, updates, and restart controls.
 - Unified learned-memory and manual-lore stores with dashboard editing.
 - Durable reminders, user and bot timezones, and optional autonomous DM follow-ups.
 - Multi-bot mode from one process, with global request coordination and bot-to-bot fall-off.
+- Optional GitHub Project helper for reporter-approved issues and GitHub activity mirrored into Discord.
 - Bot identity guardrails, response access controls, mention handling, split replies, and user ignore commands.
 - Built-in diagnostics, updater, setup scripts, quality checks, and production-friendly dashboard serving.
 
@@ -36,7 +39,7 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 
 - Python 3.10 or newer. Python 3.11 or 3.12 is the safest default; Python 3.13+ is supported through `audioop-lts`.
 - A Discord bot token.
-- At least one OpenAI-compatible AI provider, either cloud-hosted or local.
+- At least one supported AI provider, either cloud-hosted or local.
 
 Install dependencies with:
 
@@ -124,6 +127,7 @@ Use the dashboard first for routine edits:
 
 - Characters and prompt previews.
 - Provider order, provider definitions, and per-character provider tiers.
+- Project helper setup, feedback cases, GitHub activity, and delivery recovery.
 - Runtime config, response access controls, bot schedules, nicknames, and automation.
 - Memories, manual lore, reminder queue, channel auto-reply settings, logs, stats, updates, and restart actions.
 
@@ -216,7 +220,7 @@ Each bot needs its own Discord application. Startup validation reports missing o
 - Missing token: single-bot mode needs `DISCORD_TOKEN`; multi-bot mode needs every `token_env` from `bots.json`. Values can come from `.env` or the process environment.
 - Bot online but silent: enable Message Content Intent and check response access settings in the dashboard.
 - Slash commands missing: restart the bot, confirm the invite used `applications.commands`, and check the dashboard Slash Command Sync section.
-- Provider errors: run `python diagnose.py`, check API keys, and increase provider timeout for slow local models.
+- Provider errors: save the provider and choose **Test model** under **Config → Providers**. Check its result before using `python diagnose.py` for broader diagnostics; slow local models may need a longer conversation timeout.
 - Character edits not active: use `/reload` or the dashboard reload action.
 - Dashboard unreachable: open <http://localhost:5000> on the host machine; check firewall/reverse-proxy settings for remote access.
 - Too chatty: disable autonomous mode for that channel, lower `name_trigger_chance`, or use `/stop` for bot-to-bot loops.

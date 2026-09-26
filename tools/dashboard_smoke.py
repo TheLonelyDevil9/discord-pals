@@ -62,14 +62,15 @@ def main() -> int:
             return 1
         print(f"ok   {path} -> login required")
 
-    request = urllib.request.Request(f"{base}/api/project-automation/check", data=b"{}",
-                                     headers={"Content-Type": "application/json"}, method="POST")
-    with opener.open(request, timeout=5) as response:
-        landed = response.geturl()
-    if "/login" not in landed:
-        print("FAIL: setup check served without a login")
-        return 1
-    print("ok   POST /api/project-automation/check -> login required")
+    for path in ("/api/project-automation/check", "/api/test-provider/0"):
+        request = urllib.request.Request(f"{base}{path}", data=b"{}",
+                                         headers={"Content-Type": "application/json"}, method="POST")
+        with opener.open(request, timeout=5) as response:
+            landed = response.geturl()
+        if "/login" not in landed:
+            print(f"FAIL: POST {path} served without a login")
+            return 1
+        print(f"ok   POST {path} -> login required")
 
     print("dashboard smoke test passed")
     return 0

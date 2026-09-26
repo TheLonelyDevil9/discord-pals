@@ -2016,45 +2016,32 @@ def api_test_image_provider(index):
         return jsonify({'success': False, 'error': _sanitize_error_message(e)}), 500
 
 
-@app.route('/api/test-provider/<int:index>')
+@app.route('/api/test-provider/<int:index>', methods=['POST'])
+@requires_csrf
 def api_test_provider(index):
-    """Test connection to a specific provider."""
+    """Generate a bounded text reply from exactly one saved provider."""
+    from dashboard_provider_health import provider_test_failure, test_provider_connection
+
+    if request.get_data(cache=True):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or payload:
+            return jsonify(provider_test_failure('Send an empty JSON object; the test uses saved settings.')), 400
     providers_file = Path("providers.json")
     if not providers_file.exists():
-        return jsonify({'success': False, 'error': 'providers.json not found'})
+        return jsonify(provider_test_failure('providers.json not found. Save a provider before testing.')), 404
 
     try:
-        with open(providers_file, 'r') as f:
+        with open(providers_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        providers = data.get('providers', [])
-        if index >= len(providers):
-            return jsonify({'success': False, 'error': 'Provider index out of range'})
-
-        p = providers[index]
-        from dashboard_provider_health import test_endpoint_provider_config
-        if (endpoint_result := test_endpoint_provider_config(p)).get('handled'):
-            return jsonify({key: value for key, value in endpoint_result.items() if key != 'handled'})
-
-        # Support both 'url' and 'base_url' for backwards compatibility
-        url = p.get('url') or p.get('base_url')
-        if not url:
-            return jsonify({'success': False, 'error': 'Provider missing URL'})
-
-        # Support both key_env (env var name) and api_key (direct key)
-        key = None
-        if p.get('api_key'):
-            key = p['api_key']
-        elif p.get('key_env'):
-            key = os.getenv(p['key_env'], '')
-
-        if not key:
-            key = 'not-needed'  # For local LLMs that don't require auth
-        from openai import OpenAI  # Use sync client to avoid blocking issues
-        client = OpenAI(base_url=url, api_key=key, timeout=10)
-        client.models.list()
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': _sanitize_error_message(e)})
+    except (OSError, ValueError):
+        return jsonify(provider_test_failure('Saved provider configuration could not be read. Review and save it again.')), 400
+    if not isinstance(data, dict) or not isinstance(data.get('providers'), list):
+        return jsonify(provider_test_failure('Saved configuration must contain a providers list.')), 400
+    provider_list = data['providers']
+    if index >= len(provider_list):
+        return jsonify(provider_test_failure('Provider index out of range. Refresh the provider list.')), 404
+    result = test_provider_connection(provider_list[index], index=index, default_timeout=data.get('timeout', 60))
+    return jsonify(result), 400 if result['checks'][0]['status'] == 'failed' else 200
 
 
 # --- Export/Import ---

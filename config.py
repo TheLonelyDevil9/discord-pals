@@ -87,6 +87,67 @@ def _validate_provider_bool(value, default, name="value"):
     return default
 
 
+def normalize_provider_config(p: dict, index: int = 0) -> dict:
+    """Normalize one saved provider for runtime and dashboard model checks."""
+    url = p.get("url") or p.get("base_url")
+    if not url:
+        raise ValueError("Provider missing URL")
+    # Support both api_key (direct) and key_env (env var name)
+    # Priority: api_key > key_env > not-needed
+    key = None
+    if p.get("api_key"):
+        key = p["api_key"]
+    elif p.get("key_env"):
+        key = os.getenv(p["key_env"], "")
+    log.register_secret(key)
+
+    # Fallback for keyless providers (e.g., local llama.cpp)
+    if not key:
+        key = "not-needed"
+    requires_key = _validate_provider_bool(p.get("requires_key"), True, name="requires_key")
+
+    return {
+        "name": _validate_provider_value(p.get("name"), str, f"Provider {index+1}", name="name"),
+        "url": url,  # Use the resolved URL
+        "key": key,
+        "requires_key": requires_key,
+        "provider_protocol": _validate_provider_value(
+            p.get("provider_protocol") or p.get("protocol"),
+            str,
+            "legacy-openai-compatible",
+            name="provider_protocol",
+        ),
+        "endpoint_type": _validate_provider_value(
+            p.get("endpoint_type") or p.get("endpoint"),
+            str,
+            "openai-chat",
+            name="endpoint_type",
+        ),
+        "append_base_path": _validate_provider_bool(p.get("append_base_path"), True, name="append_base_path"),
+        "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
+        "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
+        "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
+        "supports_chat": _validate_provider_bool(p.get("supports_chat"), True, name="supports_chat"),
+        "supports_vision": _validate_provider_bool(p.get("supports_vision"), True, name="supports_vision"),
+        "supports_reasoning": _validate_provider_bool(p.get("supports_reasoning"), bool(p.get("reasoning_effort") or p.get("reasoning")), name="supports_reasoning"),
+        "supports_streaming": _validate_provider_bool(p.get("supports_streaming"), False, name="supports_streaming"),
+        "image_generation_modeled": _validate_provider_bool(p.get("image_generation_modeled"), False, name="image_generation_modeled"),
+        "image_generation_disabled": _validate_provider_bool(p.get("image_generation_disabled"), False, name="image_generation_disabled"),
+        "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
+        "reasoning_effort": _validate_provider_value(p.get("reasoning_effort") or p.get("effort"), str, "", name="reasoning_effort"),
+        "reasoning_format": _validate_provider_value(p.get("reasoning_format"), str, "auto", name="reasoning_format"),
+        "reasoning": _validate_provider_value(p.get("reasoning"), dict, {}, name="reasoning"),
+        "output_config": _validate_provider_value(p.get("output_config"), dict, {}, name="output_config"),
+        "thinking": _validate_provider_value(p.get("thinking"), dict, {}, name="thinking"),
+        # SillyTavern-style YAML parameters (preferred)
+        "include_body": _validate_provider_value(p.get("include_body"), str, "", name="include_body"),
+        "exclude_body": _validate_provider_value(p.get("exclude_body"), str, "", name="exclude_body"),
+        "include_headers": _validate_provider_value(p.get("include_headers"), str, "", name="include_headers"),
+        "timeout": _validate_provider_value(p.get("timeout"), int, None, min_val=5, max_val=3600, name="timeout"),
+        "openrouter": _validate_provider_value(p.get("openrouter"), dict, {}, name="openrouter"),
+    }
+
+
 def load_providers() -> tuple[dict, int, dict]:
     """Load providers from providers.json or use defaults.
 
@@ -120,60 +181,7 @@ def load_providers() -> tuple[dict, int, dict]:
                 log.warn(f"Provider {i+1} missing 'url', skipping")
                 continue
 
-            # Support both api_key (direct) and key_env (env var name)
-            # Priority: api_key > key_env > not-needed
-            key = None
-            if p.get("api_key"):
-                key = p["api_key"]
-            elif p.get("key_env"):
-                key = os.getenv(p["key_env"], "")
-            log.register_secret(key)
-
-            # Fallback for keyless providers (e.g., local llama.cpp)
-            if not key:
-                key = "not-needed"
-            requires_key = _validate_provider_bool(p.get("requires_key"), True, name="requires_key")
-
-            providers[tier] = {
-                "name": _validate_provider_value(p.get("name"), str, f"Provider {i+1}", name="name"),
-                "url": url,  # Use the resolved URL
-                "key": key,
-                "requires_key": requires_key,
-                "provider_protocol": _validate_provider_value(
-                    p.get("provider_protocol") or p.get("protocol"),
-                    str,
-                    "legacy-openai-compatible",
-                    name="provider_protocol",
-                ),
-                "endpoint_type": _validate_provider_value(
-                    p.get("endpoint_type") or p.get("endpoint"),
-                    str,
-                    "openai-chat",
-                    name="endpoint_type",
-                ),
-                "append_base_path": _validate_provider_bool(p.get("append_base_path"), True, name="append_base_path"),
-                "model": _validate_provider_value(p.get("model"), str, "gpt-4o", name="model"),
-                "max_tokens": _validate_provider_value(p.get("max_tokens"), int, DEFAULT_MAX_TOKENS, min_val=1, max_val=128000, name="max_tokens"),
-                "temperature": _validate_provider_value(p.get("temperature"), float, DEFAULT_TEMPERATURE, min_val=0.0, max_val=2.0, name="temperature"),
-                "supports_chat": _validate_provider_bool(p.get("supports_chat"), True, name="supports_chat"),
-                "supports_vision": _validate_provider_bool(p.get("supports_vision"), True, name="supports_vision"),
-                "supports_reasoning": _validate_provider_bool(p.get("supports_reasoning"), bool(p.get("reasoning_effort") or p.get("reasoning")), name="supports_reasoning"),
-                "supports_streaming": _validate_provider_bool(p.get("supports_streaming"), False, name="supports_streaming"),
-                "image_generation_modeled": _validate_provider_bool(p.get("image_generation_modeled"), False, name="image_generation_modeled"),
-                "image_generation_disabled": _validate_provider_bool(p.get("image_generation_disabled"), False, name="image_generation_disabled"),
-                "extra_body": _validate_provider_value(p.get("extra_body"), dict, {}, name="extra_body"),
-                "reasoning_effort": _validate_provider_value(p.get("reasoning_effort") or p.get("effort"), str, "", name="reasoning_effort"),
-                "reasoning_format": _validate_provider_value(p.get("reasoning_format"), str, "auto", name="reasoning_format"),
-                "reasoning": _validate_provider_value(p.get("reasoning"), dict, {}, name="reasoning"),
-                "output_config": _validate_provider_value(p.get("output_config"), dict, {}, name="output_config"),
-                "thinking": _validate_provider_value(p.get("thinking"), dict, {}, name="thinking"),
-                # SillyTavern-style YAML parameters (preferred)
-                "include_body": _validate_provider_value(p.get("include_body"), str, "", name="include_body"),
-                "exclude_body": _validate_provider_value(p.get("exclude_body"), str, "", name="exclude_body"),
-                "include_headers": _validate_provider_value(p.get("include_headers"), str, "", name="include_headers"),
-                "timeout": _validate_provider_value(p.get("timeout"), int, None, min_val=5, max_val=3600, name="timeout"),
-                "openrouter": _validate_provider_value(p.get("openrouter"), dict, {}, name="openrouter"),
-            }
+            providers[tier] = normalize_provider_config(p, i)
 
         timeout = _validate_provider_value(data.get("timeout"), int, 60, min_val=5, max_val=3600, name="timeout")
 

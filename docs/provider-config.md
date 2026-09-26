@@ -1,6 +1,22 @@
 # Provider Configuration
 
-Discord Pals uses OpenAI-compatible Chat Completions providers. Put provider definitions in `providers.json`, and keep secrets in environment variables or `.env`.
+Discord Pals supports OpenAI-compatible Chat Completions and native Responses, Anthropic Messages, and Gemini endpoints. Configure them under **Config → Providers**. Keep secrets in environment variables or `.env`, or use the dashboard's API key field.
+
+## Quick Setup
+
+Choose a provider preset, enter its name, exact model ID, API key, and base URL, then save. Presets fill connection defaults; they do not choose a model for you. For a custom gateway, choose its API format in **Advanced settings**.
+
+Advanced settings keep environment-variable keys, keyless endpoints, reasoning, generation limits, timeouts, capabilities, headers, and JSON/YAML overrides available. Opening and saving a provider preserves these settings. Chat providers are tried in list order; character-specific preferences remain available below the list. Image providers have a separate quick setup and optional advanced controls.
+
+### Test the Saved Model
+
+**Test model** sends a small text-generation request using the selected provider's saved model, API format, credentials, and request parameters. Save or reload pending edits first. The test does not retry or switch to another configured provider. It may consume provider tokens but sends nothing to Discord.
+
+Results distinguish **Saved settings**, **Model reply**, and untested capabilities. Passing requires usable final reply text; empty responses, thinking-only output, blocked replies, and replies stopped at the output limit fail. Errors identify the next setting to check without displaying provider response bodies or credentials. A model-list response or valid local configuration is never enough to pass.
+
+The test uses the saved timeout up to a 30-second ceiling; normal conversations may use a longer timeout. A passing result verifies this saved text request, not image input, tool calling, every conversation, or provider availability indefinitely. Image generation retains its separate test.
+
+The raw JSON editor remains available for advanced configuration. Provider definitions are stored in `providers.json`.
 
 ## Basic Shape
 
@@ -27,7 +43,7 @@ Common provider fields:
 | Field | Use |
 | --- | --- |
 | `name` | Friendly dashboard/log name. |
-| `url` | OpenAI-compatible base URL. `base_url` is also accepted for compatibility. |
+| `url` | API base URL. `base_url` is also accepted for compatibility. |
 | `key_env` | Environment variable containing the API key. |
 | `model` | Model name sent to the provider. |
 | `timeout` | Optional per-provider timeout in seconds. |
@@ -113,8 +129,24 @@ Supported `reasoning_format` values:
 | `claude` | `output_config: {"effort": "..."}`. |
 | `effort` | Top-level `effort`. |
 | `thinking` | `thinking: {"type": "adaptive", "effort": "..."}`. |
+| `gemini` | `generationConfig.thinkingConfig.thinkingLevel` for native Gemini thinking levels. |
 
 Values in `extra_body` override normalized fields.
+
+With **Auto**, the native Gemini and Responses endpoints select their corresponding reasoning format. An explicit format remains an override. For Google's native Gemini 3 API, keep the model ID and thinking level separate:
+
+```json
+{
+  "name": "Gemini",
+  "url": "https://generativelanguage.googleapis.com",
+  "key_env": "GEMINI_API_KEY",
+  "endpoint_type": "gemini",
+  "model": "gemini-3.8-flash",
+  "reasoning_effort": "high"
+}
+```
+
+Do not append `-high` to Google's model ID. Use a model returned by the account's [model catalog](https://ai.google.dev/api/models). Model families differ in supported thinking settings: Gemini 3 uses thinking levels; older Gemini models may require `thinkingBudget`. For those models, leave Reasoning Effort at Default and set `generationConfig.thinkingConfig.thinkingBudget` in Extra Body. See [Google's generation configuration](https://ai.google.dev/api/generate-content#ThinkingConfig). Gemini thought parts are retained separately from reply text and are never sent as the character's reply.
 
 ## Vision Support
 

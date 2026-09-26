@@ -11,9 +11,12 @@ from config import PROVIDERS, IMAGE_PROVIDERS, API_TIMEOUT
 import attribution
 from discord_utils import remove_thinking_tags
 from endpoint_adapters import EndpointAdapterError, EndpointProviderAdapter, uses_endpoint_adapter
+import endpoint_adapters
 from provider_contracts import (
     GenerationResult,
+    EndpointType,
     ProviderDescriptor,
+    ProviderError,
     ProviderProtocol,
     ProviderRequest,
     provider_error_from_exception,
@@ -196,6 +199,12 @@ def resolve_reasoning_format(provider_cfg: dict) -> str:
     if configured and configured != "auto":
         return REASONING_FORMAT_ALIASES.get(configured, configured)
 
+    endpoint = EndpointType.parse(provider_cfg.get("endpoint_type") or provider_cfg.get("endpoint"))
+    if endpoint is EndpointType.GEMINI:
+        return "gemini"
+    if endpoint is EndpointType.RESPONSES:
+        return "openai_responses"
+
     model_and_url = " ".join([
         str(provider_cfg.get("model", "")),
         str(provider_cfg.get("url", "")),
@@ -207,7 +216,7 @@ def resolve_reasoning_format(provider_cfg: dict) -> str:
 
 
 def build_reasoning_extra_body(provider_cfg: dict) -> dict:
-    """Build provider-specific reasoning controls for the Chat Completions body."""
+    """Build reasoning controls for the selected wire format, then apply overrides."""
     extra_body = {}
 
     for key in ("reasoning", "output_config", "thinking"):
@@ -220,7 +229,9 @@ def build_reasoning_extra_body(provider_cfg: dict) -> dict:
     )
     if effort:
         reasoning_format = resolve_reasoning_format(provider_cfg)
-        if reasoning_format == "openai_responses":
+        if reasoning_format == "gemini":
+            extra_body["generationConfig"] = {"thinkingConfig": {"thinkingLevel": effort.upper()}}
+        elif reasoning_format == "openai_responses":
             reasoning = extra_body.get("reasoning")
             if not isinstance(reasoning, dict):
                 reasoning = {}
@@ -250,6 +261,127 @@ def build_reasoning_extra_body(provider_cfg: dict) -> dict:
         deep_merge_dict(extra_body, provider_extra_body)
 
     return extra_body
+
+
+def provider_extra_body(provider_cfg: dict) -> dict:
+    """Use the same provider reasoning and routing options for chat and checks."""
+    extra = build_reasoning_extra_body(provider_cfg)
+    if provider_cfg.get("openrouter") and "openrouter.ai" in provider_cfg.get("url", ""):
+        extra = {**extra, **provider_cfg["openrouter"]}
+    return extra
+
+
+def provider_default_headers(provider_cfg: dict) -> dict:
+    if "openrouter.ai" in provider_cfg.get("url", ""):
+        return {"HTTP-Referer": "https://github.com/TheLonelyDevil9/discord-pals",
+                "X-OpenRouter-Title": provider_cfg.get("name", "Discord Pals")}
+    return {}
+
+
+async def probe_provider(provider_cfg: dict, *, timeout: float) -> GenerationResult:
+    """Check one saved model with runtime request builders, no retries or fallback."""
+    descriptor = ProviderDescriptor.from_config(provider_cfg, tier="test")
+    messages = format_as_single_user(
+        [{"role": "user", "content": "Say hello in one short sentence."}],
+        "You are a helpful assistant.")
+    extra = provider_extra_body(provider_cfg)
+    key = provider_cfg.get("key") or ""
+    if not provider_cfg.get("requires_key", True) and key == "not-needed":
+        key = ""
+
+    def fail(code, message):
+        raise EndpointAdapterError(ProviderError(code=code, message=message,
+            provider_name=descriptor.name, tier="test", endpoint_type=descriptor.endpoint_type))
+
+    if uses_endpoint_adapter(provider_cfg):
+        async def checked_post(url, headers, body, request_timeout):
+            if body.get("model", descriptor.model) != descriptor.model:
+                fail("bad_request", "Custom request settings change the selected model; remove the model override before testing.")
+            return await endpoint_adapters.post_json_request(url, headers, body, request_timeout)
+
+        result = await EndpointProviderAdapter(post_json=checked_post).generate(
+            descriptor=descriptor,
+            request=ProviderRequest(endpoint_type=descriptor.endpoint_type, model=descriptor.model,
+                messages=messages, temperature=provider_cfg["temperature"],
+                max_tokens=provider_cfg["max_tokens"], extra_body=extra),
+            api_key=key, timeout=timeout, requires_key=provider_cfg.get("requires_key", True),
+            include_body=provider_cfg.get("include_body", ""),
+            exclude_body=provider_cfg.get("exclude_body", ""),
+            include_headers=provider_cfg.get("include_headers", ""))
+        raw = result.raw or {}
+        finish = raw.get("stop_reason") or raw.get("status")
+        pending_tool = False
+        refused = False
+        if descriptor.endpoint_type is EndpointType.CHAT_COMPLETIONS:
+            choices = raw.get("choices")
+            choice = choices[0] if isinstance(choices, list) and choices else {}
+            choice = choice if isinstance(choice, dict) else {}
+            message = choice.get("message")
+            message = message if isinstance(message, dict) else {}
+            finish = choice.get("finish_reason")
+            refused = bool(message.get("refusal")) or finish == "content_filter"
+            pending_tool = bool(message.get("tool_calls") or message.get("function_call"))
+        elif descriptor.endpoint_type is EndpointType.GEMINI:
+            candidates = raw.get("candidates")
+            candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+            candidate = candidate if isinstance(candidate, dict) else {}
+            finish = candidate.get("finishReason")
+            content = candidate.get("content")
+            parts = content.get("parts") if isinstance(content, dict) else None
+            pending_tool = any(isinstance(part, dict) and "functionCall" in part
+                               for part in parts) if isinstance(parts, list) else False
+        elif descriptor.endpoint_type is EndpointType.RESPONSES:
+            output = raw.get("output")
+            client_tools = {"function_call", "custom_tool_call", "computer_call",
+                            "local_shell_call", "shell_call", "apply_patch_call"}
+            for item in output if isinstance(output, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                pending_tool |= item.get("type") in client_tools or item.get("status") in (
+                    "in_progress", "incomplete", "failed")
+                content = item.get("content")
+                refused |= any(isinstance(part, dict) and part.get("type") == "refusal"
+                               for part in content) if isinstance(content, list) else False
+        else:
+            content = raw.get("content")
+            pending_tool = any(isinstance(part, dict) and part.get("type") == "tool_use"
+                               for part in content) if isinstance(content, list) else False
+        if refused or finish == "refusal":
+            fail("content_filter", "The provider blocked the test reply.")
+        if finish in {"MAX_TOKENS", "max_tokens", "incomplete", "length", "model_context_window_exceeded"}:
+            fail("incomplete_response", "The model reached its output limit before completing the test reply.")
+        if pending_tool or finish in {"tool_use", "tool_calls", "function_call", "failed", "cancelled", "in_progress", "queued", "pause_turn"}:
+            fail("incomplete_response", "The provider did not complete a final text reply.")
+    else:
+        built = build_legacy_chat_request_kwargs(model=descriptor.model, messages=messages,
+            temperature=provider_cfg["temperature"], max_tokens=provider_cfg["max_tokens"],
+            extra_body=extra, include_body=provider_cfg.get("include_body", ""),
+            exclude_body=provider_cfg.get("exclude_body", ""), include_headers=provider_cfg.get("include_headers", ""))
+        requested = built.kwargs.get("extra_body", {}).get("model", built.kwargs.get("model"))
+        if requested != descriptor.model:
+            fail("bad_request", "Custom request settings change the selected model; remove the model override before testing.")
+        async with AsyncOpenAI(base_url=provider_cfg["url"], api_key=key or "not-needed",
+                               timeout=timeout, max_retries=0,
+                               default_headers=provider_default_headers(provider_cfg) or None) as client:
+            response = await client.chat.completions.create(**built.kwargs)
+        choices = getattr(response, "choices", None)
+        if not choices:
+            fail("no_choices", "The provider returned no response choices.")
+        choice = choices[0]
+        message = choice.message
+        if getattr(message, "refusal", None) or getattr(choice, "finish_reason", None) == "content_filter":
+            fail("content_filter", "The provider blocked the test reply.")
+        if getattr(choice, "finish_reason", None) == "length":
+            fail("incomplete_response", "The model reached its output limit before completing the test reply.")
+        if (getattr(choice, "finish_reason", None) in {"tool_calls", "function_call"}
+                or getattr(message, "tool_calls", None) or getattr(message, "function_call", None)):
+            fail("incomplete_response", "The provider requested a tool instead of completing the text reply.")
+        result = GenerationResult(text=message.content, provider_name=descriptor.name,
+                                  tier="test", model=descriptor.model)
+    content = remove_thinking_tags(result.text) if isinstance(result.text, str) else ""
+    if not content.strip():
+        fail("empty_response", "The model returned no usable reply text after removing thinking content.")
+    return GenerationResult(text=content, provider_name=descriptor.name, tier="test", model=descriptor.model)
 
 
 @dataclass(frozen=True)
@@ -502,10 +634,7 @@ class AIProviderManager:
                     self.providers[tier] = self._endpoint_adapter
                     continue
                 # Auto-detect OpenRouter and inject recommended headers
-                default_headers = {}
-                if "openrouter.ai" in cfg.get("url", ""):
-                    default_headers["HTTP-Referer"] = "https://github.com/TheLonelyDevil9/discord-pals"
-                    default_headers["X-OpenRouter-Title"] = cfg.get("name", "Discord Pals")
+                default_headers = provider_default_headers(cfg)
 
                 self.providers[tier] = AsyncOpenAI(
                     base_url=cfg["url"],
@@ -980,7 +1109,7 @@ class AIProviderManager:
                     timeout=effective_timeout,
                 )
                 latency_ms = int((time.perf_counter() - attempt_started) * 1000)
-                content = result.deliverable_text
+                content = remove_thinking_tags(result.deliverable_text)
                 if not content or content.strip() == "":
                     log.warn(
                         f"[{tier}] Empty content from endpoint provider {model}",
@@ -1007,7 +1136,7 @@ class AIProviderManager:
                     has_reasoning=result.has_reasoning,
                 )
                 return GenerationResult(
-                    text=remove_thinking_tags(content),
+                    text=content,
                     reasoning_text=result.reasoning_text,
                     provider_name=result.provider_name,
                     tier=result.tier,
@@ -1255,15 +1384,10 @@ class AIProviderManager:
 
                 model = PROVIDERS[tier]["model"]
                 provider_cfg = PROVIDERS[tier]
-                extra_body = build_reasoning_extra_body(provider_cfg)
+                extra_body = provider_extra_body(provider_cfg)
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
                 include_headers = PROVIDERS[tier].get("include_headers", "")
-
-                # Merge OpenRouter-specific config into extra_body
-                openrouter_cfg = PROVIDERS[tier].get("openrouter", {})
-                if openrouter_cfg and "openrouter.ai" in PROVIDERS[tier].get("url", ""):
-                    extra_body = {**extra_body, **openrouter_cfg} if extra_body else dict(openrouter_cfg)
 
                 # Check if provider supports vision (default True, set false for text-only models)
                 supports_vision = self._supports_vision_for_tier(tier)

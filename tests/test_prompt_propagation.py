@@ -532,7 +532,9 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn("providerJsonObjectFields", page)
         self.assertIn("parseOptionalJsonObject", page)
         self.assertIn("collectProviderJsonObjectValues", page)
-        self.assertIn("if (imageProvidersTouched) globalFields.image_providers = imageProvidersData", page)
+        self.assertIn('id="new-provider-advanced-panel"', page)
+        self.assertIn('id="edit-provider-advanced-panel"', page)
+        self.assertIn('id="new-image-provider-advanced-panel"', page)
         self.assertIn("editImageProvider(", page)
         self.assertIn('providerCapabilityBadges', page)
         self.assertIn('id="response-access-form"', page)
@@ -815,7 +817,7 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(captured_kwargs["quality"], "low")
         self.assertEqual(openai_mock.call_args.kwargs["api_key"], "test-key")
 
-    def test_endpoint_provider_health_check_validates_config_without_prompt_data(self):
+    def test_endpoint_provider_health_check_requires_a_model_reply(self):
         providers_payload = {
             "providers": [{
                 "name": "Responses Provider",
@@ -831,14 +833,16 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "Path", return_value=fake_path), \
                 patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
-                patch.dict(dashboard_module.os.environ, {"ENDPOINT_API_KEY": "sk-test"}):
-            response = self.client.get("/api/test-provider/0")
+                patch.dict(dashboard_module.os.environ, {"ENDPOINT_API_KEY": "sk-test"}), \
+                patch("providers.probe_provider", AsyncMock(return_value=types.SimpleNamespace(deliverable_text="Hello."))) as probe:
+            response = self.client.post("/api/test-provider/0", json={}, headers=self.csrf_headers())
 
         body = response.get_json()
         self.assertEqual(response.status_code, 200)
         self.assertTrue(body["success"])
         self.assertEqual(body["endpoint_type"], "responses")
-        self.assertEqual(body["auth_header"], "Authorization")
+        self.assertEqual(body["checks"][1]["status"], "passed")
+        probe.assert_awaited_once()
         self.assertNotIn("sk-test", json.dumps(body))
 
     def test_endpoint_provider_health_check_reports_missing_key(self):
@@ -856,10 +860,10 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         with patch.object(dashboard_module, "Path", return_value=fake_path), \
                 patch("builtins.open", mock_open(read_data=json.dumps(providers_payload))), \
                 patch.dict(dashboard_module.os.environ, {}, clear=True):
-            response = self.client.get("/api/test-provider/0")
+            response = self.client.post("/api/test-provider/0", json={}, headers=self.csrf_headers())
 
         body = response.get_json()
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
         self.assertFalse(body["success"])
         self.assertIn("API key", body["error"])
 
