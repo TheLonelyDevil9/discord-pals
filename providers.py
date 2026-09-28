@@ -293,10 +293,15 @@ async def probe_provider(provider_cfg: dict, *, timeout: float) -> GenerationRes
         raise EndpointAdapterError(ProviderError(code=code, message=message,
             provider_name=descriptor.name, tier="test", endpoint_type=descriptor.endpoint_type))
 
+    def reject_model_fallback(body):
+        if body.get("models"):
+            fail("model_fallback_override", "Custom request settings include a models fallback list; remove models from Extra Body, OpenRouter settings, or Include Body before testing the selected model.")
+
     if uses_endpoint_adapter(provider_cfg):
         async def checked_post(url, headers, body, request_timeout):
             if body.get("model", descriptor.model) != descriptor.model:
                 fail("bad_request", "Custom request settings change the selected model; remove the model override before testing.")
+            reject_model_fallback(body)
             return await endpoint_adapters.post_json_request(url, headers, body, request_timeout)
 
         result = await EndpointProviderAdapter(post_json=checked_post).generate(
@@ -360,6 +365,7 @@ async def probe_provider(provider_cfg: dict, *, timeout: float) -> GenerationRes
         requested = built.kwargs.get("extra_body", {}).get("model", built.kwargs.get("model"))
         if requested != descriptor.model:
             fail("bad_request", "Custom request settings change the selected model; remove the model override before testing.")
+        reject_model_fallback({**built.kwargs, **built.kwargs.get("extra_body", {})})
         async with AsyncOpenAI(base_url=provider_cfg["url"], api_key=key or "not-needed",
                                timeout=timeout, max_retries=0,
                                default_headers=provider_default_headers(provider_cfg) or None) as client:

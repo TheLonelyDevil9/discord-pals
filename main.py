@@ -7,6 +7,8 @@ import asyncio
 import logging
 from typing import List
 
+import discord
+
 # Suppress verbose logging from all libraries
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
@@ -115,6 +117,15 @@ def load_bot_configs() -> List[dict]:
     }]
 
 
+async def _start_bot(bot) -> None:
+    """Keep a rejected credential from stopping other bot identities."""
+    try:
+        await bot.start()
+    except discord.LoginFailure:
+        log.error("Discord rejected this bot's token. Update it in Config and restart the service.", bot.name)
+        await bot.close()
+
+
 async def run_bots():
     """Run all configured bots."""
     configs = load_bot_configs()
@@ -164,9 +175,12 @@ async def run_bots():
     _install_shutdown_handlers()
 
     try:
-        await asyncio.gather(*[bot.start() for bot in instances])
+        await asyncio.gather(*[_start_bot(bot) for bot in instances])
+        # Keep recovery controls available even if every bot needs a new token.
+        await asyncio.Event().wait()
     except KeyboardInterrupt:
         log.info("Shutting down...")
+    finally:
         _persist_runtime_state()
         for bot in instances:
             await bot.close()

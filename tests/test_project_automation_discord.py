@@ -176,8 +176,9 @@ def _native_suite():
 
         def configure_forum(self, kind="issue"):
             forum = channel(discord.ForumChannel, 201 if kind == "issue" else 202)
-            thread = channel(channel_id=301)
+            thread = channel(channel_id=301, parent_id=forum.id)
             starter = message(thread, message_id=301, author_id=777, bot=True)
+            starter.embeds = [discord.Embed().set_footer(text=f"Project 100:Project Helper:{forum.id}:SillyBunnyTeam/SillyBunny:{kind}:17")]
             thread.fetch_message.return_value = starter
             forum.create_thread.return_value = SimpleNamespace(thread=thread, message=starter)
             self.channels[forum.id] = forum
@@ -775,6 +776,18 @@ def _native_suite():
             await self.transport.mirror(event())
             self.assertTrue(any(call.kwargs.get("locked") is False for call in thread.edit.await_args_list))
 
+        async def test_repeated_issue_and_pull_sync_reuses_one_verified_post(self):
+            for kind in ("issue", "pull"):
+                forum, thread, starter = self.configure_forum(kind)
+                for state in ("open", "closed", "open"):
+                    self.assertTrue(await self.transport.mirror(event(kind, state=state, closed=state == "closed")))
+                forum.create_thread.assert_awaited_once()
+                self.assertEqual(starter.edit.await_count, 2)
+                edits = starter.edit.await_count, thread.edit.await_count
+                self.assertTrue(await self.transport.mirror(event(kind), recover_only=True))
+                self.assertEqual((starter.edit.await_count, thread.edit.await_count), edits)
+                forum.create_thread.assert_awaited_once()
+
         async def test_lost_forum_create_receipt_is_recovered_from_its_owned_marker(self):
             forum, thread, starter = self.configure_forum()
             thread.name = "Open · Settings fail to save · #17"
@@ -782,9 +795,11 @@ def _native_suite():
             embed.set_footer(text="Project 100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17")
             starter.embeds = [embed]
             forum.threads = [thread]
+            forum.archived_threads.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing archive permissions")
             self.assertTrue(await self.transport.mirror(event(), recover_only=True))
             forum.create_thread.assert_not_awaited()
             starter.edit.assert_not_awaited()
+            forum.archived_threads.assert_not_called()
             self.assertEqual(self.store.get_link("mirror", "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17")["message_id"], "301")
 
         async def test_changed_mirror_destination_does_not_edit_the_old_channel(self):
@@ -838,6 +853,37 @@ def _native_suite():
                 await self.transport.mirror(event())
             starter.edit.assert_not_awaited()
             forum.create_thread.assert_not_awaited()
+
+        async def test_recovery_rejects_saved_mirror_with_wrong_marker_or_forum(self):
+            key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            for wrong_forum in (False, True):
+                forum, thread, starter = self.configure_forum()
+                thread.parent_id = 999 if wrong_forum else forum.id
+                starter.embeds = [discord.Embed().set_footer(text=f"Project {key}" if wrong_forum else "Project unrelated")]
+                self.store.put_link("mirror", key, {"channel_id": "301", "message_id": "301"})
+                with self.assertRaises(WorkflowError):
+                    await self.transport.mirror(event(), recover_only=True)
+                self.assertIsNone(self.store.get_link("mirror_attempt", key))
+                starter.edit.assert_not_awaited()
+                thread.edit.assert_not_awaited()
+                forum.create_thread.assert_not_awaited()
+
+        async def test_recovery_permission_denied_is_not_reported_as_absent(self):
+            forum, _, _ = self.configure_forum()
+            forum.archived_threads.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing permissions")
+            with self.assertRaises(discord.Forbidden):
+                await self.transport.mirror(event(), recover_only=True)
+            forum.create_thread.assert_not_awaited()
+
+        async def test_recovery_command_reports_unreachable_destination_without_resending(self):
+            self.transport._commands(self.bot)
+            self.service.recover.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "secret response")
+            click = interaction(role_ids=[900])
+            await self.bot.tree.get_command("project-recover").callback(click, 42)
+            text = click.followup.send.await_args.args[0]
+            self.assertIn("could not be verified", text)
+            self.assertNotIn("secret response", text)
+            self.service.retry.assert_not_awaited()
 
         async def test_retry_command_passes_explicit_non_delivery_confirmation(self):
             self.transport._commands(self.bot)

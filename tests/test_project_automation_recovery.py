@@ -19,6 +19,76 @@ def harness(tmp_path, runtime):
     return Harness(tmp_path / "automation.sqlite3")
 
 
+@pytest.mark.parametrize("legacy_status", [False, True])
+def test_repeated_issue_sync_does_not_conflict_with_legacy_status_job(harness, legacy_status):
+    case = harness.ready()
+    case = harness.store.update_case(case["id"], {"linked_issue_number": 852}, expected_revision=case["revision"])
+    item = {"number": 852, "title": "Issue", "body": "", "state": "closed",
+            "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/852", "updated_at": "2026-09-16T11:17:22Z"}
+    harness.github.items[852] = item
+    if legacy_status:
+        harness.store.put_link("case_status", case["id"], {"state": "closed", "url": item["html_url"]})
+    old_id = harness.store.enqueue("notify", {"case_id": case["id"]}, f"status:{case['id']}:closed:{item['updated_at']}")
+    claimed = harness.store.claim_job()
+    harness.store.complete_job(old_id, lease_token=claimed["lease_token"])
+    before = len(harness.transport.notifications)
+    for cycle in range(3):
+        identifier = harness.event({**item, "kind": "issue", "key": "issue:852", "repository": harness.cfg["repository"]},
+                                   f"sync-item:{cycle}:issue:852")
+        asyncio.run(harness.drain())
+        assert harness.store.get_job(identifier)["state"] == "done"
+    assert len(harness.transport.mirrors) == 3
+    assert len(harness.transport.notifications) == before + (0 if legacy_status else 1)
+    assert harness.store.get_job(old_id)["payload"] == {"case_id": case["id"]}
+    assert harness.store.get_case(case["id"]) == case
+    assert harness.store.job_counts()["recovery"] == 0
+
+
+@pytest.mark.parametrize("changed", [{"state": "closed"}, {"html_url": "https://github.com/example/moved/issues/852"}])
+def test_recovered_event_notifies_each_changed_status_without_dedup_conflict(harness, changed):
+    case = harness.ready()
+    case = harness.store.update_case(case["id"], {"linked_issue_number": 852}, expected_revision=case["revision"])
+    item = {"number": 852, "title": "Issue", "body": "", "state": "open",
+            "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/852"}
+    identifier = harness.event({**item, "kind": "issue", "key": "issue:852", "repository": harness.cfg["repository"]},
+                               "recover-changing-status")
+    harness.transport.mirror = AsyncMock(return_value=True)
+    before = len(harness.transport.notifications)
+    for current in (item, {**item, **changed}):
+        harness.github.items[852] = current
+        claimed = harness.store.claim_job(kinds=["event"])
+        asyncio.run(harness.service.process_job(claimed))
+        # The checkpoint and notification committed, but the worker's completion
+        # acknowledgement was interrupted. Recovery reuses this same event ID.
+        harness.store.fail_job(identifier, "Interrupted completion", lease_token=claimed["lease_token"])
+        asyncio.run(harness.drain())
+        assert asyncio.run(harness.service.recover(identifier, user_id="700"))
+    harness.github.items[852] = item
+    asyncio.run(harness.drain())
+    assert harness.store.get_job(identifier)["state"] == "done"
+    assert harness.store.job_counts()["recovery"] == 0
+    assert len(harness.transport.notifications) == before + 3
+    assert harness.store.get_link("case_status", case["id"]) == {"state": item["state"], "url": item["html_url"]}
+    assert [event["facts"] for event in harness.ai.spoken if event["action"] == "issue_status"] == [
+        {"state": current["state"], "github_url": current["html_url"]}
+        for current in (item, {**item, **changed}, item)
+    ]
+    assert harness.store.get_case(case["id"]) == case
+
+
+def test_status_checkpoint_rolls_back_when_notification_enqueue_fails(harness, monkeypatch):
+    case = harness.ready()
+    harness.store.update_case(case["id"], {"linked_issue_number": 852}, expected_revision=case["revision"])
+    item = {"number": 852, "kind": "issue", "key": "issue:852", "repository": harness.cfg["repository"]}
+    identifier = harness.event(item, "issue-status-atomic")
+    def fail_enqueue(*args):
+        raise RuntimeError("Interrupted outbox insertion")
+    monkeypatch.setattr(harness.store, "_enqueue_spec", fail_enqueue)
+    asyncio.run(harness.service.run_once())
+    assert harness.store.get_link("case_status", case["id"]) is None
+    assert harness.store.get_job(identifier)["state"] == "recovery"
+
+
 def reject_publish(harness):
     preview = harness.preview()
     async def reject(*args):

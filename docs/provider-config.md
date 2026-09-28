@@ -16,10 +16,7 @@ Results distinguish **Saved settings**, **Model reply**, and untested capabiliti
 
 The test uses the saved timeout up to a 30-second ceiling; normal conversations may use a longer timeout. A passing result verifies this saved text request, not image input, tool calling, every conversation, or provider availability indefinitely. Image generation retains its separate test.
 
-Known v2.8.0 limitations:
-
-- Gateway-side model fallback can produce a passing result for a different model. The test preserves custom `models` fallback lists and does not compare the returned model identity. Remove model fallback overrides before checking a specific model; a pass with those overrides does not verify the selected model.
-- Thinking-only text containing both an explicit thinking block and a `SYSTEM:` marker can pass the reply check. A passing test is not a guarantee that every reasoning format was removed.
+Remove custom `models` fallback lists from Extra Body, OpenRouter settings, or Include Body before testing. The test rejects them before sending a request so a gateway cannot use a configured model fallback to pass the check. Same-model backend routing remains available. Provider-returned canonical/version aliases may differ from the saved model ID; the check cannot attest undocumented server-side substitution.
 
 The raw JSON editor remains available for advanced configuration. Provider definitions are stored in `providers.json`.
 

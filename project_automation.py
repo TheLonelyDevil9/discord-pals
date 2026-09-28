@@ -626,12 +626,20 @@ class AutomationService:
             if event["kind"] == "issue":
                 for case in self.store.cases_for_issue(event["repository"], event["number"]):
                     if self._bound(case):
-                        # Status is separate from draft/gate state; no pending approval is lost.
-                        self.store.put_link("case_status", case["id"], {"state": event["state"], "url": event["html_url"]})
-                        self.store.enqueue("notify", {"case_id": case["id"], "event": {"action": "issue_status",
-                            "facts": {"state": event["state"], "github_url": event["html_url"]},
-                            "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
-                            key=f"status:{case['id']}:{event['state']}:{event.get('updated_at', time.time())}")
+                        # Check the queued status, not an old job's payload schema.
+                        # Persist the checkpoint and outbox together so an interrupted
+                        # enqueue cannot silently suppress the reporter's notification.
+                        # A recovered event can observe another transition; each
+                        # leased attempt needs its own immutable notification key.
+                        status = {"state": event["state"], "url": event["html_url"]}
+                        if self.store.get_link("case_status", case["id"]) == status:
+                            continue
+                        self.store.save_links_with_jobs([("case_status", case["id"], status)], [{
+                            "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "issue_status",
+                                "facts": {"state": event["state"], "github_url": event["html_url"]},
+                                "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
+                            "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}",
+                        }])
 
     async def process_job(self, job):
         payload = job["payload"]

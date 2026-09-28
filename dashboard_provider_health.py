@@ -143,6 +143,7 @@ def _probe_error_detail(error: Exception, timeout: float) -> str:
         "network": "The provider could not be reached. Check the base URL and server network access.",
         "server_5xx": "The provider reported a server error. Check its availability and try again later.",
         "bad_request": "The provider rejected the request settings. Check the API format, model, and advanced parameters.",
+        "model_fallback_override": "Remove the models fallback list from Extra Body, OpenRouter settings, or Include Body before testing the selected saved model.",
         "content_filter": "The provider blocked the test response. Check its safety settings or selected model.",
         "capability_unsupported": "The selected API format is not supported by this provider's saved settings.",
         "empty_response": "The model returned no usable text. Check the model, output limit, and reasoning settings.",

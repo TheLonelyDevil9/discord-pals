@@ -7,6 +7,70 @@ import response_sanitizer as sanitizer
 
 
 class ResponseSanitizerTests(unittest.TestCase):
+    def test_explicit_thinking_is_removed_before_plain_text_recovery(self):
+        thought = "SYSTEM: choose a greeting\n\nI should choose a friendly greeting."
+        wrappers = [
+            ("<think>", "</think>"), ("<thinking>", "</thinking>"),
+            ("<|begin_of_box|>", "<|end_of_box|>"),
+            ("<reasoning>", "</reasoning>"), ("<reason>", "</reason>"),
+            ("[think]", "[/think]"), ("[thinking]", "[/thinking]"),
+            ("<|think|>", "<|/think|>"),
+            ("<|startofthought|>", "<|endofthought|>"),
+            ("||thinking||", "||end||"), ("[Internal:", "]"),
+        ]
+        for opening, closing in wrappers:
+            for visible in ("", "Hello, <@123> <:wave:456>!"):
+                with self.subTest(opening=opening, visible=visible):
+                    raw = opening + thought + closing + visible
+                    self.assertEqual(sanitizer.remove_thinking_tags(raw), visible)
+                    self.assertEqual(sanitizer.sanitize_response(raw), visible)
+
+    def test_explicit_boundaries_preserve_dialogue_that_mentions_thinking(self):
+        for visible in (
+            "Let me think about where we should go for dinner.",
+            "I need to think about your invitation.",
+            "SYSTEM: is just the label on the screen.\n\nLet me explain what it means.",
+        ):
+            for wrapper in ("{}", "<output>{}</output>", "<response>{}</response>"):
+                with self.subTest(visible=visible, wrapper=wrapper):
+                    raw = "<think>SYSTEM: plan</think>\n\n" + wrapper.format(visible)
+                    self.assertEqual(sanitizer.remove_thinking_tags(raw), visible)
+                    self.assertEqual(sanitizer.sanitize_response(raw), visible)
+
+    def test_mixed_thinking_blocks_leave_only_visible_dialogue(self):
+        raw = (
+            "<think>SYSTEM: plan\n\nPrivate first thought.</think>"
+            "Let me think about dinner."
+            "<reasoning>SYSTEM: review\n\nPrivate second thought.</reasoning>"
+            "\n\nI need to think about your invitation."
+            "<thinking>Private unfinished thought."
+        )
+        expected = "Let me think about dinner.\n\nI need to think about your invitation."
+        self.assertEqual(sanitizer.remove_thinking_tags(raw), expected)
+        self.assertEqual(sanitizer.sanitize_response(raw), expected)
+
+    def test_partial_thinking_boundaries_precede_plain_text_recovery(self):
+        thought = "SYSTEM: choose a greeting\n\nI should choose a friendly greeting."
+        for opening, closing in [
+            ("<think>", "</think>"), ("<thinking>", "</thinking>"),
+            ("<|begin_of_box|>", "<|end_of_box|>"),
+        ]:
+            with self.subTest(opening=opening):
+                self.assertEqual(sanitizer.remove_thinking_tags(opening + thought), "")
+                self.assertEqual(sanitizer.remove_thinking_tags(thought + closing + "Hello!"), "Hello!")
+                self.assertEqual(sanitizer.remove_thinking_tags("Hello!" + opening + thought), "Hello!")
+
+    def test_plain_text_glm_output_recovery_survives_tag_removal(self):
+        examples = [
+            "SYSTEM: choose a greeting\n\nHello, good to see you!",
+            'think: choose a greeting\nActual output: "Hello, good to see you!"',
+            'think: choose a greeting\nFinal Polish: "Hello, good to see you!"',
+            'think: choose a greeting\n\n"Hello, good to see you!"',
+        ]
+        for raw in examples:
+            with self.subTest(raw=raw):
+                self.assertEqual(sanitizer.remove_thinking_tags(raw), "Hello, good to see you!")
+
     def test_sanitize_response_strips_generic_xml_wrapper_tags(self):
         cleaned = sanitizer.sanitize_response(
             "<seelewee> Seele is Cecile's creator. </seelewee> Hmm...",

@@ -267,6 +267,8 @@ Single-bot mode needs `DISCORD_TOKEN` from `.env` or the process environment. Th
 
 Multi-bot mode uses the token variable names listed in `bots.json`. The Config page Advanced tab shows one token field per declared `token_env`, writes the matching `.env` variable, and never stores literal tokens in `bots.json`. In container deployments where secrets come from Compose or the host environment, update those runtime variables outside the dashboard.
 
+If Discord rejects one bot's token, that identity stays offline while other bots and the dashboard continue running. Replace its token in **Config → Advanced → Discord Tokens**, then restart the service. The dashboard remains available even if all configured tokens are rejected. A liveness check alone does not prove any bot is connected; check each bot's online status.
+
 ### No characters available
 
 Add `.md` files to `characters/`. The filename is the switch name; the first heading is the display name.

@@ -254,6 +254,12 @@ class DiscordTransport:
                 return message
         return None
 
+    async def _forum_threads(self, channel):
+        for thread in channel.threads:
+            yield thread
+        async for thread in channel.archived_threads(limit=100):
+            yield thread
+
     async def notify(self, case, *, recover_only=False):
         channel = await self._channel(case["channel_id"])
         delivery_key = case.get("delivery_key") or case["id"]
@@ -408,6 +414,8 @@ class DiscordTransport:
                 except (WorkflowError, GitHubError, Conflict) as exc:
                     text = await say(self.service, None, "error", {"error": str(exc), "job_id": job_id},
                                      "Resolve the error before retrying this delivery.")
+                except (discord.HTTPException, OSError):
+                    text = "System notice: the Discord destination could not be verified. The delivery remains held; restore access and run recovery again. Nothing was resent."
                 else:
                     text = await say(self.service, None, "delivery_recovered", {"job_id": job_id, "found": found, "resent": False},
                                      "No further action is needed." if found else "The delivery remains held; check its destination before any retry.")
@@ -428,6 +436,8 @@ class DiscordTransport:
                 except (WorkflowError, GitHubError, Conflict) as exc:
                     text = await say(self.service, None, "error", {"error": str(exc), "job_id": job_id},
                                      "Resolve the error before retrying this delivery.")
+                except (discord.HTTPException, OSError):
+                    text = "System notice: the Discord destination could not be verified. The delivery remains held; restore access and run recovery again. Nothing was resent."
                 else:
                     text = await say(self.service, None, "delivery_retry", {"job_id": job_id, "result": result},
                                      "Follow the result; any returned report needs a fresh approval before publication.")
@@ -452,14 +462,18 @@ class DiscordTransport:
                 message = await thread.fetch_message(int(link["message_id"]))
                 if message.author.id != self._bot().client.user.id:
                     raise WorkflowError("The saved mirror belongs to a different Discord bot.")
+                if isinstance(channel, discord.ForumChannel):
+                    if not isinstance(thread, discord.Thread) or str(thread.parent_id) != str(channel.id):
+                        raise WorkflowError("The saved mirror belongs to a different forum.")
+                elif str(thread.id) != str(channel.id):
+                    raise WorkflowError("The saved mirror belongs to a different channel.")
+                if not any(embed.footer.text == marker for embed in message.embeds):
+                    raise WorkflowError("The saved mirror has a different delivery marker.")
             except discord.NotFound:
                 thread = message = None
         if message is None and isinstance(channel, discord.ForumChannel):
             # Active posts plus a bounded archived search recover a lost create acknowledgement.
-            threads = list(channel.threads)
-            async for archived in channel.archived_threads(limit=100):
-                threads.append(archived)
-            for candidate in threads:
+            async for candidate in self._forum_threads(channel):
                 if candidate.name.endswith(f" · #{event.get('number')}"):
                     try:
                         starter = await candidate.fetch_message(candidate.id)

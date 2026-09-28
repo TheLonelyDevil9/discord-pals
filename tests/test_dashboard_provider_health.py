@@ -164,6 +164,24 @@ class DashboardProviderHealthTests(unittest.TestCase):
         self.assertIn("model", response.get_json()["error"])
         post.assert_awaited_once()
 
+    def test_gateway_model_fallback_reports_local_remediation_without_network(self):
+        for endpoint in ("openai-chat", "gemini"):
+            with self.subTest(endpoint=endpoint):
+                provider = {**self.provider, "endpoint_type": endpoint,
+                            "extra_body": {"models": ["chosen-model", "private-alternate-model"]}}
+                with patch.object(endpoint_adapters, "post_json_request", new_callable=AsyncMock) as post:
+                    with patch.object(providers, "AsyncOpenAI") as client:
+                        response, _ = self.request_test(provider=provider, probe=providers.probe_provider)
+                result = response.get_json()
+                self.assertFalse(result["success"])
+                self.assertIn("Remove the models fallback list", result["error"])
+                self.assertIn("Extra Body", result["error"])
+                self.assertIn("OpenRouter", result["error"])
+                self.assertIn("Include Body", result["error"])
+                self.assertNotIn("private-alternate-model", json.dumps(result))
+                post.assert_not_called()
+                client.assert_not_called()
+
     def test_native_empty_or_private_only_reply_fails_through_the_real_probe(self):
         for payload in ({"candidates": []}, {"candidates": [{"content": {"parts": [
             {"text": "fixture thought", "thought": True}
@@ -257,6 +275,7 @@ class DashboardProviderHealthTests(unittest.TestCase):
     def test_http_errors_have_safe_concrete_explanations(self):
         for code, status, expected in (("auth", 401, "credentials"), ("rate_limit", 429, "rate limit"),
                                        ("bad_request", 400, "settings"), ("unknown", 404, "model"),
+                                       ("model_fallback_override", None, "models fallback list"),
                                        ("incomplete_response", None, "output limit")):
             with self.subTest(code=code):
                 error = EndpointAdapterError(ProviderError(code=code, message="private-fixture-key raw body",

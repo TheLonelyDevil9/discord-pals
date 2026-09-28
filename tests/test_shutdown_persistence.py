@@ -1,6 +1,8 @@
+import asyncio
 import signal
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import module_stubs  # noqa: F401
 import main as main_module
@@ -50,6 +52,58 @@ class ShutdownSignalTests(unittest.TestCase):
                 handler(signal.SIGTERM, None)
         finally:
             signal.signal(signal.SIGTERM, original)
+
+
+class BotLoginIsolationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_login_does_not_stop_healthy_bot(self):
+        rejected_closed = asyncio.Event()
+        healthy_started = asyncio.Event()
+
+        async def healthy_start():
+            healthy_started.set()
+            await asyncio.Event().wait()
+
+        rejected = SimpleNamespace(
+            name="Rejected", start=AsyncMock(side_effect=main_module.discord.LoginFailure("invalid")),
+            close=AsyncMock(side_effect=rejected_closed.set),
+        )
+        healthy = SimpleNamespace(name="Healthy", start=healthy_start, close=AsyncMock())
+        with patch.object(main_module, "load_bot_configs", return_value=[{}, {}]), \
+                patch.object(main_module, "BotInstance", side_effect=[rejected, healthy]), \
+                patch.dict("sys.modules", {"dashboard": SimpleNamespace(start_dashboard=lambda **kwargs: None)}), \
+                patch.object(main_module, "_install_shutdown_handlers"), \
+                patch.object(main_module, "_persist_runtime_state"):
+            task = asyncio.create_task(main_module.run_bots())
+            try:
+                await asyncio.wait_for(rejected_closed.wait(), timeout=1)
+                await asyncio.wait_for(healthy_started.wait(), timeout=1)
+                self.assertFalse(task.done())
+                healthy.close.assert_not_awaited()
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            healthy.close.assert_awaited_once()
+
+    async def test_all_rejected_logins_leave_process_available_for_recovery(self):
+        closed = asyncio.Event()
+        bot = SimpleNamespace(
+            name="Rejected", start=AsyncMock(side_effect=main_module.discord.LoginFailure("invalid")),
+            close=AsyncMock(side_effect=closed.set),
+        )
+        with patch.object(main_module, "load_bot_configs", return_value=[{}]), \
+                patch.object(main_module, "BotInstance", return_value=bot), \
+                patch.dict("sys.modules", {"dashboard": SimpleNamespace(start_dashboard=lambda **kwargs: None)}), \
+                patch.object(main_module, "_install_shutdown_handlers"), \
+                patch.object(main_module, "_persist_runtime_state"):
+            task = asyncio.create_task(main_module.run_bots())
+            try:
+                await asyncio.wait_for(closed.wait(), timeout=1)
+                self.assertFalse(task.done())
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
 
 
 if __name__ == "__main__":

@@ -75,6 +75,9 @@ if "discord" not in sys.modules:
     class HTTPException(Exception):
         pass
 
+    class LoginFailure(Exception):
+        pass
+
     class Intents:
         @staticmethod
         def default():
@@ -159,6 +162,7 @@ if "discord" not in sys.modules:
     discord.Guild = Guild
     discord.DMChannel = DMChannel
     discord.HTTPException = HTTPException
+    discord.LoginFailure = LoginFailure
     discord.Intents = Intents
     discord.Client = Client
     discord.app_commands = types.SimpleNamespace(

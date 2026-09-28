@@ -121,9 +121,5 @@ jobs:
       - name: Static analysis
         run: bandit -q -r . -x ./venv,./tests,./bot_data -lll -iii
 
-      # Advisory: the pinned Flask, Waitress, and python-dotenv versions have
-      # open advisories, so this reports without failing the build until those
-      # pins are bumped.
       - name: Dependency advisories
-        continue-on-error: true
         run: pip-audit -r requirements.txt --progress-spinner off

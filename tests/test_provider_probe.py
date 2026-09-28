@@ -161,3 +161,67 @@ def test_model_override_cannot_make_a_different_model_pass(endpoint):
             asyncio.run(providers.probe_provider(cfg, timeout=4))
     post.assert_not_called()
     client.assert_not_called()
+
+
+@pytest.mark.parametrize("endpoint,protocol", [
+    ("openai-chat", ""), ("openai-chat", "newapi"),
+    ("openai-responses", ""), ("anthropic-messages", ""), ("gemini", ""),
+])
+@pytest.mark.parametrize("overrides", [
+    {"extra_body": {"models": ["chosen-model", "alternate-model"]}},
+    {"openrouter": {"models": ["chosen-model", "alternate-model"]}},
+    {"include_body": "models: [chosen-model, alternate-model]"},
+    {"extra_body": {"models": ["alternate-model"]}},
+])
+def test_probe_rejects_gateway_model_fallback_before_network(endpoint, protocol, overrides):
+    cfg = normalized(url="https://openrouter.ai/api/v1", endpoint_type=endpoint,
+                     provider_protocol=protocol, **overrides)
+    with patch.object(endpoint_adapters, "post_json_request", new_callable=AsyncMock) as post:
+        with patch.object(providers, "AsyncOpenAI") as client:
+            with pytest.raises(EndpointAdapterError) as raised:
+                asyncio.run(providers.probe_provider(cfg, timeout=4))
+    assert raised.value.provider_error.code == "model_fallback_override"
+    assert "models" in raised.value.provider_error.message
+    post.assert_not_called()
+    client.assert_not_called()
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("visible", [
+    "", "Hello, good to see you!",
+    "Let me think about where we should go for dinner.",
+    "I need to think about your invitation.",
+])
+def test_probe_requires_visible_reply_outside_system_thinking(native, visible):
+    text = "<think>SYSTEM: choose a greeting\n\nI should choose a friendly greeting.</think>\n\n" + visible
+    cfg = normalized(provider_protocol="newapi" if native else "")
+    client = ChatClient(chat_response(text))
+    payload = {"choices": [{"finish_reason": "stop", "message": {"content": text}}]}
+    with patch.object(providers, "AsyncOpenAI", return_value=client):
+        with patch.object(endpoint_adapters, "post_json_request", AsyncMock(return_value=payload)):
+            if visible:
+                result = asyncio.run(providers.probe_provider(cfg, timeout=4))
+                assert result.text == visible
+            else:
+                with pytest.raises(EndpointAdapterError) as raised:
+                    asyncio.run(providers.probe_provider(cfg, timeout=4))
+                assert raised.value.provider_error.code == "empty_response"
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_probe_preserves_same_model_backend_routing_and_canonical_response_alias(native):
+    routing = {"order": ["backend-a", "backend-b"], "allow_fallbacks": True}
+    cfg = normalized(url="https://openrouter.ai/api/v1", model="model-alias",
+                     provider_protocol="newapi" if native else "", openrouter={"provider": routing})
+    response = chat_response()
+    response.model = "model-canonical-2026-09-01"
+    client = ChatClient(response)
+    post = AsyncMock(return_value={"model": response.model, "choices": [
+        {"finish_reason": "stop", "message": {"content": "Hello."}}]})
+    with patch.object(providers, "AsyncOpenAI", return_value=client):
+        with patch.object(endpoint_adapters, "post_json_request", post):
+            result = asyncio.run(providers.probe_provider(cfg, timeout=4))
+    body = post.await_args.args[2] if native else client.call.await_args.kwargs["extra_body"]
+    assert body["provider"] == routing
+    assert result.text == "Hello."
+    assert result.model == "model-alias"

@@ -80,13 +80,15 @@ The Project page shows the last accepted webhook, completed sync, and delivered 
 
 **Project → Delivery activity** shows job IDs, failure/recovery states, and recorded GitHub/Discord destinations. When a delivery receipt exists, PR activity links open its exact Discord message. Normal reads retry up to three attempts. An uncertain public write is held: a timeout or process crash does not cause another issue or activity message to be created automatically.
 
-- `/project-recover job_id:123` checks the destination for the existing delivery. GitHub matches must bear the configured App’s attribution and the recovery marker.
+- `/project-recover job_id:123` checks the destination for the existing delivery. GitHub matches must bear the configured App's attribution and recovery marker; Discord mirrors must match the saved destination, bot author, and delivery marker. An inaccessible destination stays held and is never treated as proof of absence.
 - `/project-retry job_id:123` resumes failed work or checks a held delivery first.
 - If a delivery remains absent, inspect the destination before using `confirmed_not_delivered:true`. A GitHub publication then returns to the reporter for fresh approval; the old job is cancelled. A Discord delivery can be retried after that explicit confirmation.
 
 These commands require a configured maintainer or operator and the configured project server/helper. Their default Discord visibility requires Manage Server; administrators can grant command access to the maintainer role. Job and case revisions prevent a stale recovery action from replacing a newer decision.
 
 GitHub issues, PRs, and accessible PR activity reconcile on startup and every 15 minutes. PR discovery includes recently updated open, closed, and merged PRs, so discussion can be recovered even when a PR opened and closed during an outage. PR activity scans use bounded, resumable jobs. They recover the source's available current state, not every intermediate edit; deletion checks can only recover comments the helper previously observed. Repository push feeds, release, workflow, and maintainer-question events still depend on webhooks; use GitHub’s delivery history to redeliver missed events. Repository and channel changes hold older jobs for their original configuration. New mirror destinations get separate mappings.
+
+Unchanged issue status does not enqueue another reporter notification. Status checkpoints and notifications are saved together, including when older completed notification jobs use the previous payload format. A permission error can happen after a Discord post was created or edited; restore access and verify the destination before retrying those jobs.
 
 The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
 

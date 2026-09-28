@@ -148,6 +148,43 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
     # Store original for logging
     original_length = len(text)
 
+    # Explicit boundaries must win over plain-text recovery, which can return early.
+    # Remove standard thinking tags
+    text = RE_THINKING_OPEN.sub('', text)
+    text = RE_THINK_OPEN.sub('', text)
+
+    # Remove GLM box tags
+    text = RE_GLM_BOX.sub('', text)
+
+    # Remove partial/unclosed tags at START of response
+    text = RE_THINKING_PARTIAL_START.sub('', text)
+    text = RE_THINK_PARTIAL_START.sub('', text)
+    text = RE_GLM_PARTIAL_START.sub('', text)
+
+    # Remove orphaned opening tags at END
+    text = RE_THINKING_ORPHAN_END.sub('', text)
+    text = RE_THINK_ORPHAN_END.sub('', text)
+    text = RE_GLM_ORPHAN_END.sub('', text)
+
+    # Additional patterns for local LLMs
+    text = RE_REASONING_TAG.sub('', text)
+    text = RE_REASON_TAG.sub('', text)
+    text = RE_BRACKET_THINKING.sub('', text)
+    text = RE_BRACKET_THINK.sub('', text)
+
+    # Remove Deepseek/Qwen style tags
+    text = RE_DEEPSEEK_THINK.sub('', text)
+    text = RE_QWEN_THOUGHT.sub('', text)
+    text = RE_INTERNAL_MONOLOGUE.sub('', text)
+    text = RE_GLM_THINKING_PIPE.sub('', text)
+
+    if len(text) != original_length:
+        # Explicit delimiters identify the private text. Do not reinterpret the
+        # remaining dialogue as untagged reasoning (e.g. "Let me think...").
+        text = RE_OUTPUT_WRAPPER.sub(r'\1', text)
+        text = RE_RESPONSE_WRAPPER.sub(r'\1', text)
+        return text.strip()
+
     # GLM SYSTEM: prefix reasoning format - AGGRESSIVE EXTRACTION
     # This handles cases where GLM ignores thinking:disabled and leaks reasoning
     if 'SYSTEM:' in text or 'Thinking Process' in text or 'Analyze the' in text:
@@ -212,28 +249,6 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
                 if last_part:
                     return last_part
 
-    # Remove standard thinking tags
-    text = RE_THINKING_OPEN.sub('', text)
-    text = RE_THINK_OPEN.sub('', text)
-
-    # Remove GLM box tags
-    text = RE_GLM_BOX.sub('', text)
-
-    # Remove partial/unclosed tags at START of response
-    text = RE_THINKING_PARTIAL_START.sub('', text)
-    text = RE_THINK_PARTIAL_START.sub('', text)
-    text = RE_GLM_PARTIAL_START.sub('', text)
-
-    # Remove orphaned opening tags at END
-    text = RE_THINKING_ORPHAN_END.sub('', text)
-    text = RE_THINK_ORPHAN_END.sub('', text)
-    text = RE_GLM_ORPHAN_END.sub('', text)
-
-    # Additional patterns for local LLMs
-    text = RE_REASONING_TAG.sub('', text)
-    text = RE_REASON_TAG.sub('', text)
-    text = RE_BRACKET_THINKING.sub('', text)
-    text = RE_BRACKET_THINK.sub('', text)
     text = RE_MARKDOWN_THINKING.sub('', text)
     text = RE_REASONING_PREFIX.sub('', text)
 
@@ -242,11 +257,6 @@ def remove_thinking_tags(text: str, character_name: str = None) -> str:
     text = RE_READABLE_VERSION.sub('', text)
     text = RE_INTERNAL_NOTE.sub('', text)
     text = RE_STEP_LABELS.sub('', text)
-
-    # Remove Deepseek/Qwen style tags
-    text = RE_DEEPSEEK_THINK.sub('', text)
-    text = RE_QWEN_THOUGHT.sub('', text)
-    text = RE_INTERNAL_MONOLOGUE.sub('', text)
 
     # Remove <output>/<response> wrappers
     text = RE_OUTPUT_WRAPPER.sub(r'\1', text)

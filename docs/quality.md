@@ -32,9 +32,9 @@ python tools/dashboard_smoke.py
 | Lint | Ruff correctness rules only: undefined and redefined names, syntax errors, identity comparison against literals |
 | Tests | Full suite on Python 3.10, 3.12, and 3.13 |
 | Dashboard smoke test | The authenticated access boundary against a running server |
-| Security scan | Bandit at high severity and high confidence; `pip-audit` advisory-only |
+| Security scan | Bandit at high severity and high confidence; `pip-audit` fails on known dependency advisories. |
 
-Lint deliberately runs a narrow rule set. The codebase has hundreds of pre-existing style findings, and a job that always fails is a job everyone learns to ignore. `pip-audit` does not fail the build because the pinned Flask, Waitress, and python-dotenv versions have open advisories; bumping those pins is separate work.
+Lint deliberately runs a narrow rule set. The codebase has hundreds of pre-existing style findings, and a job that always fails is a job everyone learns to ignore. Dependency auditing is enforced; upgrade affected packages and verify compatibility before merging.
 
 ## Invariants
 

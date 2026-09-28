@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - A provider with an unknown endpoint type and automatic reasoning no longer aborts the entire fallback chain during request preparation. The failed tier is recorded as an error and later providers remain available, without treating the configuration failure as a vision rejection.
+- **Test model** rejects configured gateway model fallback lists before sending requests, rather than reporting a substitute model as verified. Same-model backend routing remains supported.
+- Explicit thinking blocks are removed before plain-text reasoning recovery, preventing thought-only responses from passing provider tests or leaking through that recovery path.
+- Issue synchronization no longer conflicts with legacy status-notification payloads after a successful Discord delivery. Status checkpoints and new notifications are saved atomically, and unchanged status does not generate another notice.
+- Mirror recovery verifies the destination channel, author, and delivery marker. Active receipts can be recovered without requiring archived-post enumeration, and inaccessible destinations remain held without resending.
+- A rejected Discord bot token no longer terminates other bot identities or the dashboard. Correct the token in Config and restart to reconnect that bot.
+- Updated python-dotenv, Flask, and Waitress to address the reported dependency advisories; dependency auditing now fails CI on known vulnerabilities.
 
 ## [v2.8.0] - 2026-09-26
 
