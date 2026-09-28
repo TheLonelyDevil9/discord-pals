@@ -1384,7 +1384,7 @@ class AIProviderManager:
 
                 model = PROVIDERS[tier]["model"]
                 provider_cfg = PROVIDERS[tier]
-                extra_body = provider_extra_body(provider_cfg)
+                extra_body = None
                 include_body = PROVIDERS[tier].get("include_body", "")
                 exclude_body = PROVIDERS[tier].get("exclude_body", "")
                 include_headers = PROVIDERS[tier].get("include_headers", "")
@@ -1411,6 +1411,7 @@ class AIProviderManager:
 
                 try:
                     client = self.providers[tier]
+                    extra_body = provider_extra_body(provider_cfg)
                     result = await self._try_generate_result_for_provider(
                         client, provider_cfg, model, messages_to_send, effective_temperature, effective_max_tokens, tier,
                         timeout=effective_timeout,
@@ -1459,7 +1460,7 @@ class AIProviderManager:
                         raise
                     continue
                 except APIError as e:
-                    if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
+                    if extra_body is not None and has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:
@@ -1519,7 +1520,8 @@ class AIProviderManager:
                     )
                     continue
                 except Exception as e:
-                    if has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
+                    # Failed request preparation cannot establish a vision capability failure.
+                    if extra_body is not None and has_images and supports_vision and text_only_messages and self._looks_like_vision_rejection(e):
                         log.warn(f"[{tier}] Vision input rejected by provider, retrying as text-only", component="provider", event="vision_fallback", req_id=req_id, tier=tier, model=model)
                         self._vision_support_overrides[tier] = False
                         try:

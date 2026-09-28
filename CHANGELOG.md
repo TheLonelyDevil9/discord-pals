@@ -4,6 +4,12 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- A provider with an unknown endpoint type and automatic reasoning no longer aborts the entire fallback chain during request preparation. The failed tier is recorded as an error and later providers remain available, without treating the configuration failure as a vision rejection.
+
 ## [v2.8.0] - 2026-09-26
 
 Adds GitHub project feedback and PR activity in Discord, simpler provider setup, and tests that verify a real model reply.

@@ -526,6 +526,72 @@ class EndpointAdapterContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EndpointProviderManagerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_preparation_failure_falls_back_without_retrying_images(self):
+        for content in (
+            "hello",
+            [{"type": "text", "text": "hello"},
+             {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}],
+        ):
+            with self.subTest(content=content):
+                rejected_request = AsyncMock()
+                post = _PostRecorder({"output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": "Healthy fallback reply."},
+                ]}]})
+                manager = object.__new__(providers.AIProviderManager)
+                manager._endpoint_adapter = endpoint_adapters.EndpointProviderAdapter(post_json=post)
+                manager.providers = {
+                    "primary": types.SimpleNamespace(chat=types.SimpleNamespace(
+                        completions=types.SimpleNamespace(create=rejected_request))),
+                    "secondary": manager._endpoint_adapter,
+                }
+                manager.status = {}
+                manager._vision_support_overrides = {}
+                configs = {
+                    "primary": config.normalize_provider_config({
+                        "name": "Invalid endpoint", "url": "https://invalid.example/v1",
+                        "model": "invalid-model", "requires_key": False,
+                        "endpoint_type": "unknown image input format", "reasoning_effort": "high",
+                    }),
+                    "secondary": config.normalize_provider_config({
+                        "name": "Healthy endpoint", "url": "https://healthy.example/v1",
+                        "model": "healthy-model", "requires_key": False,
+                        "endpoint_type": "openai-responses",
+                    }),
+                }
+                with patch.dict(providers.PROVIDERS, configs, clear=True):
+                    result = await manager.generate_result(
+                        messages=[{"role": "user", "content": content}],
+                        system_prompt="system", use_single_user=False,
+                    )
+
+                self.assertEqual(result.deliverable_text, "Healthy fallback reply.")
+                self.assertEqual(result.tier, "secondary")
+                self.assertEqual(manager.status, {"primary": "error", "secondary": "ok"})
+                self.assertEqual(manager._vision_support_overrides, {})
+                rejected_request.assert_not_awaited()
+                self.assertEqual(post.calls[0]["body"]["input"][-1]["content"], content)
+
+    async def test_request_preparation_failure_exhausts_without_sending(self):
+        rejected_request = AsyncMock()
+        manager = object.__new__(providers.AIProviderManager)
+        manager.providers = {"primary": types.SimpleNamespace(chat=types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=rejected_request)))}
+        manager.status = {}
+        provider_cfg = config.normalize_provider_config({
+            "name": "Invalid endpoint", "url": "https://invalid.example/v1",
+            "model": "invalid-model", "requires_key": False,
+            "endpoint_type": "unknown", "reasoning_effort": "high",
+        })
+        with patch.dict(providers.PROVIDERS, {"primary": provider_cfg}, clear=True), \
+                patch.object(providers.asyncio, "sleep", new_callable=AsyncMock):
+            result = await manager.generate_result(
+                messages=[{"role": "user", "content": "hello"}], system_prompt="system",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(manager.status["primary"], "error")
+        rejected_request.assert_not_awaited()
+
     async def test_gemini_runtime_delivers_only_visible_text_and_rejects_thought_only(self):
         for visible in ("Hello there.", None):
             with self.subTest(visible=visible):

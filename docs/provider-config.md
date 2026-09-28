@@ -20,7 +20,6 @@ Known v2.8.0 limitations:
 
 - Gateway-side model fallback can produce a passing result for a different model. The test preserves custom `models` fallback lists and does not compare the returned model identity. Remove model fallback overrides before checking a specific model; a pass with those overrides does not verify the selected model.
 - Thinking-only text containing both an explicit thinking block and a `SYSTEM:` marker can pass the reply check. A passing test is not a guarantee that every reasoning format was removed.
-- An unknown `endpoint_type` combined with a reasoning effort and automatic reasoning format can abort normal conversation generation before later provider tiers are tried. Use a supported API format from the provider editor rather than an arbitrary endpoint name.
 
 The raw JSON editor remains available for advanced configuration. Provider definitions are stored in `providers.json`.
 
@@ -105,6 +104,8 @@ Use multiple entries for redundancy:
 ```
 
 Per-character provider preferences are stored by the dashboard, not in character Markdown. The first tiers are named `primary`, `secondary`, and `fallback`; later tiers use `tier_3`, `tier_4`, and so on.
+
+Request preparation failures mark the affected tier as failed and continue to later providers. For example, an unsupported endpoint name with automatic reasoning no longer aborts the whole chain. A configuration error does not disable image support or trigger a text-only retry; correct the API format in the provider editor to restore that tier.
 
 ## Reasoning Options
 
