@@ -16,9 +16,16 @@ Main pages:
 | Reminders | Review reminder state and bulk-cancel pending reminders. |
 | Channels | Configure autonomous replies, nickname triggers, bot trigger access, cooldowns, and channel history cleanup. |
 | Config | Edit runtime settings, providers, schedules, prompt options, response access, import/export, and advanced JSON. |
+| Project | Configure the GitHub helper, inspect reporter-approved feedback, check setup, and recover held deliveries. |
 | Logs & Stats | Watch live logs, message counts, response times, context previews, and recent errors. |
 
 `prompts/system.md` is intentionally read-only in the dashboard. Editable post-system prompt sections live in `prompts/other_prompts.md`.
+
+## Project Helper
+
+The optional helper uses a dedicated Discord identity to discuss feedback, accept reporter-written reports, and publish them only after the original reporter approves the exact preview. It mirrors GitHub issues, PR discussion and code updates, commits, releases, and workflow results into configured Discord channels. Discord discussion is not copied back to GitHub automatically.
+
+Start with the [Project helper guide](project-automation.md) for setup, channel purposes, and recovery. The dashboard's **Check setup** checks permissions and subscriptions without posting; verify public webhook delivery separately. Preserve `bot_data/project_automation.sqlite3` to retain approvals, receipts, and synchronization checkpoints.
 
 ## Memory And Lore
 

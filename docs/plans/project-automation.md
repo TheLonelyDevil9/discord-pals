@@ -48,9 +48,9 @@ Use synthetic reports and isolated data for automated and dashboard checks. Publ
 - A new Discord report starts an ordinary thread conversation. The helper asks the next useful question directly instead of making the reporter choose a branch before each question.
 - Every conversational reply uses the configured character and current context. Structured workflow events stay internal; generated dialogue explains the next action.
 - The reporter enters their own title and report in a Discord form and explicitly confirms authorship. Assessment output contains no generated issue title or body.
-- Publication requires an actionable bug or feature report, enough detail, a successful duplicate check, an exact preview, and the original reporter’s approval. Explicit tests, support requests, and non-issues do not enter direct publication.
+- As revised for v2.8.0, publication requires a reporter-written title/body describing an understandable problem or desired improvement, authorship confirmation, an exact preview, and the original reporter's approval. Duplicate checking is advisory; an unavailable search does not block a complete report. Advice about tests, support requests, or readiness does not remove the reporter's controls.
 - The visible GitHub body is `Forwarded from Discord`, the Discord username, and the reporter’s contents. Preserve mention handling and the invisible recovery marker.
-- Reporters control their public text and publication. Maintainers help with unresolved questions and recovery. The clarification limit requests human help; it never grants approval.
+- Reporters control their public text and publication. Maintainers help with questions and delivery recovery. The clarification limit stops repeated automated questions while keeping reporter controls available; it never grants approval or requires a maintainer handoff.
 - Preserve saved cases, stale-button rejection, restart recovery, authentication, CSRF protection, and the other channel automations.
 
 ### Work and validation

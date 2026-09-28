@@ -73,6 +73,10 @@ Replace the host and local port with verified values. Keep the existing dashboar
 
 The bot needs outbound HTTPS to Discord, GitHub, and its text provider. No new public database or Discord listener port is needed. A tunnel with a stable HTTPS hostname can replace the reverse proxy if already operated on this host.
 
+If a proxy filters `X-GitHub-Event`, allow all subscribed event names: `ping`, `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread`, `push`, `release`, and `workflow_run`. Updating only the App subscriptions leaves review deliveries blocked at an older proxy. Keep HMAC validation on the application route and restrict public ingress to `/webhooks/github`; never forward the whole dashboard to a public tunnel.
+
+Check both sides of ingress: unrelated public paths must remain inaccessible, and GitHub delivery history must show successful signed review events reaching the application. **Check setup** inspects the App but cannot inspect an external proxy's allowlist.
+
 ## Installation and activation
 
 Install a reviewed Discord Pals revision containing the project helper. Schedule a maintenance window after preparing the bot, App, channel mapping, and hostname:

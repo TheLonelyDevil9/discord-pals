@@ -34,7 +34,7 @@ Thank you for your interest in contributing to Discord Pals! This document provi
 3. **Install dependencies**
 
    ```bash
-   pip install -r requirements.txt
+   python -m pip install -r requirements-dev.txt
    ```
 
 4. **Set up your test bot**
@@ -76,6 +76,8 @@ Thank you for your interest in contributing to Discord Pals! This document provi
    - Run the bot and verify your changes work
    - Test edge cases
    - Ensure existing functionality still works
+
+   Run the checks in [Quality Guardrails](docs/quality.md), including the real-server dashboard smoke test. `requirements-dev.txt` includes runtime dependencies and pytest.
 
 ### Project Structure Notes
 
@@ -134,10 +136,12 @@ python bump_version.py patch --tag --message "Fixed login bug"
 
 This will:
 - Update `version.py`
-- Add an entry to `CHANGELOG.md` with recent commits
+- Add a generic entry to `CHANGELOG.md`; it does not summarize recent commits
 - Create a git tag (e.g., `v1.2.4`)
 
-When `--tag` is used, the release flow publishes the release commit and tag automatically.
+When `--tag` is used, the release flow commits the version/changelog and pushes `HEAD` to `origin/main` before creating and pushing the tag. `--commit` also pushes to `main`. Neither option creates a GitHub Release.
+
+To review the release notes before publication, run the helper with `--no-tag`, replace the generated entry with categorized changes since the previous release, and commit and publish manually after validation. See [Release Verification](docs/operations.md#release-verification) for metadata, CI, deployment, and rollback checks.
 
 ## Reporting Bugs
 

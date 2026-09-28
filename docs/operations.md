@@ -42,7 +42,21 @@ If `update.py` is missing in an old install, download the latest `update.py` fro
 
 Before Git mutations, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: they are already size-capped by their own rotation, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
 
-Release tags should be cut only after the release commit is on `main` or an approved release branch. The `bump_version.py --tag` flow updates the version, writes changelog content, creates the tag, and publishes `main` plus the tag.
+Both built-in update paths snapshot `bot_data/project_automation.sqlite3` through SQLite's backup API, including committed WAL data. Keep this database with `bot_data/runtime_config.json`: it holds feedback cases, approvals, delivery receipts, and reconciliation checkpoints. For other backup tools, use SQLite's backup API or stop the service before copying the data directory. Keep an off-host copy for host-loss recovery.
+
+The dashboard's configuration ZIP export contains only `providers.json`, `bots.json`, and `autonomous.json`. It is not a full-state backup and does not include Project helper configuration or its database. Back up service-managed secrets and GitHub App private-key files separately; files outside the checkout are not captured by update snapshots.
+
+### Release Verification
+
+For a release, commit `version.py` and the matching dated `CHANGELOG.md` entry together, update any README version references, and verify the annotated `vX.Y.Z` tag resolves to that release commit on `main`. Check CI on the exact commit, including the dashboard smoke test and supported Python versions. A later documentation-only commit can follow the release without moving its tag or changing the version.
+
+`bump_version.py --tag` changes the version and changelog, commits them, pushes `HEAD` to `origin/main`, and creates and pushes the tag. `--commit` also pushes to `main`; it is not a local-only commit option. For review before publication, use the default `--no-tag` mode, replace the generic generated changelog with release-specific categorized notes, and commit and publish manually after checks pass. Running the helper again would perform another bump. It does not create a GitHub Release; do not rerun it to check an existing release.
+
+After deployment, sign in and check `/api/version`: `running_version` and `file_version` should match the intended release. For the latest release, `github_version` and `latest_version` should match too, with `update_available` and `restart_required` false. `/healthz` proves liveness only. Check `/api/status` for connected bots and **Project → Delivery activity** for failed or held work; an online helper alone does not prove synchronization is completing.
+
+For v2.8.0, follow the [upgrade notes](../CHANGELOG.md#upgrade-notes), install the updated requirements, and run **Check setup** after updating GitHub App subscriptions. If a webhook proxy filters event names, allow the three review events there too. Verify public ingress separately from the setup check; see [Project helper deployment](project-automation-oci.md#public-webhook-endpoint).
+
+Before rollback, record the current revision and preserve local changes and state backups. Pause Project automation and stop the service before restoring a prior reviewed revision and its dependencies. Preserve the helper database for recovery, then restart and repeat the version, authentication, and bot-status checks. A code rollback does not undo GitHub or Discord posts; use [delivery recovery](project-automation.md#recovery-and-operations) rather than replaying uncertain writes.
 
 ## Deployment
 
@@ -219,6 +233,7 @@ discord-pals/
 |-- logger.py                # Logging
 |-- stats.py                 # Message statistics
 |-- prometheus_metrics.py    # Metrics integration
+|-- project_automation*.py   # Project helper, GitHub/Discord delivery, and SQLite state
 |-- startup.py               # Startup validation
 |-- version.py               # Version constant
 |-- diagnose.py              # Provider diagnostics

@@ -12,9 +12,15 @@ Advanced settings keep environment-variable keys, keyless endpoints, reasoning, 
 
 **Test model** sends a small text-generation request using the selected provider's saved model, API format, credentials, and request parameters. Save or reload pending edits first. The test does not retry or switch to another configured provider. It may consume provider tokens but sends nothing to Discord.
 
-Results distinguish **Saved settings**, **Model reply**, and untested capabilities. Passing requires usable final reply text; empty responses, thinking-only output, blocked replies, and replies stopped at the output limit fail. Errors identify the next setting to check without displaying provider response bodies or credentials. A model-list response or valid local configuration is never enough to pass.
+Results distinguish **Saved settings**, **Model reply**, and untested capabilities. The test rejects empty responses, blocked replies, and replies stopped at the output limit, and checks for thinking-only output. Errors identify the next setting to check without displaying provider response bodies or credentials. A model-list response or valid local configuration is never enough to pass.
 
 The test uses the saved timeout up to a 30-second ceiling; normal conversations may use a longer timeout. A passing result verifies this saved text request, not image input, tool calling, every conversation, or provider availability indefinitely. Image generation retains its separate test.
+
+Known v2.8.0 limitations:
+
+- Gateway-side model fallback can produce a passing result for a different model. The test preserves custom `models` fallback lists and does not compare the returned model identity. Remove model fallback overrides before checking a specific model; a pass with those overrides does not verify the selected model.
+- Thinking-only text containing both an explicit thinking block and a `SYSTEM:` marker can pass the reply check. A passing test is not a guarantee that every reasoning format was removed.
+- An unknown `endpoint_type` combined with a reasoning effort and automatic reasoning format can abort normal conversation generation before later provider tiers are tried. Use a supported API format from the provider editor rather than an arbitrary endpoint name.
 
 The raw JSON editor remains available for advanced configuration. Provider definitions are stored in `providers.json`.
 
