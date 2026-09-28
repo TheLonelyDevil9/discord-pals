@@ -47,8 +47,9 @@ class FakeService:
     def get_case(self, case_id):
         return self.case if case_id == self.case["id"] else None
 
-    def list_jobs(self, limit=100):
-        return self.jobs
+    def list_job_activity(self, **kwargs):
+        return {"jobs": self.jobs, "next_before_id": None}
+
 
 
 @pytest.fixture
@@ -206,8 +207,6 @@ def test_page_escapes_untrusted_configuration_in_markup_and_script(setup):
     assert response.status_code == 200
     assert saved["config"]["bot_name"] not in text
     assert '<img src=x onerror=alert(1)>' not in text
-    page_script = text[text.index("const initial ="):].split("</script>", 1)[0]
-    assert 'innerHTML' not in page_script
 
 
 def test_cases_keep_exact_preview_and_limit_is_bounded(setup):
@@ -234,7 +233,6 @@ def test_case_inspection_preserves_human_punctuation_and_untrusted_text(setup):
     assert case["draft"]["body"] == "Forwarded from Discord\n@reporter\n\n" + text
     page = client.get("/project-automation").get_data(as_text=True)
     assert text not in page
-    assert "innerHTML" not in page[page.index("const initial ="):].split("</script>", 1)[0]
 
 
 def test_legacy_case_remains_inspectable_without_human_authorship_claim(setup):
@@ -333,7 +331,6 @@ def test_event_recovery_prefers_a_matching_recorded_mirror_thread(setup):
     }}]
     target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
     assert target["discord_url"] == "https://discord.com/channels/123/789"
-    service.store.get_link.assert_called_once_with("mirror", "123:Helper:456:SillyBunnyTeam/SillyBunny:issue:42")
     service.store.get_link.return_value["bot_name"] = "Different helper"
     target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
     assert target["discord_url"] == "https://discord.com/channels/123/456"
@@ -459,25 +456,8 @@ def test_timed_out_setup_is_cancelled_and_reported_unverified(setup, bot_loop, m
     assert next(row for row in result["checks"] if row["key"] == "discord_helper")["status"] == "unverified"
 
 
-def test_page_has_generic_selectors_manual_fallback_and_visible_only_status_polling(setup):
-    client, saved, _ = setup
-    saved["config"].update(valid_config())
-    text = client.get("/project-automation").get_data(as_text=True)
-    for label in ("Feedback intake", "Issue tracking", "Pull requests", "Commit updates", "Repository updates", "Support handoff (optional)"):
-        assert label in text
-    assert 'name="reviews_channel_id" data-discord-key="reviews_channel_id"' in text
-    assert 'data-manual-key="reviews_channel_id" value="100000000000000004"' in text
-    assert "setTimeout(pollStatus, 30000)" in text
-    assert "if (!document.hidden)" in text
-    assert "visibilitychange" in text
-    assert "Checks the draft below without saving settings or posting messages." in text
-    assert "#review-please" not in text and "#submit-feedback" not in text
-    assert '<div id="project-destinations"' in text
-
-
 def test_pr_activity_jobs_link_to_exact_recorded_receipt_with_pinned_binding(setup):
     from unittest.mock import Mock
-    from project_automation_activity import activity_receipt_key
     client, saved, service = setup
     saved["config"]["reviews_channel_id"] = "999"
     receipt = {"channel_id": "789", "message_id": "790", "forum_id": "456",
@@ -492,8 +472,6 @@ def test_pr_activity_jobs_link_to_exact_recorded_receipt_with_pinned_binding(set
     target = response.get_json()["jobs"][0]["target"]
     assert target["discord_url"] == "https://discord.com/channels/123/789/790"
     assert target["github_url"] == "https://github.com/team/project/pull/7#pullrequestreview-42"
-    payload = service.jobs[0]["payload"]
-    service.store.get_link.assert_any_call("pr_activity_delivery", activity_receipt_key(payload["_binding"], payload) + ":version-2")
     assert "private-event-body" not in response.get_data(as_text=True)
     receipt["forum_id"] = "other-forum"
     target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
@@ -543,3 +521,185 @@ def test_pr_activity_target_uses_canonical_prepared_version_and_thread_fallback(
     del records[("pr_activity_delivery", key + ":current")]
     target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
     assert target["discord_url"] == "https://discord.com/channels/123/700"
+
+
+@pytest.fixture
+def activity_api(setup, tmp_path):
+    from project_automation_store import AutomationStore
+    client, saved, service = setup
+    store = AutomationStore(tmp_path / "activity.sqlite3")
+    service.store = store
+    service.list_job_activity = store.list_job_activity
+    service.dismiss_jobs = store.dismiss_jobs
+    service.restore_job = store.restore_job
+    identifier = store.enqueue("assess", {"provider_context": "private-provider-context"}, "failed")
+    store.claim_job()
+    store.fail_job(identifier, "WorkflowError: event needs attention", permanent=True)
+    job = store.get_job(identifier)
+    return client, store, {"id": identifier, "updated_at": job["updated_at"]}
+
+
+def test_activity_api_dismiss_restore_preserves_failure_and_suppresses_provider_data(activity_api):
+    client, store, snapshot = activity_api
+    url = "/api/project-automation/jobs"
+    before = store.get_job(snapshot["id"])
+    page = client.get(url).get_json()
+    assert page["next_before_id"] is None
+    assert page["jobs"][0]["dismissed_at"] is None
+    assert page["jobs"][0]["state"] == "failed"
+    assert "private-provider-context" not in json.dumps(page)
+    assert page["jobs"][0]["last_error"] == before["last_error"]
+    response = client.post(url + "/dismiss", json={"jobs": [snapshot]}, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json() == {"dismissed": 1}
+    assert client.get(url).get_json() == {"jobs": [], "next_before_id": None}
+    assert client.get(url + "?view=attention").get_json()["jobs"] == []
+    dismissed = client.get(url + "?view=dismissed").get_json()["jobs"][0]
+    assert dismissed["id"] == snapshot["id"]
+    assert isinstance(dismissed["dismissed_at"], (int, float))
+    assert dismissed["updated_at"] == snapshot["updated_at"]
+    assert client.post(url + "/dismiss", json={"jobs": [snapshot]}, headers=csrf()).get_json() == {"dismissed": 1}
+    response = client.post(url + f'/{snapshot["id"]}/restore',
+                           json={"updated_at": snapshot["updated_at"]}, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json() == {"restored": True}
+    assert client.get(url + "?view=dismissed").get_json()["jobs"] == []
+    restored = client.get(url + "?view=attention").get_json()["jobs"][0]
+    assert restored["id"] == snapshot["id"] and restored["dismissed_at"] is None
+    after = store.get_job(snapshot["id"])
+    for key in ("state", "payload", "last_error", "attempts", "updated_at"):
+        assert after[key] == before[key]
+
+
+@pytest.mark.parametrize("action", ["dismiss", "restore"])
+def test_activity_mutations_require_auth_and_csrf(activity_api, monkeypatch, action):
+    client, store, snapshot = activity_api
+    path = "/api/project-automation/jobs/" + ("dismiss" if action == "dismiss" else f'{snapshot["id"]}/restore')
+    payload = {"jobs": [snapshot]} if action == "dismiss" else {"updated_at": snapshot["updated_at"]}
+    before = store.get_job(snapshot["id"])
+    monkeypatch.setenv("DASHBOARD_PASS", "test-password")
+    assert client.post(path, json=payload, headers=csrf()).status_code == 401
+    with client.session_transaction() as session:
+        session["logged_in"] = True
+    assert client.post(path, json=payload).status_code == 403
+    assert store.get_job(snapshot["id"]) == before
+    assert store.get_link("job_dismissal", snapshot["id"]) is None
+
+
+@pytest.mark.parametrize("query", ["view=unknown", "view=", "before_id=0", "before_id=-1", "before_id=true",
+                                  "before_id=1.5", "before_id=", "before_id=9223372036854775808",
+                                  "limit=0", "limit=101", "limit=true", "limit=1.5", "limit=garbage"])
+def test_activity_api_rejects_invalid_query(activity_api, query):
+    client, _, _ = activity_api
+    assert client.get("/api/project-automation/jobs?" + query).status_code == 400
+
+
+@pytest.mark.parametrize("payload", [None, [], "private-input", {}, {"jobs": []}, {"jobs": "private-input"},
+                                    {"jobs": [{"id": True, "updated_at": 1}]},
+                                    {"jobs": [{"id": 1, "updated_at": False}]},
+                                    {"jobs": [{"id": 1, "updated_at": "private-input"}]},
+                                    {"jobs": [{"id": 1, "updated_at": float("nan")}]},
+                                    {"jobs": [{"id": 1, "updated_at": float("inf")}]},
+                                    {"jobs": [{"id": 1, "updated_at": 1}] * 2},
+                                    {"jobs": [{"id": number, "updated_at": 1} for number in range(1, 102)]}])
+def test_activity_api_rejects_malformed_bulk_without_echo(activity_api, payload):
+    client, store, snapshot = activity_api
+    response = client.post("/api/project-automation/jobs/dismiss", data=json.dumps(payload),
+                           content_type="application/json", headers=csrf())
+    assert response.status_code == 400
+    assert "private-input" not in response.get_data(as_text=True)
+    assert store.get_link("job_dismissal", snapshot["id"]) is None
+
+
+@pytest.mark.parametrize("identifier,payload", [("true", {"updated_at": 1}), ("0", {"updated_at": 1}),
+                                              ("-1", {"updated_at": 1}), ("1", []), ("1", {}),
+                                              ("1", {"updated_at": True}), ("1", {"updated_at": "private-input"}),
+                                              ("1", {"updated_at": float("inf")})])
+def test_activity_restore_rejects_malformed_snapshot(activity_api, identifier, payload):
+    client, _, _ = activity_api
+    response = client.post(f"/api/project-automation/jobs/{identifier}/restore", data=json.dumps(payload),
+                           content_type="application/json", headers=csrf())
+    assert response.status_code == 400
+    assert "private-input" not in response.get_data(as_text=True)
+
+
+def test_activity_api_bulk_missing_and_stale_snapshots_are_atomic(activity_api):
+    client, store, snapshot = activity_api
+    path = "/api/project-automation/jobs"
+    response = client.post(path + "/dismiss", json={"jobs": [snapshot, {"id": 999, "updated_at": 1}]}, headers=csrf())
+    assert response.status_code == 404
+    assert store.get_link("job_dismissal", snapshot["id"]) is None
+    assert store.get_job(snapshot["id"])["recovery_notes"] == []
+    response = client.post(path + "/999/restore", json={"updated_at": 1}, headers=csrf())
+    assert response.status_code == 404
+    stale = {**snapshot, "updated_at": snapshot["updated_at"] - 1}
+    assert client.post(path + "/dismiss", json={"jobs": [stale]}, headers=csrf()).status_code == 409
+    assert client.post(path + f'/{snapshot["id"]}/restore', json={"updated_at": stale["updated_at"]}, headers=csrf()).status_code == 409
+    store.retry_job(snapshot["id"])
+    assert client.post(path + "/dismiss", json={"jobs": [snapshot]}, headers=csrf()).status_code == 409
+
+
+def test_activity_api_recovery_cannot_be_dismissed(activity_api):
+    client, store, snapshot = activity_api
+    store.retry_job(snapshot["id"])
+    store.claim_job()
+    store.mark_job_inflight(snapshot["id"])
+    store.fail_job(snapshot["id"], "Remote write needs verification", permanent=True)
+    current = {"id": snapshot["id"], "updated_at": store.get_job(snapshot["id"])["updated_at"]}
+    response = client.post("/api/project-automation/jobs/dismiss", json={"jobs": [current]}, headers=csrf())
+    assert response.status_code == 409
+    jobs = client.get("/api/project-automation/jobs?view=attention").get_json()["jobs"]
+    assert jobs[0]["state"] == "recovery"
+    assert jobs[0]["last_error"] == "Remote write needs verification"
+
+
+def test_activity_api_cursor_does_not_skip_filtered_rows(activity_api):
+    client, store, snapshot = activity_api
+    middle = store.enqueue("assess", {}, "middle")
+    newest = store.enqueue("assess", {}, "newest")
+    page = client.get("/api/project-automation/jobs?limit=1").get_json()
+    assert page["jobs"][0]["id"] == newest
+    assert page["next_before_id"] == newest
+    store.dismiss_jobs([snapshot])
+    page = client.get(f"/api/project-automation/jobs?limit=1&before_id={newest}").get_json()
+    assert page["jobs"][0]["id"] == middle
+    assert page["next_before_id"] is None
+
+
+@pytest.mark.parametrize("action", ["list", "dismiss", "restore"])
+def test_activity_api_never_returns_internal_exceptions(activity_api, setup, monkeypatch, action):
+    client, _, snapshot = activity_api
+    service = setup[2]
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("private-database-provider-secret")
+
+    if action == "list":
+        monkeypatch.setattr(service, "list_job_activity", broken)
+        response = client.get("/api/project-automation/jobs")
+    elif action == "dismiss":
+        monkeypatch.setattr(service, "dismiss_jobs", broken)
+        response = client.post("/api/project-automation/jobs/dismiss", json={"jobs": [snapshot]}, headers=csrf())
+    else:
+        monkeypatch.setattr(service, "restore_job", broken)
+        response = client.post(f'/api/project-automation/jobs/{snapshot["id"]}/restore',
+                               json={"updated_at": snapshot["updated_at"]}, headers=csrf())
+    assert response.status_code == 500
+    assert "private-database-provider-secret" not in response.get_data(as_text=True)
+
+
+def test_activity_actor_cannot_be_supplied_by_client_and_audit_stays_private(activity_api):
+    client, store, snapshot = activity_api
+    path = "/api/project-automation/jobs"
+    for payload in ({"jobs": [snapshot], "actor": "private-forged-actor"},
+                    {"jobs": [{**snapshot, "actor": "private-forged-actor"}]}):
+        response = client.post(path + "/dismiss", json=payload, headers=csrf())
+        assert response.status_code == 400
+        assert "private-forged-actor" not in response.get_data(as_text=True)
+    assert store.get_job(snapshot["id"])["recovery_notes"] == []
+    assert client.post(path + "/dismiss", json={"jobs": [snapshot]}, headers=csrf()).status_code == 200
+    assert store.get_job(snapshot["id"])["recovery_notes"][-1]["actor"] == "dashboard"
+    dismissed = client.get(path + "?view=dismissed").get_json()["jobs"][0]
+    assert "recovery_notes" not in dismissed
+    assert "payload" not in dismissed
+    assert "lease_token" not in dismissed

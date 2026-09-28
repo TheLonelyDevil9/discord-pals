@@ -72,6 +72,17 @@
     .project-manual summary { font-size: 0.875rem; }
     .project-manual .project-form-grid { margin-top: 14px; }
     .project-jobs { margin-top: 14px; }
+    .project-jobs table { width: 100%; table-layout: fixed; }
+    .project-jobs caption { text-align: left; padding: 0 12px 10px; color: var(--text-secondary); }
+    .project-activity-toolbar { align-items: flex-start; margin-top: 20px; }
+    .project-activity-views .btn[aria-pressed="true"] { background: var(--accent-muted); border-color: var(--accent); color: var(--text-primary); }
+    .project-activity-toolbar .btn { white-space: normal; }
+    .project-activity-toolbar .btn:focus-visible, .project-jobs .btn:focus-visible, .project-job-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .project-job-action { margin-top: 10px; }
+    .project-activity-status { min-height: 1.5em; overflow-wrap: anywhere; }
+    .project-activity-status[data-state="error"] { color: var(--text-primary); }
+    .project-activity-footer { margin-top: 16px; }
+    #project-dismiss-visible[hidden], #project-jobs-older[hidden] { display: none; }
     .project-jobs td, .project-jobs th { padding: 12px; }
     .project-jobs th { color: var(--text-secondary); }
     .project-jobs td { overflow-wrap: anywhere; }
@@ -93,6 +104,10 @@
         .project-jobs tr { padding: 12px 0; border-top: 1px solid var(--border-subtle); }
         .project-jobs td { border: 0; padding: 5px 12px; }
         .project-jobs td::before { content: attr(data-label); display: block; color: var(--text-secondary); font-weight: 600; font-size: 0.75rem; margin-bottom: 3px; }
+        .project-activity-toolbar > .project-controls { width: 100%; }
+        .project-activity-toolbar .btn { flex: 1 1 auto; }
+        .project-jobs { overflow-x: visible; }
+        .project-job-target { max-width: none; }
         .project-jobs td[colspan]::before { display: none; }
     }
 </style>
@@ -285,11 +300,28 @@
     <h2 id="jobs-heading">Delivery activity</h2>
     <p class="project-hint">Queued work survives restarts. A recovery state means a public write may already exist; check GitHub or Discord before retrying it.</p>
     <p class="project-hint">Maintainers can use <code>/project-recover job_id</code> in Discord to find an existing delivery, or <code>/project-retry job_id</code> to resume failed work. An uncertain publication requires a destination check and the reporter’s fresh approval.</p>
+    <div class="project-toolbar project-activity-toolbar">
+        <div class="project-controls project-activity-views" role="group" aria-label="Delivery activity view">
+            <button type="button" class="btn btn-secondary" data-jobs-view="recent" aria-pressed="true" aria-controls="project-jobs">Recent</button>
+            <button type="button" class="btn btn-secondary" data-jobs-view="attention" aria-pressed="false" aria-controls="project-jobs">Needs attention</button>
+            <button type="button" class="btn btn-secondary" data-jobs-view="dismissed" aria-pressed="false" aria-controls="project-jobs">Dismissed</button>
+        </div>
+        <div class="project-controls">
+            <button type="button" class="btn btn-secondary" id="project-dismiss-visible" aria-describedby="project-dismiss-help" disabled>Dismiss visible failures</button>
+            <button type="button" class="btn btn-secondary" id="project-jobs-refresh">Refresh activity</button>
+        </div>
+    </div>
+    <p class="project-hint project-notice" id="project-dismiss-help">Dismiss hides only loaded failures from Recent and Needs attention. It does not retry, cancel, or delete work. Restore them from Dismissed. Held work cannot be dismissed.</p>
+    <p class="project-hint project-activity-status" id="project-jobs-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
     <div class="table-responsive project-jobs">
         <table>
+            <caption id="project-jobs-caption">Recent delivery activity</caption>
             <thead><tr><th scope="col">Work</th><th scope="col">Destination</th><th scope="col">State</th><th scope="col">Attempts</th></tr></thead>
             <tbody id="project-jobs"><tr><td colspan="4">Loading delivery activity…</td></tr></tbody>
         </table>
+    </div>
+    <div class="project-controls project-activity-footer">
+        <button type="button" class="btn btn-secondary" id="project-jobs-older" hidden>Load older</button>
     </div>
 </section>
 
@@ -304,6 +336,17 @@ document.addEventListener('DOMContentLoaded', function () {
     let hasChecks = false;
     let statusTimer = null;
     let statusLoading = false;
+    let jobsView = 'recent';
+    let displayedJobsView = 'recent';
+    let loadedJobs = [];
+    let nextBeforeId = null;
+    let jobsRequest = 0;
+    let jobsLoading = false;
+    let jobsAction = false;
+    let refreshing = false;
+    let statusRequest = 0;
+    let statusWrites = 0;
+    const jobViewLabels = {recent: 'Recent', attention: 'Needs attention', dismissed: 'Dismissed'};
     const form = document.getElementById('project-form');
     const purposes = initial.channel_purposes;
     const labels = {
@@ -365,6 +408,19 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return body;
     }
+    async function refreshStatus(method, data) {
+        const sequence = ++statusRequest;
+        const writing = method === 'POST';
+        if (writing) statusWrites++;
+        try {
+            const result = await requestJson('/api/project-automation', method, data);
+            if (sequence === statusRequest) renderStatus(result);
+        } catch (error) {
+            if (writing || sequence === statusRequest) throw error;
+        } finally {
+            if (writing) statusWrites--;
+        }
+    }
     function renderStatus(data) {
         snapshot = data;
         const enabled = data.config.enabled;
@@ -397,7 +453,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         const counts = data.service.job_counts;
         document.getElementById('project-queue').textContent = counts
-            ? String(counts.pending ?? 0) + ' pending · ' + String(counts.failed ?? 0) + ' failed · ' + String(counts.recovery ?? 0) + ' held for recovery'
+            ? String(counts.pending ?? 0) + ' pending · ' + String(counts.failed ?? 0) + ' failed · ' + String(counts.recovery ?? 0) + ' held for recovery · ' + String(counts.dismissed ?? 0) + ' dismissed'
             : 'Not available';
         const destinations = document.getElementById('project-destinations');
         destinations.replaceChildren();
@@ -621,12 +677,108 @@ document.addEventListener('DOMContentLoaded', function () {
             list.append(row);
         });
     }
+    function visibleFailures() {
+        return loadedJobs.filter(job => (job.state || job.status) === 'failed' && job.dismissed_at == null);
+    }
+    function activityMessage(text, state) {
+        const message = document.getElementById('project-jobs-status');
+        message.textContent = text;
+        message.dataset.state = state || '';
+    }
+    function updateJobControls() {
+        const busy = jobsLoading || jobsAction;
+        const failures = visibleFailures().length;
+        document.getElementById('project-jobs').setAttribute('aria-busy', String(busy));
+        document.querySelectorAll('[data-jobs-view]').forEach(button => {
+            button.disabled = jobsAction;
+            button.setAttribute('aria-pressed', String(button.dataset.jobsView === jobsView));
+        });
+        const dismiss = document.getElementById('project-dismiss-visible');
+        dismiss.disabled = busy || refreshing || !failures || displayedJobsView !== jobsView;
+        dismiss.textContent = failures ? 'Dismiss ' + Math.min(failures, 100) + ' visible ' + (failures === 1 ? 'failure' : 'failures') : 'Dismiss visible failures';
+        dismiss.hidden = jobsView === 'dismissed';
+        document.getElementById('project-dismiss-help').textContent = failures > 100
+            ? '100 of ' + failures + ' loaded failures will be dismissed. Remaining failures stay visible. Dismissal never retries, cancels, or deletes work; restore it from Dismissed. Held work cannot be dismissed.'
+            : 'Dismiss hides only loaded failures from Recent and Needs attention. It does not retry, cancel, or delete work. Restore them from Dismissed. Held work cannot be dismissed.';
+        document.querySelectorAll('[data-job-action]').forEach(button => { button.disabled = busy || refreshing; });
+        ['project-refresh', 'project-jobs-refresh'].forEach(id => {
+            const button = document.getElementById(id);
+            button.disabled = busy || refreshing;
+            button.textContent = refreshing ? 'Refreshing…' : 'Refresh activity';
+        });
+        const older = document.getElementById('project-jobs-older');
+        older.hidden = nextBeforeId == null;
+        older.disabled = busy || refreshing || displayedJobsView !== jobsView;
+        older.textContent = jobsLoading ? 'Loading…' : 'Load older';
+    }
+    async function loadJobs(append = false) {
+        if (jobsAction || (append && (jobsLoading || nextBeforeId == null))) return;
+        const sequence = ++jobsRequest;
+        const view = jobsView;
+        const query = new URLSearchParams({view, limit: '50'});
+        if (append) query.set('before_id', String(nextBeforeId));
+        jobsLoading = true;
+        activityMessage(append ? 'Loading older activity…' : 'Loading ' + jobViewLabels[view].toLowerCase() + ' activity…');
+        updateJobControls();
+        try {
+            const data = await requestJson('/api/project-automation/jobs?' + query);
+            if (sequence !== jobsRequest) return;
+            const existing = new Set(append ? loadedJobs.map(job => job.id) : []);
+            const page = data.jobs.filter(job => {
+                if (existing.has(job.id)) return false;
+                existing.add(job.id);
+                return true;
+            });
+            loadedJobs = append ? loadedJobs.concat(page) : page;
+            displayedJobsView = view;
+            nextBeforeId = data.next_before_id;
+            renderJobs(loadedJobs);
+            activityMessage(loadedJobs.length + ' shown in ' + jobViewLabels[view] + (nextBeforeId == null ? '. No older activity in this view.' : '. Load older for more.'));
+        } catch (error) {
+            if (sequence !== jobsRequest) return;
+            jobsView = displayedJobsView;
+            activityMessage('Could not load activity. ' + error.message + ' The previous list is unchanged. Use Refresh activity to try again.', 'error');
+        } finally {
+            if (sequence === jobsRequest) { jobsLoading = false; updateJobControls(); }
+        }
+    }
+    async function changeJobDismissal(jobs, restore = false) {
+        if (jobsLoading || jobsAction || refreshing || !jobs.length || jobs.length > 100) return;
+        const payload = jobs.map(job => ({id: job.id, updated_at: job.updated_at}));
+        jobsAction = true;
+        ++statusRequest;
+        activityMessage(restore ? 'Restoring failure…' : 'Dismissing ' + jobs.length + (jobs.length === 1 ? ' failure…' : ' failures…'));
+        updateJobControls();
+        try {
+            const result = restore
+                ? await requestJson('/api/project-automation/jobs/' + payload[0].id + '/restore', 'POST', {updated_at: payload[0].updated_at})
+                : await requestJson('/api/project-automation/jobs/dismiss', 'POST', {jobs: payload});
+            const changed = new Set(payload.map(job => job.id));
+            loadedJobs = loadedJobs.filter(job => !changed.has(job.id));
+            renderJobs(loadedJobs);
+            updateJobControls();
+            activityMessage(restore
+                ? 'Failure restored to Recent and Needs attention. No work was retried.'
+                : result.dismissed + (result.dismissed === 1 ? ' failure dismissed.' : ' failures dismissed.') + ' Find and restore them in Dismissed. No work was retried or deleted.');
+            document.getElementById('project-jobs-status').focus({preventScroll: true});
+            try { await refreshStatus(); }
+            catch (_) { activityMessage(document.getElementById('project-jobs-status').textContent + ' Queue counts could not refresh. Use Refresh activity for current counts.'); }
+        } catch (error) {
+            activityMessage('Could not ' + (restore ? 'restore' : 'dismiss') + ' this activity. ' + error.message + ' The list is unchanged. Use Refresh activity before trying again.', 'error');
+        } finally { jobsAction = false; updateJobControls(); }
+    }
     function renderJobs(jobs) {
         const body = document.getElementById('project-jobs');
         body.replaceChildren();
+        document.getElementById('project-jobs-caption').textContent = jobViewLabels[displayedJobsView] + ' delivery activity';
         if (!jobs.length) {
             const row = element('tr');
-            const cell = element('td', 'No delivery activity yet.');
+            const empty = {
+                recent: 'No recent activity to show. Dismissed failures remain available in Dismissed.',
+                attention: 'No failures or held work to show. Dismissed failures remain available in Dismissed.',
+                dismissed: 'No dismissed failures to show. Dismiss failures from Recent or Needs attention; restore them here.'
+            };
+            const cell = element('td', nextBeforeId == null ? empty[displayedJobsView] : 'No entries remain on the loaded pages. Load older to continue browsing.');
             cell.colSpan = 4;
             row.append(cell);
             body.append(row);
@@ -634,11 +786,26 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         jobs.forEach(job => {
             const row = element('tr');
+            row.dataset.jobId = job.id;
             const status = job.state || job.status;
-            const state = element('td', readable(status));
+            const dismissed = status === 'failed' && job.dismissed_at != null;
+            const held = ['recovery', 'uncertain'].includes(status);
+            const state = element('td');
+            const badge = element('span', dismissed ? 'Failed · dismissed' : held ? 'Held for recovery' : readable(status), 'project-check-state');
+            if (held) badge.dataset.state = 'attention';
+            state.append(badge);
             const error = job.last_error || job.error;
             if (error) state.append(element('span', error, 'project-job-error'));
-            if (['recovery', 'uncertain'].includes(status)) state.append(element('span', 'A public write may already exist. Check the destination before any retry.', 'project-job-error'));
+            if (held) state.append(element('span', 'A public write may already exist. Check the destination before any retry. Held work cannot be dismissed.', 'project-job-error'));
+            if (dismissed) state.append(element('span', 'Dismissed ' + new Date(job.dismissed_at * 1000).toLocaleString(), 'project-job-error'));
+            if (status === 'failed') {
+                const action = element('button', dismissed ? 'Restore' : 'Dismiss', 'btn btn-secondary project-job-action');
+                action.type = 'button';
+                action.dataset.jobAction = dismissed ? 'restore' : 'dismiss';
+                action.setAttribute('aria-label', (dismissed ? 'Restore' : 'Dismiss') + ' failed job ' + job.id);
+                action.addEventListener('click', () => changeJobDismissal([job], dismissed));
+                state.append(element('br'), action);
+            }
             const work = element('td', readable(job.activity || job.kind));
             work.append(element('span', 'Job ' + job.id, 'project-job-error'));
             const target = job.target || {};
@@ -673,19 +840,17 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
     async function refresh() {
-        const button = document.getElementById('project-refresh');
-        button.disabled = true;
-        button.textContent = 'Refreshing…';
+        if (refreshing || jobsAction) return;
+        refreshing = true;
+        updateJobControls();
         try {
-            const [status, cases, jobs] = await Promise.all([
-                requestJson('/api/project-automation'), requestJson('/api/project-automation/cases'), requestJson('/api/project-automation/jobs')
+            const [, cases] = await Promise.all([
+                refreshStatus(), requestJson('/api/project-automation/cases'), loadJobs()
             ]);
-            renderStatus(status);
             renderCases(cases.cases);
-            renderJobs(jobs.jobs);
             if (selectedId) await inspectCase(selectedId);
         } catch (error) { document.getElementById('project-status-detail').textContent = error.message; }
-        finally { button.disabled = false; button.textContent = 'Refresh activity'; }
+        finally { refreshing = false; updateJobControls(); }
     }
     form.addEventListener('submit', async event => {
         event.preventDefault();
@@ -697,7 +862,7 @@ document.addEventListener('DOMContentLoaded', function () {
         button.textContent = 'Saving…';
         message.textContent = '';
         try {
-            renderStatus(await requestJson('/api/project-automation', 'POST', config));
+            await refreshStatus('POST', config);
             message.textContent = 'Project settings saved.';
         } catch (error) { message.textContent = error.message; errorsAt('project-save-errors', error.details); }
         finally { button.disabled = false; button.textContent = 'Save project settings'; }
@@ -705,19 +870,30 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('project-pause').addEventListener('click', async function () {
         this.disabled = true;
         try {
-            renderStatus(await requestJson('/api/project-automation', 'POST', { enabled: false }));
+            await refreshStatus('POST', { enabled: false });
             form.elements.enabled.checked = false;
         } catch (error) { document.getElementById('project-status-detail').textContent = error.message; this.disabled = false; }
     });
     document.getElementById('project-refresh').addEventListener('click', refresh);
+    document.getElementById('project-jobs-refresh').addEventListener('click', refresh);
+    document.getElementById('project-jobs-older').addEventListener('click', () => loadJobs(true));
+    document.getElementById('project-dismiss-visible').addEventListener('click', () => changeJobDismissal(visibleFailures().slice(0, 100)));
+    document.querySelectorAll('[data-jobs-view]').forEach(button => {
+        button.addEventListener('click', () => {
+            if (jobsAction || button.dataset.jobsView === jobsView) return;
+            jobsView = button.dataset.jobsView;
+            loadJobs();
+        });
+    });
     function scheduleStatus() {
         clearTimeout(statusTimer);
         if (!document.hidden) statusTimer = setTimeout(pollStatus, 30000);
     }
     async function pollStatus() {
         if (document.hidden || statusLoading) return;
+        if (jobsAction || refreshing || statusWrites) { scheduleStatus(); return; }
         statusLoading = true;
-        try { renderStatus(await requestJson('/api/project-automation')); }
+        try { await refreshStatus(); }
         catch (error) { document.getElementById('project-status-detail').textContent = 'Status could not refresh. ' + error.message; }
         finally { statusLoading = false; scheduleStatus(); }
     }

@@ -318,3 +318,199 @@ def test_audit_history_is_bounded(store, database):
     consumed = store.consume_gate(case["id"], 1, "submit", "456")
     assert len(consumed["decisions"]) == 100
     assert consumed["decisions"][-1]["action"] == "submit"
+
+
+def failed_snapshot(store, key="failed"):
+    job_id = store.enqueue("assess", {"_sync_cycle": 123, "context": "private"}, key)
+    assert store.claim_job()["id"] == job_id
+    store.fail_job(job_id, "private provider error", permanent=True)
+    job = store.get_job(job_id)
+    return {"id": job_id, "updated_at": job["updated_at"]}
+
+
+def test_dismiss_restore_persists_without_changing_work_or_sync_completion(store, database, clock):
+    snapshot = failed_snapshot(store)
+    before = store.get_job(snapshot["id"])
+    clock[0] += 1
+    assert store.dismiss_jobs([snapshot]) == 1
+    reopened = AutomationStore(database)
+    dismissed = reopened.list_job_activity(view="dismissed")["jobs"][0]
+    assert dismissed["dismissed_at"] == clock[0]
+    assert reopened.list_job_activity()["jobs"] == []
+    assert reopened.list_job_activity(view="attention")["jobs"] == []
+    assert reopened.job_counts() == {"pending": 0, "failed": 0, "recovery": 0, "dismissed": 1}
+    assert reopened.unfinished_sync_jobs(123)
+    after = reopened.get_job(snapshot["id"])
+    assert {key: value for key, value in after.items() if key != "recovery_notes"} == {
+        key: value for key, value in before.items() if key != "recovery_notes"}
+    assert reopened.list_jobs() == [after]
+    assert after["recovery_notes"][-1]["actor"] == "dashboard"
+    assert after["recovery_notes"][-1]["outcome"] == "dismiss"
+    assert after["recovery_notes"][-1]["time"] == clock[0]
+    assert reopened.dismiss_jobs([snapshot]) == 1
+    assert reopened.get_job(snapshot["id"]) == after
+    clock[0] += 1
+    reopened.restore_job(snapshot["id"], snapshot["updated_at"])
+    assert reopened.list_job_activity(view="dismissed")["jobs"] == []
+    assert reopened.list_job_activity(view="attention")["jobs"][0]["dismissed_at"] is None
+    assert reopened.job_counts()["failed"] == 1
+    assert reopened.job_counts()["dismissed"] == 0
+    assert reopened.get_job(snapshot["id"])["recovery_notes"][-1]["outcome"] == "restore"
+    assert reopened.claim_job() is None
+
+
+def test_retry_clears_dismissal_and_new_failure_reappears(store, clock):
+    old = failed_snapshot(store)
+    store.dismiss_jobs([old])
+    clock[0] += 1
+    store.retry_job(old["id"])
+    assert store.get_link("job_dismissal", old["id"]) is None
+    assert store.job_counts() == {"pending": 1, "failed": 0, "recovery": 0, "dismissed": 0}
+    store.claim_job()
+    store.fail_job(old["id"], "new failure", permanent=True)
+    assert store.list_job_activity(view="attention")["jobs"][0]["id"] == old["id"]
+    with pytest.raises(Conflict):
+        store.dismiss_jobs([old])
+    with pytest.raises(Conflict):
+        store.restore_job(old["id"], old["updated_at"])
+    assert store.job_counts()["failed"] == 1
+
+
+@pytest.mark.parametrize("state", ["pending", "running", "inflight", "recovery", "done", "cancelled"])
+def test_only_failed_jobs_can_be_hidden_or_restored(store, database, state):
+    snapshot = failed_snapshot(store)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (state, snapshot["id"]))
+    with pytest.raises(Conflict):
+        store.dismiss_jobs([snapshot])
+    with pytest.raises(Conflict):
+        store.restore_job(snapshot["id"], snapshot["updated_at"])
+    assert store.get_link("job_dismissal", snapshot["id"]) is None
+    assert store.list_job_activity()["jobs"][0]["state"] == state
+    if state == "recovery":
+        assert store.job_counts()["recovery"] == 1
+        assert store.list_job_activity(view="attention")["jobs"][0]["id"] == snapshot["id"]
+
+
+@pytest.mark.parametrize("changed", ["missing", "updated", "retried"])
+def test_bulk_dismissal_rolls_back_all_jobs_on_stale_snapshot(store, database, clock, changed):
+    first = failed_snapshot(store, "first")
+    second = failed_snapshot(store, "second")
+    before = store.get_job(first["id"])
+    other = AutomationStore(database)
+    clock[0] += 1
+    if changed == "retried":
+        other.retry_job(second["id"])
+    elif changed == "updated":
+        second = {**second, "updated_at": second["updated_at"] - 1}
+    else:
+        second = {**second, "id": 999}
+    with pytest.raises(KeyError if changed == "missing" else Conflict):
+        store.dismiss_jobs([first, second])
+    assert store.get_job(first["id"]) == before
+    assert store.list_job_activity(view="dismissed")["jobs"] == []
+
+
+def test_concurrent_bulk_dismissal_and_retry_never_hide_new_work(store, database, clock):
+    first = failed_snapshot(store, "first")
+    second = failed_snapshot(store, "second")
+    other = AutomationStore(database)
+    clock[0] += 1
+
+    def dismiss():
+        try:
+            store.dismiss_jobs([first, second])
+            return True
+        except Conflict:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        dismissal = executor.submit(dismiss)
+        retry = executor.submit(other.retry_job, second["id"])
+        succeeded = dismissal.result()
+        retry.result()
+    assert store.get_job(second["id"])["state"] == "pending"
+    assert store.get_link("job_dismissal", second["id"]) is None
+    assert (store.get_link("job_dismissal", first["id"]) is not None) == succeeded
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "1", None, 2**63])
+def test_dismissal_rejects_invalid_ids_without_mutation(store, value):
+    snapshot = failed_snapshot(store)
+    with pytest.raises(ValueError):
+        store.dismiss_jobs([{**snapshot, "id": value}])
+    with pytest.raises(ValueError):
+        store.restore_job(value, snapshot["updated_at"])
+    assert store.job_counts()["failed"] == 1
+
+
+@pytest.mark.parametrize("value", [True, False, "1000", None, float("nan"), float("inf"), -float("inf"), 10**400])
+def test_dismissal_rejects_nonfinite_or_nonnumeric_snapshots(store, value):
+    snapshot = failed_snapshot(store)
+    with pytest.raises(ValueError):
+        store.dismiss_jobs([{**snapshot, "updated_at": value}])
+    with pytest.raises(ValueError):
+        store.restore_job(snapshot["id"], value)
+    assert store.get_link("job_dismissal", snapshot["id"]) is None
+
+
+@pytest.mark.parametrize("jobs", [None, {}, [], [None], [{"id": 1}], [{"id": 1, "updated_at": 1, "extra": 1}],
+                                  [{"id": 1, "updated_at": 1}] * 2,
+                                  [{"id": i, "updated_at": 1} for i in range(1, 102)]])
+def test_dismissal_batch_shape_is_bounded_and_unique(store, jobs):
+    with pytest.raises(ValueError):
+        store.dismiss_jobs(jobs)
+
+
+def test_activity_cursor_filters_before_limiting_and_ignores_updated_order(store, clock):
+    snapshots = [failed_snapshot(store, str(index)) for index in range(5)]
+    store.dismiss_jobs([snapshots[1], snapshots[3]])
+    first = store.list_job_activity(limit=2)
+    assert [job["id"] for job in first["jobs"]] == [snapshots[4]["id"], snapshots[2]["id"]]
+    assert first["next_before_id"] == snapshots[2]["id"]
+    clock[0] += 1
+    store.retry_job(snapshots[0]["id"])
+    newest = store.enqueue("assess", {}, "arrived-after-page")
+    second = store.list_job_activity(limit=2, before_id=first["next_before_id"])
+    assert [job["id"] for job in second["jobs"]] == [snapshots[0]["id"]]
+    assert second["next_before_id"] is None
+    assert store.list_job_activity(before_id=1) == {"jobs": [], "next_before_id": None}
+    assert store.list_job_activity()["jobs"][0]["id"] == newest
+    assert [job["id"] for job in store.list_job_activity(view="attention")["jobs"]] == [snapshots[4]["id"], snapshots[2]["id"]]
+    dismissed = store.list_job_activity(view="dismissed", limit=2)
+    assert [job["id"] for job in dismissed["jobs"]] == [snapshots[3]["id"], snapshots[1]["id"]]
+    assert dismissed["next_before_id"] is None
+
+
+@pytest.mark.parametrize("kwargs", [{"view": "all"}, {"view": []}, {"limit": 0}, {"limit": 101},
+                                   {"limit": True}, {"before_id": 0}, {"before_id": True}])
+def test_activity_rejects_unsupported_pages(store, kwargs):
+    with pytest.raises(ValueError):
+        store.list_job_activity(**kwargs)
+
+
+def test_dismiss_restore_audit_retains_bounded_recent_history(store, database):
+    snapshot = failed_snapshot(store)
+    history = [{"actor": "maintainer", "outcome": "retry", "time": index} for index in range(100)]
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE jobs SET recovery_notes = ? WHERE id = ?", (json.dumps(history), snapshot["id"]))
+    store.dismiss_jobs([snapshot])
+    store.restore_job(snapshot["id"], snapshot["updated_at"])
+    notes = store.get_job(snapshot["id"])["recovery_notes"]
+    assert notes[:-2] == history[2:]
+    assert [note["outcome"] for note in notes[-2:]] == ["dismiss", "restore"]
+    assert all(note["actor"] == "dashboard" for note in notes[-2:])
+
+
+def test_full_activity_page_bulk_dismissal_leaves_recovery_visible(store):
+    snapshots = [failed_snapshot(store, f"failure:{index}") for index in range(100)]
+    recovery_id = store.enqueue("publish", {}, "uncertain")
+    store.claim_job()
+    store.mark_job_inflight(recovery_id)
+    store.fail_job(recovery_id, "unknown remote outcome", permanent=True)
+    assert store.dismiss_jobs(snapshots) == 100
+    assert store.job_counts() == {"pending": 0, "failed": 0, "recovery": 1, "dismissed": 100}
+    assert [job["id"] for job in store.list_job_activity(view="attention")["jobs"]] == [recovery_id]
+    dismissed = store.list_job_activity(view="dismissed", limit=100)
+    assert [job["id"] for job in dismissed["jobs"]] == [snapshot["id"] for snapshot in reversed(snapshots)]
+    assert dismissed["next_before_id"] is None

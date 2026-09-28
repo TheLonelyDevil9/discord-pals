@@ -15,6 +15,7 @@ from project_automation_config import (
     CHANNEL_PURPOSES, config_errors, config_input_errors, credential_status, normalize_project_config,
 )
 import project_automation_setup as setup
+from project_automation_store import Conflict
 from security import requires_auth, requires_csrf
 
 
@@ -164,7 +165,8 @@ def _job_summary(job: dict, service) -> dict:
     # Outbox payloads can include provider context; expose only recovery locations.
     keys = ("id", "kind", "state", "status", "attempts", "created_at", "updated_at",
             "available_at", "lease_until", "error", "last_error")
-    summary = {**{key: job[key] for key in keys if key in job}, "target": _job_target(job, service)}
+    summary = {**{key: job[key] for key in keys if key in job}, "target": _job_target(job, service),
+               "dismissed_at": job.get("dismissed_at")}
     if isinstance(job.get("payload"), dict) and job["payload"].get("kind") == "pr_activity":
         summary["activity"] = "pr_activity"
     return summary
@@ -313,5 +315,58 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
     @app.route("/api/project-automation/jobs")
     @requires_auth
     def project_automation_jobs():
-        service = get_service()
-        return jsonify({"jobs": [_job_summary(job, service) for job in service.list_jobs(limit=_limit())]})
+        try:
+            view = request.args.get("view", "recent")
+            raw_limit = request.args.get("limit", "100")
+            raw_cursor = request.args.get("before_id")
+            if (view not in {"recent", "attention", "dismissed"}
+                    or not re.fullmatch(r"[0-9]{1,3}", raw_limit)
+                    or not 1 <= int(raw_limit) <= 100
+                    or (raw_cursor is not None and (not re.fullmatch(r"[0-9]{1,19}", raw_cursor)
+                        or not 0 < int(raw_cursor) <= 2**63 - 1))):
+                raise ValueError
+            service = get_service()
+            page = service.list_job_activity(view=view, limit=int(raw_limit),
+                                             before_id=int(raw_cursor) if raw_cursor is not None else None)
+            return jsonify({"jobs": [_job_summary(job, service) for job in page["jobs"]],
+                            "next_before_id": page["next_before_id"]})
+        except ValueError:
+            return jsonify({"message": "Invalid activity view, cursor, or limit."}), 400
+        except Exception:
+            return jsonify({"message": "Activity could not be loaded."}), 500
+
+    def activity_mutation(operation):
+        try:
+            return jsonify(operation())
+        except ValueError:
+            return jsonify({"message": "Provide valid job IDs and updated_at snapshots."}), 400
+        except KeyError:
+            return jsonify({"message": "Activity job not found."}), 404
+        except Conflict:
+            return jsonify({"message": "The failure changed. Refresh activity before trying again."}), 409
+        except Exception:
+            return jsonify({"message": "Activity could not be updated."}), 500
+
+    @app.route("/api/project-automation/jobs/dismiss", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_dismiss_jobs():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"jobs"}:
+            return jsonify({"message": "Provide a jobs list."}), 400
+        return activity_mutation(lambda: {"dismissed": get_service().dismiss_jobs(payload["jobs"])})
+
+    @app.route("/api/project-automation/jobs/<job_id>/restore", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_restore_job(job_id):
+        payload = request.get_json(silent=True)
+        if (not re.fullmatch(r"[0-9]{1,19}", job_id) or not 0 < int(job_id) <= 2**63 - 1
+                or not isinstance(payload, dict) or set(payload) != {"updated_at"}):
+            return jsonify({"message": "Provide a valid job ID and updated_at snapshot."}), 400
+
+        def restore():
+            get_service().restore_job(int(job_id), payload["updated_at"])
+            return {"restored": True}
+
+        return activity_mutation(restore)

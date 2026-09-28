@@ -271,7 +271,7 @@ def test_successful_sync_time_waits_for_all_child_work(setup):
     assert setup.store.get_job(cycle)["state"] == "done"
     assert setup.service.status()["last_sync_at"] is not None
     assert setup.service.status()["last_activity_at"] is not None
-    assert setup.service.status()["job_counts"] == {"pending": 0, "failed": 0, "recovery": 0}
+    assert setup.service.status()["job_counts"] == {"pending": 0, "failed": 0, "recovery": 0, "dismissed": 0}
 
 
 def test_failed_reconciliation_does_not_claim_success(setup):

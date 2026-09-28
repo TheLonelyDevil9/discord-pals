@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Project Delivery activity now supports reversible failure dismissal, Recent/Needs attention/Dismissed views, and older-page loading. Dismiss individual failures or a counted batch of visible failures without deleting history or retrying work; held deliveries remain visible until verified recovery.
+
 ### Fixed
 
 - A provider with an unknown endpoint type and automatic reasoning no longer aborts the entire fallback chain during request preparation. The failed tier is recorded as an error and later providers remain available, without treating the configuration failure as a vision rejection.

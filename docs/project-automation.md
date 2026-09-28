@@ -82,6 +82,10 @@ The Project page shows the last accepted webhook, completed sync, and delivered 
 
 **Project → Delivery activity** shows job IDs, failure/recovery states, and recorded GitHub/Discord destinations. When a delivery receipt exists, PR activity links open its exact Discord message. Normal reads retry up to three attempts. An uncertain public write is held: a timeout or process crash does not cause another issue or activity message to be created automatically.
 
+Use **Recent** for delivery history, **Needs attention** for undismissed failures and held work, and **Dismissed** for failures you have already reviewed. **Load older** retrieves another page without losing the loaded rows. **Dismiss** hides one failed job; **Dismiss visible failures** handles up to 100 loaded failures at a time and states the exact count. Dismissal preserves the error, attempts, payload, and audit history. It does not retry, cancel, delete, or mark a delivery successful.
+
+Use **Restore** in Dismissed to return a failure to the normal views and failed count. A retried job automatically returns to normal visibility, so a new failure is not hidden by an earlier dismissal. Jobs held for recovery cannot be dismissed because a public write may already exist. If work changes while you are reviewing it, refresh before dismissing or restoring.
+
 - `/project-recover job_id:123` checks the destination for the existing delivery. GitHub matches must bear the configured App's attribution and recovery marker; Discord mirrors must match the saved destination, bot author, and delivery marker. An inaccessible destination stays held and is never treated as proof of absence.
 - `/project-retry job_id:123` resumes failed work or checks a held delivery first.
 - If a delivery remains absent, inspect the destination before using `confirmed_not_delivered:true`. A GitHub publication then returns to the reporter for fresh approval; the old job is cancelled. A Discord delivery can be retried after that explicit confirmation.

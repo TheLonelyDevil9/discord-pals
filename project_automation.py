@@ -87,6 +87,15 @@ class AutomationService:
     def list_jobs(self, limit=100):
         return self.store.list_jobs(limit=limit)
 
+    def list_job_activity(self, *, view="recent", before_id=None, limit=100):
+        return self.store.list_job_activity(view=view, before_id=before_id, limit=limit)
+
+    def dismiss_jobs(self, jobs):
+        return self.store.dismiss_jobs(jobs)
+
+    def restore_job(self, job_id, updated_at):
+        self.store.restore_job(job_id, updated_at)
+
     def _bound(self, case: dict) -> bool:
         cfg = self.settings()
         return all(str(case.get(key, "")) == str(cfg.get(key, ""))
