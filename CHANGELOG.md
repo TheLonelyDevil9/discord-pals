@@ -4,7 +4,9 @@ All notable changes to Discord Pals will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v2.9.0] - 2026-09-29
+
+Adds failure cleanup to Project activity and fixes provider verification, delivery recovery, and multi-bot startup failures.
 
 ### Added
 
@@ -19,6 +21,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mirror recovery verifies the destination channel, author, and delivery marker. Active receipts can be recovered without requiring archived-post enumeration, and inaccessible destinations remain held without resending.
 - A rejected Discord bot token no longer terminates other bot identities or the dashboard. Correct the token in Config and restart to reconnect that bot.
 - Updated python-dotenv, Flask, and Waitress to address the reported dependency advisories; dependency auditing now fails CI on known vulnerabilities.
+
+### Upgrade notes
+
+- Python 3.10 or newer is still required. Existing provider, bot, and Project settings remain compatible. Install the updated `requirements.txt` in the environment that runs the bot, then restart; pulling source alone does not update the patched dependencies.
+- Back up configuration, character/prompt files, and `bot_data` before updating. Use a consistent SQLite snapshot for `bot_data/project_automation.sqlite3`; the dashboard's configuration ZIP is not a full-state backup. See [Updates and recovery](docs/operations.md#updates-and-recovery).
+- Failure dismissal is optional and reversible. It does not remove history, retry work, or hide uncertain deliveries. Existing failures are not dismissed automatically. A code rollback may display dismissed failures again; keep the database and receipts intact.
+- Before testing a specific model, remove custom `models` fallback lists from Extra Body, OpenRouter settings, or Include Body. Same-model backend routing remains supported.
+- Existing Project helper installations need the `pull_request_review`, `pull_request_review_comment`, and `pull_request_review_thread` GitHub App subscriptions. Any event-filtering proxy must allow them too. Run **Check setup** and verify signed webhook delivery separately; see [deployment setup](docs/project-automation-oci.md).
+- An invalid Discord token leaves that bot offline while other bots and the dashboard keep running. Update the rejected token in Config and restart. Selecting a Project personality only selects a character file; it does not require another Discord bot or token.
 
 ## [v2.8.0] - 2026-09-26
 

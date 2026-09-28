@@ -47,6 +47,12 @@ Install dependencies with:
 pip install -r requirements.txt
 ```
 
+## Latest Release
+
+**[v2.9.0](https://github.com/TheLonelyDevil9/discord-pals/releases/tag/v2.9.0)** includes Project failure dismissal and filtering, provider-test fixes, safer delivery recovery, and isolation for rejected bot credentials. Read the [changelog and upgrade notes](CHANGELOG.md) before updating.
+
+The release page provides source ZIP and tar.gz downloads. These are Python source distributions, not standalone executables; install the requirements and run setup below. A Git clone is recommended because the built-in updater requires Git history. For an archive-based installation, update source manually after backing up your local configuration and runtime data.
+
 ## Quick Start
 
 Clone the repo:
