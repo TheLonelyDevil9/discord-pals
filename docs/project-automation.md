@@ -59,6 +59,8 @@ Approval never happens automatically. Editing a report or adding new information
 
 Select an existing character under **Project → Personality**. Its persona and example dialogue shape free-form replies, follow-up questions, and status messages from the current context. Buttons and form labels remain consistent controls. Normal character-chat memories, user profiles, and unrelated conversation history are not imported into feedback cases. Attachments are recorded as links and are not read by the model in this version.
 
+Personality selects a character file; it does not create or switch Discord bot credentials. Keep the connected helper selected under **Dedicated helper bot** and choose any installed character under **Personality**. A separate bot identity is needed only when you want a different Discord account to own the workflow, not when changing its voice.
+
 Conversation and report text go to the configured text provider for assessment. Human authorship is established by separate reporter input and explicit confirmation; it is not an AI-authorship detector. The helper does not implement fixes, merge pull requests, or promise release dates. A closed issue is reported as closed; a merged PR is reported as merged.
 
 In **Project → Feedback cases**, inspect the reporter’s text, authorship confirmation, exact preview, next actor, and decision history. Older cases waiting for a maintainer return to reporter controls when the helper reconnects. A generated draft from the earlier workflow is not a confirmed human report.
