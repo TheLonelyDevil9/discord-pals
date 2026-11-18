@@ -183,11 +183,8 @@ def _saved_footer(message, receipt, prefix):
 
 
 def _record(transport, config, event, thread, message, version, *, current, prefix):
-    """Save the receipt of `message` at `version`.
-
-    `prefix` must be the footer prefix the message shows, because the next check of the saved
-    message accepts only that prefix or the computed one.
-    """
+    """`prefix` must be the footer prefix the message shows, because the next check of the saved
+    message accepts only that prefix or the computed one."""
     key = receipt_key(config, event)
     receipt = {"channel_id": str(thread.id), "message_id": str(message.id),
                "source_version": version, "source_key": event["key"],

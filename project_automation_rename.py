@@ -34,7 +34,8 @@ MAPPING_KEYED = {
 }
 IDENTITY_FREE = {"case_status", "conversation", "feedback", "feedback_delivery", "github_delivery",
                  "item_closed", "job_dismissal", "maintainer_question", "pr_discovery_cycle", "question_notice"}
-# Document fields that may name the helper, per kind. A name anywhere else is not handled.
+# Document fields that may name the helper, per kind. A record that names the helper anywhere else
+# cannot be verified, so the rename refuses.
 IDENTITY_PATHS = {
     "pr_source": {("event", "_binding"), ("event", "_binding", "bot_name")},
     "pr_head": {("event", "_binding"), ("event", "_binding", "bot_name")},
