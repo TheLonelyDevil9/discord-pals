@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import sqlite3
+import time
 
 import pytest
 
@@ -500,6 +501,89 @@ def test_dismiss_restore_audit_retains_bounded_recent_history(store, database):
     assert notes[:-2] == history[2:]
     assert [note["outcome"] for note in notes[-2:]] == ["dismiss", "restore"]
     assert all(note["actor"] == "dashboard" for note in notes[-2:])
+
+
+def trace_store_statements(monkeypatch, callback):
+    """Pass every SQL statement the store executes to callback; return the unpatched connect."""
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        connection.set_trace_callback(callback)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    return original
+
+
+@pytest.mark.parametrize("read", ["job_counts", "get_job", "list_job_activity"])
+def test_status_reads_leave_the_write_lock_free(store, database, monkeypatch, read):
+    snapshot = failed_snapshot(store)
+    writer_could_start = []
+
+    def probe(statement):
+        if statement.lstrip().upper().startswith("SELECT"):
+            other = original(str(database), timeout=0, isolation_level=None)
+            try:
+                other.execute("BEGIN IMMEDIATE")
+                other.execute("ROLLBACK")
+                writer_could_start.append(True)
+            except sqlite3.OperationalError:
+                writer_could_start.append(False)
+            finally:
+                other.close()
+
+    original = trace_store_statements(monkeypatch, probe)
+    if read == "get_job":
+        assert store.get_job(snapshot["id"])["state"] == "failed"
+    elif read == "list_job_activity":
+        assert store.list_job_activity(view="attention")["jobs"][0]["id"] == snapshot["id"]
+    else:
+        assert store.job_counts() == {"pending": 0, "failed": 1, "recovery": 0, "dismissed": 0}
+    assert writer_could_start and all(writer_could_start)
+
+
+def test_job_counts_search_indexes_instead_of_scanning_jobs(store, database, monkeypatch):
+    failed_snapshot(store)
+    counted = []
+    trace_store_statements(monkeypatch, lambda statement: counted.append(statement) if "COUNT(" in statement else None)
+    store.job_counts()
+    monkeypatch.undo()
+    assert counted
+    with sqlite3.connect(database) as connection:
+        for statement in counted:
+            plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
+            assert not any(step.startswith("SCAN") for step in plan), plan
+
+
+def test_job_counts_stay_fast_on_a_large_history(store, database):
+    now = time.time()
+    rows = [("event", f"done:{index}", json.dumps({"_sync_cycle": index // 500, "body": "x" * 200}), "done")
+            for index in range(200_000)]
+    rows += [("event", f"pending:{index}", "{}", "pending") for index in range(300)]
+    rows += [("event", f"failed:{index}", "{}", "failed") for index in range(20)]
+    rows += [("event", f"held:{index}", "{}", "recovery") for index in range(5)]
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", [row + (now, now, now) for row in rows])
+    started = time.perf_counter()
+    counts = store.job_counts()
+    elapsed = time.perf_counter() - started
+    assert counts == {"pending": 300, "failed": 20, "recovery": 5, "dismissed": 0}
+    assert elapsed < 0.5
+
+
+def test_status_reads_still_expire_lapsed_leases(store, clock):
+    held = store.enqueue("publish", {}, "publish:held")
+    reader = store.enqueue("assess", {}, "assess:read")
+    assert store.claim_job(lease_seconds=20)["id"] == held
+    store.mark_job_inflight(held, lease_seconds=20)
+    assert store.claim_job(lease_seconds=20)["id"] == reader
+    clock[0] += 21
+    assert store.job_counts() == {"pending": 1, "failed": 0, "recovery": 1, "dismissed": 0}
+    assert store.get_job(held)["state"] == "recovery"
+    assert store.get_job(reader)["state"] == "pending"
 
 
 def test_full_activity_page_bulk_dismissal_leaves_recovery_visible(store):

@@ -341,6 +341,17 @@ class AutomationStore:
             "WHERE state = 'running' AND lease_until <= ?", (now, now),
         )
 
+    def _expire_due_leases(self):
+        """Release lapsed leases in their own short write, taken only when one has lapsed."""
+        with self._connection() as connection:
+            due = connection.execute(
+                "SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') AND lease_until <= ? LIMIT 1",
+                (time.time(),),
+            ).fetchone()
+        if due:
+            with self._connection(write=True) as connection:
+                self._expire_leases(connection)
+
     @staticmethod
     def _job(row):
         if row is None:
@@ -351,8 +362,8 @@ class AutomationStore:
         return job
 
     def get_job(self, job_id):
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
+        self._expire_due_leases()
+        with self._connection() as connection:
             return self._job(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
 
     def list_jobs(self, limit=100):
@@ -378,8 +389,8 @@ class AutomationStore:
             parameters.append(_job_id(before_id))
             where += " AND j.id < ?"
         parameters.append(limit + 1)
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
+        self._expire_due_leases()
+        with self._connection() as connection:
             rows = connection.execute(
                 "SELECT j.*, CASE WHEN j.state = 'failed' THEN d.updated_at END AS dismissed_at "
                 "FROM jobs j LEFT JOIN links d ON d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
@@ -625,16 +636,20 @@ class AutomationStore:
             )
 
     def job_counts(self):
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
-            counts = dict(connection.execute(
-                "SELECT CASE WHEN j.state = 'failed' AND d.key IS NOT NULL THEN 'dismissed' ELSE j.state END, COUNT(*) "
-                "FROM jobs j LEFT JOIN links d ON d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
-                "GROUP BY 1"
-            ).fetchall())
+        self._expire_due_leases()
+        with self._connection() as connection:
+            # Listing the unfinished states lets jobs_ready skip every done row,
+            # and only failed rows probe links for a dismissal.
+            rows = connection.execute(
+                "SELECT j.state, COUNT(*), COUNT(d.key) FROM jobs j "
+                "LEFT JOIN links d ON j.state = 'failed' AND d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
+                "WHERE j.state IN ('pending', 'running', 'inflight', 'failed', 'recovery') GROUP BY j.state"
+            ).fetchall()
+        counts = {row[0]: row[1] for row in rows}
+        dismissed = sum(row[2] for row in rows)
         return {"pending": sum(counts.get(state, 0) for state in ("pending", "running", "inflight")),
-                "failed": counts.get("failed", 0), "recovery": counts.get("recovery", 0),
-                "dismissed": counts.get("dismissed", 0)}
+                "failed": counts.get("failed", 0) - dismissed, "recovery": counts.get("recovery", 0),
+                "dismissed": dismissed}
 
     def unfinished_sync_jobs(self, cycle_id):
         """A sync is successful only after its child deliveries complete."""
