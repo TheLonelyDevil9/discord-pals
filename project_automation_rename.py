@@ -292,6 +292,11 @@ HANDLERS = {**{kind: _mapping_keyed for kind in MAPPING_KEYED},
             "notification": _notification, "pr_prepared": _pr_prepared}
 # An activity attempt guard carries no identity of its own, so plan_rename moves it with its receipt.
 KNOWN_KINDS = set(HANDLERS) | IDENTITY_FREE | {"pr_activity_attempt"}
+# A pending guard marks a send whose result is unknown. Moved to the new key, it ends in a
+# duplicate: the search for a lost post or message looks only for the new footer, misses the
+# one sent under the old name, and the operator's confirmation then authorizes a second send.
+UNCONFIRMED = ("a send of the old name is unconfirmed; resolve that delivery with /project-recover or "
+               "/project-retry under the old name first")
 
 
 @dataclass
@@ -382,6 +387,9 @@ def plan_rename(rows, old, new):
         if kind not in HANDLERS:
             plan.refusals[(kind, "names the old helper, but this kind has no rewrite")] += 1
             continue
+        if kind == "mirror_attempt" and data.get("state") == "pending":
+            plan.refusals[(kind, UNCONFIRMED)] += 1
+            continue
         try:
             plan.changes.append(_rewrite(kind, key, document, data, ctx))
         except Unverifiable as exc:
@@ -391,13 +399,20 @@ def plan_rename(rows, old, new):
 
     for key, document in attempts:
         data = json.loads(document)
+        pending = data.get("state") == "pending"
         if naming_paths(data, old) or naming_paths(data, new) or old.mapping in document:
             plan.refusals[("pr_activity_attempt", "attempt document names a helper")] += 1
         elif key in ctx.receipts:
             plan.counts["pr_activity_attempt"]["old"] += 1
-            plan.changes.append(RowChange("links", "pr_activity_attempt", key, ctx.receipts[key], document, document))
+            if pending:
+                plan.refusals[("pr_activity_attempt", UNCONFIRMED)] += 1
+            else:
+                plan.changes.append(RowChange("links", "pr_activity_attempt", key, ctx.receipts[key], document, document))
         elif key in other_receipts:
             plan.counts["pr_activity_attempt"]["new"] += key in new_receipts
+        elif pending:
+            plan.refusals[("pr_activity_attempt", "an unconfirmed send matches no stored receipt or source, so its "
+                                                  "helper is unknown; resolve that delivery first")] += 1
         else:
             plan.refusals[("pr_activity_attempt", "attempt matches no stored receipt, so its helper is unknown")] += 1
 

@@ -368,6 +368,12 @@ def stale_source_binding(connection):
                        (_json_object(data, MAX_LINK_BYTES), key))
 
 
+def set_guard(connection, kind, key, state):
+    connection.execute("UPDATE links SET document = ? WHERE kind = ? AND key = ?",
+                       (_json_object({"state": state, "source_version": "v2"}, MAX_LINK_BYTES), kind, key))
+
+
+COMMENT = {"kind": "pr_activity", "key": "pr:17:comment:42"}
 NEW_CFG = settings(bot_name=NEW)
 REFUSALS = {
     "wrong --from": ({}, None, "Old Helpe", NEW, "different helper bot"),
@@ -392,9 +398,15 @@ REFUSALS = {
     "unknown record kind": ({}, lambda c: put(c, "future_kind", "x", {"bot_name": OLD}, 1), OLD, NEW, "unknown record kind"),
     "old name in a kind without identity": (
         {}, lambda c: put(c, "feedback", "planted", {"bot_name": OLD}, 1), OLD, NEW, "this kind has no rewrite"),
-    "activity attempt without a receipt": (
+    "unconfirmed activity send without a receipt": (
         {}, lambda c: put(c, "pr_activity_attempt", "pr:" + "0" * 64, {"state": "pending"}, 1), OLD, NEW,
-        "matches no stored receipt"),
+        "its helper is unknown; resolve that delivery first"),
+    "unconfirmed activity send of the old name": (
+        {}, lambda c: set_guard(c, "pr_activity_attempt", activity_receipt_key(settings(), COMMENT), "pending"),
+        OLD, NEW, "unconfirmed; resolve that delivery"),
+    "unconfirmed post send of the old name": (
+        {}, lambda c: set_guard(c, "mirror_attempt", mirror_key(settings(), "issue", "issue:7"), "pending"),
+        OLD, NEW, "unconfirmed; resolve that delivery"),
     "old case the settings do not bind": (
         {}, lambda c: change_case(c, feedback_channel_id="1"), OLD, NEW, "do not bind it"),
 }
