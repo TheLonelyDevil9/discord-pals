@@ -100,12 +100,14 @@ def test_reconciliation_waits_near_the_limit_while_webhook_deliveries_use_the_re
 
 
 def test_reconciliation_resumes_once_the_window_resets(tmp_path, runtime):
-    client, session = real_client(FakeResponse([], headers=limits(900, reset_in=1)), FakeResponse([], headers=limits(4999)))
+    reset = int(time.time()) + 2
+    near = {"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "900", "X-RateLimit-Reset": str(reset)}
+    client, session = real_client(FakeResponse([], headers=near), FakeResponse([], headers=limits(4999)))
     harness = Harness(tmp_path / "resume.sqlite3", github=client)
     first, second = page_job(harness, 7, "pr-page:1:7:comment:1"), page_job(harness, 8, "pr-page:1:8:comment:1")
     assert asyncio.run(harness.service.run_once()) is True
     assert asyncio.run(harness.service.run_once()) is False
-    time.sleep(1.1)
+    time.sleep(max(0.0, reset - time.time()) + 0.2)
     assert asyncio.run(harness.service.run_once()) is True
     assert (row(harness, first)["state"], row(harness, second)["state"]) == ("done", "done")
 
