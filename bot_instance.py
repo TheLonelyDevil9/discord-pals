@@ -31,7 +31,7 @@ from discord_utils import (
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_deleted_bot_message,
-    resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
+    resolve_discord_formatting, sanitize_discord_syntax_fallback, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
 )
@@ -1462,7 +1462,6 @@ Return exactly one JSON object with this shape:
         @self.client.event
         async def on_ready():
             ensure_data_dir()
-            load_history()  # Restore history from previous session
             # Load character
             self.character = character_manager.load(self.character_name)
             if self.character:
