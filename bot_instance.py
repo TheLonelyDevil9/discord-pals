@@ -1046,6 +1046,7 @@ Return exactly one JSON object with this shape:
             content,
             author_name=self.character.name,
             guild=guild,
+            message_id=getattr(sent, "id", None),
             timestamp=getattr(sent, "created_at", None) if sent else None
         )
         return True
@@ -3230,15 +3231,14 @@ Return exactly one JSON object with this shape:
                 if reactions:
                     await self._send_staggered_reactions(sent_records[0]["message"], reactions, None)
 
-                delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
-                first_sent_message = sent_records[0]["message"]
-
                 # Add to history
-                add_to_history(
-                    delivery_target.history_id, "assistant", delivered_response,
-                    author_name=char_name,
-                    timestamp=getattr(first_sent_message, "created_at", None)
-                )
+                for record in sent_records:
+                    add_to_history(
+                        delivery_target.history_id, "assistant", record["content"],
+                        author_name=char_name,
+                        message_id=getattr(record["message"], "id", None),
+                        timestamp=getattr(record["message"], "created_at", None)
+                    )
 
                 # Update state
                 state["followups_sent"] = followups_sent + 1

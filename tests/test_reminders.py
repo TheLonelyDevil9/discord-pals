@@ -748,6 +748,17 @@ class DMReminderHistoryTests(HistorySandbox, MemorySandboxMixin, unittest.Isolat
         self.assertEqual(self._contents(self.DM_KEY), ["Time to water the plants."])
         self.assertEqual(self._contents(555), [])
 
+    async def test_reminder_in_two_messages_records_each_with_its_message_id(self):
+        instance = self._make_bot(dm_channel=_FakeChannel(555))
+        instance._split_response_for_delivery = lambda response: ["Good morning!", "Time to water the plants."]
+
+        await instance._send_scheduled_reminder(self._reminder("dm", 555), "Good morning! Time to water the plants.")
+
+        self.assertEqual(
+            [(entry["content"], entry["message_id"]) for entry in discord_utils_module.get_history(self.DM_KEY)],
+            [("Good morning!", 9001), ("Time to water the plants.", 9002)],
+        )
+
     async def test_server_reminder_sent_by_dm_is_recorded_in_the_dm_history(self):
         instance = self._make_bot(channel=None, dm_channel=_FakeChannel(555))
 
@@ -818,4 +829,5 @@ class DMReminderHistoryTests(HistorySandbox, MemorySandboxMixin, unittest.Isolat
             await instance._maybe_handle_reminder_capture(context, message, request)
 
         self.assertEqual(self._contents(self.DM_KEY), ["When is it?"])
+        self.assertEqual(discord_utils_module.get_history(self.DM_KEY)[0]["message_id"], 2001)
         self.assertEqual(self._contents(77), [])

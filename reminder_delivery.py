@@ -76,14 +76,16 @@ async def send_scheduled_reminder(bot, reminder: dict, response: str) -> tuple[l
                     history_id = dm_history_id(bot.name, user_id)
                 else:
                     history_id = getattr(channel, "id", source_channel_id)
-                add_to_history(
-                    history_id,
-                    "assistant",
-                    delivered,
-                    author_name=bot.character.name,
-                    guild=getattr(channel, "guild", None),
-                    timestamp=getattr(sent_messages[0], "created_at", None)
-                )
+                for record in batch.sent_records:
+                    add_to_history(
+                        history_id,
+                        "assistant",
+                        record["content"],
+                        author_name=bot.character.name,
+                        guild=getattr(channel, "guild", None),
+                        message_id=getattr(record["message"], "id", None),
+                        timestamp=getattr(record["message"], "created_at", None)
+                    )
                 if len(sent_messages) > 1:
                     multipart_ids = [getattr(sent, "id", None) for sent in sent_messages if getattr(sent, "id", None) is not None]
                     if len(multipart_ids) > 1:
