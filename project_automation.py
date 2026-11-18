@@ -16,7 +16,7 @@ from logger import info
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_store import AutomationStore, Conflict
-from project_automation_activity import PRActivity, activate, mapping_key
+from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
 
 CLOSED_SYNC_DAYS = 7
@@ -778,14 +778,17 @@ class AutomationService:
                     item = await self._closed_item_in_scope(client, data["kind"], data["number"])
                     if item is not None:
                         in_scope.append((data["kind"], item))
-            mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
-            refreshed = sum(self._enqueue_sync_item(item, kind, job["id"], mirrored) for kind, item in in_scope)
-            changed, daily = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"],
-                                                            job["id"])
+            changed, daily = self._refreshes(in_scope)
+            for kind, item in changed + daily:
+                self._enqueue_sync_item(item, kind, job["id"])
+            walked, rechecked = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"],
+                                                               job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
-            info(f"Project sync listed {listed} open items and checked {len(in_scope) - listed} recently closed "
-                 f"ones; queued {refreshed} refreshes and {changed + daily} PR walks ({changed} changed, "
-                 f"{daily} daily); skipped {len(in_scope) - refreshed} unchanged items.",
+            refreshed = len(changed) + len(daily)
+            info(f"Project sync listed {listed} open items and kept {len(in_scope) - listed} recently closed items "
+                 f"in scope; queued {refreshed} refreshes ({len(changed)} changed, {len(daily)} daily) and "
+                 f"{walked + rechecked} PR walks ({walked} changed, {rechecked} daily); "
+                 f"skipped {len(in_scope) - refreshed} unchanged items.",
                  component="project_automation", event="sync_cycle")
         else:
             raise WorkflowError("Unknown job type.")
@@ -829,16 +832,30 @@ class AutomationService:
             self.store.put_link("item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None
 
-    def _enqueue_sync_item(self, item, kind, sync_id, mirrored):
-        """Queue a refresh unless the item's record in `mirrored` still matches; return whether it queued one."""
+    def _refreshes(self, in_scope):
+        """Return the (kind, item) pairs to refresh: the changed ones and the daily share of the rest.
+
+        An item changed when its post has no record or the record differs from GitHub. The others
+        get a daily check through oldest_due, by when their post was last written or found unchanged,
+        so that a post changed on Discord alone is still corrected.
+        """
+        cfg = self.settings()
+        mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
+        changed, unchanged = [], []
+        for kind, item in in_scope:
+            record = mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}"))
+            if record is None or any(record.get(name) != value for name, value in mirror_record(item).items()):
+                changed.append((kind, item))
+            else:
+                unchanged.append((record.get("mirrored_at", 0), (kind, item["number"]), (kind, item)))
+        return changed, oldest_due(unchanged, len(in_scope), time.time())
+
+    def _enqueue_sync_item(self, item, kind, sync_id):
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        if mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}")) == mirror_record(item):
-            return False
         event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
                  "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
         self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
-        return True
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:

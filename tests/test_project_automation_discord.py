@@ -884,16 +884,31 @@ def _native_suite():
         def item_record(self, kind="issue", channel=201):
             return self.store.get_link("item_mirrored", f"100:Project Helper:{channel}:SillyBunnyTeam/SillyBunny:{kind}:17")
 
-        async def test_a_written_or_unchanged_post_records_the_item_version_it_shows(self):
+        async def test_a_written_or_unchanged_post_records_the_item_version_it_shows_and_when(self):
+            import project_automation_discord
             for kind in ("issue", "pull"):
                 forum, thread, starter = self.configure_forum(kind)
-                await self.transport.mirror(event(kind, updated_at="2026-11-01T00:00:00Z"))
-                self.assertEqual(self.item_record(kind, forum.id)["updated_at"], "2026-11-01T00:00:00Z")
+                with patch.object(project_automation_discord, "time", SimpleNamespace(time=lambda: 1000.0)):
+                    await self.transport.mirror(event(kind, updated_at="2026-11-01T00:00:00Z"))
+                record = self.item_record(kind, forum.id)
+                self.assertEqual((record["updated_at"], record["mirrored_at"]), ("2026-11-01T00:00:00Z", 1000.0))
                 self.apply_thread_writes(forum, thread)
                 self.reset_writes(starter.edit, thread.edit)
-                await self.transport.mirror(event(kind, updated_at="2026-11-02T00:00:00Z"))
+                with patch.object(project_automation_discord, "time", SimpleNamespace(time=lambda: 2000.0)):
+                    await self.transport.mirror(event(kind, updated_at="2026-11-02T00:00:00Z"))
                 starter.edit.assert_not_awaited()
-                self.assertEqual(self.item_record(kind, forum.id)["updated_at"], "2026-11-02T00:00:00Z")
+                record = self.item_record(kind, forum.id)
+                self.assertEqual((record["updated_at"], record["mirrored_at"]), ("2026-11-02T00:00:00Z", 2000.0))
+
+        async def test_open_post_archived_by_discord_is_reopened_by_a_refresh_with_a_matching_digest(self):
+            forum, thread, starter = self.configure_forum()
+            await self.transport.mirror(event())
+            self.apply_thread_writes(forum, thread)
+            thread.archived = True
+            self.reset_writes(starter.edit, thread.edit)
+            await self.transport.mirror(event())
+            self.assertEqual(thread.edit.await_args_list[0].kwargs, {"archived": False, "locked": False})
+            starter.edit.assert_awaited_once()
 
         async def test_a_failed_write_or_a_recovery_records_no_item_version(self):
             forum, thread, starter = self.configure_forum()

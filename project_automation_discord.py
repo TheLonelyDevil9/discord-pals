@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import io
 import json
+import time
 import weakref
 import discord
 from discord import app_commands
@@ -552,11 +553,12 @@ class DiscordTransport:
         return True
 
     def _record_item(self, key, event):
-        """Store the issue or PR version that the post at `key` now shows, for the sync root to compare.
+        """Store the issue or PR version that the post at `key` now shows, and when it was checked.
 
-        `key` must be the one this mirror call computed: the settings can change while it
-        waits on Discord, and a record under another destination's key would stop the sync
-        root from ever posting the item there.
+        The sync root compares the version with GitHub and schedules the daily post check by
+        the time. `key` must be the one this mirror call computed: the settings can change
+        while it waits on Discord, and a record under another destination's key would stop
+        the sync root from ever posting the item there.
         """
         if event["kind"] in {"issue", "pull"}:
-            self.service.store.put_link("item_mirrored", key, mirror_record(event))
+            self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": time.time()})

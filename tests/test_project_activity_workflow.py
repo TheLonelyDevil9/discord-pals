@@ -74,6 +74,7 @@ class Transport:
         self.recoveries = []
         self.confirmations = []
         self.service = None
+        self.clock = time.time
 
     async def mirror_activity(self, event, *, recover_only=False):
         identity = (event.get("delivery_key", event["key"]), event["source_version"])
@@ -91,7 +92,7 @@ class Transport:
     async def mirror(self, event, *, recover_only=False):
         key = mirror_key(self.service.settings(), event["kind"], event["key"])
         if not recover_only and event["kind"] in {"issue", "pull"}:
-            self.service.store.put_link("item_mirrored", key, mirror_record(event))
+            self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": self.clock()})
         return True
 
     def confirm_not_delivered(self, event):
@@ -963,6 +964,29 @@ def walk_clock(monkeypatch):
     return clock
 
 
+@pytest.fixture
+def clock(setup, walk_clock, monkeypatch):
+    """Extend walk_clock to the sync root and to the time each post's record is written."""
+    import project_automation
+    monkeypatch.setattr(project_automation, "time", SimpleNamespace(time=lambda: walk_clock[0], monotonic=time.monotonic))
+    setup.transport.clock = lambda: walk_clock[0]
+    return walk_clock
+
+
+def test_each_unchanged_post_gets_one_daily_refresh_and_no_cycle_refreshes_two(setup, clock):
+    items = {number: github_item("issue" if number <= 3 else "pull", number) for number in range(1, 6)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[0] == [1, 2, 3, 4, 5]
+    clock[0] += DAY
+    refreshed = []
+    for _ in range(96):
+        refreshed.append(sync_cycle(setup)[0])
+        clock[0] += 900
+    assert all(len(numbers) <= 1 for numbers in refreshed)
+    assert sorted(number for numbers in refreshed for number in numbers) == [1, 2, 3, 4, 5]
+    assert sync_cycle(setup)[0] == refreshed[0]
+
+
 def test_thirteen_prs_get_one_daily_walk_each_and_no_cycle_walks_two(setup, walk_clock):
     open_world(setup, {number: github_item("pull", number) for number in range(1, 14)})
     assert sync_cycle(setup)[1] == list(range(1, 14))
@@ -1014,7 +1038,7 @@ def test_the_first_cycle_after_upgrade_does_all_work_once_and_the_next_only_the_
     assert len(discovery_jobs(setup)) == 2
 
 
-def test_each_finished_root_logs_one_line_with_counts_only(setup, monkeypatch, walk_clock):
+def test_each_finished_root_logs_one_line_with_counts_only(setup, monkeypatch, clock):
     import project_automation
     logged = []
     monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append((message, fields)))
@@ -1024,16 +1048,16 @@ def test_each_finished_root_logs_one_line_with_counts_only(setup, monkeypatch, w
     sync_cycle(setup)
     items[3]["updated_at"] = LATER
     sync_cycle(setup)
-    walk_clock[0] += DAY
+    clock[0] += DAY
     sync_cycle(setup)
     lines = [message for message, fields in logged if fields.get("event") == "sync_cycle"]
     assert lines == [
-        "Project sync listed 2 open items and checked 1 recently closed ones; queued 3 refreshes "
-        "and 2 PR walks (2 changed, 0 daily); skipped 0 unchanged items.",
-        "Project sync listed 2 open items and checked 1 recently closed ones; queued 1 refreshes "
-        "and 1 PR walks (1 changed, 0 daily); skipped 2 unchanged items.",
-        "Project sync listed 2 open items and checked 1 recently closed ones; queued 0 refreshes "
-        "and 1 PR walks (0 changed, 1 daily); skipped 3 unchanged items.",
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 3 refreshes "
+        "(3 changed, 0 daily) and 2 PR walks (2 changed, 0 daily); skipped 0 unchanged items.",
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 1 refreshes "
+        "(1 changed, 0 daily) and 1 PR walks (1 changed, 0 daily); skipped 2 unchanged items.",
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 1 refreshes "
+        "(0 changed, 1 daily) and 1 PR walks (0 changed, 1 daily); skipped 2 unchanged items.",
     ]
     assert all(fields == {"component": "project_automation", "event": "sync_cycle"}
                for _, fields in logged if fields.get("event") == "sync_cycle")
