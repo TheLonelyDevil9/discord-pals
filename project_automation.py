@@ -48,7 +48,11 @@ def closed_time(item):
 
 
 def mirror_key(config, kind, key):
-    """Key of the mirror link for GitHub object `key` in the channel configured for `kind`."""
+    """Key of the mirror link for GitHub object `key` in the channel configured for `kind`.
+
+    Existing mirror links and the footer marker on each Discord post use this exact format.
+    A changed format matches neither, so every item would be posted again as new.
+    """
     return f"{config['guild_id']}:{config['bot_name']}:{config[MIRROR_CHANNELS[kind]]}:{config['repository']}:{key}"
 
 
