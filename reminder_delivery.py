@@ -8,6 +8,7 @@ import logger as log
 import response_access
 from discord_utils import add_to_history, convert_emojis_in_text, store_multipart_response
 from runtime_delivery import deliver_channel_multipart
+from scopes import dm_history_id
 
 
 async def send_scheduled_reminder(bot, reminder: dict, response: str) -> tuple[list, int | None]:
@@ -71,8 +72,12 @@ async def send_scheduled_reminder(bot, reminder: dict, response: str) -> tuple[l
 
             if sent_messages:
                 delivered = batch.persistable_visible_text.strip()
+                if source_type == "dm" or channel_mode == "dm_fallback":
+                    history_id = dm_history_id(bot.name, user_id)
+                else:
+                    history_id = getattr(channel, "id", source_channel_id)
                 add_to_history(
-                    getattr(channel, "id", source_channel_id),
+                    history_id,
                     "assistant",
                     delivered,
                     author_name=bot.character.name,

@@ -9,12 +9,14 @@ from zoneinfo import ZoneInfo
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
 import dashboard as dashboard_module
+import discord_utils as discord_utils_module
 import memory as memory_module
 import reminder_delivery as reminder_delivery_module
 import reminders as reminders_module
 import runtime_config as runtime_config_module
 import time_utils as time_utils_module
 
+from history_sandbox import HistorySandbox
 from test_support import MemorySandboxMixin
 
 
@@ -685,3 +687,135 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         fallback_dm.send.assert_not_awaited()
         add_history_mock.assert_called_once()
         self.assertEqual(add_history_mock.call_args.args[2], "<@42> One.")
+
+
+class _FakeChannel:
+    def __init__(self, channel_id):
+        self.id = channel_id
+        self.guild = None
+        self.sent = []
+
+    async def send(self, content):
+        self.sent.append(content)
+        return types.SimpleNamespace(id=9000 + len(self.sent), created_at=None, content=content)
+
+
+class DMReminderHistoryTests(HistorySandbox, MemorySandboxMixin, unittest.IsolatedAsyncioTestCase):
+    DM_KEY = "dm:Nahida:user:42"
+
+    def setUp(self):
+        super().setUp()
+        self.setUpMemorySandbox()
+        self.addCleanup(self.tearDownMemorySandbox)
+        for patcher in (
+            patch.object(bot_instance_module.runtime_config, "is_server_response_allowed", return_value=(True, None)),
+            patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(True, None)),
+            patch("runtime_delivery.asyncio.sleep", new=AsyncMock()),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _make_bot(self, *, channel=None, dm_channel=None):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida")
+        instance.client = types.SimpleNamespace(get_guild=lambda guild_id: None)
+        instance._resolve_channel = AsyncMock(return_value=channel)
+        instance._resolve_user_dm_channel = AsyncMock(return_value=dm_channel)
+        instance._resolve_dm_followup_channel = AsyncMock(return_value=dm_channel)
+        return instance
+
+    @staticmethod
+    def _reminder(source_type, source_channel_id):
+        return {
+            "id": "rem-1",
+            "source_type": source_type,
+            "target_user_id": 42,
+            "source_channel_id": source_channel_id,
+            "source_guild_id": None if source_type == "dm" else 5,
+        }
+
+    def _contents(self, history_id):
+        return [entry["content"] for entry in discord_utils_module.get_history(history_id)]
+
+    async def test_dm_reminder_is_recorded_in_the_dm_history(self):
+        instance = self._make_bot(dm_channel=_FakeChannel(555))
+
+        sent, _ = await instance._send_scheduled_reminder(self._reminder("dm", 555), "Time to water the plants.")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(self._contents(self.DM_KEY), ["Time to water the plants."])
+        self.assertEqual(self._contents(555), [])
+
+    async def test_server_reminder_sent_by_dm_is_recorded_in_the_dm_history(self):
+        instance = self._make_bot(channel=None, dm_channel=_FakeChannel(555))
+
+        sent, actual_channel_id = await instance._send_scheduled_reminder(self._reminder("channel", 77), "Tea time.")
+
+        self.assertEqual(actual_channel_id, 555)
+        self.assertEqual(self._contents(self.DM_KEY), ["Tea time."])
+        self.assertEqual(self._contents(555), [])
+
+    async def test_server_reminder_is_recorded_in_the_channel_history(self):
+        instance = self._make_bot(channel=_FakeChannel(77), dm_channel=_FakeChannel(555))
+
+        await instance._send_scheduled_reminder(self._reminder("channel", 77), "Tea time.")
+
+        self.assertEqual(len(self._contents(77)), 1)
+        self.assertEqual(self._contents(self.DM_KEY), [])
+
+    async def test_dm_reminder_text_is_written_from_the_dm_history(self):
+        instance = self._make_bot()
+        discord_utils_module.add_to_history(self.DM_KEY, "user", "I must water the plants tomorrow", author_name="Alice", user_id=42, message_id=7)
+        reminder = self._reminder("dm", 555)
+        reminder.update({"target_user_name": "Alice", "event_summary": "Water the plants", "due_at_utc": "2026-11-20T08:00:00+00:00"})
+        generate_mock = AsyncMock(return_value="Time to water the plants!")
+
+        with patch.object(bot_instance_module.provider_manager, "generate", new=generate_mock), \
+                patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")), \
+                patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")), \
+                patch.object(bot_instance_module.character_manager, "build_reminder_delivery_context", Mock(return_value="REMINDER")), \
+                patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+                    "time_passage_context_enabled": False,
+                }.get(key, default)):
+            text = await instance._generate_scheduled_reminder_text(reminder, "due")
+
+        self.assertEqual(text, "Time to water the plants!")
+        prompt_contents = " ".join(str(item["content"]) for item in generate_mock.await_args.kwargs["messages"])
+        self.assertIn("I must water the plants tomorrow", prompt_contents)
+
+    async def test_clarification_question_is_recorded_in_the_dm_history(self):
+        instance = self._make_bot()
+        instance.name = "Nahida"
+        instance._extract_reminder_payload = AsyncMock(return_value={
+            "action": "clarify",
+            "event_summary": "Dentist appointment",
+            "clarification_prompt": "When is the appointment?",
+        })
+        instance._generate_reminder_clarification_message = AsyncMock(return_value="When is it?")
+        dm_channel = bot_instance_module.discord.DMChannel()
+        dm_channel.id = 77
+        message = types.SimpleNamespace(
+            id=1234,
+            channel=dm_channel,
+            _interaction=None,
+            reply=AsyncMock(return_value=types.SimpleNamespace(id=2001, created_at=None)),
+        )
+        context = {
+            "channel_id": self.DM_KEY,
+            "discord_channel_id": 77,
+            "content": "Remind me about the dentist.",
+            "user_id": 42,
+            "user_name": "Alice",
+            "is_dm": True,
+            "guild_id": None,
+            "timezone_context": {"timezone_name": "UTC", "timezone_source": "process", "offset_minutes": 0, "tzinfo": timezone.utc},
+        }
+        request = {"allow_auto_reminders": True, "pending_reminder_clarification": None, "guild": None}
+
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager):
+            await instance._maybe_handle_reminder_capture(context, message, request)
+
+        self.assertEqual(self._contents(self.DM_KEY), ["When is it?"])
+        self.assertEqual(self._contents(77), [])

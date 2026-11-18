@@ -1022,7 +1022,7 @@ Return exactly one JSON object with this shape:
             return clarification_prompt.strip().rstrip("?") + "?"
         return "What time should I remind you about that?"
 
-    async def _send_auxiliary_followup(self, message: discord.Message, content: str, guild) -> bool:
+    async def _send_auxiliary_followup(self, message: discord.Message, content: str, guild, *, history_key) -> bool:
         """Send a short follow-up message such as a reminder clarification."""
         if not content or not content.strip():
             return False
@@ -1041,7 +1041,7 @@ Return exactly one JSON object with this shape:
             return False
 
         add_to_history(
-            message.channel.id,
+            history_key,
             "assistant",
             content,
             author_name=self.character.name,
@@ -1123,7 +1123,9 @@ Return exactly one JSON object with this shape:
                 clarification_prompt=clarification_prompt,
                 event_summary=event_summary or (pending_draft or {}).get("event_summary", ""),
             )
-            await self._send_auxiliary_followup(message, clarification_text, request.get("guild"))
+            await self._send_auxiliary_followup(
+                message, clarification_text, request.get("guild"), history_key=context["channel_id"]
+            )
             return
 
         if action != "create":
@@ -1261,6 +1263,7 @@ Return exactly one JSON object with this shape:
         target_user_name = reminder.get("target_user_name") or f"User {target_user_id}"
         source_channel_id = int(reminder.get("source_channel_id"))
         is_dm = reminder.get("source_type") == "dm"
+        history_key = dm_history_key(self.name, target_user_id) if is_dm else source_channel_id
         get_guild = getattr(self.client, "get_guild", None)
         guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
         server_id = self._dm_memory_server_id() if is_dm else int(reminder.get("source_guild_id") or 0)
@@ -1278,12 +1281,12 @@ Return exactly one JSON object with this shape:
         if memories:
             memories = remove_thinking_tags(memories)
 
-        active_users = get_active_users(source_channel_id) if not is_dm else []
-        other_bot_names = get_other_bot_names(source_channel_id, self.character.name if self.character else "")
+        active_users = get_active_users(history_key) if not is_dm else []
+        other_bot_names = get_other_bot_names(history_key, self.character.name if self.character else "")
         time_passage_context = ""
         if runtime_config.get("time_passage_context_enabled", True):
             time_passage_context = character_manager.build_time_passage_context(
-                build_time_passage_signal(get_history(source_channel_id)),
+                build_time_passage_signal(get_history(history_key)),
                 is_dm=is_dm,
                 now=prompt_now
             )
@@ -1306,7 +1309,7 @@ Return exactly one JSON object with this shape:
         )
 
         history_msgs, immediate = format_history_split(
-            source_channel_id,
+            history_key,
             total_limit=runtime_config.get("history_limit", 200),
             immediate_count=runtime_config.get("immediate_message_count", 5),
             current_bot_name=self.character.name if self.character else None
