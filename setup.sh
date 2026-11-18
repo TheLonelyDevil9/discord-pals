@@ -93,10 +93,8 @@ if [ -z "$SKIP_PROVIDERS" ]; then
     echo
     read -p "Number of providers (1-5, default=1): " PROVIDER_COUNT
     PROVIDER_COUNT=${PROVIDER_COUNT:-1}
-    
-    echo "{" > providers.json
-    echo '  "providers": [' >> providers.json
-    
+    PROVIDER_VALUES=()
+
     for ((i=0; i<PROVIDER_COUNT; i++)); do
         NUM=$((i+1))
         echo
@@ -108,18 +106,14 @@ if [ -z "$SKIP_PROVIDERS" ]; then
         
         # Store key env var for later
         PROVIDER_KEYS+=("$P_KEY_ENV")
-        
-        if [ $i -eq $((PROVIDER_COUNT-1)) ]; then
-            echo "    {\"name\": \"$P_NAME\", \"url\": \"$P_URL\", \"key_env\": \"$P_KEY_ENV\", \"model\": \"$P_MODEL\"}" >> providers.json
-        else
-            echo "    {\"name\": \"$P_NAME\", \"url\": \"$P_URL\", \"key_env\": \"$P_KEY_ENV\", \"model\": \"$P_MODEL\"}," >> providers.json
-        fi
+        PROVIDER_VALUES+=("$P_NAME" "$P_URL" "$P_KEY_ENV" "$P_MODEL")
     done
-    
-    echo '  ],' >> providers.json
-    echo '  "timeout": 60' >> providers.json
-    echo "}" >> providers.json
-    
+
+    if ! python tools/setup_config.py providers providers.json -- "${PROVIDER_VALUES[@]}"; then
+        echo "ERROR: Failed to write providers.json!"
+        exit 1
+    fi
+
     echo
     echo "[OK] providers.json created"
 fi
@@ -139,10 +133,8 @@ BOT_COUNT=${BOT_COUNT:-1}
 if [ $BOT_COUNT -gt 1 ]; then
     echo
     echo "Configuring multi-bot mode..."
-    
-    echo "{" > bots.json
-    echo '  "bots": [' >> bots.json
-    
+    BOT_VALUES=()
+
     for ((i=0; i<BOT_COUNT; i++)); do
         NUM=$((i+1))
         echo
@@ -153,17 +145,14 @@ if [ $BOT_COUNT -gt 1 ]; then
         
         # Store token env var for later
         BOT_TOKENS+=("$B_TOKEN_ENV")
-        
-        if [ $i -eq $((BOT_COUNT-1)) ]; then
-            echo "    {\"name\": \"$B_NAME\", \"token_env\": \"$B_TOKEN_ENV\", \"character\": \"$B_CHARACTER\"}" >> bots.json
-        else
-            echo "    {\"name\": \"$B_NAME\", \"token_env\": \"$B_TOKEN_ENV\", \"character\": \"$B_CHARACTER\"}," >> bots.json
-        fi
+        BOT_VALUES+=("$B_NAME" "$B_TOKEN_ENV" "$B_CHARACTER")
     done
-    
-    echo '  ]' >> bots.json
-    echo "}" >> bots.json
-    
+
+    if ! python tools/setup_config.py bots bots.json -- "${BOT_VALUES[@]}"; then
+        echo "ERROR: Failed to write bots.json!"
+        exit 1
+    fi
+
     echo
     echo "[OK] bots.json created/updated for $BOT_COUNT bots"
 else
@@ -219,8 +208,10 @@ if [ -f ".env" ]; then
     fi
 else
     echo "Creating .env file..."
-    
-    cat > .env << 'EOF'
+
+    # .env will hold Discord tokens and API keys, so only its owner may read it.
+    (umask 077 && : > .env)
+    cat >> .env << 'EOF'
 # ============================================
 # SINGLE-BOT MODE (without bots.json)
 # ============================================

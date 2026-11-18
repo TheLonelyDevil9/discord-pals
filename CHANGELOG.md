@@ -49,6 +49,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
 - On Python 3.11, the periodic sweep returned almost no space to the file system: each sweep released one free database page instead of all of them.
+- `setup.sh` no longer writes an invalid `providers.json` or `bots.json` when a name contains a quote, and it creates `.env` readable only by its owner.
 
 ### Upgrade notes
 
@@ -59,6 +60,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 - An install on Python 3.10 keeps starting after this update and shows a warning. To move to a supported version, install Python 3.11, 3.12, 3.13, or 3.14 and build a new virtual environment beside the old one, for example `python3.13 -m venv venv-new` and `venv-new/bin/pip install -r requirements.lock` (on Windows, `py -3.13 -m venv venv-new` and `venv-new\Scripts\pip install -r requirements.lock`). Stop the bot, rename `venv` to `venv-old` and `venv-new` to `venv`, and start it again. Delete `venv-old` once the bot runs. `requirements.lock` needs Python 3.11 or newer; on 3.10, `pip install -r requirements.txt` still works.
+- `setup.sh` now creates `.env` readable only by its owner. An existing `.env` keeps its permissions; on Linux and macOS, run `chmod 600 .env` to restrict it.
 
 ## [v2.9.0] - 2026-09-29
 
