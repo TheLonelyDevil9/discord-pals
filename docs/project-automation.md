@@ -86,17 +86,56 @@ Use **Recent** for delivery history, **Needs attention** for undismissed failure
 
 Use **Restore** in Dismissed to return a failure to the normal views and failed count. A retried job automatically returns to normal visibility, so a new failure is not hidden by an earlier dismissal. Jobs held for recovery cannot be dismissed because a public write may already exist. If work changes while you are reviewing it, refresh before dismissing or restoring.
 
+**Discard** deletes one held job and its saved delivery version. Check the destination first: the delivery is not retried, and a public write may already exist. A held report publication cannot be discarded, because its report stays in recovery until `/project-retry` returns it to the reporter.
+
 - `/project-recover job_id:123` checks the destination for the existing delivery. GitHub matches must bear the configured App's attribution and recovery marker; Discord mirrors must match the saved destination, bot author, and delivery marker. An inaccessible destination stays held and is never treated as proof of absence.
 - `/project-retry job_id:123` resumes failed work or checks a held delivery first.
 - If a delivery remains absent, inspect the destination before using `confirmed_not_delivered:true`. A GitHub publication then returns to the reporter for fresh approval; the old job is cancelled. A Discord delivery can be retried after that explicit confirmation.
 
 These commands require a configured maintainer or operator and the configured project server/helper. Their default Discord visibility requires Manage Server; administrators can grant command access to the maintainer role. Job and case revisions prevent a stale recovery action from replacing a newer decision.
 
-GitHub issues, PRs, and accessible PR activity reconcile on startup and every 15 minutes. PR discovery includes recently updated open, closed, and merged PRs, so discussion can be recovered even when a PR opened and closed during an outage. PR activity scans use bounded, resumable jobs. They recover the source's available current state, not every intermediate edit; deletion checks can only recover comments the helper previously observed. Repository push feeds, release, workflow, and maintainer-question events still depend on webhooks; use GitHub’s delivery history to redeliver missed events. Repository and channel changes hold older jobs for their original configuration. New mirror destinations get separate mappings.
+GitHub issues, PRs, and accessible PR activity reconcile on startup and then at most every 15 minutes. A new cycle starts only when no job of the previous cycle is still queued, running, or sending; failed and held jobs do not delay it. An issue or PR that closed more than 7 days ago is no longer refreshed by reconciliation, and it returns to scope if it reopens. PR discovery includes recently updated open, closed, and merged PRs, so discussion can be recovered even when a PR opened and closed during an outage. PR activity scans use bounded, resumable jobs. They recover the source's available current state, not every intermediate edit; deletion checks can only recover comments the helper previously observed. Repository push feeds, release, workflow, and maintainer-question events still depend on webhooks; use GitHub’s delivery history to redeliver missed events. Repository and channel changes hold older jobs for their original configuration. New mirror destinations get separate mappings.
 
 Unchanged issue status does not enqueue another reporter notification. Status checkpoints and notifications are saved together, including when older completed notification jobs use the previous payload format. A permission error can happen after a Discord post was created or edited; restore access and verify the destination before retrying those jobs.
 
 The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
+
+### Job history and Project data
+
+Project jobs are working data. A sweep deletes them at most every 10 minutes, also while automation is paused. **Helper setup → Job history** sets how many days finished jobs stay (0 to 365, default 0).
+
+| Data | Kept |
+| --- | --- |
+| Finished jobs | Until the next sweep, or for the Job history days. A reconciliation cycle keeps its finished jobs while any of its jobs is still queued, running, or sending. |
+| Failed jobs, dismissed or not, and cancelled publications | 7 days after their last change, or the Job history days when that is longer. |
+| Queued, running, sending, and held jobs | Until they finish or you remove them. The sweep never deletes them. |
+| Duplicate-delivery markers | 4 days. A marker holds only a SHA-256 of the GitHub delivery ID. A delivery received again within that time is answered as accepted and queues nothing; GitHub offers redelivery for 3 days. |
+| Release, workflow, and commit post records | 7 days, or the Job history days when that is longer. A later update to the same release or workflow run then posts a new message instead of editing the old one. |
+| Issue and PR posts, PR activity receipts, feedback cases, and notification receipts | Until **Reset Project data**. |
+
+**Project → Project data** has two controls:
+
+- **Clear history and queue** deletes every job except jobs in progress. Queued work, including pending feedback steps, never runs, and held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. It works while automation runs or is paused.
+- **Reset Project data** deletes every job, post record, receipt, and feedback case. It is available only while automation is paused and no job is in progress, and you confirm it by typing the repository name. Afterwards every open issue and PR is posted again as new, and the old Discord posts stay in their channels.
+
+After a clear or reset, the database file is compacted when at least 25% of it, and at least 16 MB, is free. Compaction switches the file to incremental auto-vacuum, so later sweeps return freed space to the disk. If another process holds the database, a later sweep compacts it instead.
+
+Operators without dashboard access can run the same functions from the checkout, with the service's Python environment:
+
+```bash
+python tools/project_data.py status
+python tools/project_data.py clear-history
+python tools/project_data.py reset --confirm OWNER/REPOSITORY
+python tools/project_data.py compact
+```
+
+`reset` refuses while automation is enabled, while a job is in progress, and when `--confirm` does not match the configured repository. The tool prints counts only.
+
+#### First start after upgrading
+
+The first start of a version with job history runs a one-time cleanup before the worker takes any job. It deletes the queued reconciliation work left by overlapping cycles: sync cycle starts, PR discovery, page, missing-comment, and check jobs, and issue and PR refreshes. Queued webhook deliveries, detected PR activity deliveries, feedback jobs, and held jobs stay. It then applies the table above to every remaining job and compacts the file when enough space is free. It logs one summary line with the counts.
+
+On a large database the cleanup holds the database for some time. Webhooks that arrive meanwhile can be answered with 503; redeliver them from GitHub's delivery history. Back up the database before updating, as described above.
 
 ## Implementation boundaries
 
