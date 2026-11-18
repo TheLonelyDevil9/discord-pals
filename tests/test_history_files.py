@@ -203,6 +203,109 @@ class LegacyHistoryFileTests(HistorySandbox, unittest.TestCase):
         self.assertIn("11.json", self.file_names())
 
 
+class MismatchedHistoryFileTests(HistorySandbox, unittest.TestCase):
+    """A file is read only under its own key's current name or its older name."""
+
+    def _assert_left_alone(self, warn, path, original):
+        self.assertEqual(path.read_bytes(), original)
+        warned = [call.args[0] for call in warn.call_args_list if path.name in call.args[0]]
+        self.assertEqual(len(warned), 1, warned)
+
+    def _start(self):
+        with patch.object(discord_utils_module.log, "warn") as warn:
+            discord_utils_module.load_history()
+        return warn
+
+    def test_p1_a_name_that_parses_to_another_files_key_is_left_alone(self):
+        self.write_file("123.json", {"name": "#tea", "messages": [{"role": "user", "content": "real"}]})
+        stray = self.write_file("0123.json", {"name": "#tea", "messages": [{"role": "user", "content": "stray"}]})
+        original = stray.read_bytes()
+
+        warn = self._start()
+
+        self._assert_left_alone(warn, stray, original)
+        self.assertEqual(discord_utils_module.get_history(123)[0]["content"], "real")
+        self.assertEqual(json.loads((self.history_dir / "123.json").read_text(encoding="utf-8"))["history_id"], 123)
+        self.restart()
+        self.assertEqual(discord_utils_module.get_history(123)[0]["content"], "real")
+
+    def test_p2_a_file_that_holds_another_name_s_key_is_left_alone(self):
+        self.write_file("123.json", {"name": "#tea", "messages": [{"role": "user", "content": "real"}]})
+        other = self.write_file("100.json", {"history_id": 123, "name": "#tea", "messages": [{"role": "user", "content": "copy"}]})
+        original = other.read_bytes()
+
+        warn = self._start()
+
+        self._assert_left_alone(warn, other, original)
+        self.assertEqual(discord_utils_module.get_history(123)[0]["content"], "real")
+        self.assertEqual(discord_utils_module.get_history(100), [])
+
+    def test_p3_a_keyed_copy_beside_a_file_from_an_earlier_version_is_left_alone(self):
+        self.write_file("123.json", {"name": "#tea", "messages": [{"role": "user", "content": "rewritten by the earlier version"}]})
+        copy = self.write_file("123-copy.json", {"history_id": 123, "name": "#tea", "messages": [{"role": "user", "content": "copy"}]})
+        original = copy.read_bytes()
+
+        warn = self._start()
+
+        self._assert_left_alone(warn, copy, original)
+        self.assertEqual(discord_utils_module.get_history(123)[0]["content"], "rewritten by the earlier version")
+        self.restart()
+        self.assertEqual(discord_utils_module.get_history(123)[0]["content"], "rewritten by the earlier version")
+
+    def test_q_a_current_name_in_other_letter_case_is_never_deleted(self):
+        dm_key = discord_utils_module.dm_history_key("Firefly", 42)
+        discord_utils_module.add_to_history(dm_key, "user", "keep me", author_name="Alice", message_id=1)
+        discord_utils_module.save_history(force=True)
+        (current_name,) = self.file_names()
+        os.rename(self.history_dir / current_name, self.history_dir / current_name.lower())
+        case_insensitive = (self.history_dir / current_name).exists()
+
+        self.restart()
+        self.restart()
+
+        self.assertEqual(self.file_names(), [current_name.lower()])
+        lines = [entry["content"] for entry in discord_utils_module.get_history(dm_key)]
+        self.assertEqual(lines, ["keep me"] if case_insensitive else [])
+
+    def test_e1_a_file_that_holds_another_channel_s_key_is_left_alone(self):
+        misplaced = self.write_file("123.json", {"history_id": 456, "name": "#a", "messages": [{"role": "user", "content": "misplaced"}]})
+        self.write_file("456.json", {"history_id": 456, "name": "#b", "messages": [{"role": "user", "content": "real"}]})
+        original = misplaced.read_bytes()
+
+        warn = self._start()
+
+        self._assert_left_alone(warn, misplaced, original)
+        self.assertEqual(discord_utils_module.get_history(456)[0]["content"], "real")
+        self.assertEqual(discord_utils_module.get_history(123), [])
+
+    def test_e2_a_channel_file_that_holds_its_id_as_text_is_left_alone(self):
+        text_key = self.write_file("123.json", {"history_id": "123", "name": "#a", "messages": [{"role": "user", "content": "x"}]})
+        original = text_key.read_bytes()
+
+        warn = self._start()
+
+        self._assert_left_alone(warn, text_key, original)
+        self.assertEqual(self.file_names(), ["123.json"])
+        self.assertEqual(discord_utils_module.get_history(123), [])
+        self.assertEqual(discord_utils_module.get_history("123"), [])
+
+    def test_e3_a_renamed_copy_of_a_dm_file_is_left_alone(self):
+        dm_key = discord_utils_module.dm_history_key("Firefly", 42)
+        discord_utils_module.add_to_history(dm_key, "user", "the real one", author_name="Alice", message_id=1)
+        discord_utils_module.save_history(force=True)
+        (current_name,) = self.file_names()
+        backup = self.history_dir / "my-backup.json"
+        backup.write_bytes((self.history_dir / current_name).read_bytes())
+        original = backup.read_bytes()
+
+        discord_utils_module.conversation_history = {}
+        warn = self._start()
+
+        self._assert_left_alone(warn, backup, original)
+        self.assertEqual(discord_utils_module.get_history(dm_key)[0]["content"], "the real one")
+        self.assertEqual(self.file_names(), sorted([current_name, "my-backup.json"]))
+
+
 class HistoryLimitTests(HistorySandbox, unittest.TestCase):
     """The 500-conversation limit deletes the files of what it evicts."""
 

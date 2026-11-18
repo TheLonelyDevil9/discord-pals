@@ -395,20 +395,47 @@ def _legacy_history_id(stem: str):
     """Return the key that a file written without a stored key is named after.
 
     Channel files are named after the channel ID. DM files were named after
-    their raw key, which only Linux and macOS could create.
+    their raw key, which only Linux and macOS could create. A name such as
+    0123 is not the name of channel 123, so it maps to no key.
     """
     try:
-        return int(stem)
+        channel_id = int(stem)
     except ValueError:
-        pass
+        channel_id = None
+    if channel_id is not None and str(channel_id) == stem:
+        return channel_id
     if stem.startswith("dm:"):
         return stem
     return None
 
 
+def _legacy_history_file_name(history_id):
+    """Return the name that versions without a stored key gave this history's file, or None."""
+    if isinstance(history_id, int) or str(history_id).startswith("dm:"):
+        return f"{history_id}.json"
+    return None
+
+
+def _same_history_file(path, other) -> bool:
+    """Return whether two paths name one file.
+
+    Names that differ only in letter case are one file on Windows and on a
+    default macOS volume, which os.path.samefile detects.
+    """
+    if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(other)):
+        return True
+    try:
+        return os.path.samefile(path, other)
+    except OSError:
+        return False
+
+
 def _remove_legacy_history_files(history_id):
-    """Delete the older files of one history after its current file exists."""
+    """Delete the older-named files recorded for one history, never its current file."""
+    current_path = _history_channel_path(history_id)
     for filepath in _legacy_history_files.pop(history_id, ()):
+        if _same_history_file(filepath, current_path):
+            continue
         lock = _get_file_lock(filepath)
         with lock:
             try:
@@ -542,12 +569,14 @@ def load_history():
     history_dir = Path(HISTORY_CHANNELS_DIR)
     history_files = sorted(history_dir.glob("*.json")) if history_dir.exists() else []
     if history_files:
-        # A file in the current form holds its key and has the name built
-        # from it. When an older file holds the same key, for example after
-        # a rename was interrupted, the current file wins because it was
-        # written later from the loaded history.
-        chosen = {}
-        superseded = {}
+        # A file is read only under its key's current name, or under the name
+        # that versions without a stored key gave it. Any other file, such as
+        # a hand copy or a name that disagrees with the key inside, could
+        # hide or replace the real history, so it stays as it is. When an
+        # older-named file holds the same key, for example after a rename was
+        # interrupted, the current file wins because it was written later
+        # from the loaded history.
+        found = {}
         unreadable = object()
         for path in history_files:
             # A file that fails to parse is skipped, so the rewrite below
@@ -564,19 +593,16 @@ def load_history():
                 continue
             stored_id = _stored_history_id(data.get("history_id"))
             history_id = stored_id if stored_id is not None else _legacy_history_id(path.stem)
-            if history_id is None:
-                continue
-            is_current = stored_id is not None and path.name == _history_file_name(history_id)
-            previous = chosen.get(history_id)
-            if previous is not None and (previous[2] or not is_current):
-                superseded.setdefault(history_id, set()).add(str(path))
-                continue
-            if previous is not None:
-                superseded.setdefault(history_id, set()).add(str(previous[0]))
-            chosen[history_id] = (path, data, is_current)
+            if stored_id is not None and _same_history_file(path, _history_channel_path(history_id)):
+                found.setdefault(history_id, {})["current"] = (path, data)
+            elif history_id is not None and path.name == _legacy_history_file_name(history_id):
+                found.setdefault(history_id, {})["older"] = (path, data)
+            else:
+                log.warn(f"Skipped history file {path.name}: its name does not match the conversation it holds")
 
         rewrite = []
-        for history_id, (path, data, is_current) in chosen.items():
+        for history_id, files in found.items():
+            path, data = files.get("current") or files["older"]
             try:
                 conversation_history[history_id] = data.get("messages", [])
                 name = data.get("name")
@@ -595,12 +621,10 @@ def load_history():
                 log.warn(f"Skipped history file {path.name}: {e}")
                 continue
 
-            older_files = superseded.get(history_id, set())
-            if path.name != _history_file_name(history_id):
-                older_files.add(str(path))
-            if older_files:
-                _legacy_history_files[history_id] = older_files
-            if not is_current or older_files:
+            if "older" in files:
+                older_path = files["older"][0]
+                if not _same_history_file(older_path, _history_channel_path(history_id)):
+                    _legacy_history_files[history_id] = {str(older_path)}
                 rewrite.append(history_id)
 
         log.info(f"Loaded history for {len(conversation_history)} channels")
