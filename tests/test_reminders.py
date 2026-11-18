@@ -11,6 +11,7 @@ import bot_instance as bot_instance_module
 import dashboard as dashboard_module
 import discord_utils as discord_utils_module
 import memory as memory_module
+import project_automation as project_automation_module
 import reminder_delivery as reminder_delivery_module
 import reminders as reminders_module
 import runtime_config as runtime_config_module
@@ -521,6 +522,38 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
             draft = instance._pending_reminder_clarification(message)
 
         self.assertEqual(draft["event_summary"], "Dentist appointment")
+
+    async def test_a_dm_answer_is_queued_with_the_question_it_answers(self):
+        bot = bot_instance_module.BotInstance("Nahida", "token", "nahida")
+        bot.character = types.SimpleNamespace(name="Nahida")
+        bot.client.user = types.SimpleNamespace(id=999, bot=True, display_name="Nahida Bot", name="nahida-bot")
+        bot.request_queue.add_request = AsyncMock(return_value=True)
+        reminders_module.reminder_manager.create_pending_clarification(
+            bot_name="Nahida", target_user_id=42, target_user_name="Alice",
+            source_channel_id=77, source_channel_name="DM", source_guild_id=None,
+            source_guild_name="DM", source_type="dm", timezone_name="UTC",
+            timezone_offset_minutes=0, timezone_source="process",
+            event_summary="Dentist appointment", normalized_event="dentist appointment",
+            creation_mode="explicit", clarification_prompt="When is the appointment?",
+        )
+        dm_channel = bot_instance_module.discord.DMChannel()
+        dm_channel.id = 77
+        message = types.SimpleNamespace(
+            id=1234, content="Thursday at 3", channel=dm_channel, guild=None,
+            author=types.SimpleNamespace(id=42, bot=False, display_name="Alice", name="alice"),
+            attachments=[], mentions=[], stickers=[], reference=None, created_at=None,
+        )
+        automation = types.SimpleNamespace(handle_message=AsyncMock(return_value=False))
+
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager), \
+                patch.object(project_automation_module, "get_automation", return_value=automation), \
+                patch.object(bot_instance_module.runtime_config, "is_dm_response_allowed", return_value=(True, None)), \
+                patch.object(bot_instance_module.user_ignores, "is_ignored", return_value=False):
+            await bot.client.on_message(message)
+
+        queued = bot.request_queue.add_request.await_args.kwargs
+        self.assertEqual(queued["channel_id"], "dm:Nahida:user:42")
+        self.assertEqual(queued["pending_reminder_clarification"]["event_summary"], "Dentist appointment")
 
     def test_server_clarification_does_not_break_a_dm_message_from_the_same_user(self):
         instance = self._make_dm_bot()

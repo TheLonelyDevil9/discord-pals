@@ -1491,8 +1491,9 @@ Return exactly one JSON object with this shape:
         
         @self.client.event
         async def on_ready():
-            # Set up request processor first, so that a step below that fails
-            # cannot leave a connected bot that drops every queued request.
+            # Set up request processor first: the awaited steps below, the
+            # Project helper attach and the command sync, can be slow or hang,
+            # and a request that arrives while no processor is set is dropped.
             self.request_queue.set_processor(self._process_request)
 
             with self._ready_step("data directory"):

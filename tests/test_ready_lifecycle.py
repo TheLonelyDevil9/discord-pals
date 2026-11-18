@@ -75,6 +75,24 @@ class ReadyRobustnessTests(ReadyTestCase):
         self.log["error"].assert_called_once()
         self.assertIn("character file unreadable", self.log["error"].call_args.args[0])
 
+    async def test_the_request_processor_is_set_before_the_first_awaited_step(self):
+        bot = self.make_bot()
+        attach_started = asyncio.Event()
+        release_attach = asyncio.Event()
+
+        async def slow_attach(attached_bot):
+            attach_started.set()
+            await release_attach.wait()
+
+        self.automation.attach = slow_attach
+        ready = asyncio.create_task(bot.client.on_ready())
+        try:
+            await asyncio.wait_for(attach_started.wait(), timeout=1)
+            self.assertEqual(bot.request_queue.process_callback, bot._process_request)
+        finally:
+            release_attach.set()
+            await ready
+
     async def test_a_failing_step_does_not_stop_the_later_steps(self):
         bot = self.make_bot()
         self.automation.attach.side_effect = RuntimeError("helper store locked")
