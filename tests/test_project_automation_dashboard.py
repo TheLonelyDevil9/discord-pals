@@ -428,6 +428,34 @@ def test_event_recovery_prefers_a_matching_recorded_mirror_thread(setup):
     assert target["discord_url"] == "https://discord.com/channels/123/456"
 
 
+@pytest.mark.parametrize("missing", ["guild_id", "bot_name", "issues_channel_id"])
+def test_event_recovery_with_an_incomplete_recorded_binding_still_lists_the_job(setup, missing):
+    from unittest.mock import Mock
+    client, _, service = setup
+    service.store = SimpleNamespace(get_link=Mock(return_value=None))
+    binding = {"guild_id": "123", "bot_name": "Helper", "issues_channel_id": "456", "repository": "SillyBunnyTeam/SillyBunny"}
+    del binding[missing]
+    service.jobs = [{"id": 2, "kind": "event", "payload": {
+        "kind": "issue", "key": "issue:42", "number": 42, "repository": "SillyBunnyTeam/SillyBunny", "_binding": binding,
+    }}]
+    response = client.get("/api/project-automation/jobs")
+    assert response.status_code == 200
+    assert response.get_json()["jobs"][0]["target"]["issue_number"] == 42
+
+
+@pytest.mark.parametrize("kind, path", [("issue", "issues"), ("pull", "pull")])
+def test_a_held_reconciliation_refresh_links_to_its_item_on_github(setup, kind, path):
+    client, _, service = setup
+    service.jobs = [{"id": 2, "kind": "event", "state": "recovery", "payload": {
+        "kind": kind, "key": f"{kind}:42", "number": 42, "repository": "SillyBunnyTeam/SillyBunny", "_sync_cycle": 1,
+        "_binding": {"guild_id": "123", "bot_name": "Helper", "issues_channel_id": "456", "reviews_channel_id": "457",
+                     "repository": "SillyBunnyTeam/SillyBunny"},
+    }}]
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["github_url"] == f"https://github.com/SillyBunnyTeam/SillyBunny/{path}/42"
+    assert target["issue_number"] == 42
+
+
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "https://github.com.evil.test/SillyBunnyTeam/SillyBunny/issues/1",
                                "https://github.com/elsewhere/project/issues/1", "https://github.com/SillyBunnyTeam/SillyBunny/%2e%2e/elsewhere"])
 def test_job_target_rejects_unexpected_github_locations(setup, url):

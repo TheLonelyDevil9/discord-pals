@@ -315,6 +315,21 @@ def _native_suite():
             self.assertTrue(await self.transport.mirror_activity(event))
             self.assertEqual(self.forum.create_thread.await_count, 2)
 
+        async def test_confirmed_absence_releases_the_guard_of_the_issue_or_pull_post(self):
+            for kind, forum in (("issue", self.forum_channel(201)), ("pull", self.forum)):
+                item = {"kind": kind, "key": f"{kind}:17", "number": 17, "title": "Settings fail to save",
+                        "body": "", "state": "open", "html_url": "https://github.com/example/project/issues/17"}
+                create = forum.create_thread.side_effect
+                forum.create_thread.side_effect = TimeoutError("No receipt")
+                with self.assertRaises(TimeoutError):
+                    await self.transport.mirror(item)
+                with self.assertRaisesRegex(WorkflowError, "needs recovery"):
+                    await self.transport.mirror(item)
+                self.transport.confirm_not_delivered(item)
+                forum.create_thread.side_effect = create
+                self.assertTrue(await self.transport.mirror(item))
+                self.assertEqual(forum.create_thread.await_count, 2)
+
         async def test_unseen_activity_attempt_blocks_other_versions_until_confirmed(self):
             event = self.event()
             await self.transport.mirror({**event["pull"], "key": "pull:17"})

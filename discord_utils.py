@@ -6,6 +6,7 @@ Helper functions for Discord interactions.
 import discord
 import re
 import base64
+import hashlib
 import json
 import os
 import aiohttp
@@ -153,6 +154,7 @@ _MAX_CHANNELS_IN_HISTORY = 500  # Max channels to keep in memory
 _STALE_CHANNEL_THRESHOLD = 86400  # 24 hours - channels with no activity are candidates for cleanup
 _channel_last_activity: Dict[int, float] = {}  # Track last activity per channel
 _dirty_history_channels: set[int] = set()
+_legacy_history_files: Dict[object, set[str]] = {}
 
 # Pre-compiled patterns for resolve_discord_formatting
 RE_CUSTOM_EMOJI = re.compile(r'<a?:([a-zA-Z0-9_]+):\d+>')
@@ -354,9 +356,116 @@ def build_idle_time_passage_signal(
     }
 
 
+_HISTORY_FILE_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _history_file_name(history_id) -> str:
+    """Return the file name that stores one conversation history.
+
+    Channel histories keep their numeric name. Other keys, such as DM keys,
+    contain colons, which Windows rejects in file names, so they keep only
+    letters, digits, underscores and hyphens. A digest of the exact key
+    follows, so two keys that differ only in letter case do not share one
+    file on a case-insensitive file system. The key itself is stored inside
+    the file because the name cannot be turned back into it.
+    """
+    if isinstance(history_id, int):
+        return f"{history_id}.json"
+    key = str(history_id)
+    readable = _HISTORY_FILE_NAME_UNSAFE.sub("-", key).strip("-")[:96] or "history"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    return f"{readable}.{digest}.json"
+
+
 def _history_channel_path(channel_id: int) -> str:
     """Get the per-channel history cache path."""
-    return os.path.join(HISTORY_CHANNELS_DIR, f"{channel_id}.json")
+    return os.path.join(HISTORY_CHANNELS_DIR, _history_file_name(channel_id))
+
+
+def _stored_history_id(value):
+    """Return the history key stored in a file, or None when it is unusable."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) or (isinstance(value, str) and value):
+        return value
+    return None
+
+
+def _legacy_history_id(stem: str):
+    """Return the key that a file written without a stored key is named after.
+
+    Channel files are named after the channel ID. DM files were named after
+    their raw key, which only Linux and macOS could create. A name such as
+    0123 is not the name of channel 123, so it maps to no key.
+    """
+    try:
+        channel_id = int(stem)
+    except ValueError:
+        channel_id = None
+    if channel_id is not None and str(channel_id) == stem:
+        return channel_id
+    if stem.startswith("dm:"):
+        return stem
+    return None
+
+
+def _legacy_history_file_name(history_id):
+    """Return the name that versions without a stored key gave this history's file, or None."""
+    if isinstance(history_id, int) or str(history_id).startswith("dm:"):
+        return f"{history_id}.json"
+    return None
+
+
+def _same_history_file(path, other) -> bool:
+    """Return whether two paths name one file.
+
+    Names that differ only in letter case are one file on Windows and on a
+    default macOS volume, which os.path.samefile detects.
+    """
+    if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(other)):
+        return True
+    try:
+        return os.path.samefile(path, other)
+    except OSError:
+        return False
+
+
+def _history_last_activity(data: dict) -> float:
+    try:
+        return float(data.get("last_activity"))
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _set_history_file_aside(path: Path) -> None:
+    """Rename an older-named file that holds newer messages to a name the loader ignores."""
+    target = path.with_name(f"{path.name}.superseded")
+    suffix = 1
+    while target.exists():
+        target = path.with_name(f"{path.name}.superseded.{suffix}")
+        suffix += 1
+    try:
+        os.rename(path, target)
+    except OSError as e:
+        log.warn(f"History file {path.name} holds newer messages than the file loaded and could not be renamed: {e}")
+        return
+    log.warn(f"History file {path.name} holds newer messages than the file loaded; it is kept as {target.name} and not loaded")
+
+
+def _remove_legacy_history_files(history_id):
+    """Delete the older-named files recorded for one history, never its current file."""
+    current_path = _history_channel_path(history_id)
+    for filepath in _legacy_history_files.pop(history_id, ()):
+        if _same_history_file(filepath, current_path):
+            continue
+        lock = _get_file_lock(filepath)
+        with lock:
+            try:
+                os.remove(filepath)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                log.warn(f"Failed to delete old history file {os.path.basename(filepath)}: {e}")
 
 
 def _mark_history_dirty(channel_id: int):
@@ -392,6 +501,7 @@ def _rebuild_recent_message_hashes(channel_id: int):
 def _serialize_channel_history(channel_id: int) -> dict:
     """Serialize one channel history entry for per-channel persistence."""
     return {
+        "history_id": channel_id,
         "name": channel_names.get(channel_id, str(channel_id)),
         "messages": conversation_history.get(channel_id, []),
         "last_activity": _channel_last_activity.get(channel_id, time.time()),
@@ -403,12 +513,12 @@ def _delete_channel_history_file(channel_id: int):
     filepath = _history_channel_path(channel_id)
     lock = _get_file_lock(filepath)
     with lock:
-        if not os.path.exists(filepath):
-            return
-        try:
-            os.remove(filepath)
-        except OSError as e:
-            log.warn(f"Failed to delete history cache for channel {channel_id}: {e}")
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError as e:
+                log.warn(f"Failed to delete history cache for channel {channel_id}: {e}")
+    _remove_legacy_history_files(channel_id)
 
 
 def save_history(force: bool = False):
@@ -441,7 +551,9 @@ def save_history(force: bool = False):
     failed_channels = set()
     for channel_id in dirty_channels:
         if channel_id in conversation_history:
-            if not safe_json_save(_history_channel_path(channel_id), _serialize_channel_history(channel_id)):
+            if safe_json_save(_history_channel_path(channel_id), _serialize_channel_history(channel_id)):
+                _remove_legacy_history_files(channel_id)
+            else:
                 failed_channels.add(channel_id)
         else:
             _delete_channel_history_file(channel_id)
@@ -470,6 +582,7 @@ def load_history():
     channel_names = {}
     _channel_last_activity = {}
     _recent_message_hashes.clear()
+    _legacy_history_files.clear()
 
     with _history_save_lock:
         _dirty_history_channels.clear()
@@ -478,31 +591,74 @@ def load_history():
     history_dir = Path(HISTORY_CHANNELS_DIR)
     history_files = sorted(history_dir.glob("*.json")) if history_dir.exists() else []
     if history_files:
+        # A file is read only under its key's current name, or under the name
+        # that versions without a stored key gave it. Any other file, such as
+        # a hand copy or a name that disagrees with the key inside, could
+        # hide or replace the real history, so it stays as it is. When both
+        # names exist, the current file is loaded. The older-named file is
+        # deleted when it is no newer, as after an interrupted rename. When
+        # it is newer, as after a rollback to a version that writes that
+        # name, it is renamed aside and kept, but not loaded.
+        found = {}
+        unreadable = object()
         for path in history_files:
+            # A file that fails to parse is skipped, so the rewrite below
+            # cannot replace it with an empty history.
             try:
-                channel_id = int(path.stem)
-            except ValueError:
+                data = safe_json_load(str(path), default=unreadable)
+            except Exception as e:
+                log.warn(f"Skipped history file {path.name}: {e}")
+                continue
+            if data is unreadable:
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+                log.warn(f"Skipped history file {path.name}: it holds no message list")
+                continue
+            stored_id = _stored_history_id(data.get("history_id"))
+            history_id = stored_id if stored_id is not None else _legacy_history_id(path.stem)
+            if stored_id is not None and _same_history_file(path, _history_channel_path(history_id)):
+                found.setdefault(history_id, {})["current"] = (path, data)
+            elif history_id is not None and path.name == _legacy_history_file_name(history_id):
+                found.setdefault(history_id, {})["older"] = (path, data)
+            else:
+                log.warn(f"Skipped history file {path.name}: its name does not match the conversation it holds")
+
+        rewrite = []
+        for history_id, files in found.items():
+            path, data = files.get("current") or files["older"]
+            try:
+                conversation_history[history_id] = data.get("messages", [])
+                name = data.get("name")
+                if isinstance(name, str) and name:
+                    channel_names[history_id] = name
+                try:
+                    _channel_last_activity[history_id] = float(data.get("last_activity"))
+                except (TypeError, ValueError):
+                    _channel_last_activity[history_id] = time.time()
+                _rebuild_recent_message_hashes(history_id)
+            except Exception as e:
+                conversation_history.pop(history_id, None)
+                channel_names.pop(history_id, None)
+                _channel_last_activity.pop(history_id, None)
+                _recent_message_hashes.pop(history_id, None)
+                log.warn(f"Skipped history file {path.name}: {e}")
                 continue
 
-            data = safe_json_load(str(path), default={})
-            messages = data.get("messages", []) if isinstance(data, dict) else []
-            if not isinstance(messages, list):
-                continue
-
-            conversation_history[channel_id] = messages
-            name = data.get("name") if isinstance(data, dict) else None
-            if isinstance(name, str) and name:
-                channel_names[channel_id] = name
-
-            last_activity = data.get("last_activity") if isinstance(data, dict) else None
-            try:
-                _channel_last_activity[channel_id] = float(last_activity)
-            except (TypeError, ValueError):
-                _channel_last_activity[channel_id] = time.time()
-
-            _rebuild_recent_message_hashes(channel_id)
+            if "older" in files:
+                older_path, older_data = files["older"]
+                if "current" in files and _history_last_activity(older_data) > _history_last_activity(data):
+                    _set_history_file_aside(older_path)
+                    continue
+                if not _same_history_file(older_path, _history_channel_path(history_id)):
+                    _legacy_history_files[history_id] = {str(older_path)}
+                rewrite.append(history_id)
 
         log.info(f"Loaded history for {len(conversation_history)} channels")
+        if rewrite:
+            log.info(f"Rewriting {len(rewrite)} history file(s) in the current format")
+            with _history_save_lock:
+                _dirty_history_channels.update(rewrite)
+            save_history(force=True)
         return
 
     data = safe_json_load(HISTORY_CACHE_FILE, default={})
@@ -800,25 +956,33 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
 
 def cleanup_stale_conversation_history():
-    """Remove stale channels from conversation_history to prevent memory leaks."""
+    """Remove stale channels from conversation_history to prevent memory leaks.
+
+    Only channel histories count toward the limit and only they are removed.
+    Removal deletes the history file, and every DM file loads at start, so
+    counting DMs would delete idle conversations because of DM volume alone.
+    """
     now = time.time()
+    channel_ids = [history_id for history_id in conversation_history if isinstance(history_id, int)]
+    if len(channel_ids) <= _MAX_CHANNELS_IN_HISTORY:
+        return
     channels_to_remove = []
 
     # Find channels with no recent activity
-    for channel_id in list(conversation_history.keys()):
+    for channel_id in channel_ids:
         last_activity = _channel_last_activity.get(channel_id, 0)
         if now - last_activity > _STALE_CHANNEL_THRESHOLD:
             channels_to_remove.append(channel_id)
 
     # If still over limit, remove oldest channels
-    if len(conversation_history) - len(channels_to_remove) > _MAX_CHANNELS_IN_HISTORY:
+    if len(channel_ids) - len(channels_to_remove) > _MAX_CHANNELS_IN_HISTORY:
         # Sort by last activity, oldest first
         sorted_channels = sorted(
-            conversation_history.keys(),
+            channel_ids,
             key=lambda cid: _channel_last_activity.get(cid, 0)
         )
         # Remove oldest until under limit
-        excess = len(conversation_history) - _MAX_CHANNELS_IN_HISTORY
+        excess = len(channel_ids) - _MAX_CHANNELS_IN_HISTORY
         channels_to_remove.extend(sorted_channels[:excess])
 
     # Remove duplicates and clean up
@@ -854,25 +1018,38 @@ def update_history_on_edit(channel_id: int, old_content: str, new_content: str, 
                 return
 
 
-def remove_assistant_from_history(channel_id: int, count: int = 1):
-    """Remove last N assistant messages from history."""
-    if channel_id not in conversation_history:
-        return
-    
-    history = conversation_history[channel_id]
-    removed = 0
-    
-    for i in range(len(history) - 1, -1, -1):
-        if removed >= count:
-            break
-        if history[i]["role"] == "assistant":
-            del history[i]
-            removed += 1
+def remove_deleted_bot_message(channel_id, message_id: int, *, author_name: str | None, created_at) -> bool:
+    """Remove the history entry of a bot message that was deleted on Discord.
 
-    if removed:
+    An entry with a message ID matches only that ID. An assistant entry
+    without one matches when it is under this bot's character name and was
+    recorded in the second the deleted message was created. Nothing else is
+    removed, because the bot also deletes its own notices, which were never
+    recorded.
+    """
+    if remove_message_from_history(channel_id, message_id):
+        return True
+
+    created = _parse_history_timestamp(created_at)
+    if not author_name or created is None or channel_id not in conversation_history:
+        return False
+    created = created.replace(microsecond=0)
+
+    history = conversation_history[channel_id]
+    for i in range(len(history) - 1, -1, -1):
+        entry = history[i]
+        if entry.get("role") != "assistant" or entry.get("message_id"):
+            continue
+        if str(entry.get("author") or "").lower() != author_name.lower():
+            continue
+        if _parse_history_timestamp(entry.get("timestamp")) != created:
+            continue
+        del history[i]
         _rebuild_recent_message_hashes(channel_id)
         _mark_history_dirty(channel_id)
         save_history()
+        return True
+    return False
 
 
 def remove_message_from_history(channel_id: int, message_id: int) -> bool:

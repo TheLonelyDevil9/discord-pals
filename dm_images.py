@@ -255,6 +255,7 @@ async def generate_and_send_dm_image_followup(
         "assistant",
         caption or "[Sent a generated image]",
         author_name=character_name,
+        message_id=getattr(sent_msg, "id", None),
         timestamp=getattr(sent_msg, "created_at", None),
     )
     state["followups_sent"] = followups_sent + 1
@@ -321,6 +322,7 @@ async def generate_and_send_requested_dm_image(
         "assistant",
         caption or "[Sent a generated image]",
         author_name=character_name,
+        message_id=getattr(sent_msg, "id", None),
         timestamp=getattr(sent_msg, "created_at", None),
     )
     log.info(f"Sent requested DM image to user {user_id}", bot_name)
