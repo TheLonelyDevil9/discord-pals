@@ -298,6 +298,36 @@ class DashboardUpdateLogTests(DashboardUpdateCase):
         self.assertEqual(run.call_count, 1)
 
 
+class DashboardRestartRefusalTests(DashboardUpdateCase):
+    def post_restart(self):
+        with patch.object(dashboard_module, "__file__", str(self.install / "dashboard.py")), \
+                patch.object(update_module, "check_imports", return_value=None) as check, \
+                patch("dashboard_restart.start_restart") as start:
+            response = self.client.post("/api/restart", headers=self.csrf_headers())
+        return response, check, start
+
+    def test_a_restart_is_refused_while_the_checkout_has_unresolved_conflicts(self):
+        self.leave_stash_pop_conflict()
+
+        response, check, thread = self.post_restart()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Restart refused", response.get_json()["message"])
+        self.assertIn("prompts/other_prompts.md", response.get_json()["message"])
+        thread.assert_not_called()
+        check.assert_not_called()
+        self.assertFalse(dashboard_module._update_lock.locked())
+
+    def test_a_restart_is_refused_while_a_merge_is_in_progress(self):
+        self.leave_merge_in_progress()
+
+        response, _check, thread = self.post_restart()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("git merge --abort", response.get_json()["message"])
+        thread.assert_not_called()
+
+
 class DashboardBranchModeTests(DashboardUpdateCase):
     """An install that follows staging while main carries a newer release tag."""
 

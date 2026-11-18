@@ -245,9 +245,37 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
         self.client = self.make_client()
         with self.client.session_transaction() as session:
             session["logged_in"] = True
+        # An accepted restart keeps the update lock until the process ends.
+        self.addCleanup(lambda: dashboard_module._update_lock.locked() and dashboard_module._update_lock.release())
 
     def tearDown(self):
         self.tearDownMemorySandbox()
+
+    def test_a_restart_is_refused_while_an_update_runs(self):
+        self.assertTrue(dashboard_module._update_lock.acquire(blocking=False))
+
+        response, check, thread, _saves = self.post_restart()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("an update is running", response.get_json()["message"])
+        thread.assert_not_called()
+        check.assert_not_called()
+
+    def test_no_update_starts_once_a_restart_is_accepted(self):
+        self.assertEqual(self.post_restart()[0].status_code, 200)
+
+        response = self.client.post("/api/update", json={"update_branch": "main"}, headers=self.csrf_headers())
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["message"], "An update is already running")
+
+    def test_an_install_without_git_can_still_restart(self):
+        with patch.object(update_module, "preflight", side_effect=RuntimeError("not a git repository")):
+            response, check, thread, _saves = self.post_restart()
+
+        self.assertEqual(response.status_code, 200)
+        check.assert_called_once()
+        thread.assert_called_once()
 
     def post_restart(self, import_error=None):
         with patch.object(update_module, "check_imports", return_value=import_error) as check, \
@@ -255,10 +283,10 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
                 patch.object(self.manager, "save_all") as save_memories, \
                 patch("reminders.reminder_manager.save") as save_reminders, \
                 patch("stats.stats_manager.flush") as flush_stats, \
-                patch.object(dashboard_module.threading, "Thread") as thread:
+                patch.object(dashboard_restart, "start_restart") as start:
             response = self.client.post("/api/restart", headers=self.csrf_headers())
         saves = (save_history, save_memories, save_reminders, flush_stats)
-        return response, check, thread, saves
+        return response, check, start, saves
 
     def test_the_restart_saves_every_store_even_when_one_fails(self):
         with patch("discord_utils.save_history", side_effect=OSError("disk full")) as save_history, \
@@ -275,20 +303,27 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("ImportError: broken on purpose", response.get_json()["message"])
+        self.assertIn("failed its import check", response.get_json()["message"])
+        self.assertFalse(dashboard_module._update_lock.locked())
         thread.assert_not_called()
         self.assertEqual(check.call_args.args[0], Path(dashboard_module.__file__).resolve().parent)
         for save in saves:
             save.assert_not_called()
 
     def test_restart_starts_the_restart_thread_which_saves_after_the_bots_close(self):
-        response, _check, thread, saves = self.post_restart()
+        response, _check, start, saves = self.post_restart()
 
         self.assertEqual(response.status_code, 200)
         for save in saves:
             save.assert_not_called()
-        thread.assert_called_once()
-        self.assertIs(thread.call_args.kwargs["target"], dashboard_restart.restart_process)
-        self.assertEqual(thread.call_args.kwargs["args"], (dashboard_module.bot_instances,))
+        start.assert_called_once_with(dashboard_module.bot_instances)
+
+    def test_the_restart_thread_runs_the_restart_with_the_bots(self):
+        bots = [object()]
+        with patch.object(dashboard_restart, "restart_process") as restart:
+            dashboard_restart.start_restart(bots).join(5)
+
+        restart.assert_called_once_with(bots)
 
 
 if __name__ == "__main__":

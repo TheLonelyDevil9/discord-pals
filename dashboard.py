@@ -4370,15 +4370,20 @@ def api_restart():
     """Restart the bot application without terminal restart."""
     log.warn("Application restart requested via dashboard")
 
-    import_error = update_engine.check_imports(Path(__file__).resolve().parent, sys.executable)
-    if import_error:
-        message = f"Restart cancelled: the code on disk does not start ({import_error}). The bot keeps running."
-        log.error(message)
-        return jsonify({'status': 'error', 'message': message}), 409
-
-    # Start restart in background thread
-    restart_thread = threading.Thread(target=dashboard_restart.restart_process, args=(bot_instances,), daemon=True)
-    restart_thread.start()
+    if not _update_lock.acquire(blocking=False):
+        return jsonify({'status': 'error', 'message': 'Restart refused: an update is running. Restart when it has finished.'}), 409
+    started = False
+    try:
+        refusal = dashboard_restart.refusal(Path(__file__).resolve().parent)
+        if refusal:
+            log.error(refusal)
+            return jsonify({'status': 'error', 'message': refusal}), 409
+        # The update lock stays held, so no update can start while the process restarts.
+        dashboard_restart.start_restart(bot_instances)
+        started = True
+    finally:
+        if not started:
+            _update_lock.release()
 
     return jsonify({
         'status': 'ok',

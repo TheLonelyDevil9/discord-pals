@@ -4,10 +4,12 @@ import asyncio
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import logger as log
+import update
 
 # Exit status of a dashboard restart under systemd. docs/operations.md lists the unit
 # settings that start the service again after it.
@@ -81,6 +83,24 @@ def exits_for_systemd() -> bool:
     return restarts_after_exit(dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line))
 
 
+def refusal(code_dir: Path) -> str | None:
+    """Return why the code in code_dir must not be started now, or None.
+
+    The update pre-flight refuses a checkout with unresolved conflicts or an unfinished Git
+    operation, and the import check refuses code that does not import.
+    """
+    try:
+        update.preflight(code_dir)
+    except update.UpdateRefused as e:
+        return f"Restart refused: {e}"
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        pass  # Not a Git checkout, so there is no Git state to refuse.
+    import_error = update.check_imports(code_dir, sys.executable)
+    if import_error:
+        return f"Restart cancelled: the code on disk failed its import check ({import_error}). The bot keeps running."
+    return None
+
+
 def replacement_command() -> list[str]:
     return [sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]]
 
@@ -125,6 +145,12 @@ def flush_output() -> None:
     # os._exit and os.execv skip the interpreter's shutdown, so write out buffered output first.
     sys.stdout.flush()
     sys.stderr.flush()
+
+
+def start_restart(bots) -> threading.Thread:
+    thread = threading.Thread(target=restart_process, args=(bots,), daemon=True, name="dashboard-restart")
+    thread.start()
+    return thread
 
 
 def restart_process(bots) -> None:
