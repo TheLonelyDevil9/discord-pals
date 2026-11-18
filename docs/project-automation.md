@@ -27,7 +27,7 @@ Human and bot authors are included and attributed. Messages retain source text, 
 
 The helper creates or recovers the PR post before delivering its activity. A closed or merged PR's post returns to its archived/locked state after delivery. Source identities and delivery receipts prevent webhook redelivery and reconciliation from producing duplicate copies.
 
-Activity starts at the mapping's first activation. Earlier discussion is not imported as a backlog, though later changes to it can appear. The activation time and reconciliation checkpoints survive restarts and pauses. Changing the repository, server, helper, or PR forum creates a separate mapping; returning to an earlier mapping retains its saved baseline.
+Activity starts at the mapping's first activation. Earlier discussion is not imported as a backlog, though later changes to it can appear. The activation time and reconciliation checkpoints survive restarts and pauses. Changing the repository, server, helper, or PR forum creates a separate mapping; returning to an earlier mapping retains its saved baseline. To keep the posts and activity of a helper whose bot you renamed, see [Renaming the helper bot](#renaming-the-helper-bot).
 
 ## Feedback and personality
 
@@ -148,6 +148,37 @@ On a large database the cleanup can hold the database for a minute or more. Webh
 
 The first reconciliation cycle of a version with change-driven sync has no record yet of what each post showed or when each PR was scanned. It refreshes every open issue and PR, and every one closed within the last 7 days, once; each existing post is written once even when nothing changed. It also scans the activity of every PR in scope once. From the next cycle on, an unchanged repository gets no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item.
 
+### Renaming the helper bot
+
+The helper keys its post records, PR activity receipts, and checkpoints by the name of its bot entry in **Config**. If you rename that entry and choose the new name under **Dedicated helper bot**, the helper starts over: it posts every open issue and PR again, starts PR activity from a new baseline, and stops the open feedback cases, which belong to the old name. Move the records to the new name before you choose it:
+
+1. Pause automation on the Project page.
+2. If the queue holds jobs, choose **Clear history and queue**. The rename refuses while any job carries the old name, finished jobs kept by **Job history** included.
+3. Back up `bot_data/project_automation.sqlite3` as described in [Recovery and operations](#recovery-and-operations).
+4. From the checkout, with the service's Python environment, run a dry run. It changes nothing and prints counts per record kind and a verdict:
+
+   ```bash
+   python tools/project_data.py rename-helper --from "Old name" --to "New name"
+   ```
+
+5. Run it again with `--apply`. It moves every record of the old name in one transaction, checks the result, and rolls everything back if a check fails. A second run reports nothing to do.
+
+   ```bash
+   python tools/project_data.py rename-helper --from "Old name" --to "New name" --apply
+   ```
+
+6. Select the new name under **Dedicated helper bot** and save, with automation still paused.
+7. Restart Discord Pals, so that the buttons of open feedback cases register for the renamed bot.
+8. Resume automation.
+
+The rename moves the post records, PR activity receipts and sources, checkpoints, the activity baseline, notification snapshots, and feedback cases. Records of other helper names stay unchanged, and each record keeps its last-change time, so job history retention treats it as before. Each moved post record and activity receipt stores the footer that its Discord message shows. The helper accepts that footer and writes the new one the next time it updates the message, so nothing is posted again.
+
+`rename-helper` refuses and changes nothing while automation is enabled, when the settings select a different helper than `--from`, when both names are the same, while a job still carries the old name, when a record already exists under the new name, when a record of the old name differs from what the helper would have written, and when the database holds a record kind it does not know.
+
+To undo a rename, pause automation with the new name still selected, clear the queue if it holds jobs, and run the command with the two names swapped, first as a dry run and then with `--apply`. Then rename the bot back in **Config**, select its old name, restart Discord Pals, and resume. Each record keeps the footer that its post shows, so posts the helper updated under the new name stay valid.
+
+Restore the backup only when the command cannot run and the helper has not run under the new name. Stop Discord Pals, move `project_automation.sqlite3` and its `-wal` and `-shm` files aside, copy the backup in their place, and start Discord Pals. With automation still paused, rename the bot back in **Config**, select its old name, restart, and resume. Posts that the helper updated under the new name carry footers that the backup does not know, so their refreshes stop with a delivery marker error.
+
 ## Implementation boundaries
 
 - `project_automation.py`: decisions, durable jobs, recovery, and lifecycle synchronization.
@@ -157,6 +188,7 @@ The first reconciliation cycle of a version with change-driven sync has no recor
 - `project_automation_github.py`: repository-scoped GitHub App access, event parsing, and marker reconciliation.
 - `project_automation_github_activity.py`: PR activity normalization, source reads, and GitHub setup diagnostics.
 - `project_automation_store.py`: SQLite cases, decision audit, mappings, and jobs.
+- `project_automation_rename.py`: the plan that moves a renamed helper bot's records, applied by the store in one transaction.
 - `project_automation_webhook.py`: signed webhook ingress.
 - `project_automation_config.py`, `project_automation_setup.py`, and `project_automation_dashboard.py`: normalized settings, read-only setup checks, and operator UI.
 

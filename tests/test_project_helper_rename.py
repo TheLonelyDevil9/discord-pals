@@ -334,6 +334,20 @@ def test_a_dry_run_writes_nothing_and_a_second_run_finds_nothing_to_do(seeded):
         assert dump(seeded.store) == after
 
 
+def test_renaming_back_restores_every_row_and_keeps_the_stored_footers(seeded):
+    run(seeded.store)
+    assert run(seeded.store, settings(bot_name=NEW), NEW, OLD).verdict == "applied"
+    (before_links, before_cases, _), (after_links, after_cases, _) = seeded.before, rows(seeded.store)
+    assert set(after_links) == set(before_links) and after_cases == before_cases
+    for item, (document, updated_at) in before_links.items():
+        restored = json.loads(after_links[item][0])
+        if item[0] == "mirror" and restored["bot_name"] == OLD:
+            assert restored.pop("marker") == "Project " + item[1]
+        if item[0] == "pr_activity" and restored["bot_name"] == OLD:
+            assert restored.pop("marker_prefix") == marker_prefix(item[1])
+        assert (_json_object(restored, MAX_LINK_BYTES), after_links[item][1]) == (document, updated_at)
+
+
 def plant_job(connection, key, payload, state="pending"):
     connection.execute("INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
                        "VALUES ('event', ?, ?, ?, 1, 1, 1)", (key, json.dumps(payload), state))

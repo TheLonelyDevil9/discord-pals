@@ -6,15 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Keeps the Project helper's job queue bounded, gives operators controls that clear it, and limits reconciliation to what changed.
+Keeps the Project helper's job queue bounded, gives operators controls that clear it, limits reconciliation to what changed, and keeps a renamed helper bot's posts.
 
 ### Added
 
 - **Job history** setting under Project → Helper setup: days to keep finished jobs, from 0 to 365, default 0.
 - **Project data** controls: **Clear history and queue** deletes every job except jobs in progress and the feedback steps open reports still need; **Reset Project data** deletes all jobs, post records, receipts, and feedback cases while automation is paused, after you type the repository name. A held job can be removed with **Discard**, which does not retry its delivery.
 - `tools/project_data.py` with `status`, `clear-history`, `reset --confirm <repository>`, and `compact` for operators without dashboard access.
+- `tools/project_data.py rename-helper --from OLD --to NEW` moves the Project helper's posts, PR activity receipts, checkpoints, and feedback cases to a renamed helper bot, so choosing the new name does not post every open issue and PR again. Without `--apply` it only reports counts. It refuses while automation is enabled or a job carries the old name, and it checks its result before it commits. See [Renaming the helper bot](docs/project-automation.md#renaming-the-helper-bot).
 
 ### Changed
+
+- Issue and PR post records and PR activity receipts store the footer that their Discord message shows. The helper accepts a saved message with that footer or the current one, and its next update writes the current one.
+- When the selected helper bot is missing from Config, the Project page adds that a renamed bot needs `rename-helper` before its new name is selected.
 
 - A retention sweep deletes finished Project jobs at most every 10 minutes, also while paused, and failed jobs after 7 days or the Job history days when longer. A failed report decision or publication stays until it is retried. Release, workflow, and commit post records follow the Job history days with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued, running, and held jobs, issue and PR posts, receipts, and feedback cases are kept. See [Job history and Project data](docs/project-automation.md#job-history-and-project-data).
 - Reconciliation runs one cycle at a time and no longer refreshes issues and PRs that closed more than 7 days ago. Discovery of recently updated PRs is unchanged.
