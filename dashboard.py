@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import timedelta, datetime
 import logger as log
 import env_config
+import dashboard_restart
 import update as update_engine
 from security import (
     safe_path, safe_filename, validate_zip_entry,
@@ -4415,48 +4416,6 @@ def api_update():
 
 # --- Restart API ---
 
-# Exit status of a dashboard restart under systemd. docs/operations.md lists the unit
-# settings that start the service again after it.
-_RESTART_EXIT_CODE = 75
-_PROC_CGROUP = Path("/proc/self/cgroup")
-
-
-def _running_under_systemd() -> bool:
-    """True when systemd started this process as part of a service unit.
-
-    INVOCATION_ID alone is not enough: a shell in a terminal that runs as a systemd user
-    service can inherit it, and exiting there would leave nothing to start the bot again.
-    The processes of a service run in a cgroup whose name ends in ".service".
-    """
-    if not os.environ.get("INVOCATION_ID"):
-        return False
-    try:
-        cgroups = _PROC_CGROUP.read_text(encoding="utf-8")
-    except OSError:
-        return True
-    return any(line.split(":", 2)[-1].strip().endswith(".service") for line in cgroups.splitlines())
-
-
-def _restart_process() -> None:
-    """Close the bots, then exit for systemd to start the service again, or replace this process."""
-    time.sleep(1)  # Give time for response to be sent
-    for bot in bot_instances:
-        try:
-            asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
-        except Exception:
-            pass
-    time.sleep(2)  # Wait for connections to close
-
-    if _running_under_systemd():
-        log.info(f"Exiting with status {_RESTART_EXIT_CODE} so that systemd starts the service again")
-        # os._exit skips the interpreter's shutdown, so write out buffered output first.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(_RESTART_EXIT_CODE)
-    else:
-        os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
-
-
 @app.route('/api/restart', methods=['POST'])
 @requires_csrf
 @requires_auth
@@ -4488,7 +4447,7 @@ def api_restart():
             log.error(f"Failed to save {label} before restart: {e}")
 
     # Start restart in background thread
-    restart_thread = threading.Thread(target=_restart_process, daemon=True)
+    restart_thread = threading.Thread(target=dashboard_restart.restart_process, args=(bot_instances,), daemon=True)
     restart_thread.start()
 
     return jsonify({

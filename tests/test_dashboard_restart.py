@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
+import dashboard_restart
 import update as update_module
 from test_support import MemorySandboxMixin
 
@@ -21,8 +22,8 @@ class SystemdDetectionTests(unittest.TestCase):
             if invocation_id:
                 environ["INVOCATION_ID"] = invocation_id
             with patch.dict(os.environ, environ, clear=True), \
-                    patch.object(dashboard_module, "_PROC_CGROUP", cgroup_file):
-                return dashboard_module._running_under_systemd()
+                    patch.object(dashboard_restart, "PROC_CGROUP", cgroup_file):
+                return dashboard_restart.running_under_systemd()
 
     def test_without_invocation_id_the_process_is_not_a_service(self):
         self.assertFalse(self.detect(None, "0::/system.slice/discord-pals.service\n"))
@@ -42,20 +43,19 @@ class SystemdDetectionTests(unittest.TestCase):
 
 class RestartProcessTests(unittest.TestCase):
     def restart(self, under_systemd):
-        with patch.object(dashboard_module, "_running_under_systemd", return_value=under_systemd), \
-                patch.object(dashboard_module.time, "sleep"), \
-                patch.object(dashboard_module, "bot_instances", []), \
-                patch.object(dashboard_module.os, "_exit") as exit_process, \
-                patch.object(dashboard_module.os, "execv") as execv, \
-                patch.object(dashboard_module.subprocess, "run") as run:
-            dashboard_module._restart_process()
+        with patch.object(dashboard_restart, "running_under_systemd", return_value=under_systemd), \
+                patch.object(dashboard_restart.time, "sleep"), \
+                patch.object(dashboard_restart.os, "_exit") as exit_process, \
+                patch.object(dashboard_restart.os, "execv") as execv, \
+                patch("subprocess.run") as run:
+            dashboard_restart.restart_process([])
         return exit_process, execv, run
 
     def test_under_systemd_the_process_exits_for_the_unit_to_restart_it(self):
         exit_process, execv, run = self.restart(True)
 
-        exit_process.assert_called_once_with(dashboard_module._RESTART_EXIT_CODE)
-        self.assertEqual(dashboard_module._RESTART_EXIT_CODE, 75)
+        exit_process.assert_called_once_with(dashboard_restart.RESTART_EXIT_CODE)
+        self.assertEqual(dashboard_restart.RESTART_EXIT_CODE, 75)
         execv.assert_not_called()
         run.assert_not_called()
 
@@ -106,7 +106,7 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
         for save in saves:
             save.assert_called_once()
         thread.assert_called_once()
-        self.assertIs(thread.call_args.kwargs["target"], dashboard_module._restart_process)
+        self.assertIs(thread.call_args.kwargs["target"], dashboard_restart.restart_process)
 
 
 if __name__ == "__main__":
