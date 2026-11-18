@@ -80,7 +80,7 @@ The initial repository default is `SillyBunnyTeam/SillyBunny`. One configured se
 
 The Project page shows the last accepted webhook, completed sync, and delivered PR activity for the current mapping, plus pending, failed, and held job counts. Status refreshes every 30 seconds while the page is visible. A quiet repository can have old or missing timestamps without an error. **Refresh activity** also reloads feedback cases and delivery rows.
 
-**Project → Delivery activity** shows job IDs, failure/recovery states, and recorded GitHub/Discord destinations. When a delivery receipt exists, PR activity links open its exact Discord message. Normal reads retry up to three attempts. An uncertain public write is held: a timeout or process crash does not cause another issue or activity message to be created automatically.
+**Project → Delivery activity** shows job IDs, failure/recovery states, and recorded GitHub/Discord destinations. When a delivery receipt exists, PR activity links open its exact Discord message. Normal reads retry up to three attempts. A request that GitHub refuses for its rate limit does not count as an attempt; see [GitHub rate limits](#github-rate-limits). An uncertain public write is held: a timeout or process crash does not cause another issue or activity message to be created automatically.
 
 Use **Recent** for delivery history, **Needs attention** for undismissed failures and held work, and **Dismissed** for failures you have already reviewed. **Load older** retrieves another page without losing the loaded rows. **Dismiss** hides one failed job; **Dismiss visible failures** handles up to 100 loaded failures at a time and states the exact count. Dismissal preserves the error, attempts, payload, and audit history. It does not retry, cancel, delete, or mark a delivery successful.
 
@@ -96,7 +96,7 @@ These commands require a configured maintainer or operator and the configured pr
 
 GitHub issues, PRs, and accessible PR activity reconcile on startup and then at most every 15 minutes. A new cycle starts only when no job of the previous cycle is still queued, running, or sending; failed and held jobs do not delay it.
 
-Each cycle lists the open issues and PRs and checks every mirrored issue or PR that closed within the last 7 days. It refreshes a post when the item is new to its forum, or when its last-update time, its state, or anything the post shows differs from the last successful write of that post, whether a webhook, a cycle, a retry, or a PR activity delivery made it. A failed or held write does not count, so the next cycle tries the refresh again. A refresh that would write the same post makes no Discord change unless the post's name, archived state, or lock differs from what the helper wrote.
+Each cycle lists the open issues and PRs and checks every issue or PR that closed within the last 7 days and has a post in the current Issue tracking or Pull requests forum. It refreshes a post when the item is new to its forum, or when its last-update time, its state, or anything the post shows differs from the last successful write of that post, whether a webhook, a cycle, a retry, or a PR activity delivery made it. A failed or held write does not count, so the next cycle tries the refresh again. A refresh that would write the same post makes no Discord change unless the post's name, archived state, or lock differs from what the helper wrote.
 
 Each post in scope also gets a daily check, about once a day once the queue has settled: every cycle refreshes the in-scope items whose post was last written or checked a day or more ago, oldest first, up to one item for every 96 in scope, rounded up. A daily check reads the item from GitHub and the post from Discord, and writes only when the post drifted, for example when Discord archived an open item's post or someone renamed, reopened, unlocked, or deleted it.
 
@@ -110,6 +110,12 @@ Unchanged issue status does not enqueue another reporter notification. Status ch
 
 The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. They leave out a database larger than 256 MB and say so in the update log; see [Updates and recovery](operations.md#updates-and-recovery). Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
 
+### GitHub rate limits
+
+Reconciliation leaves a fifth of GitHub's rate limit to webhook deliveries and report publications. While at most a fifth of the App installation's quota is left, sync cycles, post refreshes, and PR activity scans wait until the quota resets, and webhook deliveries, report publications, and the other feedback steps keep running. A request that GitHub refuses for a rate limit waits until the reset, or for the time that GitHub names, and does not count as one of the job's three attempts: a cycle is not failed for it, and a report publication returns to the queue instead of being held. When GitHub asks for a pause, every GitHub call waits for it. The Health card shows what is left of the quota and whether reconciliation waits. The helper keeps this state in memory; after a restart, the next GitHub response reports it again.
+
+The worker takes the next job as soon as one finishes and waits only while no job is due. Its database calls, and those of the helper's Discord commands, buttons, and messages, run on one background thread, so a locked database or a slow disk does not stall the bots.
+
 ### Health and alerts
 
 The **Health** card on the Project page lists the helper's checks. Each shows its level as a text label and an icon shape as well as a color: OK, Warning, or Alert. A check that is not OK says what to do in one sentence. The card refreshes with the page status every 30 seconds and shows counts and times only, never job contents or user names.
@@ -121,12 +127,13 @@ The **Health** card on the Project page lists the helper's checks. Each shows it
 | Helper bot | | Not online |
 | Queue lag: how long the oldest due job has waited | Over 15 minutes | Over 60 minutes |
 | Time since a sync completed | Over 1 hour | Over 3 hours |
+| GitHub rate limit: what is left of the quota, when it resets, and whether reconciliation waits | Reconciliation waits for the reset, or GitHub asked for a pause | Nothing is left |
 | Pending jobs: queued, running, and sending | Over 2,000 | Over 10,000 |
 | Held jobs | Any | |
 | Failed jobs that are not dismissed | Any | |
 | Database size | Over 512 MB | |
 
-The first five checks measure a running helper. While automation is paused, globally paused, or waiting for setup, the card shows that state in their place. Queue lag and the time since a sync completed count from when automation last started or resumed if that is later, so a restart or the end of a pause does not report the time it was stopped.
+The first six checks measure a running helper. While automation is paused, globally paused, or waiting for setup, the card shows that state in their place. Queue lag and the time since a sync completed count from when automation last started or resumed if that is later, so a restart or the end of a pause does not report the time it was stopped.
 
 The worker records a heartbeat on every pass of its loop. A watchdog checks it every minute and starts the worker again when its task has stopped. The Worker check then shows how many times that happened since the process started and the exception type of the last stop. An old heartbeat on a running worker is only reported: its current job can hold a lease or an unconfirmed remote write, so the watchdog never stops it.
 
@@ -219,7 +226,7 @@ Restore the backup only when the command cannot run and the helper has not run u
 - `project_automation_activity.py` and `project_automation_discord_activity.py`: PR activity checkpoints, delivery orchestration, formatting, and receipts.
 - `project_automation_github.py`: repository-scoped GitHub App access, event parsing, and marker reconciliation.
 - `project_automation_github_activity.py`: PR activity normalization, source reads, and GitHub setup diagnostics.
-- `project_automation_store.py`: SQLite cases, decision audit, mappings, and jobs.
+- `project_automation_store.py`: SQLite cases, decision audit, mappings, and jobs, and the store thread that runs the store calls made on the event loop.
 - `project_automation_health.py`: health checks, their thresholds, and when an operator alert is due.
 - `project_automation_rename.py`: the plan that moves a renamed helper bot's records, applied by the store in one transaction.
 - `project_automation_webhook.py`: signed webhook ingress.

@@ -18,6 +18,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - A watchdog starts the Project worker again within a minute when its task stops, and the Worker check shows the restarts and the exception type of the last stop.
 - Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
+- A **GitHub rate limit** check on the Project Health card shows what is left of GitHub's quota, its size, when it resets, and whether reconciliation waits for the reset. It is Warning while reconciliation waits or GitHub asked for a pause, and Alert when nothing is left. See [GitHub rate limits](docs/project-automation.md#github-rate-limits).
 
 ### Changed
 
@@ -32,9 +33,15 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
+- The Project worker no longer waits one second after every job. It takes the next job at once and waits only while no job is due, so a long queue drains several times faster.
+- Near GitHub's rate limit, reconciliation waits for the reset and leaves a fifth of the quota to webhook deliveries and report publications, which keep running. A request that GitHub refuses for a rate limit waits for the reset, or for the pause GitHub names, without counting as one of the job's three attempts. See [GitHub rate limits](docs/project-automation.md#github-rate-limits).
+- Reconciliation reads only the post records of the current Issue tracking and Pull requests forums. An issue or PR that closed within the last 7 days and has a post only in an earlier forum no longer gets a post in the current one.
 
 ### Fixed
 
+- The Project helper's database work no longer runs on the bots' event loop. A locked database or a slow disk could freeze every bot for up to 10 seconds per call, and the call then failed.
+- A GitHub rate limit no longer fails reconciliation jobs, and a report publication refused for one is published after the reset instead of being held for recovery.
+- A setup check held by GitHub's rate limit reports Not verified instead of a problem with the installation or repository access.
 - Loading the Project page no longer locks the database while it counts every stored job, which could stall the worker and fail webhook deliveries on a large queue.
 - Overlapping reconciliation cycles no longer queue a recheck of every stored PR comment, and a new cycle no longer starts while the previous one is unfinished.
 - A maintainer question is not relayed to the reporter twice when its finished notice has been deleted.
