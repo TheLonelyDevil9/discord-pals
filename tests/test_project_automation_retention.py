@@ -172,7 +172,7 @@ def add_finished_rows(store, count, *, body_bytes=60):
         connection.executemany(
             "INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
             "VALUES ('event', ?, ?, 'done', ?, ?, ?)",
-            ((f"github:bulk:{index}", json.dumps({"body": body}), NOW, NOW, NOW) for index in range(count)))
+            ((f"pr-event:bulk:{index}", json.dumps({"body": body}), NOW, NOW, NOW) for index in range(count)))
 
 
 def add_kept_rows(store):
@@ -346,6 +346,24 @@ def test_first_start_cleanup_keeps_only_live_held_and_recent_work_and_runs_once(
         connection.execute("PRAGMA user_version = 0")
     assert store.clean_up_old_queue(0) == {"stale": 0, "expired": 0}
     assert snapshot_rows(store, sorted(kept)) == before
+
+
+@pytest.mark.parametrize("delete", ["cleanup", "clear"])
+def test_deleting_rows_from_before_the_upgrade_keeps_their_duplicate_guards(store, delete):
+    recent = add_job(store, "github:before-upgrade", age_days=1)
+    expired = add_job(store, "github:long-ago", age_days=5)
+    question = add_job(store, "question:case-1:comment:9", kind="notify", age_days=30)
+    if delete == "cleanup":
+        store.clean_up_old_queue(0)
+    else:
+        store.clear_history()
+    assert not job_ids(store) & {recent, expired, question}
+    assert store.enqueue_delivery("before-upgrade", "event", {}, "github:before-upgrade") is None
+    assert store.enqueue_delivery("long-ago", "event", {}, "github:long-ago") is not None
+    assert link_keys(store, "question_notice") == {"case-1:comment:9"}
+    while store.prune_links(0):
+        pass
+    assert len(link_keys(store, "github_delivery")) == 2
 
 
 def test_first_start_cleanup_of_a_large_backlog_uses_the_bulk_path(store, monkeypatch):

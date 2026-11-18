@@ -790,6 +790,26 @@ class AutomationStore:
             return self._delete_doomed(connection, limit)
 
     @staticmethod
+    def _keep_duplicate_guards(connection, now):
+        """Write delivery markers and question notices for job rows that are about to be deleted.
+
+        Rows written before these links existed are their own duplicate guard, so deleting
+        them without the links would let a redelivery or a rerun act twice.
+        """
+        rows = connection.execute(
+            "SELECT key, created_at FROM jobs WHERE key >= 'github:' AND key < 'github;' AND created_at >= ?",
+            (now - DELIVERY_MARKER_DAYS * DAY_SECONDS,),
+        ).fetchall()
+        connection.executemany(
+            "INSERT OR IGNORE INTO links(kind, key, document, updated_at) VALUES ('github_delivery', ?, '{}', ?)",
+            [(hashlib.sha256(row["key"][len("github:"):].encode("utf-8")).hexdigest(), row["created_at"])
+             for row in rows],
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO links(kind, key, document, updated_at) SELECT 'question_notice', "
+            "substr(key, 10), '{}', created_at FROM jobs WHERE key >= 'question:' AND key < 'question;'")
+
+    @staticmethod
     def _delete_orphaned_job_links(connection):
         connection.execute(
             "DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared', 'pr_discovery_cycle') "
@@ -805,6 +825,7 @@ class AutomationStore:
         """
         with self._connection(write=True) as connection:
             before = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            self._keep_duplicate_guards(connection, time.time())
             self._replace_jobs(connection, "SELECT id FROM jobs WHERE state IN ('running', 'inflight')")
             self._delete_orphaned_job_links(connection)
             return before - connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
@@ -844,6 +865,7 @@ class AutomationStore:
         with self._connection(write=True) as connection:
             if connection.execute("PRAGMA user_version").fetchone()[0] >= QUEUE_CLEANUP_VERSION:
                 return None
+            self._keep_duplicate_guards(connection, time.time())
             connection.execute("CREATE TEMP TABLE IF NOT EXISTS doomed(id INTEGER PRIMARY KEY)")
             stale = connection.execute(
                 "INSERT INTO temp.doomed SELECT id FROM jobs WHERE state = 'pending' AND (kind IN "
