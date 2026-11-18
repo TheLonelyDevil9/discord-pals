@@ -40,9 +40,9 @@ python update.py
 
 If `update.py` is missing in an old install, download the latest `update.py` from the repository into the Discord Pals folder and run it with Python.
 
-Before Git mutations, the updater backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: they are already size-capped by their own rotation, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
+When an update moves the checkout to another commit, the updater first backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. An update that leaves the checkout at its commit takes no snapshot, so repeated **Update** clicks keep the last real one. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: their own rotation already limits them by size and age, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
 
-Both built-in update paths snapshot `bot_data/project_automation.sqlite3` through SQLite's backup API, including committed WAL data. Keep this database with `bot_data/runtime_config.json`: it holds feedback cases, approvals, delivery receipts, and reconciliation checkpoints. For other backup tools, use SQLite's backup API or stop the service before copying the data directory. Keep an off-host copy for host-loss recovery.
+Both built-in update paths snapshot `bot_data/project_automation.sqlite3` through SQLite's backup API in one step, including committed WAL data, so writes from the running helper cannot restart the copy. A database larger than 256 MB is left out of the snapshot, and the update log records a warning; back it up separately, for example with the command in [Renaming the helper bot](project-automation.md#renaming-the-helper-bot). Keep this database with `bot_data/runtime_config.json`: it holds feedback cases, approvals, delivery receipts, and reconciliation checkpoints. For other backup tools, use SQLite's backup API or stop the service before copying the data directory. Keep an off-host copy for host-loss recovery.
 
 The dashboard's configuration ZIP export contains only `providers.json`, `bots.json`, and `autonomous.json`. It is not a full-state backup and does not include Project helper configuration or its database. Back up service-managed secrets and GitHub App private-key files separately; files outside the checkout are not captured by update snapshots.
 
@@ -52,7 +52,7 @@ For a release, commit `version.py` and the matching dated `CHANGELOG.md` entry t
 
 `bump_version.py --tag` changes the version and changelog, commits them, pushes `HEAD` to `origin/main`, and creates and pushes the tag. `--commit` also pushes to `main`; it is not a local-only commit option. For review before publication, use the default `--no-tag` mode, replace the generic generated changelog with release-specific categorized notes, and commit and publish manually after checks pass. Running the helper again would perform another bump. It does not create a GitHub Release; do not rerun it to check an existing release.
 
-After deployment, sign in and check `/api/version`: `running_version` and `file_version` should match the intended release. For the latest release, `github_version` and `latest_version` should match too, with `update_available` and `restart_required` false. `/healthz` proves liveness only. Check `/api/status` for connected bots and **Project → Delivery activity** for failed or held work; an online helper alone does not prove synchronization is completing.
+After deployment, sign in and check `/api/version`: `running_version` and `file_version` should match the intended release. For the latest release, `github_version` and `latest_version` should match too, with `update_available` and `restart_required` false. `/healthz` proves liveness only. Check `/api/status` for connected bots, and the **Health** card and **Delivery activity** on the Project page for a stopped worker, a growing queue, and failed or held work; an online helper alone does not prove synchronization is completing.
 
 For v2.9.0, follow the [upgrade notes](../CHANGELOG.md#upgrade-notes), install the updated requirements, and restart the process. Failure dismissal uses metadata in the existing database; no manual migration is required. Older code may show dismissed failures again after rollback. For Project helper installations, run **Check setup** after updating GitHub App subscriptions and allow the three review events through any filtering proxy. Verify public ingress separately; see [Project helper deployment](project-automation-oci.md#public-webhook-endpoint).
 
@@ -246,6 +246,12 @@ discord-pals/
 |-- images/                  # Dashboard/readme images
 `-- bot_data/                # Runtime state
 ```
+
+## Log Files
+
+Local logs are JSON lines under `bot_data/logs/`: the active `discord-pals.log` and its rotations `discord-pals.log.1`, `discord-pals.log.2`, and so on, newest first. The active file rotates when it reaches **Log File Size**. While **Keep Log Files** (`log_retention_days`, default 14) is above 0, it also rotates on its first write of each UTC day, and rotated files whose oldest line is older than that many days are deleted at start and then about once a day. No line then stays on disk more than one day longer than the setting. Only files with these names are deleted, and the active file is rotated first instead of deleted.
+
+The size limit still applies: past the five newest rotated files, older ones stay only while they all fit in the space of five full files, so a busy install can lose files sooner than the setting. 0 keeps rotation by size only. Both settings are under **Config → Advanced → Debug Settings**.
 
 ## Metrics
 
