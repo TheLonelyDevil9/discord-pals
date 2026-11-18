@@ -68,6 +68,24 @@ class PreflightTests(GitCheckoutCase):
         self.assertIn("git merge --abort", str(refused.exception))
 
 
+class UntrackedPathTests(GitCheckoutCase):
+    def test_a_case_only_rename_upstream_is_not_an_untracked_file(self):
+        self.publish({"characters/Luna.md": "# Luna\n"})
+        git(self.install, "pull", "-q", "--ff-only")
+        lower = self.install / "characters" / "luna.md"
+        if not lower.exists():
+            # A case-sensitive file system: the hard link makes luna.md the tracked file, as a
+            # case-insensitive file system does.
+            os.link(self.install / "characters" / "Luna.md", lower)
+        head = self.head()
+        git(self.seed, "mv", "characters/Luna.md", "characters/luna.md")
+        git(self.seed, "commit", "-q", "-m", "lower-case the file name")
+        git(self.seed, "push", "-q", "origin", "HEAD:main")
+        git(self.install, "fetch", "-q")
+
+        update_module.refuse_overwriting_untracked(self.install, head, git(self.install, "rev-parse", "origin/main").stdout.strip())
+
+
 class DashboardUpdateCase(MemorySandboxMixin, GitCheckoutCase):
     """Drive POST /api/update against the install clone."""
 

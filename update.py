@@ -336,6 +336,9 @@ def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
     added = run(["git", "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", head, target],
                 repo, timeout=60, check=True).stdout
     indexed = set(run(["git", "ls-files", "-z"], repo, timeout=60, check=True).stdout.split("\0"))
+    # On a case-insensitive file system a path that differs from a tracked path only in case,
+    # such as the target of an upstream rename from Luna.md to luna.md, is the tracked file.
+    folded = {path.casefold(): path for path in indexed if path}
     in_the_way = set()
     for path in filter(None, added.split("\0")):
         parts = path.split("/")
@@ -343,7 +346,9 @@ def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
             candidate = "/".join(parts[:depth])
             local = repo / candidate
             is_leaf = depth == len(parts)
-            if candidate not in indexed and os.path.lexists(local) and (is_leaf or not local.is_dir()):
+            tracked = folded.get(candidate.casefold())
+            if (candidate not in indexed and os.path.lexists(local) and (is_leaf or not local.is_dir())
+                    and not (tracked and same_file(local, repo / tracked))):
                 in_the_way.add(candidate)
                 break
     if not in_the_way:
@@ -355,6 +360,13 @@ def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
         detail = (f"{', '.join(paths)} exist in the checkout but are not tracked by Git, and the update would "
                   "overwrite them. Move or rename them")
     raise UpdateRefused(f"{detail}, then try again.")
+
+
+def same_file(first: Path, second: Path) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
 
 
 def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120, own_lock: bool = False) -> None:
