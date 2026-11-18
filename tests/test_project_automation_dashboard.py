@@ -213,6 +213,11 @@ def test_a_missing_helper_bot_tells_the_operator_to_run_rename_helper_before_cho
                     next(error for error in enable.get_json()["errors"] if "helper bot" in error)):
         assert "python tools/project_data.py rename-helper --from OLD --to NEW" in message
         assert "posts every open issue and PR again" in message
+        # The refused save left automation paused, so pausing is not a step here.
+        assert "while automation stays paused" in message and "pause automation" not in message
+    saved["config"]["enabled"] = True
+    detail = client.get("/api/project-automation/discord-options").get_json()["detail"]
+    assert "pause automation, then run python tools/project_data.py rename-helper" in detail
     saved["config"] = normalize_project_config({})
     assert "rename-helper" not in client.get("/api/project-automation/discord-options").get_json()["detail"]
 
