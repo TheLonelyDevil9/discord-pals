@@ -3519,17 +3519,18 @@ def api_version():
     restart_required = False  # Already updated locally, just need restart
     latest_version = VERSION
 
+    # A selected branch moves between releases, and a newer tag elsewhere is not an update it
+    # can reach, so only the branch's own new commits count there.
+    if update_branch:
+        update_available = bool(commits_behind)
     # Check if GitHub has a newer version than what's on disk
-    if github_version and _compare_versions(github_version, file_version) > 0:
+    elif github_version and _compare_versions(github_version, file_version) > 0:
         update_available = True
         latest_version = github_version
     # Check if disk version is newer than running version (restart needed)
-    elif file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
+    if latest_version == VERSION and file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
         restart_required = True
         latest_version = file_version
-    # A selected branch moves between releases, so its new commits are an update too.
-    if update_branch and commits_behind:
-        update_available = True
     if _RUNNING_COMMIT and disk_commit and disk_commit != _RUNNING_COMMIT:
         restart_required = True
 
@@ -4225,7 +4226,9 @@ def api_update():
         # no local recovery step, so it does not change the message.
         snapshot_warnings = list(git_result.get("snapshot_warnings", []))
 
-        verification_error = _update_verification_failure(expected_version, new_version, git_result)
+        # A branch update is complete at the branch tip; the newest tag may live on another branch.
+        verification_error = None if update_branch else _update_verification_failure(
+            expected_version, new_version, git_result)
         if verification_error:
             if dependency_result.get("warning"):
                 verification_error["warnings"] = list(verification_error["warnings"]) + [dependency_result["warning"]]
@@ -4264,6 +4267,8 @@ def api_update():
             )
         elif version_changed:
             message = f"Restart to apply v{new_version}.{dependency_result['message']}"
+        elif update_branch:
+            message = f"Already up to date with {git_result.get('upstream')}.{dependency_result['message']}"
         elif expected_version and _compare_versions(expected_version, new_version) == 0:
             message = f"Already up to date at v{new_version}.{dependency_result['message']}"
         else:

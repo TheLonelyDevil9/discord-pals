@@ -298,6 +298,53 @@ class DashboardUpdateLogTests(DashboardUpdateCase):
         self.assertEqual(run.call_count, 1)
 
 
+class DashboardBranchModeTests(DashboardUpdateCase):
+    """An install that follows staging while main carries a newer release tag."""
+
+    def setUp(self):
+        super().setUp()
+        git(self.seed, "push", "-q", "origin", "HEAD:staging")
+        git(self.install, "fetch", "-q")
+        git(self.install, "checkout", "-q", "-b", "staging", "--track", "origin/staging")
+        git(self.seed, "checkout", "-q", "-b", "staging", "--track", "origin/staging")
+
+    def publish_staging(self, files):
+        for relative, text in files.items():
+            (self.seed / relative).write_text(text, encoding="utf-8", newline="\n")
+        git(self.seed, "commit", "-q", "-am", "staging change")
+        git(self.seed, "push", "-q", "origin", "HEAD:staging")
+        return git(self.seed, "rev-parse", "HEAD").stdout.strip()
+
+    def tag_release_on_main(self, version):
+        git(self.seed, "checkout", "-q", "main")
+        (self.seed / "version.py").write_text(f'__version__ = "{version}"\nVERSION = __version__\n',
+                                              encoding="utf-8", newline="\n")
+        git(self.seed, "commit", "-q", "-am", f"release {version}")
+        git(self.seed, "tag", "-a", f"v{version}", "-m", f"v{version}")
+        git(self.seed, "push", "-q", "origin", "HEAD:main", f"v{version}")
+        git(self.seed, "checkout", "-q", "staging")
+
+    def post_staging(self):
+        with patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.1"), \
+                patch.object(dashboard_module, "VERSION", "1.0.0"):
+            return self.client.post("/api/update", json={"update_branch": "staging"}, headers=self.csrf_headers())
+
+    def test_a_branch_update_is_complete_at_the_branch_tip_whatever_the_newest_tag(self):
+        tip = self.publish_staging({"main.py": "STARTED = 'staging'\n"})
+        self.tag_release_on_main("1.0.1")
+
+        first = self.post_staging()
+        second = self.post_staging()
+
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertTrue(first.get_json()["updated"])
+        self.assertTrue(first.get_json()["auto_restart"])
+        self.assertEqual(self.head(), tip)
+        self.assertEqual(second.status_code, 200, second.get_json())
+        self.assertFalse(second.get_json()["updated"])
+        self.assertIn("Already up to date", second.get_json()["message"])
+
+
 class ImportCheckTests(unittest.TestCase):
     def check(self, files):
         with tempfile.TemporaryDirectory() as temp:

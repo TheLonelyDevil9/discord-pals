@@ -151,6 +151,30 @@ class VersionDriftTests(VersionApiCase):
         self.assertIn("updateCommitsLabel(data) || ('Update to v' + version)", page)
         self.assertIn("showNewVersionBadge(data.latest_version, false, window.updateCommitsLabel", page)
 
+    def test_a_selected_branch_ignores_a_newer_release_tag(self):
+        runtime_config_module.set("update_branch", "staging")
+        self.refresh_now("2.0.0", tracked=("origin/staging", True))
+
+        with patch.object(dashboard_module, "_commits_behind", return_value=0):
+            current = self.version()
+        with patch.object(dashboard_module, "_commits_behind", return_value=2):
+            behind = self.version()
+
+        self.assertFalse(current["update_available"])
+        self.assertTrue(behind["update_available"])
+        self.assertEqual((current["latest_version"], behind["latest_version"]), ("1.0.0", "1.0.0"))
+
+    def test_a_restart_after_a_branch_update_names_the_running_version(self):
+        runtime_config_module.set("update_branch", "staging")
+        self.refresh_now("2.0.0", tracked=("origin/staging", True))
+
+        with patch.object(dashboard_module, "_git_head", return_value="b" * 40), \
+                patch.object(dashboard_module, "_commits_behind", return_value=0):
+            data = self.version()
+
+        self.assertTrue(data["restart_required"])
+        self.assertEqual(data["latest_version"], data["running_version"])
+
     def test_without_a_selected_branch_new_commits_do_not_count_as_a_release(self):
         self.refresh_now("1.0.0", tracked=("origin/main", True))
 
