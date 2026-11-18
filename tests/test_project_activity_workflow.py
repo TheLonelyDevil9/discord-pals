@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import sqlite3
 import sys
 import time
 from types import SimpleNamespace
@@ -473,6 +474,68 @@ def test_pr_closed_during_outage_is_discovered_and_discussion_recovered(setup):
     checkpoint = setup.store.get_link("pr_discovery_checkpoint", mapping_key(setup.cfg))
     assert checkpoint["completed_through"] == setup.store.get_job(cycle)["created_at"]
     assert setup.service.status()["last_sync_at"] is not None
+
+
+def cycle_with_child(setup, child_state, *, root_state="done"):
+    """Store a sync root and one of its PR page jobs in the given states."""
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, "sync:earlier")
+    child = setup.store.enqueue("pr_sync_page", page_job(setup, root), f"pr-page:{root}:7:comment:1")
+    with sqlite3.connect(setup.store.path) as connection:
+        connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (root_state, root))
+        connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (child_state, child))
+    return root, child
+
+
+def sync_roots(store):
+    return [job["id"] for job in store.list_jobs(limit=500) if job["kind"] == "sync"]
+
+
+@pytest.mark.parametrize("state", ["pending", "running", "inflight"])
+def test_no_new_sync_root_while_a_cycle_has_live_work(setup, state):
+    root, _ = cycle_with_child(setup, state)
+    assert setup.service.queue_sync_cycle() is None
+    assert sync_roots(setup.store) == [root]
+
+
+def test_live_sync_root_blocks_the_next_cycle(setup):
+    root, _ = cycle_with_child(setup, "done", root_state="pending")
+    assert setup.service.queue_sync_cycle() is None
+    assert sync_roots(setup.store) == [root]
+
+
+@pytest.mark.parametrize("state", ["failed", "recovery"])
+def test_failed_or_held_cycle_work_does_not_block_the_next_cycle(setup, state):
+    root, _ = cycle_with_child(setup, state)
+    queued = setup.service.queue_sync_cycle()
+    assert queued is not None and queued != root
+    assert sync_roots(setup.store) == [queued, root]
+
+
+def test_restart_mid_cycle_queues_no_duplicate_root(setup):
+    root, _ = cycle_with_child(setup, "pending")
+    restarted = AutomationService(AutomationStore(setup.store.path), settings=lambda: setup.cfg,
+                                  github_factory=lambda _: setup.client, transport=setup.transport)
+    restarted.bots["Helper"] = SimpleNamespace(name="Helper")
+    assert restarted.queue_sync_cycle() is None
+    assert sync_roots(setup.store) == [root]
+
+
+def test_next_root_waits_for_the_interval_and_an_idle_queue(setup, monkeypatch):
+    import project_automation
+    clock = [50_000.0]
+    monkeypatch.setattr(project_automation, "time", SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0]))
+    first = setup.service.queue_sync_cycle()
+    assert sync_roots(setup.store) == [first]
+    clock[0] += 1000
+    assert setup.service.queue_sync_cycle() is None
+    with sqlite3.connect(setup.store.path) as connection:
+        connection.execute("UPDATE jobs SET state = 'done'")
+    clock[0] -= 101
+    assert setup.service.queue_sync_cycle() is None
+    clock[0] += 102
+    second = setup.service.queue_sync_cycle()
+    assert second is not None and sync_roots(setup.store) == [second, first]
 
 
 def test_discovery_window_survives_restart_and_failed_scan(setup):

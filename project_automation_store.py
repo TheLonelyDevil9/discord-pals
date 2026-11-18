@@ -651,6 +651,14 @@ class AutomationStore:
                 "failed": counts.get("failed", 0) - dismissed, "recovery": counts.get("recovery", 0),
                 "dismissed": dismissed}
 
+    def reconciliation_live(self):
+        """Report whether a sync root or any job of a sync cycle is pending, running, or inflight."""
+        with self._connection() as connection:
+            return connection.execute(
+                "SELECT 1 FROM jobs WHERE state IN ('pending', 'running', 'inflight') "
+                "AND (kind = 'sync' OR json_extract(payload, '$._sync_cycle') IS NOT NULL) LIMIT 1"
+            ).fetchone() is not None
+
     def unfinished_sync_jobs(self, cycle_id):
         """A sync is successful only after its child deliveries complete."""
         with self._connection() as connection:

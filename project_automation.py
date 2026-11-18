@@ -746,17 +746,24 @@ class AutomationService:
                                          "next_step": "The check could not finish. Write or edit your report, or choose Check my report to retry a saved report. Nothing was published."}})
         return True
 
+    def queue_sync_cycle(self):
+        """Return the queued root's ID, or None while the interval runs or a cycle still has live work."""
+        if self._last_sync and time.monotonic() - self._last_sync <= 900:
+            return None
+        if self.store.reconciliation_live():
+            return None
+        self._last_sync = time.monotonic()
+        from project_automation_webhook import webhook_binding
+        cfg = self.settings()
+        activate(self.store, cfg)
+        return self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
+                                  key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
+
     async def _run(self):
         while True:
             try:
                 if not self.paused() and self.settings().get("bot_name") in self.bots:
-                    if not self._last_sync or time.monotonic() - self._last_sync > 900:
-                        self._last_sync = time.monotonic()
-                        from project_automation_webhook import webhook_binding
-                        cfg = self.settings()
-                        activate(self.store, cfg)
-                        self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
-                                           key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
+                    self.queue_sync_cycle()
                     await self.run_once()
             except asyncio.CancelledError:
                 raise
