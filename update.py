@@ -88,12 +88,16 @@ def fail(message: str) -> int:
 
 
 def run(args: list[str], cwd: Path, timeout: int = GIT_TIMEOUT, check: bool = False) -> subprocess.CompletedProcess:
+    # Git writes file names in UTF-8 on Windows and as their own bytes elsewhere, but text=True
+    # decodes output with the locale's code page. surrogateescape keeps a name that is not
+    # UTF-8 as the same bytes for the file system calls that use it.
+    decoding = {"encoding": "utf-8", "errors": "surrogateescape"} if args[0] == "git" else {"text": True}
     result = subprocess.run(
         args,
         cwd=str(cwd),
         capture_output=True,
-        text=True,
         timeout=timeout,
+        **decoding,
     )
     if check and result.returncode != 0:
         details = (result.stderr or result.stdout or str(result.returncode)).strip()

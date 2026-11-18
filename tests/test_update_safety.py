@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -180,6 +181,65 @@ class DashboardUntrackedFileTests(DashboardUpdateCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("extras", response.get_json()["message"])
         self.assertEqual((self.install / "extras").read_bytes(), self.OWN_FILE)
+
+
+@contextmanager
+def decoding_text_output_as_cp1252():
+    """Decode text output that names no encoding with cp1252, like Windows with that ANSI code page."""
+    real_run = subprocess.run
+
+    def run(*args, **kwargs):
+        if kwargs.get("text") and not kwargs.get("encoding"):
+            kwargs["encoding"] = "cp1252"
+        return real_run(*args, **kwargs)
+
+    with patch("subprocess.run", side_effect=run):
+        yield
+
+
+class DashboardNonAsciiPathTests(DashboardUpdateCase):
+    OWN_FILE = "# My own Amélie\n".encode("utf-8")
+
+    def test_an_ignored_file_with_a_non_ascii_name_at_an_added_path_refuses_the_update(self):
+        self.publish({".gitignore": "characters/*.md\n!characters/firefly.md\n"})
+        git(self.install, "pull", "-q", "--ff-only")
+        own = self.install / "characters" / "Amélie.md"
+        own.write_bytes(self.OWN_FILE)
+        (self.seed / "characters" / "Amélie.md").write_text("# Upstream Amélie\n", encoding="utf-8", newline="\n")
+        git(self.seed, "add", "-f", "characters/Amélie.md")
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        with decoding_text_output_as_cp1252():
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 409, response.get_json())
+        self.assertIn("characters/Amélie.md", response.get_json()["message"])
+        self.assertEqual(own.read_bytes(), self.OWN_FILE)
+        self.assertEqual(self.head(), before)
+
+    def test_an_added_file_whose_name_the_code_page_cannot_decode_updates_cleanly(self):
+        upstream = self.publish({"characters/Ágota.md": "# Ágota\n", "main.py": "STARTED = 2\n"})
+
+        with decoding_text_output_as_cp1252():
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertTrue(response.get_json()["updated"])
+        self.assertEqual(self.head(), upstream)
+        self.assertEqual(self.read("characters/Ágota.md"), "# Ágota\n")
+
+
+class NonAsciiCheckoutFolderTests(GitCheckoutCase):
+    def test_the_checkout_folder_is_read_from_git_as_utf_8(self):
+        folder = self.root / "Zoë bot"
+        git(self.root, "clone", "-q", str(self.remote), str(folder))
+
+        with decoding_text_output_as_cp1252():
+            found = dashboard_module._repo_root(str(folder))
+
+        self.assertTrue(Path(found).is_dir(), found)
+        self.assertTrue(os.path.samefile(found, folder))
 
 
 class DashboardLocalChangesTests(DashboardUpdateCase):

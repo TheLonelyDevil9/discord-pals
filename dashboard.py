@@ -3570,15 +3570,7 @@ def _command_output(result) -> str:
 
 
 def _run_command(args: list[str], cwd: str, timeout: int):
-    import subprocess
-
-    return subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    return update_engine.run(args, Path(cwd), timeout=timeout)
 
 
 def _git_index_lock_path(repo_dir: str) -> Path | None:
