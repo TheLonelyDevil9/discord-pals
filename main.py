@@ -22,6 +22,7 @@ logging.getLogger('websockets').setLevel(logging.WARNING)
 logging.getLogger('aiohttp').setLevel(logging.WARNING)
 
 from config import DISCORD_TOKEN, DEFAULT_CHARACTER
+from background_tasks import BackgroundTaskRegistry
 from bot_instance import BotInstance
 from discord_utils import save_history
 from memory import memory_manager
@@ -173,6 +174,8 @@ async def run_bots():
         log.warn(f"Metrics exporter failed to start: {e}")
 
     _install_shutdown_handlers()
+    maintenance = BackgroundTaskRegistry()
+    maintenance.start_once(log.run_log_retention(), name="log-retention")
 
     try:
         await asyncio.gather(*[_start_bot(bot) for bot in instances])
@@ -184,6 +187,7 @@ async def run_bots():
         _persist_runtime_state()
         for bot in instances:
             await bot.close()
+        await maintenance.cancel_all()
 
 
 # --- Entry Point ---
