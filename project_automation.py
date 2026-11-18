@@ -752,16 +752,22 @@ class AutomationService:
             await self.pr_activity.deliver(event, job)
             return
         client = await self.client()
+        converted = False
         if event["kind"] in {"issue", "pull"}:
             # Fetch current state so out-of-order delivery cannot reopen a closed mirror.
             try:
                 item = await client.get_issue(event["number"])
+                # GitHub answers an issue that became a pull request with that pull request.
+                converted = event["kind"] == "issue" and item.get("kind") == "pull"
                 event = {**event, **item, "key": event["key"], "kind": event["kind"]}
             except GitHubError as exc:
                 # GitHub answers a deleted issue with 410, or with 404 when the App cannot read it.
                 if not (exc.status in {404, 410} and event.get("action") == "deleted"):
                     raise
         self._check_event_binding(event)
+        if converted:
+            await self._close_converted_issue(event, job)
+            return
         if event["kind"] == "comment":
             for case in self.store.cases_for_issue(event["repository"], event["number"]):
                 if self._bound(case):
@@ -797,6 +803,42 @@ class AutomationService:
                                 "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
                             "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}",
                         }])
+
+    async def _close_converted_issue(self, event, job):
+        """Mark the post of an issue that became pull request `event` as converted, and queue the PR's own post.
+
+        The issue post is edited, never created. It keeps the title that the item had when the
+        conversion was first recorded and shows no later pull request title, text or state, so a
+        conversion seen again writes nothing to Discord. The stored conversion makes the sync root
+        ask for the pull request in place of the issue, and the queued refresh gives the PR its own
+        post at once, also when it is no longer open. Each bound report linked to the issue gets one
+        notice of the conversion, kept from repeating by its case_status checkpoint, and no status
+        notice after it.
+        """
+        number, url = event["number"], event["html_url"]
+        closed = self._closed_key("issue", number)
+        stored = self.store.get_link("item_closed", closed) or {}
+        title = stored.get("title") or event["title"]
+        self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        await self.transport.mirror({
+            "kind": "issue", "key": event["key"], "number": number, "repository": event["repository"],
+            "title": title, "state": "converted", "closed": True, "html_url": url,
+            "body": f"This issue became [pull request #{number}]({url}). Its updates appear in the pull request's own post.",
+        }, create=False)
+        status, links, jobs = {"state": "converted", "url": url}, [], []
+        for case in self.store.cases_for_issue(event["repository"], number):
+            if self._bound(case) and self.store.get_link("case_status", case["id"]) != status:
+                links.append(("case_status", case["id"], status))
+                jobs.append({"kind": "notify", "payload": {"case_id": case["id"], "event": {
+                    "action": "issue_converted", "facts": {"pull_request_number": number, "github_url": url},
+                    # The next step also says what happened, because it is the whole notice while
+                    # the character's reply is unavailable.
+                    "next_step": f"The linked issue became pull request #{number}. Follow it on GitHub: {url}"}},
+                    "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}"})
+        links.append(("item_closed", closed, {**stored, "converted": True, "title": title}))
+        jobs.append({"kind": "event", "payload": self._refresh("pull", number, event.get("_sync_cycle")),
+                     "key": f"converted:{job['id']}:pull:{number}"})
+        self.store.save_links_with_jobs(links, jobs)
 
     async def process_job(self, job):
         payload = job["payload"]
@@ -841,9 +883,18 @@ class AutomationService:
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
                     seen.add((data["kind"], data["number"]))
-                    item = await self._closed_item_in_scope(client, data["kind"], data["number"])
+                    kind = data["kind"]
+                    if kind == "issue" and (self.store.get_link("item_closed", self._closed_key(kind, data["number"])) or {}).get("converted"):
+                        # The issue's post record keeps its pull request in scope, so that a PR that closed
+                        # before it got a post still gets one when the refresh that the conversion queued
+                        # was cleared or failed.
+                        kind = "pull"
+                        if (kind, data["number"]) in seen:
+                            continue
+                        seen.add((kind, data["number"]))
+                    item = await self._closed_item_in_scope(client, kind, data["number"])
                     if item is not None:
-                        in_scope.append((data["kind"], item))
+                        in_scope.append((kind, item))
             changed, daily = self._refreshes(in_scope)
             for kind, item in changed + daily:
                 self._enqueue_sync_item(item, kind, job["id"])
@@ -869,7 +920,9 @@ class AutomationService:
         time is stored. An unknown close time costs one fetch, which stores it. An item that
         GitHub reports as moved or deleted is stored as gone and costs no further fetch; a 404
         counts only when the next cycle gets one again. Both stay out of scope until the open
-        listing shows the item again. Neither answer drops a stored close time.
+        listing shows the item again. Neither answer drops a stored close time. An issue that
+        became a pull request is returned as that pull request until a refresh of its post
+        stores the conversion; from then on the sync root asks for the pull request instead.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
@@ -906,7 +959,9 @@ class AutomationService:
         so that a post changed on Discord alone is still corrected.
         """
         cfg = self.settings()
-        mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
+        # Only records under the current destinations' keys can match, so the others are not read.
+        mirrored = {link["key"]: link["data"] for kind in ("issue", "pull")
+                    for link in self.store.list_links("item_mirrored", prefix=mirror_key(cfg, kind, f"{kind}:"))}
         changed, unchanged = [], []
         for kind, item in in_scope:
             record = mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}"))
@@ -916,12 +971,26 @@ class AutomationService:
                 unchanged.append((record.get("mirrored_at", 0), (kind, item["number"]), (kind, item)))
         return changed, oldest_due(unchanged, len(in_scope), time.time())
 
-    def _enqueue_sync_item(self, item, kind, sync_id):
+    def _refresh(self, kind, number, cycle=None):
+        """Return the payload of an event job that refreshes the post of issue or PR `number`.
+
+        It holds only the item's identity, because _event reads the item from GitHub again before
+        it writes. A sync root that runs again after the item changed then queues the same job.
+        """
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
-                 "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
-        self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        event = {"kind": kind, "number": number, "key": f"{kind}:{number}", "repository": cfg["repository"],
+                 "_binding": webhook_binding(cfg)}
+        return event if cycle is None else {**event, "_sync_cycle": cycle}
+
+    def _enqueue_sync_item(self, item, kind, sync_id):
+        try:
+            self.store.enqueue("event", self._refresh(kind, item["number"], sync_id),
+                               key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        except Conflict:
+            # A job that holds this key refreshes the same post in the same cycle, whatever else
+            # its payload holds, such as the whole item that earlier versions stored there.
+            pass
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:
