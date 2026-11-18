@@ -104,6 +104,24 @@ class VersionCheckTimingTests(VersionApiCase):
             self.version()
             start.assert_called_once()
 
+    def test_no_check_starts_while_an_update_runs(self):
+        self.assertTrue(dashboard_module._update_lock.acquire(blocking=False))
+        try:
+            with patch.object(dashboard_module, "_start_version_refresh") as start:
+                self.version()
+        finally:
+            dashboard_module._update_lock.release()
+
+        start.assert_not_called()
+
+    def test_a_check_thread_that_cannot_start_lets_a_later_page_try_again(self):
+        dashboard_module._github_version_cache["refreshing"] = True
+        with patch.object(dashboard_module.threading, "Thread") as thread:
+            thread.return_value.start.side_effect = RuntimeError("can't start new thread")
+            dashboard_module._start_version_refresh("")
+
+        self.assertFalse(dashboard_module._github_version_cache["refreshing"])
+
     def test_changing_the_update_branch_starts_a_new_check(self):
         self.refresh_now("1.0.0", tracked=("origin/main", True))
         runtime_config_module.set("update_branch", "staging")
@@ -217,6 +235,26 @@ class TrackedBranchTests(GitCheckoutCase):
 
         self.assertEqual((tracked, fetched), ("origin/main", True))
         self.assertEqual(dashboard_module._commits_behind(str(self.install), tracked), 2)
+
+    def test_the_tracked_branch_fetch_leaves_tags_alone(self):
+        self.publish({"main.py": "STARTED = 2\n"})
+        git(self.seed, "tag", "v9.9.9")
+        git(self.seed, "push", "-q", "origin", "v9.9.9")
+
+        self.assertEqual(dashboard_module._fetch_tracked_branch(str(self.install), "main"), ("origin/main", True))
+
+        self.assertEqual(git(self.install, "tag", "--list").stdout, "")
+
+    def test_the_tracked_branch_is_not_fetched_while_an_update_runs(self):
+        self.publish({"main.py": "STARTED = 2\n"})
+        self.assertTrue(dashboard_module._update_lock.acquire(blocking=False))
+        try:
+            result = dashboard_module._fetch_tracked_branch(str(self.install), "main")
+        finally:
+            dashboard_module._update_lock.release()
+
+        self.assertEqual(result, ("origin/main", True))
+        self.assertEqual(dashboard_module._commits_behind(str(self.install), "origin/main"), 0)
 
     def test_a_fetch_that_fails_is_reported(self):
         git(self.install, "remote", "set-url", "origin", str(self.root / "missing.git"))

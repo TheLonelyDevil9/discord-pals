@@ -3381,12 +3381,15 @@ def _fetch_tracked_branch(repo_dir: str, update_branch: str) -> tuple[str | None
     except RuntimeError:
         return None, True
     remote, _, branch = tracked_ref.partition("/")
-    if not _git_fetch_lock.acquire(blocking=False):
-        # An update is fetching right now and brings the ref up to date itself.
+    # A running update fetches the ref itself, and a fetch beside its merge or reset could
+    # move the ref it is applying.
+    if _update_lock.locked() or not _git_fetch_lock.acquire(blocking=False):
         return tracked_ref, True
     try:
+        # A moved release tag fails a fetch that follows tags; the update's own fetch recovers from that.
         fetch = _run_git(
-            ["fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{tracked_ref}"], repo_dir, timeout=30
+            ["fetch", "--quiet", "--no-tags", remote, f"+refs/heads/{branch}:refs/remotes/{tracked_ref}"],
+            repo_dir, timeout=30,
         )
     finally:
         _git_fetch_lock.release()
@@ -3419,7 +3422,12 @@ def _refresh_version_state(update_branch: str) -> None:
 
 
 def _start_version_refresh(update_branch: str) -> None:
-    threading.Thread(target=_refresh_version_state, args=(update_branch,), daemon=True, name="version-check").start()
+    try:
+        threading.Thread(target=_refresh_version_state, args=(update_branch,), daemon=True, name="version-check").start()
+    except RuntimeError as e:
+        log.warn(f"Could not start the version check: {e}")
+        with _github_version_cache_lock:
+            _github_version_cache["refreshing"] = False
 
 
 def _version_state(update_branch: str) -> dict:
@@ -3431,7 +3439,7 @@ def _version_state(update_branch: str) -> dict:
     with _github_version_cache_lock:
         state = dict(_github_version_cache)
         stale = state["update_branch"] != update_branch or not _version_cache_is_fresh(time.time())
-        start = stale and not state["refreshing"]
+        start = stale and not state["refreshing"] and not _update_lock.locked()
         if start:
             _github_version_cache["refreshing"] = True
     if start:
