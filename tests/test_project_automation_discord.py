@@ -110,22 +110,39 @@ def _native_suite():
             **updates,
         }
 
+    def on_loop():
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
     class Store:
         def __init__(self):
             self.links = {}
             self.pending = []
             self.current_case = None
+            # A list while a test records the store calls that run on the event loop's thread.
+            self.loop_calls = None
+
+        def _note(self, name):
+            if self.loop_calls is not None and on_loop():
+                self.loop_calls.append(name)
 
         def get_link(self, kind, key):
+            self._note("get_link")
             return deepcopy(self.links.get((kind, key)))
 
         def put_link(self, kind, key, data):
+            self._note("put_link")
             self.links[(kind, key)] = deepcopy(data)
 
         def list_pending_cases(self):
+            self._note("list_pending_cases")
             return deepcopy(self.pending)
 
         def find_case(self, channel_id):
+            self._note("find_case")
             return self.current_case if self.current_case and self.current_case["channel_id"] == channel_id else None
 
     class NativeDiscordTransportTests(unittest.IsolatedAsyncioTestCase):
@@ -404,6 +421,50 @@ def _native_suite():
             self.service.validate_report_author.assert_not_called()
             self.service.submit_report.assert_not_called()
             modal.stop()
+
+        async def test_store_calls_of_the_transport_and_controls_run_off_the_event_loop(self):
+            item, _, _ = self.configure_feedback()
+            self.configure_forum()
+            loop_calls = []
+            self.store.loop_calls = loop_calls
+            cases = self.cases
+
+            def get_case(identifier):
+                if on_loop():
+                    loop_calls.append("get_case")
+                return cases.get(identifier)
+
+            self.service.get_case = get_case
+            for name in ("choose", "check_new_report", "receive_report", "add_detail", "validate_report_author",
+                         "submit_report"):
+                getattr(self.service, name).side_effect = (
+                    lambda *args, _name=name, **kwargs: loop_calls.append(_name) if on_loop() else None)
+            await self.transport.notify(item)
+            await self.transport.mirror(event())
+            self.store.pending = [item]
+            await self.transport.attach(self.bot)
+            self.store.current_case = item
+            await self.transport.handle_message(self.bot, message())
+            await self.transport.handle_message(self.bot, message(channel(discord.TextChannel, 101)))
+            view = DecisionView(self.service, item)
+            await view.children[0].callback(interaction())
+            await view.children[1].callback(interaction())
+            modal = HumanReportModal(self.service, item)
+            modal.authorship._value = "YES"
+            await modal.on_submit(interaction())
+            self.store.loop_calls = None
+            view.stop()
+            modal.stop()
+            self.assertEqual(loop_calls, [])
+
+        async def test_controls_of_a_newer_revision_are_not_replaced_by_an_older_snapshot(self):
+            newer = case(revision=5)
+            current = self.transport._register_view(self.bot, newer, message_id=1001)
+            self.assertIs(self.transport._register_view(self.bot, case(revision=4), message_id=999), current)
+            self.assertIs(self.transport._views[newer["id"]], current)
+            self.assertFalse(current.is_finished())
+            self.assertEqual(self.bot.client.add_view.call_count, 1)
+            current.stop()
 
         async def test_attach_restores_persistent_views_and_registers_commands_once(self):
             item = case()

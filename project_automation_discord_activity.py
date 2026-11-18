@@ -8,6 +8,7 @@ import discord
 
 from project_automation import WorkflowError, mirror_key
 from project_automation_activity import activity_receipt_key, marker_prefix
+from project_automation_store import run_store
 
 
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -182,16 +183,16 @@ def _saved_footer(message, receipt, prefix):
     return None
 
 
-def _record(transport, config, event, thread, message, version, *, current, prefix):
+def _record(transport, config, event, thread_id, message_id, version, *, current, prefix):
     """`prefix` must be the footer prefix the message shows, because the next check of the saved
     message accepts only that prefix or the computed one."""
     key = receipt_key(config, event)
-    receipt = {"channel_id": str(thread.id), "message_id": str(message.id),
+    receipt = {"channel_id": str(thread_id), "message_id": str(message_id),
                "source_version": version, "source_key": event["key"],
                "number": event["number"], "activity_type": event["activity_type"],
                "forum_id": config["reviews_channel_id"], "repository": config["repository"],
                "guild_id": config["guild_id"], "bot_name": config["bot_name"], "marker_prefix": prefix,
-               "jump_url": f"https://discord.com/channels/{config['guild_id']}/{thread.id}/{message.id}"}
+               "jump_url": f"https://discord.com/channels/{config['guild_id']}/{thread_id}/{message_id}"}
     transport.service.store.put_link("pr_activity_delivery", f"{key}:{version}", receipt)
     previous = transport.service.store.get_link("pr_activity", key)
     # Recovery of an older job must not replace the latest object receipt.
@@ -209,7 +210,7 @@ async def _with_parent_reply(transport, config, event, thread):
         return event
     parent = {**event, "key": f"pr:{event['number']}:review_comment:{parent_id}"}
     key = receipt_key(config, parent)
-    receipt = transport.service.store.get_link("pr_activity", key)
+    receipt = await run_store(transport.service.store.get_link, "pr_activity", key)
     if not receipt or receipt.get("channel_id") != str(thread.id):
         return event
     try:
@@ -230,13 +231,13 @@ async def mirror_activity(transport, event, *, recover_only=False):
     if not await transport.mirror(parent, recover_only=recover_only):
         return False
     parent_key = receipt_key(config, parent)
-    parent_link = transport.service.store.get_link("mirror", parent_key)
+    parent_link = await run_store(transport.service.store.get_link, "mirror", parent_key)
     thread = await transport._channel(parent_link["channel_id"])
     if not isinstance(thread, discord.Thread) or str(thread.parent_id) != config["reviews_channel_id"]:
         raise WorkflowError("The saved PR mirror belongs to a different forum.")
 
     prefix = marker_prefix(key)
-    link = transport.service.store.get_link("pr_activity", key)
+    link = await run_store(transport.service.store.get_link, "pr_activity", key)
     message, observed, shown = None, None, prefix
     if link:
         if str(link["channel_id"]) != str(thread.id):
@@ -258,24 +259,10 @@ async def mirror_activity(transport, event, *, recover_only=False):
                 if observed:
                     message = candidate
                     break
-    if message:
-        _record(transport, config, event, thread, message, observed, current=False, prefix=shown)
-        if observed == version:
-            if not recover_only:
-                _record(transport, config, event, thread, message, version, current=True, prefix=shown)
-            return True
-        if recover_only:
-            # A persisted receipt proves that exact version was applied before a
-            # later edit. Finding only a previous version does not prove this one.
-            receipt = transport.service.store.get_link("pr_activity_delivery", f"{key}:{version}")
-            return bool(receipt and receipt.get("message_id") == str(message.id)
-                        and receipt.get("channel_id") == str(thread.id))
-    elif recover_only:
-        return False
-
-    attempt = transport.service.store.get_link("pr_activity_attempt", key)
-    if message is None and attempt and attempt.get("state") == "pending":
-        raise WorkflowError("An earlier PR activity send needs recovery before it can be repeated.")
+    found = await run_store(_settle_saved, transport, config, event, key, version, thread.id,
+                            None if message is None else message.id, observed, shown, recover_only)
+    if found is not None:
+        return found
     embed = activity_embed(await _with_parent_reply(transport, config, event, thread), prefix + version)
     original = bool(thread.archived), bool(thread.locked)
     opened = False
@@ -285,16 +272,44 @@ async def mirror_activity(transport, event, *, recover_only=False):
             # cached object's archive flags when restoring after a failed send.
             opened = True
             await thread.edit(archived=False, locked=False)
-        transport.service.store.put_link("pr_activity_attempt", key, {"state": "pending", "source_version": version})
+        await run_store(transport.service.store.put_link, "pr_activity_attempt", key,
+                        {"state": "pending", "source_version": version})
         if message:
             await message.edit(embed=embed, allowed_mentions=NO_MENTIONS)
         else:
             message = await thread.send(embed=embed, allowed_mentions=NO_MENTIONS)
-        _record(transport, config, event, thread, message, version, current=True, prefix=prefix)
+        await run_store(_record, transport, config, event, thread.id, message.id, version, current=True, prefix=prefix)
     finally:
         if opened or parent["closed"]:
             await thread.edit(archived=parent["closed"], locked=parent["closed"])
     return True
+
+
+def _settle_saved(transport, config, event, key, version, thread_id, message_id, observed, shown, recover_only):
+    """Record what the found message shows, and return the result when no send is needed, else None.
+
+    message_id is the ID of the activity message found for `key`, or None, and observed is the
+    version it shows. Raise WorkflowError when no message was found but an earlier send may exist.
+    """
+    store = transport.service.store
+    if message_id is not None:
+        _record(transport, config, event, thread_id, message_id, observed, current=False, prefix=shown)
+        if observed == version:
+            if not recover_only:
+                _record(transport, config, event, thread_id, message_id, version, current=True, prefix=shown)
+            return True
+        if recover_only:
+            # A persisted receipt proves that exact version was applied before a
+            # later edit. Finding only a previous version does not prove this one.
+            receipt = store.get_link("pr_activity_delivery", f"{key}:{version}")
+            return bool(receipt and receipt.get("message_id") == str(message_id)
+                        and receipt.get("channel_id") == str(thread_id))
+    elif recover_only:
+        return False
+    attempt = store.get_link("pr_activity_attempt", key)
+    if message_id is None and attempt and attempt.get("state") == "pending":
+        raise WorkflowError("An earlier PR activity send needs recovery before it can be repeated.")
+    return None
 
 
 def confirm_not_delivered(transport, event):

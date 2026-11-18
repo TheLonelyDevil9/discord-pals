@@ -17,7 +17,7 @@ from project_automation_discord_activity import (
     activity_version, confirm_not_delivered, mirror_activity, receipt_key,
 )
 from project_automation_github import GitHubError
-from project_automation_store import Conflict
+from project_automation_store import Conflict, run_store
 
 
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -84,22 +84,14 @@ class HumanReportModal(discord.ui.Modal):
 
     async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
-        case = self.service.get_case(self.case_id)
+        case = await run_store(self.service.get_case, self.case_id)
         if not in_case_thread(interaction, case):
             text = await say(self.service, None, "error", {"error": "This form belongs to another feedback thread."},
                              "Open the current report controls in its original thread.")
         else:
             try:
-                self.service.validate_report_author(self.case_id, self.revision, interaction.user.id, roles(interaction.user),
-                                                    report_revision=self.report_revision, issue_number=self.issue_number)
-                if self.authorship.value.strip().upper() != "YES":
-                    raise WorkflowError("Confirm that you wrote the report yourself by typing YES.")
-                updated = self.service.submit_report(
-                    self.case_id, self.revision, user_id=interaction.user.id, username=interaction.user.name,
-                    title=self.report_title.value, body=self.report_body.value,
-                    role_ids=roles(interaction.user), human_authored=True,
-                    report_revision=self.report_revision, issue_number=self.issue_number,
-                )
+                updated = await run_store(self._submit, interaction.user.id, interaction.user.name, roles(interaction.user),
+                                          self.report_title.value, self.report_body.value, self.authorship.value)
             except (WorkflowError, Conflict) as exc:
                 text = await say(self.service, case, "error", {"error": str(exc)},
                                  "Use the current Write report or Edit report button to try again.")
@@ -107,6 +99,16 @@ class HumanReportModal(discord.ui.Modal):
                 text = await say(self.service, updated, "report_saved", {"saved": True, "published": False},
                                  "Your report will get a completeness check; review your exact text before approving a post.")
         await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
+
+    def _submit(self, user_id, username, role_ids, title, body, authorship):
+        self.service.validate_report_author(self.case_id, self.revision, user_id, role_ids,
+                                            report_revision=self.report_revision, issue_number=self.issue_number)
+        if authorship.strip().upper() != "YES":
+            raise WorkflowError("Confirm that you wrote the report yourself by typing YES.")
+        return self.service.submit_report(
+            self.case_id, self.revision, user_id=user_id, username=username, title=title, body=body,
+            role_ids=role_ids, human_authored=True, report_revision=self.report_revision, issue_number=self.issue_number,
+        )
 
 
 class DecisionView(discord.ui.View):
@@ -128,7 +130,7 @@ class DecisionView(discord.ui.View):
 
     def _callback(self, action):
         async def callback(interaction):
-            case = self.service.get_case(self.case_id)
+            case = await run_store(self.service.get_case, self.case_id)
             if not in_case_thread(interaction, case):
                 await interaction.response.defer(ephemeral=True)
                 text = await say(self.service, None, "error", {"error": "These controls belong to another feedback thread."},
@@ -137,19 +139,22 @@ class DecisionView(discord.ui.View):
                 return
             if action in {"write", "edit"}:
                 try:
-                    self.service.validate_report_author(self.case_id, self.revision, interaction.user.id, roles(interaction.user))
+                    await run_store(self.service.validate_report_author, self.case_id, self.revision,
+                                    interaction.user.id, roles(interaction.user))
                 except (WorkflowError, Conflict) as exc:
                     await interaction.response.defer(ephemeral=True)
                     text = await say(self.service, case, "error", {"error": str(exc)},
                                      "The original reporter can use the current report controls.")
                     await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
                 else:
-                    # Modal responses cannot follow a defer. Local authorization is synchronous.
+                    # A modal must be the first response to an interaction, so the author check
+                    # runs before any response instead of after a defer.
                     await interaction.response.send_modal(HumanReportModal(self.service, case))
                 return
             await interaction.response.defer(ephemeral=True)
             try:
-                updated = self.service.choose(self.case_id, self.revision, action, user_id=interaction.user.id, role_ids=roles(interaction.user))
+                updated = await run_store(self.service.choose, self.case_id, self.revision, action,
+                                          user_id=interaction.user.id, role_ids=roles(interaction.user))
             except (WorkflowError, Conflict) as exc:
                 text = await say(self.service, case, "error", {"error": str(exc)},
                                  "Use the latest controls in this feedback thread after resolving the error.")
@@ -184,19 +189,20 @@ class DiscordTransport:
     async def _new_message_report(self, message):
         async with self._intake_lock(message.author.id):
             content = message_text(message)
-            self.service.check_new_report(message.author.id, content)
+            await run_store(self.service.check_new_report, message.author.id, content)
             channel = message.channel
             if isinstance(channel, discord.Thread) and channel.owner_id != message.author.id:
                 raise WorkflowError("The original reporter must start this feedback thread with the helper.")
             if not isinstance(channel, discord.Thread):
                 channel = await message.create_thread(name=(message.content.strip() or "Project feedback")[:90])
-            return self.service.receive_report(source_key=f"discord:{message.guild.id}:{message.id}", channel_id=channel.id,
-                                               reporter_id=message.author.id, content=content, source_url=message.jump_url,
-                                               message_id=message.id, reporter_name=message.author.name, title=channel.name)
+            return await run_store(
+                self.service.receive_report, source_key=f"discord:{message.guild.id}:{message.id}", channel_id=channel.id,
+                reporter_id=message.author.id, content=content, source_url=message.jump_url,
+                message_id=message.id, reporter_name=message.author.name, title=channel.name)
 
     async def _new_command_report(self, interaction, report):
         async with self._intake_lock(interaction.user.id):
-            self.service.check_new_report(interaction.user.id, report)
+            await run_store(self.service.check_new_report, interaction.user.id, report)
             cfg = self.service.settings()
             channel = await self._channel(cfg["feedback_channel_id"])
             title = report.strip().splitlines()[0][:90]
@@ -212,27 +218,38 @@ class DiscordTransport:
                 await thread.send(**original)
             else:
                 raise WorkflowError("The feedback destination must be a forum or text channel.")
-            self.service.receive_report(source_key=f"interaction:{interaction.id}", channel_id=thread.id, reporter_id=interaction.user.id,
-                                        content=report, source_url=f"https://discord.com/channels/{interaction.guild_id}/{thread.id}",
-                                        message_id=interaction.id, reporter_name=interaction.user.name, title=title)
+            await run_store(self.service.receive_report, source_key=f"interaction:{interaction.id}", channel_id=thread.id,
+                            reporter_id=interaction.user.id, content=report,
+                            source_url=f"https://discord.com/channels/{interaction.guild_id}/{thread.id}",
+                            message_id=interaction.id, reporter_name=interaction.user.name, title=title)
             return thread
 
     async def attach(self, bot):
         if bot.name not in self._registered:
             self._commands(bot)
             self._registered.add(bot.name)
+        for case, message_id in await run_store(self._saved_controls, bot.name):
+            self._register_view(bot, case, message_id=message_id)
+
+    def _saved_controls(self, bot_name):
+        """Return (case, ID of the message that shows its controls or None) for each pending case of bot_name with controls."""
+        controls = []
         for case in self.service.store.list_pending_cases():
-            if case["bot_name"] == bot.name and case.get("gate"):
-                self._register_view(bot, case)
+            if case["bot_name"] == bot_name and case.get("gate"):
+                link = self.service.store.get_link("feedback", case["id"])
+                controls.append((case, int(link["message_id"]) if link else None))
+        return controls
 
     def _register_view(self, bot, case, *, view=None, message_id=None):
-        previous = self._views.pop(case["id"], None)
+        previous = self._views.get(case["id"])
+        if previous is not None and previous is not view and previous.revision > case["revision"]:
+            # A case read before a newer reply registered its controls must not replace them,
+            # because the older controls' choices fail against the newer revision.
+            return previous
+        self._views.pop(case["id"], None)
         if previous and previous is not view:
             previous.stop()
         view = view or DecisionView(self.service, case)
-        link = self.service.store.get_link("feedback", case["id"])
-        if message_id is None and link:
-            message_id = int(link["message_id"])
         if message_id:
             for item in view.children:
                 if item.url:
@@ -280,9 +297,7 @@ class DiscordTransport:
         channel = await self._channel(case["channel_id"])
         delivery_key = case.get("delivery_key") or case["id"]
         marker = f"Feedback {delivery_key}"
-        link = self.service.store.get_link("feedback_delivery", delivery_key)
-        if not link and "delivery_key" not in case:
-            link = self.service.store.get_link("feedback", case["id"])
+        link = await run_store(self._saved_feedback, case, delivery_key)
         message = None
         if link and str(link["channel_id"]) == str(channel.id):
             try:
@@ -296,8 +311,7 @@ class DiscordTransport:
         if message is None:
             message = await self._find_message(channel, marker)
         if message:
-            current = self._record_feedback(case, channel, message, delivery_key)
-            latest = self.service.get_case(case["id"])
+            current, latest = await run_store(self._record_found_feedback, case, channel.id, message.id, delivery_key)
             if (current and case.get("gate") and latest and latest["revision"] == case["revision"]
                     and latest.get("gate") == case["gate"]):
                 self._register_view(self._bot(), case, message_id=message.id)
@@ -316,11 +330,11 @@ class DiscordTransport:
             # The footer is a delivery receipt, not a generated state card.
             embed = discord.Embed(color=COLOUR)
         embed.set_footer(text=marker)
-        previous = self.service.store.get_link("feedback", case["id"])
+        previous = await run_store(self.service.store.get_link, "feedback", case["id"])
         current = not previous or feedback_order(previous) <= feedback_order(case)
         view = DecisionView(self.service, case) if current and case.get("gate") else None
         message = await channel.send(content=reply, embed=embed, view=view, allowed_mentions=NO_MENTIONS)
-        self._record_feedback(case, channel, message, delivery_key)
+        await run_store(self._record_feedback, case, channel.id, message.id, delivery_key)
         if view:
             self._register_view(self._bot(), case, view=view, message_id=message.id)
             if any(item.url for item in view.children):
@@ -331,10 +345,20 @@ class DiscordTransport:
             await self._retire_controls(case, channel, previous, message.id)
         return True
 
-    def _record_feedback(self, case, channel, message, delivery_key):
-        receipt = {"channel_id": str(channel.id), "message_id": str(message.id),
+    def _saved_feedback(self, case, delivery_key):
+        link = self.service.store.get_link("feedback_delivery", delivery_key)
+        if not link and "delivery_key" not in case:
+            link = self.service.store.get_link("feedback", case["id"])
+        return link
+
+    def _record_found_feedback(self, case, channel_id, message_id, delivery_key):
+        """Record the receipt of a found reply; return whether it is the latest reply, and the case as stored."""
+        return self._record_feedback(case, channel_id, message_id, delivery_key), self.service.get_case(case["id"])
+
+    def _record_feedback(self, case, channel_id, message_id, delivery_key):
+        receipt = {"channel_id": str(channel_id), "message_id": str(message_id),
                    "revision": case["revision"], "delivery_key": delivery_key,
-                   "created_at": discord.utils.snowflake_time(message.id).timestamp()}
+                   "created_at": discord.utils.snowflake_time(message_id).timestamp()}
         self.service.store.put_link("feedback_delivery", delivery_key, receipt)
         current = self.service.store.get_link("feedback", case["id"])
         if not current or feedback_order(current) <= feedback_order(receipt):
@@ -371,12 +395,13 @@ class DiscordTransport:
         import response_access
         if not response_access.message_access(False, message.author.id, parent_id)[0]:
             return True
-        case = self.service.store.find_case(str(message.channel.id)) if isinstance(message.channel, discord.Thread) else None
+        case = (await run_store(self.service.store.find_case, str(message.channel.id))
+                if isinstance(message.channel, discord.Thread) else None)
         try:
             if case:
-                self.service.add_detail(case["id"], user_id=message.author.id, content=message_text(message),
-                                        message_id=message.id, source_url=message.jump_url, role_ids=roles(message.author),
-                                        username=message.author.name)
+                await run_store(self.service.add_detail, case["id"], user_id=message.author.id, content=message_text(message),
+                                message_id=message.id, source_url=message.jump_url, role_ids=roles(message.author),
+                                username=message.author.name)
             else:
                 await self._new_message_report(message)
         except (WorkflowError, Conflict) as exc:
@@ -474,7 +499,7 @@ class DiscordTransport:
         if event["kind"] in {"issue", "pull"} and not isinstance(channel, discord.ForumChannel):
             raise WorkflowError("Issue tracking and Pull requests require forum channels.")
         marker = f"Project {key}"
-        link = self.service.store.get_link("mirror", key)
+        link = await run_store(self.service.store.get_link, "mirror", key)
         # A post keeps the footer it was last written with. After the rename-helper command moves
         # its record to a new key, the footer differs from the computed marker, so the record
         # stores it as "marker". An edit whose acknowledgement was lost can leave the post on the
@@ -515,8 +540,7 @@ class DiscordTransport:
             message = await self._find_message(channel, marker)
         if recover_only:
             if message:
-                self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": shown})
-                self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
+                await run_store(self._record_post, key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": shown})
             return message is not None
         if message is None and not create:
             return False
@@ -533,15 +557,9 @@ class DiscordTransport:
         if saved and shown == marker and link.get("digest") == digest and (
                 not isinstance(thread, discord.Thread)
                 or (thread.name, bool(thread.archived), bool(thread.locked)) == (name, closed, closed)):
-            self._record_item(key, event)
+            await run_store(self._record_item, key, event)
             return True
-        attempt = self.service.store.get_link("mirror_attempt", key)
-        if not message and attempt and attempt.get("state") == "pending":
-            raise WorkflowError("An earlier project mirror send needs recovery before it can be repeated.")
-        if link and "digest" in link:
-            # A write that fails part way leaves the post unknown. A kept digest could then match
-            # a later rendering and skip the write that would repair the post.
-            self.service.store.put_link("mirror", key, {k: v for k, v in link.items() if k != "digest"})
+        await run_store(self._prepare_post_write, key, link, message is not None)
         original = (bool(thread.archived), bool(thread.locked)) if isinstance(thread, discord.Thread) else (False, False)
         opened, complete = False, False
         try:
@@ -552,16 +570,13 @@ class DiscordTransport:
                 await message.edit(embed=embed, allowed_mentions=NO_MENTIONS)
                 if isinstance(thread, discord.Thread):
                     await thread.edit(name=name)
+            elif isinstance(channel, discord.ForumChannel):
+                created = await channel.create_thread(name=name, embed=embed, allowed_mentions=NO_MENTIONS)
+                thread, message = created.thread, created.message
             else:
-                self.service.store.put_link("mirror_attempt", key, {"state": "pending"})
-                if isinstance(channel, discord.ForumChannel):
-                    created = await channel.create_thread(name=name, embed=embed, allowed_mentions=NO_MENTIONS)
-                    thread, message = created.thread, created.message
-                else:
-                    thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
+                thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
             record = {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": marker}
-            self.service.store.put_link("mirror", key, record)
-            self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
+            await run_store(self._record_post, key, record)
             complete = True
         finally:
             if isinstance(thread, discord.Thread):
@@ -569,9 +584,33 @@ class DiscordTransport:
                     await thread.edit(archived=True, locked=True)
                 elif opened and not complete:
                     await thread.edit(archived=original[0], locked=original[1])
-        self.service.store.put_link("mirror", key, {**record, "digest": digest})
-        self._record_item(key, event)
+        await run_store(self._record_written_post, key, {**record, "digest": digest}, event)
         return True
+
+    def _prepare_post_write(self, key, link, existing):
+        """Check and set the send guard of the post at `key` before a write, and forget its digest.
+
+        Raise WorkflowError when no post was found but an earlier create may have been sent.
+        Before a create, the guard is set to pending, so that a lost acknowledgement needs recovery
+        instead of a second post.
+        """
+        attempt = self.service.store.get_link("mirror_attempt", key)
+        if not existing and attempt and attempt.get("state") == "pending":
+            raise WorkflowError("An earlier project mirror send needs recovery before it can be repeated.")
+        if link and "digest" in link:
+            # A write that fails part way leaves the post unknown. A kept digest could then match
+            # a later rendering and skip the write that would repair the post.
+            self.service.store.put_link("mirror", key, {k: v for k, v in link.items() if k != "digest"})
+        if not existing:
+            self.service.store.put_link("mirror_attempt", key, {"state": "pending"})
+
+    def _record_post(self, key, record):
+        self.service.store.put_link("mirror", key, record)
+        self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
+
+    def _record_written_post(self, key, record, event):
+        self.service.store.put_link("mirror", key, record)
+        self._record_item(key, event)
 
     def _record_item(self, key, event):
         """Store the issue or PR version that the post at `key` now shows, and when it was checked.

@@ -583,6 +583,29 @@ def _native_suite():
             service = AutomationService(self.store, settings=lambda: self.config, ai=object(), transport=object())
             self.assertTrue(service._bound(self.store.get_case(case["id"])))
 
+        async def test_activity_store_calls_run_off_the_event_loop(self):
+            import contextlib
+            loop_connections, real = [], AutomationStore._connection
+
+            @contextlib.contextmanager
+            def watched(store, write=False, timeout=10):
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
+                else:
+                    loop_connections.append(write)
+                with real(store, write=write, timeout=timeout) as connection:
+                    yield connection
+
+            parent = self.event("review_comment")
+            reply = self.event("review_comment", key="pr:17:review_comment:43", source_id="43", reply_to_id=42)
+            edited = {**parent, "source_version": "version-2", "action": "edited", "body": "Edited source text."}
+            with patch.object(AutomationStore, "_connection", watched):
+                for event, recover_only in ((parent, False), (reply, False), (edited, False), (edited, True)):
+                    self.assertTrue(await self.transport.mirror_activity(event, recover_only=recover_only))
+            self.assertEqual(loop_connections, [])
+
         async def test_recovery_cannot_create_a_missing_parent(self):
             self.assertFalse(await self.transport.mirror_activity(self.event(), recover_only=True))
             self.forum.create_thread.assert_not_awaited()
