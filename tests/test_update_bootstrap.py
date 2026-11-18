@@ -1,8 +1,11 @@
+import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -128,6 +131,36 @@ class BootstrapUpdaterTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         log_path = self.install / "bot_data" / "update_log.json"
         self.assertTrue(log_path.exists())
+
+    def snapshots(self):
+        return list((self.install / "bot_data" / "update_backups").glob("pre-update-*"))
+
+    def test_bootstrap_takes_a_snapshot_only_for_an_update_that_moves_the_checkout(self):
+        (self.install / "bot_data").mkdir()
+        (self.install / "bot_data" / "stats.json").write_text("{}", encoding="utf-8")
+        with patch.object(update_module, "install_dependencies", return_value={"status": "skipped", "warning": None}):
+            self.assertEqual(update_module.perform_update(self.install, "2.2.1"), 0)
+            self.assertEqual(self.snapshots(), [])
+            self.release_tag_ahead_of_branch()
+            run_git(["fetch", "origin", "--tags"], self.install)
+            self.assertEqual(update_module.perform_update(self.install, "2.2.10"), 0)
+        self.assertEqual(len(self.snapshots()), 1)
+
+    def test_bootstrap_update_log_says_when_the_snapshot_left_out_a_large_project_database(self):
+        (self.install / "bot_data").mkdir()
+        with closing(sqlite3.connect(str(self.install / "bot_data" / "project_automation.sqlite3"))) as database:
+            database.execute("CREATE TABLE evidence (value TEXT)")
+            database.executemany("INSERT INTO evidence VALUES (?)", [("x" * 4000,)] * 50)
+            database.commit()
+        self.release_tag_ahead_of_branch()
+        run_git(["fetch", "origin", "--tags"], self.install)
+        with patch.object(update_module, "install_dependencies", return_value={"status": "skipped", "warning": None}), \
+                patch.object(update_module, "PROJECT_DATABASE_SNAPSHOT_MAX_BYTES", 64 * 1024):
+            self.assertEqual(update_module.perform_update(self.install, "2.2.10"), 0)
+        (snapshot,) = self.snapshots()
+        self.assertFalse((snapshot / "bot_data" / "project_automation.sqlite3").exists())
+        entry = json.loads((self.install / "bot_data" / "update_log.json").read_text(encoding="utf-8"))[-1]
+        self.assertTrue(any("project_automation.sqlite3" in warning for warning in entry["warnings"]))
 
     def test_bootstrap_recovers_from_stale_local_release_tag(self):
         self.release_tag_ahead_of_branch("2.2.2")

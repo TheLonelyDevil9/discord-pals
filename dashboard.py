@@ -3743,7 +3743,8 @@ def _prune_update_backups(backup_root: Path, retention: int = _UPDATE_BACKUP_RET
             log.warn(f"Could not prune update backup {old_backup}: {e}")
 
 
-def _create_update_state_backup(repo_dir: str) -> str | None:
+def _create_update_state_backup(repo_dir: str, warnings: list | None = None) -> str | None:
+    """Snapshot local state before an update; a note about a left-out database goes into warnings."""
     backup_root = Path(repo_dir) / _UPDATE_BACKUP_ROOT
     backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     copied = False
@@ -3764,7 +3765,9 @@ def _create_update_state_backup(repo_dir: str) -> str | None:
         return None
 
     from update import backup_project_database
-    backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    if note and warnings is not None:
+        warnings.append(note)
     _prune_update_backups(backup_root)
     return str(backup_dir)
 
@@ -3864,7 +3867,6 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     """Fetch and update the checkout while preserving user changes where possible."""
     warnings = []
     selected_branch = _normalize_update_branch(update_branch)
-    backup_path = _create_update_state_backup(repo_dir)
 
     fetch = _fetch_all_with_tag_recovery(repo_dir)
     _require_git_success(fetch, "Fetching updates")
@@ -3878,6 +3880,10 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     upstream = tag_ref or branch_upstream
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
+    # Only an update that moves HEAD takes a snapshot, so idle Update clicks cannot rotate
+    # the last real one out of the _UPDATE_BACKUP_RETENTION kept.
+    moves_head = before_head != upstream_head and not _git_is_ancestor(repo_dir, upstream_head, before_head)
+    backup_path = _create_update_state_backup(repo_dir, warnings) if moves_head else None
     stash = _stash_local_changes(repo_dir)
     output = fetch_output
     updated = False
