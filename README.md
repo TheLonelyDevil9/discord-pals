@@ -124,7 +124,7 @@ When startup succeeds, the console shows the loaded character, synced slash comm
 
 ## Dashboard
 
-The dashboard starts with the bot at <http://localhost:5000>. It binds to `0.0.0.0:5000`, so protect it before exposing that port outside a trusted machine or private network:
+The dashboard starts with the bot at <http://localhost:5000>. It binds to `0.0.0.0:5000`, and without `DASHBOARD_PASS` it has no login, so anyone who can reach that port has full control of the bot. Set a password before exposing the port outside a trusted machine or private network:
 
 ```env
 DASHBOARD_USER=admin

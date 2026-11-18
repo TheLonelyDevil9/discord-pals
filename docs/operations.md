@@ -4,7 +4,7 @@ This page covers local operations, deployment, update recovery, file layout, and
 
 ## Dashboard Security
 
-The dashboard starts automatically with `python main.py` and listens on `0.0.0.0:5000` by default. That can be reachable from other devices if the firewall or host allows it.
+The dashboard starts automatically with `python main.py` and listens on `0.0.0.0:5000` by default. That can be reachable from other devices if the firewall or host allows it. Without `DASHBOARD_PASS` the dashboard has no login, so anyone who can reach that port has full control of the bot.
 
 Set the bind address and port with environment variables rather than editing `main.py`:
 
@@ -22,7 +22,7 @@ DASHBOARD_USER=admin
 DASHBOARD_PASS=your_secure_password
 ```
 
-When `DASHBOARD_PASS` is set, dashboard pages require login and sessions persist until logout or browser close. When it is unset, authentication is disabled.
+When `DASHBOARD_PASS` is set, dashboard pages require login. A login lasts until you log out or until 24 hours pass without a dashboard request; each request starts the 24 hours again. Closing the browser, restarting the bot, or changing `DASHBOARD_PASS` does not end it. When `DASHBOARD_PASS` is unset, authentication is disabled.
 
 `GET /healthz` returns `{"status": "ok"}` without a login so host monitoring keeps working after you set a password. It reports nothing else. Point uptime checks at it rather than `/api/version`, which redirects to the login page once authentication is on.
 
@@ -264,7 +264,7 @@ The size limit still applies: past the five newest rotated files, older ones sta
 
 ## Metrics
 
-Response times, provider API latency, memory-generation and history-save durations are recorded as Prometheus histograms during normal operation. They are not exposed unless the exporter is turned on:
+Response times are recorded as a Prometheus histogram during normal operation. The exporter also lists histograms for provider API latency, memory generation, and history saves, but nothing records them, so they stay empty. Metrics are not exposed unless the exporter is turned on:
 
 ```env
 METRICS_ENABLED=true

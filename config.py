@@ -372,8 +372,8 @@ DASHBOARD_PORT = _port_from_env('DASHBOARD_PORT', 5000)
 
 # Prometheus Metrics
 # The exporter is unauthenticated, so it is off by default and binds to
-# localhost when enabled. prometheus_metrics.py already records request and
-# generation latency histograms; this only exposes them for scraping.
+# localhost when enabled. It only exposes for scraping the metrics that
+# prometheus_metrics.py records; it does not start recording any.
 METRICS_ENABLED = os.getenv('METRICS_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 METRICS_HOST = os.getenv('METRICS_HOST', '127.0.0.1').strip() or '127.0.0.1'
 METRICS_PORT = _port_from_env('METRICS_PORT', 9090)
