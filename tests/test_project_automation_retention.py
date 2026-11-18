@@ -250,6 +250,34 @@ def test_bulk_deletes_do_not_rewrite_freed_pages_when_secure_delete_is_on(store,
     assert max(wal_sizes) < 4 * 1024 * 1024
 
 
+def test_link_cleanup_after_a_bulk_delete_does_not_probe_every_deleted_id(store, monkeypatch):
+    add_finished_rows(store, BULK_DELETE_ROWS + 1_000)
+    kept = add_kept_rows(store)
+    deleted = add_job(store, "pr-event:prepared")
+    add_link(store, "pr_prepared", deleted, {"kind": "pr_activity"})
+    add_link(store, "pr_prepared", kept[0][0], {"kind": "pr_activity"})
+    steps, statement = {}, [""]
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        connection.set_trace_callback(lambda sql: statement.__setitem__(0, " ".join(sql.split())))
+
+        def count():
+            steps[statement[0]] = steps.get(statement[0], 0) + 1
+            return 0
+
+        connection.set_progress_handler(count, 100)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    assert store.prune_jobs(0) == BULK_DELETE_ROWS + 1_001
+    assert link_keys(store, "pr_prepared") == {str(kept[0][0])}
+    assert link_keys(store, "job_dismissal") == {str(kept[-1][0])}
+    link_steps = sum(count for sql, count in steps.items() if sql.startswith("DELETE FROM links"))
+    assert link_steps < 100
+
+
 def test_small_backlog_is_deleted_by_id(store, monkeypatch):
     add_finished_rows(store, 50)
     deletes = trace_job_deletes(monkeypatch)

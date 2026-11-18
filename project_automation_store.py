@@ -763,7 +763,7 @@ class AutomationStore:
 
     @staticmethod
     def _delete_doomed(connection, limit=None):
-        """Delete the jobs in temp.doomed, with links keyed by their ID, and return the count.
+        """Delete the jobs in temp.doomed and the links that belonged to them, and return the count.
 
         Past BULK_DELETE_ROWS every listed job goes in one step; otherwise only the
         lowest `limit` IDs go when a limit is given.
@@ -774,11 +774,14 @@ class AutomationStore:
             # instead of reading every row of the table.
             AutomationStore._replace_jobs(
                 connection, "SELECT id FROM jobs INDEXED BY jobs_ready WHERE id NOT IN (SELECT id FROM temp.doomed)")
-        else:
-            if limit is not None:
-                connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
-                                   "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
-            count = connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
+            # Only the kept jobs remain, so checking each link against them costs far less
+            # than two index probes for every deleted ID.
+            AutomationStore._delete_orphaned_job_links(connection)
+            return count
+        if limit is not None:
+            connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
+                               "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
+        count = connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
         connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') "
                            "AND key IN (SELECT CAST(id AS TEXT) FROM temp.doomed)")
         return count
