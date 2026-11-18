@@ -430,6 +430,28 @@ def _same_history_file(path, other) -> bool:
         return False
 
 
+def _history_last_activity(data: dict) -> float:
+    try:
+        return float(data.get("last_activity"))
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _set_history_file_aside(path: Path) -> None:
+    """Rename an older-named file that holds newer messages to a name the loader ignores."""
+    target = path.with_name(f"{path.name}.superseded")
+    suffix = 1
+    while target.exists():
+        target = path.with_name(f"{path.name}.superseded.{suffix}")
+        suffix += 1
+    try:
+        os.rename(path, target)
+    except OSError as e:
+        log.warn(f"History file {path.name} holds newer messages than the file loaded and could not be renamed: {e}")
+        return
+    log.warn(f"History file {path.name} holds newer messages than the file loaded; it is kept as {target.name} and not loaded")
+
+
 def _remove_legacy_history_files(history_id):
     """Delete the older-named files recorded for one history, never its current file."""
     current_path = _history_channel_path(history_id)
@@ -572,10 +594,11 @@ def load_history():
         # A file is read only under its key's current name, or under the name
         # that versions without a stored key gave it. Any other file, such as
         # a hand copy or a name that disagrees with the key inside, could
-        # hide or replace the real history, so it stays as it is. When an
-        # older-named file holds the same key, for example after a rename was
-        # interrupted, the current file wins because it was written later
-        # from the loaded history.
+        # hide or replace the real history, so it stays as it is. When both
+        # names exist, the current file is loaded. The older-named file is
+        # deleted when it is no newer, as after an interrupted rename. When
+        # it is newer, as after a rollback to a version that writes that
+        # name, it is renamed aside and kept, but not loaded.
         found = {}
         unreadable = object()
         for path in history_files:
@@ -622,7 +645,10 @@ def load_history():
                 continue
 
             if "older" in files:
-                older_path = files["older"][0]
+                older_path, older_data = files["older"]
+                if "current" in files and _history_last_activity(older_data) > _history_last_activity(data):
+                    _set_history_file_aside(older_path)
+                    continue
                 if not _same_history_file(older_path, _history_channel_path(history_id)):
                     _legacy_history_files[history_id] = {str(older_path)}
                 rewrite.append(history_id)

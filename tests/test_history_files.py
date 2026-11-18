@@ -94,13 +94,48 @@ class LegacyHistoryFileTests(HistorySandbox, unittest.TestCase):
         discord_utils_module.add_to_history(dm_key, "assistant", "second", author_name="Firefly", message_id=2)
         discord_utils_module.save_history(force=True)
         current_names = self.file_names()
-        legacy = self.write_file(f"{dm_key}.json", {"name": "DM", "messages": [{"role": "user", "content": "first", "author": "Alice"}]})
+        last_activity = json.loads((self.history_dir / current_names[0]).read_text(encoding="utf-8"))["last_activity"]
+        legacy = self.write_file(f"{dm_key}.json", {
+            "name": "DM",
+            "messages": [{"role": "user", "content": "first", "author": "Alice"}],
+            "last_activity": last_activity,
+        })
 
         self.restart()
 
         self.assertEqual([entry["content"] for entry in discord_utils_module.get_history(dm_key)], ["first", "second"])
         self.assertFalse(legacy.exists())
         self.assertEqual(self.file_names(), current_names)
+
+    @unittest.skipIf(LEGACY_COLON_NAMES, COLON_SKIP_REASON)
+    def test_a_newer_file_under_the_dm_key_name_is_kept_aside_after_a_rollback(self):
+        dm_key = discord_utils_module.dm_history_key("Firefly", 42)
+        for index in range(5):
+            discord_utils_module.add_to_history(dm_key, "user", f"older {index}", author_name="Alice", message_id=index + 1)
+        discord_utils_module._channel_last_activity[dm_key] = 100.0
+        discord_utils_module._dirty_history_channels.add(dm_key)
+        discord_utils_module.save_history(force=True)
+        (current_name,) = self.file_names()
+        newer = [{"role": "user", "content": f"newer {index}", "author": "Alice"} for index in range(7)]
+        legacy = self.write_file(f"{dm_key}.json", {"name": "DM", "messages": newer, "last_activity": 200.0})
+        original = legacy.read_bytes()
+        aside = self.history_dir / f"{dm_key}.json.superseded"
+
+        with patch.object(discord_utils_module.log, "warn") as warn:
+            self.restart()
+
+        self.assertFalse(legacy.exists())
+        self.assertEqual(aside.read_bytes(), original)
+        self.assertEqual(self.file_names(), [current_name])
+        self.assertEqual([entry["content"] for entry in discord_utils_module.get_history(dm_key)], [f"older {index}" for index in range(5)])
+        self.assertEqual(len([call for call in warn.call_args_list if legacy.name in call.args[0]]), 1)
+
+        with patch.object(discord_utils_module.log, "warn") as warn_again:
+            self.restart()
+
+        self.assertEqual(aside.read_bytes(), original)
+        self.assertEqual(sorted(path.name for path in self.history_dir.iterdir()), sorted([current_name, aside.name]))
+        warn_again.assert_not_called()
 
     @unittest.skipIf(LEGACY_COLON_NAMES, COLON_SKIP_REASON)
     def test_failed_rewrite_keeps_the_old_file_until_a_later_save(self):
