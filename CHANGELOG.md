@@ -43,7 +43,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
 - A reconciliation cycle that starts again after a failure no longer ends early when an issue or PR changed in between. It skipped the rest of its refreshes and PR discovery.
-- An issue that GitHub turned into a pull request no longer has its post in Issue tracking overwritten with the pull request's title, text and state. The post is marked Converted with a link to the pull request, archived and locked, and the pull request gets its own post. A feedback report linked to such an issue gets no further status notice from it. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
+- An issue that GitHub turned into a pull request no longer has its post in Issue tracking overwritten with the pull request's title, text and state. The post is marked Converted with a link to the pull request, archived and locked, and keeps the title that the item had when the helper first recorded the conversion. The pull request gets its own post. A feedback report linked to such an issue gets no further status notice from it. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
 
 ### Upgrade notes
 

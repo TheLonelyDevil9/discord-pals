@@ -63,10 +63,14 @@ class Client:
         return [await self.get_issue(7)] if kind == "pull" else []
 
 
+SHOWN = ("title", "body", "state", "closed", "merged", "draft", "html_url")
+
+
 class Transport:
     """Keeps DiscordTransport's contract: one post per post key, which a mirror with create=False only
-    edits; a successful issue or PR mirror records the item version; and an activity delivery first
-    refreshes its PR's post. `posts` holds every version each post showed, oldest first."""
+    edits; a mirror that shows the post's version again writes nothing; a successful issue or PR mirror
+    records the item version; and an activity delivery first refreshes its PR's post. `posts` holds the
+    versions each post showed, oldest first, as dicts of the SHOWN fields."""
 
     def __init__(self):
         self.attempts = []
@@ -97,7 +101,9 @@ class Transport:
             return True
         if key not in self.posts and not create:
             return False
-        self.posts.setdefault(key, []).append(deepcopy(event))
+        version, versions = {name: event.get(name) for name in SHOWN}, self.posts.setdefault(key, [])
+        if not versions or versions[-1] != version:
+            versions.append(version)
         if event["kind"] in {"issue", "pull"}:
             self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": self.clock()})
         return True
@@ -1120,6 +1126,43 @@ def test_a_closed_pull_request_gets_its_post_although_its_queued_refresh_was_cle
     fetched = count_fetches(setup)
     assert sync_cycle(setup)[0] == [] and fetched == []
     assert len(setup.transport.posts) == 2
+
+
+def late_issue_event(setup, key):
+    """Queue an issues webhook for issue 17 that GitHub sent before the conversion."""
+    enqueue(setup, {"repository": "Owner/Project", "kind": "issue", "number": 17, "key": "issue:17",
+                    "title": "Settings fail to save", "state": "open", "action": "edited"}, key=key)
+
+
+def test_a_conversion_seen_again_leaves_the_converted_post_as_it_is(setup):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    items[17].update(title="Fix settings saving", body="Newer text", updated_at="2026-11-03T00:00:00Z")
+    late_issue_event(setup, "github:late-edit-17")
+    drain(setup)
+    assert [(version["state"], version["title"]) for version in shown(setup, "issue", 17)] == [
+        ("open", "Settings fail to save"), ("converted", "Settings fail to save")]
+
+
+def test_a_conversion_seen_again_under_another_forum_marks_that_post_with_the_first_title(setup):
+    setup.cfg["issues_channel_id"] = "250"
+    items = {17: {**github_item("issue", 17), "title": "Settings fail to save"}}
+    open_world(setup, items)
+    sync_cycle(setup)
+    first_forum = dict(setup.cfg)
+    setup.cfg["issues_channel_id"] = "201"
+    sync_cycle(setup)
+    mirror_post(setup, "issue", 17)
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    items[17]["title"] = "Fix settings saving"
+    setup.cfg["issues_channel_id"] = "250"
+    late_issue_event(setup, "github:late-edit-17")
+    drain(setup)
+    for forum in ({**first_forum, "issues_channel_id": "201"}, first_forum):
+        assert [(version["state"], version["title"]) for version in shown(setup, "issue", 17, forum)] == [
+            ("open", "Settings fail to save"), ("converted", "Settings fail to save")]
 
 
 def test_a_converted_issue_without_a_post_in_the_current_forum_gets_none(setup):

@@ -807,21 +807,25 @@ class AutomationService:
     async def _close_converted_issue(self, event, job):
         """Mark the post of an issue that became pull request `event` as converted, and queue the PR's own post.
 
-        The issue post is edited, never created, and from then on shows no PR content. The stored
-        conversion keeps the sync root from fetching the issue again, and the queued refresh gives
-        the PR its own post even when it is no longer open. Reports linked to the issue get no
-        further status notice from it.
+        The issue post is edited, never created. It keeps the title that the item had when the
+        conversion was first recorded and shows no later pull request title, text or state, so a
+        conversion seen again writes nothing to Discord. The stored conversion makes the sync root
+        ask for the pull request in place of the issue, and the queued refresh gives the PR its own
+        post at once, also when it is no longer open. Reports linked to the issue get no further
+        status notice from it.
         """
         number, url = event["number"], event["html_url"]
+        closed = self._closed_key("issue", number)
+        stored = self.store.get_link("item_closed", closed) or {}
+        title = stored.get("title") or event["title"]
         self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
         await self.transport.mirror({
             "kind": "issue", "key": event["key"], "number": number, "repository": event["repository"],
-            "title": event["title"], "state": "converted", "closed": True, "html_url": url,
+            "title": title, "state": "converted", "closed": True, "html_url": url,
             "body": f"This issue became [pull request #{number}]({url}). Its updates appear in the pull request's own post.",
         }, create=False)
-        closed = self._closed_key("issue", number)
         self.store.save_links_with_jobs(
-            [("item_closed", closed, {**(self.store.get_link("item_closed", closed) or {}), "converted": True})],
+            [("item_closed", closed, {**stored, "converted": True, "title": title})],
             [{"kind": "event", "payload": self._refresh("pull", number, event.get("_sync_cycle")),
               "key": f"converted:{job['id']}:pull:{number}"}])
 
