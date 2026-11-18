@@ -80,6 +80,10 @@ class WorkflowError(ValueError):
     """An action is not currently available to this actor."""
 
 
+class RecipientRefused(Exception):
+    """Discord refused a DM for good: the user is unknown or does not accept DMs from the bot."""
+
+
 class AutomationService:
     def __init__(self, store, *, settings=None, ai=None, github_factory=None, transport=None):
         self.store = store
@@ -1040,26 +1044,35 @@ class AutomationService:
         """DM the operators about signals that entered alert or recovered, and about watchdog restarts.
 
         The records of sent DMs live in the store, so the daily limit per signal holds across
-        restarts. A signal's message that finds no online bot stays due for the next pass.
+        restarts. A message that no online bot could deliver, and that Discord did not refuse,
+        stays due for the next pass.
         """
         import runtime_config
-        restarts, self._reported_restarts = self._reported_restarts, self._restarts
+        restarts = self._restarts
         if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
+            self._reported_restarts = restarts
             return
         if not self.bots or self.transport is None:
             return
         facts = await asyncio.to_thread(self._health_facts)
         records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
         now = time.time()
-        reason = self._restart_reason if self._restarts > restarts else None
+        reason = self._restart_reason if restarts > self._reported_restarts else None
+        restart_due = False
         for key, kind, text in due_alerts(facts, records, now, new_restart_reason=reason):
             # The record is written before the DM, so a record that cannot be written stops
             # the DM instead of letting every pass send it again.
             sent_at = records[key]["sent_at"] if kind == "resolved" else now
-            if not await self._save_alert_record(key, {"sent_at": sent_at, "open": False}):
-                continue
-            if await self._message_operators(text) and kind == "alert":
+            outcome = None
+            if await self._save_alert_record(key, {"sent_at": sent_at, "open": False}):
+                outcome = await self._message_operators(text)
+            if outcome == "retry":
+                await self._save_alert_record(key, records.get(key))
+            elif outcome == "delivered" and kind == "alert":
                 await self._save_alert_record(key, {"sent_at": now, "open": True})
+            restart_due = restart_due or (kind == "restart" and outcome in (None, "retry"))
+        if not restart_due:
+            self._reported_restarts = restarts
 
     async def _save_alert_record(self, key, record) -> bool:
         try:
@@ -1071,25 +1084,34 @@ class AutomationService:
         return True
 
     def _record_alert(self, key, record):
-        self.store.put_link("health_alert", key, record)
+        if record is None:
+            self.store.delete_links("health_alert", [key])
+        else:
+            self.store.put_link("health_alert", key, record)
 
     async def _message_operators(self, text):
-        """DM text to every operator through the helper bot, or another online bot while it is offline.
+        """DM text to every operator and return "delivered", "refused" or "retry".
 
-        Return whether any DM arrived, or None when no bot is online. A failed DM is logged once
-        and never raised, so a closed DM or an unknown user cannot stop the watchdog.
+        Each DM tries the helper bot first and then the other online bots. Discord's refusal
+        is final for that operator, while a timeout, a server error or a reconnecting bot moves
+        on to the next bot. "delivered" means at least one operator got the DM; "retry" means
+        an operator got neither the DM nor a refusal, so the message stays due.
         """
         import runtime_config
-        bot = self.bots.get(self.settings().get("bot_name")) or next(iter(self.bots.values()), None)
-        if bot is None or self.transport is None:
-            return None
-        delivered = False
+        helper = self.bots.get(self.settings().get("bot_name"))
+        bots = ([helper] if helper else []) + [bot for bot in list(self.bots.values()) if bot is not helper]
+        outcomes = set()
         for user_id in runtime_config.get("operator_user_ids", []) or []:
-            delivered = await self._direct_message(bot, user_id, text) or delivered
-        return delivered
+            outcome = "retry"
+            for bot in bots:
+                outcome = await self._direct_message(bot, user_id, text)
+                if outcome != "retry":
+                    break
+            outcomes.add(outcome)
+        return next((outcome for outcome in ("delivered", "retry") if outcome in outcomes), "refused")
 
-    async def _direct_message(self, bot, user_id, text) -> bool:
-        """Send one alert DM and return whether it arrived; a failure is logged, never raised.
+    async def _direct_message(self, bot, user_id, text) -> str:
+        """Send one alert DM and return "delivered", "refused" or "retry"; a failure is logged, never raised.
 
         The send runs as its own task, so a CancelledError that the send raises counts as a
         failed DM, and only a cancellation of the calling task ends the watchdog.
@@ -1108,10 +1130,11 @@ class AutomationService:
             error = asyncio.TimeoutError()
         else:
             error = asyncio.CancelledError() if task.cancelled() else task.exception()
-        if error is not None:
-            warn(f"A Project alert DM to an operator failed with {type(error).__name__}.",
-                 component="project_automation", event="alert_dm_failed", user_id=str(user_id))
-        return error is None
+        if error is None:
+            return "delivered"
+        warn(f"A Project alert DM to an operator failed with {type(error).__name__}.",
+             component="project_automation", event="alert_dm_failed", user_id=str(user_id))
+        return "refused" if isinstance(error, RecipientRefused) else "retry"
 
     async def supervise_once(self):
         """Run each watchdog check once; a check that raises is logged and the checks after it still run."""

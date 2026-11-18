@@ -21,11 +21,15 @@ DAY = 86400
 class Messenger:
     def __init__(self):
         self.sent = []
+        self.attempts = []
         self.failure = None
+        self.failing_bots = {}
 
     async def direct_message(self, bot, user_id, text):
-        if self.failure:
-            raise self.failure
+        self.attempts.append(bot.name)
+        failure = self.failing_bots.get(bot.name) or self.failure
+        if failure:
+            raise failure
         self.sent.append((bot.name, user_id, text))
 
 
@@ -203,19 +207,70 @@ def test_no_dm_while_alerts_are_turned_off(alerts, cfg):
     assert len(send(alerts)) == 2
 
 
-def test_a_failed_dm_is_logged_once_per_attempt_and_never_raises(alerts, monkeypatch):
+def test_a_refused_dm_is_logged_once_per_attempt_and_counts_against_the_daily_limit(alerts, monkeypatch):
     logged = []
     monkeypatch.setattr(project_automation, "warn", lambda message, **fields: logged.append((message, fields)))
-    alerts.transport.failure = RuntimeError("Cannot send messages to this user")
+    alerts.bots["Other"] = SimpleNamespace(name="Other")
+    alerts.transport.failure = project_automation.RecipientRefused("Cannot send messages to this user")
     late_job(alerts)
     asyncio.run(alerts.supervise_once())
     assert [fields["event"] for _, fields in logged] == ["alert_dm_failed", "alert_dm_failed"]
-    assert all("RuntimeError" in message and "Cannot send" not in message for message, _ in logged)
+    assert all("RecipientRefused" in message and "Cannot send" not in message for message, _ in logged)
+    # A refusal is final for that operator, so no other bot tries.
+    assert alerts.transport.attempts == ["Helper", "Helper"]
     alerts.transport.failure = None
     # The attempt counts against the daily limit, and nothing was delivered that could be resolved.
     assert send(alerts) == []
     finish_jobs(alerts)
     assert send(alerts) == []
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("timed out"), ConnectionError("reconnecting"),
+                                     RuntimeError("503 Service Unavailable")])
+def test_a_transient_dm_failure_tries_the_other_bots_in_the_same_pass(alerts, monkeypatch, failure):
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: None)
+    alerts.bots["Other"] = SimpleNamespace(name="Other")
+    alerts.transport.failing_bots["Helper"] = failure
+    late_job(alerts)
+    assert [(bot, user) for bot, user, _ in send(alerts)] == [("Other", "800"), ("Other", "801")]
+    assert alerts.transport.attempts == ["Helper", "Other", "Helper", "Other"]
+    assert send(alerts) == []
+
+
+def test_a_dm_that_no_bot_could_deliver_stays_due_for_the_next_pass(alerts, monkeypatch):
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: None)
+    alerts.transport.failure = TimeoutError("timed out")
+    late_job(alerts)
+    assert send(alerts) == []
+    alerts.transport.failure = None
+    assert len(send(alerts)) == 2
+    assert send(alerts) == []
+
+
+def test_a_restart_notice_that_no_bot_could_deliver_stays_due(alerts, monkeypatch):
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: None)
+
+    async def scenario():
+        async def crash():
+            raise ValueError("private detail")
+
+        async def idle():
+            await asyncio.Event().wait()
+
+        alerts._worker = asyncio.create_task(crash())
+        await asyncio.sleep(0)
+        monkeypatch.setattr(alerts, "_run", idle)
+        alerts.transport.failure = TimeoutError("timed out")
+        await alerts.supervise_once()
+        alerts.transport.failure = None
+        await alerts.supervise_once()
+        await alerts.supervise_once()
+        alerts._worker.cancel()
+        return [text for _, _, text in alerts.transport.sent]
+
+    assert asyncio.run(scenario()) == [
+        "Project helper alert. Worker: restarted by the watchdog after ValueError. "
+        "Check the logs for the cause. Dashboard → Project"] * 2
 
 
 def locked_writes(store, monkeypatch, failing):
