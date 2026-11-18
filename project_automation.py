@@ -16,13 +16,14 @@ from background_tasks import BackgroundTaskRegistry
 from logger import info, warn
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
-from project_automation_health import HealthFacts, health_signals
+from project_automation_health import HealthFacts, due_alerts, health_signals
 from project_automation_store import AutomationStore, Conflict
 from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
 
 CLOSED_SYNC_DAYS = 7
 WATCHDOG_SECONDS = 60
+ALERT_DM_TIMEOUT_SECONDS = 30
 # GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
 # and 404 for either when the App cannot read the repository involved:
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
@@ -99,6 +100,7 @@ class AutomationService:
         self._active_since = None
         self._restarts = 0
         self._restart_reason = None
+        self._reported_restarts = 0
         self._tasks = BackgroundTaskRegistry("project-automation")
         self.pr_activity = PRActivity(self)
 
@@ -130,6 +132,7 @@ class AutomationService:
         counts from the later of the last completed sync and the time automation last started
         running, so a restart or a resumed pause does not report the paused time.
         """
+        import runtime_config
         cfg = self.settings()
         queue = self.store.queue_health()
         synced = max((self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at") or 0,
@@ -142,7 +145,9 @@ class AutomationService:
             heartbeat_age=None if self._heartbeat is None else time.monotonic() - self._heartbeat,
             pending=queue["pending"], held=queue["recovery"], failed=queue["failed"],
             queue_lag=None if queue["oldest_due_at"] is None else max(0.0, now - queue["oldest_due_at"]),
-            sync_age=max(0.0, now - synced) if synced else None, database_bytes=queue["database_bytes"]))
+            sync_age=max(0.0, now - synced) if synced else None, database_bytes=queue["database_bytes"],
+            alerts_enabled=cfg.get("alerts_enabled", True),
+            operators=len(runtime_config.get("operator_user_ids", []) or [])))
 
     def status(self) -> dict:
         cfg = self.settings()
@@ -1018,9 +1023,56 @@ class AutomationService:
         warn(f"The watchdog restarted the Project worker after {reason}.",
              component="project_automation", event="worker_restarted")
 
+    async def send_alerts(self):
+        """DM the operators about signals that entered alert or recovered, and about watchdog restarts.
+
+        The records of sent DMs live in the store, so the daily limit per signal holds across
+        restarts. A signal's message that finds no online bot stays due for the next pass.
+        """
+        import runtime_config
+        restarts, self._reported_restarts = self._reported_restarts, self._restarts
+        if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
+            return
+        signals = await asyncio.to_thread(self.health)
+        records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
+        now = time.time()
+        reason = self._restart_reason if self._restarts > restarts else None
+        for key, kind, text in due_alerts(signals, records, now, new_restart_reason=reason):
+            delivered = await self._message_operators(text)
+            if delivered is None:
+                continue
+            record = ({**records[key], "open": False} if kind == "resolved"
+                      else {"sent_at": now, "open": kind == "alert" and delivered})
+            await asyncio.to_thread(self._record_alert, key, record)
+
+    def _record_alert(self, key, record):
+        self.store.put_link("health_alert", key, record)
+
+    async def _message_operators(self, text):
+        """DM text to every operator through the helper bot, or another online bot while it is offline.
+
+        Return whether any DM arrived, or None when no bot is online. A failed DM is logged once
+        and never raised, so a closed DM or an unknown user cannot stop the watchdog.
+        """
+        import runtime_config
+        bot = self.bots.get(self.settings().get("bot_name")) or next(iter(self.bots.values()), None)
+        if bot is None or self.transport is None:
+            return None
+        delivered = False
+        for user_id in runtime_config.get("operator_user_ids", []) or []:
+            try:
+                await asyncio.wait_for(self.transport.direct_message(bot, user_id, text), ALERT_DM_TIMEOUT_SECONDS)
+                delivered = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                warn(f"A Project alert DM to an operator failed with {type(exc).__name__}.",
+                     component="project_automation", event="alert_dm_failed", user_id=str(user_id))
+        return delivered
+
     async def supervise_once(self):
         """Run each watchdog check once; a check that raises is logged and the checks after it still run."""
-        for check in (self._revive_worker,):
+        for check in (self._revive_worker, self.send_alerts):
             try:
                 await check()
             except asyncio.CancelledError:

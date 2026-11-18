@@ -1127,6 +1127,20 @@ def _native_suite():
                 destination.send.assert_awaited_once()
                 self.assertIs(destination.send.await_args.kwargs["allowed_mentions"], NO_MENTIONS)
 
+        async def test_operator_alert_is_a_direct_message_with_mentions_disabled(self):
+            user = SimpleNamespace(send=AsyncMock())
+            self.bot.client.get_user = Mock(return_value=None)
+            self.bot.client.fetch_user = AsyncMock(return_value=user)
+            await self.transport.direct_message(self.bot, "800", "Project helper alert. Dashboard → Project")
+            self.bot.client.fetch_user.assert_awaited_once_with(800)
+            user.send.assert_awaited_once_with("Project helper alert. Dashboard → Project", allowed_mentions=NO_MENTIONS)
+            cached = SimpleNamespace(send=AsyncMock())
+            self.bot.client.get_user = Mock(return_value=cached)
+            await self.transport.direct_message(self.bot, "801", "Resolved.")
+            self.bot.client.get_user.assert_called_once_with(801)
+            self.bot.client.fetch_user.assert_awaited_once()
+            cached.send.assert_awaited_once_with("Resolved.", allowed_mentions=NO_MENTIONS)
+
         async def test_mentions_are_disabled_and_attachments_are_not_claimed_as_inspected(self):
             self.assertEqual(NO_MENTIONS.to_dict(), {"parse": []})
             incoming = message(attachments=[SimpleNamespace(url=f"https://example.org/log-{number}.txt") for number in range(8)])

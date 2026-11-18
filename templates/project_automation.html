@@ -171,6 +171,7 @@
 {%- endmacro %}
 <section class="project-section" aria-labelledby="health-heading">
     <h2 id="health-heading">Health</h2>
+    <p class="project-hint">Operators get a Discord DM when a check reaches Alert. Turn this off under Helper setup → Operator alerts.</p>
     <ul id="project-signals" class="project-signals" aria-label="Health checks">
         {% for item in project.service.health or [] %}
         <li class="project-signal" data-level="{{ item.level }}"><span class="project-signal-state">{{ signal_icon(item.level) }}{{ signal_labels[item.level] }}</span><span class="project-signal-name">{{ item.name }}</span><span class="project-signal-value">{{ item.value }}</span><p class="project-signal-sentence">{{ item.sentence }}</p></li>
@@ -346,6 +347,14 @@
                     <p class="form-hint" id="project-history-days-hint">0 keeps none: finished jobs are deleted within about 10 minutes. Failed jobs stay at least 7 days. Release, workflow, and commit post records also follow this setting with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued and held jobs, issue and PR posts, receipts, and feedback cases are not affected.</p>
                 </div>
             </div>
+        </fieldset>
+        <fieldset>
+            <legend>Operator alerts</legend>
+            <label class="project-enabled" for="project-alerts-enabled">
+                <input id="project-alerts-enabled" name="alerts_enabled" type="checkbox" {% if project.config.alerts_enabled %}checked{% endif %} aria-describedby="project-alerts-hint">
+                <span>Send alert DMs to operators</span>
+            </label>
+            <p class="form-hint" id="project-alerts-hint">When a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, at most once a day per check, and one more when the check is OK again. The helper bot sends them, or another online bot while it is offline.</p>
         </fieldset>
         <div class="project-form-actions">
             <button type="submit" class="btn btn-primary" id="project-save">Save project settings</button>
@@ -583,6 +592,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function draftConfig() {
         const config = Object.fromEntries(new FormData(form).entries());
         config.enabled = form.elements.enabled.checked;
+        config.alerts_enabled = form.elements.alerts_enabled.checked;
         config.max_questions = Number(config.max_questions);
         config.history_days = Number(config.history_days);
         ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });

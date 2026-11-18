@@ -19,6 +19,8 @@ PENDING_ALERT_JOBS = 10_000
 SYNC_AGE_WARN_SECONDS = 60 * 60
 SYNC_AGE_ALERT_SECONDS = 3 * 60 * 60
 DATABASE_WARN_BYTES = 512 * 1024 * 1024
+ALERT_REPEAT_SECONDS = 24 * 60 * 60
+DASHBOARD = "Dashboard → Project"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class HealthFacts:
     queue_lag: float | None
     sync_age: float | None
     database_bytes: int
+    alerts_enabled: bool
+    operators: int
     restarts: int = 0
     restart_reason: str | None = None
 
@@ -132,4 +136,30 @@ def health_signals(facts: HealthFacts) -> list[dict]:
                            _level(facts.database_bytes, DATABASE_WARN_BYTES), {
                                "ok": "The database file is within its expected size.",
                                "warn": "Lower Job history or use Clear history and queue so that compaction can shrink the file."}))
+    if facts.alerts_enabled and not facts.operators:
+        signals.append({"key": "alerts", "name": "Operator alerts", "value": "No operators", "level": "ok",
+                        "sentence": "Add Discord user IDs under Config → Operators to get alert DMs."})
     return signals
+
+
+def due_alerts(signals, records, now, *, new_restart_reason=None):
+    """Return the operator messages due now as (key, kind, text) tuples, kind "alert", "resolved" or "restart".
+
+    records maps a signal key to {"sent_at": when its last alert DM was attempted, "open":
+    whether an alert DM arrived that no resolved DM has followed}. An alert is due when no
+    open alert DM exists and the last attempt is ALERT_REPEAT_SECONDS old. A resolved DM is
+    due when an open signal is ok again. new_restart_reason names a watchdog restart that no
+    message reported yet, and its message follows the same daily limit.
+    """
+    due = []
+    for item in signals:
+        record = records.get(item["key"])
+        if item["level"] == "alert" and not (record and (record.get("open") or now - record["sent_at"] < ALERT_REPEAT_SECONDS)):
+            due.append((item["key"], "alert", f"Project helper alert. {item['name']}: {item['value']}. {item['sentence']} {DASHBOARD}"))
+        elif item["level"] == "ok" and record and record.get("open"):
+            due.append((item["key"], "resolved", f"Project helper resolved. {item['name']}: {item['value']}. {item['sentence']} {DASHBOARD}"))
+    record = records.get("worker_restart")
+    if new_restart_reason and not (record and now - record["sent_at"] < ALERT_REPEAT_SECONDS):
+        due.append(("worker_restart", "restart", f"Project helper alert. Worker: restarted by the watchdog after "
+                                                 f"{new_restart_reason}. Check the logs for the cause. {DASHBOARD}"))
+    return due

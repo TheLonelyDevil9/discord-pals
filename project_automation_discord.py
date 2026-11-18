@@ -244,6 +244,10 @@ class DiscordTransport:
     def _bot(self):
         return self.service.bots[self.service.settings()["bot_name"]]
 
+    async def direct_message(self, bot, user_id, text):
+        user = bot.client.get_user(int(user_id)) or await bot.client.fetch_user(int(user_id))
+        await user.send(text, allowed_mentions=NO_MENTIONS)
+
     async def _channel(self, channel_id):
         bot = self._bot()
         channel = bot.client.get_channel(int(channel_id)) or await bot.client.fetch_channel(int(channel_id))

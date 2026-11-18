@@ -25,7 +25,8 @@ ALWAYS = {"pending", "held", "failed", "database"}
 
 def healthy(**changes):
     facts = HealthFacts(pause_reason=None, bot_online=True, worker_running=True, heartbeat_age=1.0,
-                        pending=0, held=0, failed=0, queue_lag=None, sync_age=60.0, database_bytes=4096)
+                        pending=0, held=0, failed=0, queue_lag=None, sync_age=60.0, database_bytes=4096,
+                        alerts_enabled=True, operators=1)
     return replace(facts, **changes)
 
 

@@ -139,6 +139,24 @@ def test_history_days_are_saved_validated_and_shown(setup):
     assert saved["config"]["history_days"] == 14
 
 
+def alerts_checkbox(page):
+    return page.split('id="project-alerts-enabled"')[1].split(">")[0]
+
+
+def test_alerts_setting_is_saved_validated_and_shown(setup):
+    client, saved, _ = setup
+    page = client.get("/project-automation").get_data(as_text=True)
+    assert 'name="alerts_enabled"' in alerts_checkbox(page) and "checked" in alerts_checkbox(page)
+    assert "config.alerts_enabled = form.elements.alerts_enabled.checked;" in page
+    assert client.post("/api/project-automation", json={"alerts_enabled": False}, headers=csrf()).status_code == 200
+    assert saved["config"]["alerts_enabled"] is False
+    assert "checked" not in alerts_checkbox(client.get("/project-automation").get_data(as_text=True))
+    response = client.post("/api/project-automation", json={"alerts_enabled": "no"}, headers=csrf())
+    assert response.status_code == 400
+    assert any("alerts_enabled" in error for error in response.get_json()["errors"])
+    assert saved["config"]["alerts_enabled"] is False
+
+
 def health_card(page):
     start = page.index('id="project-signals"')
     return page[start:page.index("</ul>", start)]

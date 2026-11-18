@@ -33,7 +33,8 @@ MAPPING_KEYED = {
     "pr_checkpoint": ("number", "source"), "pr_missing_checkpoint": ("number", "source"),
 }
 IDENTITY_FREE = {"case_status", "conversation", "feedback", "feedback_delivery", "github_delivery",
-                 "item_closed", "job_dismissal", "maintainer_question", "pr_discovery_cycle", "question_notice"}
+                 "health_alert", "item_closed", "job_dismissal", "maintainer_question", "pr_discovery_cycle",
+                 "question_notice"}
 # Document fields that may name the helper, per kind. A record that names the helper anywhere else
 # cannot be verified, so the rename refuses.
 IDENTITY_PATHS = {
