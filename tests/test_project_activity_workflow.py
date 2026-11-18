@@ -1404,17 +1404,18 @@ def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monke
                                     "transcript": []}, "source:waiting")
     started, release = threading.Event(), threading.Event()
     real_cleanup, real_connection = setup.store.clean_up_old_queue, setup.store._connection
-    loop_thread, loop_writes = threading.get_ident(), []
+    loop_thread, cleanup_threads, attach_writes = threading.get_ident(), set(), []
 
     def slow_cleanup(history_days=0):
+        cleanup_threads.add(threading.get_ident())
         started.set()
         assert release.wait(5)
         return real_cleanup(history_days)
 
     @contextlib.contextmanager
     def watched(write=False, timeout=10):
-        if write and threading.get_ident() == loop_thread:
-            loop_writes.append(release.is_set())
+        if write and threading.get_ident() not in cleanup_threads:
+            attach_writes.append((threading.get_ident() == loop_thread, release.is_set()))
         with real_connection(write=write, timeout=timeout) as connection:
             yield connection
 
@@ -1430,12 +1431,12 @@ def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monke
         second = asyncio.create_task(setup.service.attach(SimpleNamespace(name="Helper")))
         await asyncio.sleep(0.2)
         assert not first.done() and not second.done()
-        assert loop_writes == []
+        assert attach_writes == []
         release.set()
         await asyncio.wait_for(asyncio.gather(first, second), 10)
 
     asyncio.run(scenario())
-    assert loop_writes and all(loop_writes)
+    assert attach_writes and all(after and not on_loop for on_loop, after in attach_writes)
     assert setup.transport.attach.await_count == 2
     assert any(job["key"] == f"initial:{case['id']}" for job in setup.store.list_jobs())
 

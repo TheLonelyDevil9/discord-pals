@@ -1,18 +1,24 @@
 """Durable cases, human decisions, and an outbox for project automation.
 
-Each operation owns a short SQLite transaction, so Flask threads and the Discord
-event loop can use the same store. No transaction remains open across network
-work. A worker must mark a job inflight before a remote write: abandoned writes
-then require reconciliation instead of being sent again after a restart.
+Each operation owns a short SQLite transaction, so Flask threads and the store
+thread can use the same store. Code on the Discord event loop calls the store
+through run_store, which runs on the store thread, so a lock wait or a slow disk
+never stalls the bots. No transaction remains open across network work. A worker
+must mark a job inflight before a remote write: abandoned writes then require
+reconciliation instead of being sent again after a restart.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+import functools
 import hashlib
 import json
 import math
 from pathlib import Path
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -35,6 +41,49 @@ JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
 QUEUE_CLEANUP_VERSION = 1
 _MANAGED_CASE_FIELDS = {"id", "source_key", "revision", "created_at", "updated_at", "decisions"}
 _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "repository"}
+
+
+_store_thread = None
+_store_thread_lock = threading.Lock()
+
+
+def _store_executor():
+    global _store_thread
+    with _store_thread_lock:
+        if _store_thread is None:
+            _store_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="project-store")
+        return _store_thread
+
+
+def store_future(function, *args, **kwargs):
+    """Queue function(*args, **kwargs) on the store thread and return an asyncio future of its result.
+
+    Call it from the event loop. Cancelling the future cancels a call that has not started,
+    so await it through run_store unless the caller handles that itself.
+    """
+    call = functools.partial(function, *args, **kwargs)
+    return asyncio.get_running_loop().run_in_executor(_store_executor(), call)
+
+
+async def run_store(function, *args, **kwargs):
+    """Run function(*args, **kwargs) on the store thread and return its result or raise its exception.
+
+    Call it from the event loop. function may make several store calls: one thread runs every
+    queued function in the order the event loop queued them, so the store calls of one function
+    never interleave with those of another. A queued function always runs to its end. When the
+    caller is cancelled, the await ends at once and the function still runs.
+    """
+    return await asyncio.shield(store_future(function, *args, **kwargs))
+
+
+def _nothing():
+    return None
+
+
+async def store_thread_idle():
+    """Wait until every function queued on the store thread before this call has finished."""
+    if _store_thread is not None:
+        await run_store(_nothing)
 
 
 class Conflict(Exception):
@@ -570,6 +619,22 @@ class AutomationStore:
             connection.execute(
                 "UPDATE jobs SET state = ?, updated_at = ?, available_at = ?, lease_until = NULL, lease_token = NULL, last_error = ? WHERE id = ?",
                 (state, now, now + delay, str(error)[:1500], job_id),
+            )
+
+    def defer_job(self, job_id, available_at, *, lease_token=None, note=None):
+        """Return a claimed job to the queue, due at available_at, without counting the attempt that claimed it.
+
+        Call it only when the attempt made no remote write, for example a claim whose worker
+        stopped before it started the job. An inflight job then also returns to the queue
+        instead of recovery. note replaces last_error when given.
+        """
+        with self._connection(write=True) as connection:
+            row = self._claimed_job(connection, job_id, lease_token)
+            now = time.time()
+            connection.execute(
+                "UPDATE jobs SET state = 'pending', attempts = MAX(attempts - 1, 0), updated_at = ?, available_at = ?, "
+                "lease_until = NULL, lease_token = NULL, last_error = ? WHERE id = ?",
+                (now, available_at, row["last_error"] if note is None else str(note)[:1500], job_id),
             )
 
     def retry_job(self, job_id):

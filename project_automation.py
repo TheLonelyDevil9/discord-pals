@@ -17,7 +17,7 @@ from logger import info, warn
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_health import HealthFacts, due_alerts, health_signals
-from project_automation_store import AutomationStore, Conflict
+from project_automation_store import AutomationStore, Conflict, run_store, store_future, store_thread_idle
 from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
 
@@ -292,7 +292,8 @@ class AutomationService:
                 "maintainer_question": self.store.get_link("maintainer_question", case["id"])}
 
     async def say(self, case, event):
-        context = self._context(case) if case else {"id": "project-command", "repository": self.settings()["repository"]}
+        context = (await run_store(self._context, case) if case
+                   else {"id": "project-command", "repository": self.settings()["repository"]})
         try:
             return await self.ai.speak(context, event, self.bots[self.settings()["bot_name"]], self.settings())
         except Exception:
@@ -302,7 +303,7 @@ class AutomationService:
 
     async def _notify(self, case, job, *, recover_only=False):
         key = f"{case['id']}:{job['id']}"
-        snapshot = self.store.get_link("notification", key)
+        snapshot = await run_store(self.store.get_link, "notification", key)
         if snapshot is None:
             if recover_only:
                 # Before conversational turns, one receipt represented the case's status card.
@@ -316,24 +317,35 @@ class AutomationService:
                                               "next_step": "Continue this report in the Discord thread."})
             keys = ("id", "revision", "bot_name", "guild_id", "channel_id", "reporter_id", "repository",
                     "state", "gate", "draft", "submitted_report", "github_url", "review_url")
-            snapshot = {name: deepcopy(case[name]) for name in keys if name in case}
-            if self.get_case(case["id"])["revision"] != case["revision"]:
+            snapshot = await run_store(self._prepare_notification, case, job, key, {
+                **{name: deepcopy(case[name]) for name in keys if name in case}, "reply": reply, "delivery_key": key})
+            if snapshot is None:
                 return False
-            snapshot.update(reply=reply, delivery_key=key, prepared_at=time.time())
-            self.store.put_link("notification", key, snapshot)
-        if not recover_only:
-            self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        elif not recover_only:
+            await run_store(self.store.mark_job_inflight, job["id"], lease_token=job["lease_token"], lease_seconds=600)
         found = await self.transport.notify(snapshot, recover_only=recover_only)
         if not recover_only or found:
-            receipt = self.store.get_link("feedback_delivery", key) or {}
-            delivered_at = receipt.get("created_at", snapshot.get("prepared_at", case["created_at"]))
-            history = self.store.get_link("conversation", case["id"]) or {"turns": []}
-            if not any(turn.get("delivery_key") == key for turn in history["turns"]):
-                history["turns"].append({"role": "assistant", "content": snapshot["reply"],
-                    "author_name": self.settings().get("character_name", ""), "created_at": delivered_at, "delivery_key": key})
-                history["turns"] = sorted(history["turns"], key=lambda turn: turn["created_at"])[-8:]
-                self.store.put_link("conversation", case["id"], history)
+            await run_store(self._record_conversation_turn, case, key, snapshot)
         return found
+
+    def _prepare_notification(self, case, job, key, snapshot):
+        """Save the notification snapshot and mark the job inflight, or return None when the case moved on."""
+        if self.get_case(case["id"])["revision"] != case["revision"]:
+            return None
+        snapshot = {**snapshot, "prepared_at": time.time()}
+        self.store.put_link("notification", key, snapshot)
+        self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        return snapshot
+
+    def _record_conversation_turn(self, case, key, snapshot):
+        receipt = self.store.get_link("feedback_delivery", key) or {}
+        delivered_at = receipt.get("created_at", snapshot.get("prepared_at", case["created_at"]))
+        history = self.store.get_link("conversation", case["id"]) or {"turns": []}
+        if not any(turn.get("delivery_key") == key for turn in history["turns"]):
+            history["turns"].append({"role": "assistant", "content": snapshot["reply"],
+                "author_name": self.settings().get("character_name", ""), "created_at": delivered_at, "delivery_key": key})
+            history["turns"] = sorted(history["turns"], key=lambda turn: turn["created_at"])[-8:]
+            self.store.put_link("conversation", case["id"], history)
 
     def check_new_report(self, reporter_id, content):
         if self.paused():
@@ -452,32 +464,38 @@ class AutomationService:
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
-        # The store writes below run on the bots' event loop. While the one-time cleanup
-        # holds the write lock they would freeze every bot and then fail, so wait here.
+        # The store writes below would wait for the one-time cleanup's write lock and then
+        # fail, so wait here until the cleanup has ended.
         try:
             await self.clean_up_old_queue()
         except Exception:
             self._last_error = "Background processing needs attention"
         if bot.name == self.settings().get("bot_name"):
-            for case in self.store.list_pending_cases():
-                if not self._bound(case) or case["state"] not in {"needs_maintainer", "discussing", "awaiting_report"}:
-                    continue
-                actions = {option["key"] for option in (case.get("gate") or {}).get("options", [])}
-                expected = reporter_actions(case)
-                if case["state"] == "needs_maintainer" or "human" in actions or not set(expected).issubset(actions):
-                    try:
-                        self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", expected),
-                            "notice_event": {"action": "reporter_controls", "facts": {"published": False},
-                                "next_step": "Write or edit your report here. Describe the problem or improvement; no maintainer handoff is required."}})
-                    except Conflict:
-                        # A reporter action won the race; do not replace its controls.
-                        continue
+            await run_store(self._restore_reporter_controls)
         await self.transport.attach(bot)
+        await run_store(self._queue_initial_assessments)
+        if self._worker is None or self._worker.done():
+            self._start_worker()
+
+    def _restore_reporter_controls(self):
+        for case in self.store.list_pending_cases():
+            if not self._bound(case) or case["state"] not in {"needs_maintainer", "discussing", "awaiting_report"}:
+                continue
+            actions = {option["key"] for option in (case.get("gate") or {}).get("options", [])}
+            expected = reporter_actions(case)
+            if case["state"] == "needs_maintainer" or "human" in actions or not set(expected).issubset(actions):
+                try:
+                    self._save(case, {"state": "discussing", "draft": None, "gate": gate("conversation", expected),
+                        "notice_event": {"action": "reporter_controls", "facts": {"published": False},
+                            "next_step": "Write or edit your report here. Describe the problem or improvement; no maintainer handoff is required."}})
+                except Conflict:
+                    # A reporter action won the race; do not replace its controls.
+                    continue
+
+    def _queue_initial_assessments(self):
         for case in self.store.list_pending_cases():
             if case["revision"] == 1 and case["state"] == "assessing":
                 self.store.enqueue("assess", {"case_id": case["id"], "revision": 1}, key=f"initial:{case['id']}")
-        if self._worker is None or self._worker.done():
-            self._start_worker()
 
     def _start_worker(self):
         self._worker = asyncio.create_task(self._run(), name="project-automation")
@@ -491,6 +509,9 @@ class AutomationService:
                 self._worker.cancel()
                 await asyncio.gather(self._worker, return_exceptions=True)
                 self._worker = None
+            # The cancelled tasks' store calls still run on the store thread. Waiting for them
+            # keeps any of them from finishing after the event loop has closed.
+            await store_thread_idle()
             if self._github:
                 await self._github.close()
                 self._github = None
@@ -521,7 +542,7 @@ class AutomationService:
         except GitHubError:
             search_unavailable = True
         candidates = [{**item, "body": item.get("body", "")[:2000]} for item in candidates[:5]]
-        context = {**self._context(case), "search_unavailable": search_unavailable,
+        context = {**await run_store(self._context, case), "search_unavailable": search_unavailable,
                    "linked_issue_number": case.get("target_issue_number") or case.get("linked_issue_number")}
         result = await self.ai.assess(context, candidates, self.bots[case["bot_name"]], self.settings())
         report = case.get("submitted_report") or {}
@@ -545,7 +566,7 @@ class AutomationService:
         if (result.get("duplicate_number") and not search_unavailable
                 and not (case.get("target_issue_number") or case.get("linked_issue_number"))):
             actions.insert(1, "link")
-        self._save(case, {"workflow_version": 2, "assessment": result, "candidates": candidates,
+        await run_store(self._save, case, {"workflow_version": 2, "assessment": result, "candidates": candidates,
                           "assessment_question_key": case.get("answering_question_key"),
                           "search_unavailable": search_unavailable, "question_count": count,
                           "reply": result["reply"], "notice_event": None, "draft": draft,
@@ -569,7 +590,7 @@ class AutomationService:
         except (WorkflowError, KeyError, TypeError):
             return False
 
-    async def _branch(self, case, action):
+    def _branch(self, case, action):
         if case.get("workflow_version") != 2:
             self.store.update_case(case["id"], {"workflow_version": 2, "state": "assessing", "gate": None,
                 "draft": None, "submitted_report": None, "reply": "", "notice_event": None},
@@ -611,24 +632,26 @@ class AutomationService:
             return
         draft, marker = job["payload"]["draft"], job["payload"]["marker"]
         if case.get("workflow_version") != 2 or not self._human_draft(case):
-            self.store.update_case(case["id"], {"workflow_version": 2, "state": "assessing", "gate": None,
+            await run_store(self.store.update_case, case["id"], {"workflow_version": 2, "state": "assessing", "gate": None,
                 "draft": None, "submitted_report": None}, expected_revision=case["revision"],
                 job=self._job("assess", case, revision=case["revision"] + 1))
             return
         if draft != case["draft"] or marker != case.get("publication_marker"):
             raise WorkflowError("The queued publication does not match the approved report.")
         client = await self.client()
-        self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        await run_store(self.store.mark_job_inflight, job["id"], lease_token=job["lease_token"], lease_seconds=600)
         try:
             if draft["kind"] == "issue":
                 result = await client.create_issue(draft["title"], draft["body"], marker)
             else:
                 result = await client.add_comment(draft["issue_number"], draft["body"], marker)
         except (GitHubAmbiguousWrite, asyncio.CancelledError):
-            self._save(case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
+            await run_store(self._save, case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
                 "facts": {"publication_confirmed": False}, "next_step": "A maintainer must check GitHub before another attempt."}})
             raise
-        number = draft.get("issue_number") or result["number"]
+        await run_store(self._record_publication, case, draft, draft.get("issue_number") or result["number"], result)
+
+    def _record_publication(self, case, draft, number, result):
         question = self.store.get_link("maintainer_question", case["id"]) or {}
         if draft.get("question_key") and question.get("key") == draft["question_key"]:
             self.store.put_link("maintainer_question", case["id"], {})
@@ -641,31 +664,30 @@ class AutomationService:
         """Read-only marker lookup; a missing match never authorizes a second POST."""
         if not self.is_maintainer(user_id, role_ids) or self.paused():
             raise WorkflowError("A configured maintainer must run recovery while the helper is enabled.")
-        job = self.store.get_job(job_id)
+        job, case = await run_store(self._job_and_case, job_id)
         if not job or job["state"] != "recovery":
             raise WorkflowError("That job is not awaiting delivery recovery.")
         if job["kind"] in {"notify", "event"}:
             if job["kind"] == "notify":
-                case = self.get_case(job["payload"]["case_id"])
                 if not self._bound(case):
                     raise WorkflowError("Restore the report's project configuration before recovery.")
                 found = await self._notify(case, job, recover_only=True)
             else:
                 self._check_event_binding(job["payload"])
                 if job["payload"].get("kind") == "pr_activity":
-                    prepared = self.store.get_link("pr_prepared", str(job_id))
+                    prepared = await run_store(self.store.get_link, "pr_prepared", str(job_id))
                     if not prepared:
                         raise WorkflowError("The uncertain PR activity has no saved delivery version.")
                     found = await self.transport.mirror_activity(prepared, recover_only=True)
                 else:
                     found = await self.transport.mirror(job["payload"], recover_only=True)
             if found:
-                self.store.resolve_recovery(job_id, outcome="complete" if job["kind"] == "notify" else "retry",
-                    actor=str(user_id), note="Found existing Discord delivery")
+                await run_store(self.store.resolve_recovery, job_id,
+                                outcome="complete" if job["kind"] == "notify" else "retry",
+                                actor=str(user_id), note="Found existing Discord delivery")
             return found
         if job["kind"] != "publish":
             raise WorkflowError("This job requires operator inspection in the dashboard.")
-        case = self.get_case(job["payload"]["case_id"])
         if not self._bound(case):
             raise WorkflowError("Restore the report's project configuration before recovery.")
         if case["state"] not in {"queued", "recovery"} or case.get("publication_marker") != job["payload"]["marker"]:
@@ -678,21 +700,28 @@ class AutomationService:
             result = await client.find_comment_by_marker(draft["issue_number"], marker)
         if not result:
             return False
+        await run_store(self._record_recovered_publication, job_id, case, draft, result, user_id)
+        return True
+
+    def _job_and_case(self, job_id):
+        """Return the job and, when its payload names one, its feedback case."""
+        job = self.store.get_job(job_id)
+        return job, self.get_case(job["payload"]["case_id"]) if job and "case_id" in job["payload"] else None
+
+    def _record_recovered_publication(self, job_id, case, draft, result, user_id):
         self._save(case, {"state": "filed", "linked_issue_number": draft.get("issue_number") or result["number"],
                           "github_url": result["html_url"], "gate": None,
                           "notice_event": {"action": "publication_recovered", "facts": {"github_url": result["html_url"]},
                                            "next_step": "Follow the existing report on GitHub."}})
         self.store.resolve_recovery(job_id, outcome="complete", actor=str(user_id), note="Matched GitHub publication marker")
-        return True
 
     async def retry(self, job_id, *, user_id, role_ids=(), confirmed_not_delivered=False):
         """A maintainer can retry failed reads or explicitly resolve an uncertain write."""
         if not self.is_maintainer(user_id, role_ids) or self.paused():
             raise WorkflowError("A configured maintainer must retry work while the helper is enabled.")
-        job = self.store.get_job(job_id)
+        job, case = await run_store(self._job_and_case, job_id)
         if not job or job["state"] not in {"failed", "recovery"}:
             raise WorkflowError("That job is not held or failed.")
-        case = self.get_case(job["payload"]["case_id"]) if "case_id" in job["payload"] else None
         if case and not self._bound(case):
             raise WorkflowError("Restore this report's project configuration first.")
         if job["kind"] == "event":
@@ -705,11 +734,7 @@ class AutomationService:
                 or (case["state"] in {"needs_maintainer", "discussing"} and case["revision"] == job["payload"]["revision"] + 1)
             ):
                 raise WorkflowError("This report has progressed beyond that assessment.")
-            if job["kind"] == "assess" and case["state"] != "assessing":
-                self.store.update_case(case["id"], {"state": "assessing", "gate": None},
-                                       expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
-            else:
-                self.store.retry_job(job_id)
+            await run_store(self._retry_failed_job, job, case)
             return "Retry queued."
         if await self.recover(job_id, user_id=user_id, role_ids=role_ids):
             return "Existing delivery recovered; no new publication was created."
@@ -723,21 +748,32 @@ class AutomationService:
                                        "next_step": "The reporter must review and approve their exact text again."}}
                      if fresh_report else {"workflow_version": 2, "state": "assessing", "draft": None,
                                            "submitted_report": None, "gate": None, "reply": "", "notice_event": None})
-            self.store.resolve_recovery(job_id, outcome="cancel", actor=str(user_id),
-                                        note="Maintainer confirmed no delivery; returned draft for fresh approval",
-                                        case_update={"case_id": case["id"], "expected_revision": case["revision"],
-                                                     "patch": patch,
-                                                     "job": self._job("notify" if fresh_report else "assess", case,
-                                                                      revision=case["revision"] + 1)})
+            await run_store(self.store.resolve_recovery, job_id, outcome="cancel", actor=str(user_id),
+                            note="Maintainer confirmed no delivery; returned draft for fresh approval",
+                            case_update={"case_id": case["id"], "expected_revision": case["revision"],
+                                         "patch": patch,
+                                         "job": self._job("notify" if fresh_report else "assess", case,
+                                                          revision=case["revision"] + 1)})
             return "Draft returned to Discord for a fresh approval. Nothing has been published."
+        await run_store(self._release_confirmed_absence, job, user_id)
+        return "Discord delivery retry queued after your confirmation."
+
+    def _retry_failed_job(self, job, case):
+        if job["kind"] == "assess" and case["state"] != "assessing":
+            self.store.update_case(case["id"], {"state": "assessing", "gate": None},
+                                   expected_revision=case["revision"], job=self._job("assess", case, revision=case["revision"] + 1))
+        else:
+            self.store.retry_job(job["id"])
+
+    def _release_confirmed_absence(self, job, user_id):
+        """Release the send guards of a held Discord delivery that the maintainer confirmed absent, and queue it again."""
         if job["kind"] == "event":
-            prepared = (self.store.get_link("pr_prepared", str(job_id))
+            prepared = (self.store.get_link("pr_prepared", str(job["id"]))
                         if job["payload"].get("kind") == "pr_activity" else job["payload"])
             if not prepared:
                 raise WorkflowError("The uncertain PR activity has no saved delivery version.")
             self.transport.confirm_not_delivered(prepared)
-        self.store.resolve_recovery(job_id, outcome="retry", actor=str(user_id), note="Maintainer inspected destination and explicitly confirmed no delivery")
-        return "Discord delivery retry queued after your confirmation."
+        self.store.resolve_recovery(job["id"], outcome="retry", actor=str(user_id), note="Maintainer inspected destination and explicitly confirmed no delivery")
 
     def _check_event_binding(self, event):
         from project_automation_webhook import webhook_binding
@@ -769,40 +805,46 @@ class AutomationService:
             await self._close_converted_issue(event, job)
             return
         if event["kind"] == "comment":
-            for case in self.store.cases_for_issue(event["repository"], event["number"]):
-                if self._bound(case):
-                    notice = f"{case['id']}:{event['key']}"
-                    # Retention deletes the finished notify job, so this link is what
-                    # keeps a rerun of the same event from asking the reporter twice.
-                    if self.store.get_link("question_notice", notice) is not None:
-                        continue
-                    # Preserve any current draft approval. The question is an independent status note.
-                    self.store.put_link("maintainer_question", case["id"], {"key": event["key"], "body": event["body"], "url": event["html_url"]})
-                    self.store.save_links_with_jobs([("question_notice", notice, {})], [{
-                        "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "maintainer_question",
-                            "facts": {"question": event["body"], "github_url": event["html_url"]},
-                            "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
-                        "key": f"question:{notice}"}])
+            await run_store(self._relay_maintainer_question, event)
         else:
-            self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+            await run_store(self.store.mark_job_inflight, job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
             if event["kind"] == "issue":
-                for case in self.store.cases_for_issue(event["repository"], event["number"]):
-                    if self._bound(case):
-                        # Check the queued status, not an old job's payload schema.
-                        # Persist the checkpoint and outbox together so an interrupted
-                        # enqueue cannot silently suppress the reporter's notification.
-                        # A recovered event can observe another transition; each
-                        # leased attempt needs its own immutable notification key.
-                        status = {"state": event["state"], "url": event["html_url"]}
-                        if self.store.get_link("case_status", case["id"]) == status:
-                            continue
-                        self.store.save_links_with_jobs([("case_status", case["id"], status)], [{
-                            "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "issue_status",
-                                "facts": {"state": event["state"], "github_url": event["html_url"]},
-                                "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
-                            "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}",
-                        }])
+                await run_store(self._queue_status_notices, event, job)
+
+    def _relay_maintainer_question(self, event):
+        for case in self.store.cases_for_issue(event["repository"], event["number"]):
+            if self._bound(case):
+                notice = f"{case['id']}:{event['key']}"
+                # Retention deletes the finished notify job, so this link is what
+                # keeps a rerun of the same event from asking the reporter twice.
+                if self.store.get_link("question_notice", notice) is not None:
+                    continue
+                # Preserve any current draft approval. The question is an independent status note.
+                self.store.put_link("maintainer_question", case["id"], {"key": event["key"], "body": event["body"], "url": event["html_url"]})
+                self.store.save_links_with_jobs([("question_notice", notice, {})], [{
+                    "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "maintainer_question",
+                        "facts": {"question": event["body"], "github_url": event["html_url"]},
+                        "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
+                    "key": f"question:{notice}"}])
+
+    def _queue_status_notices(self, event, job):
+        for case in self.store.cases_for_issue(event["repository"], event["number"]):
+            if self._bound(case):
+                # Check the queued status, not an old job's payload schema.
+                # Persist the checkpoint and outbox together so an interrupted
+                # enqueue cannot silently suppress the reporter's notification.
+                # A recovered event can observe another transition; each
+                # leased attempt needs its own immutable notification key.
+                status = {"state": event["state"], "url": event["html_url"]}
+                if self.store.get_link("case_status", case["id"]) == status:
+                    continue
+                self.store.save_links_with_jobs([("case_status", case["id"], status)], [{
+                    "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "issue_status",
+                        "facts": {"state": event["state"], "github_url": event["html_url"]},
+                        "next_step": "Follow the linked issue for details; closed does not by itself mean fixed."}},
+                    "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}",
+                }])
 
     async def _close_converted_issue(self, event, job):
         """Mark the post of an issue that became pull request `event` as converted, and queue the PR's own post.
@@ -817,14 +859,23 @@ class AutomationService:
         """
         number, url = event["number"], event["html_url"]
         closed = self._closed_key("issue", number)
-        stored = self.store.get_link("item_closed", closed) or {}
+        stored = await run_store(self._begin_conversion, closed, job)
         title = stored.get("title") or event["title"]
-        self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
         await self.transport.mirror({
             "kind": "issue", "key": event["key"], "number": number, "repository": event["repository"],
             "title": title, "state": "converted", "closed": True, "html_url": url,
             "body": f"This issue became [pull request #{number}]({url}). Its updates appear in the pull request's own post.",
         }, create=False)
+        await run_store(self._record_conversion, event, job, closed, stored, title)
+
+    def _begin_conversion(self, closed, job):
+        """Return the stored close record of the converted issue and mark the job inflight."""
+        stored = self.store.get_link("item_closed", closed) or {}
+        self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
+        return stored
+
+    def _record_conversion(self, event, job, closed, stored, title):
+        number, url = event["number"], event["html_url"]
         status, links, jobs = {"state": "converted", "url": url}, [], []
         for case in self.store.cases_for_issue(event["repository"], number):
             if self._bound(case) and self.store.get_link("case_status", case["id"]) != status:
@@ -842,7 +893,7 @@ class AutomationService:
 
     async def process_job(self, job):
         payload = job["payload"]
-        case = self.get_case(payload["case_id"]) if "case_id" in payload else None
+        case = await run_store(self.get_case, payload["case_id"]) if "case_id" in payload else None
         if case and not self._bound(case):
             raise WorkflowError("Project settings changed; this case is held for its original configuration.")
         if case:
@@ -851,7 +902,7 @@ class AutomationService:
             await self._assess(case, job)
         elif job["kind"] == "branch":
             if case["state"] == "processing" and case["revision"] == payload["revision"]:
-                await self._branch(case, payload["action"])
+                await run_store(self._branch, case, payload["action"])
         elif job["kind"] == "publish":
             await self._publish(case, job)
         elif job["kind"] == "notify":
@@ -870,21 +921,21 @@ class AutomationService:
         elif job["kind"] == "sync":
             if "_binding" in payload:
                 self._check_event_binding(payload)
-            activate(self.store, self.settings())
+            await run_store(activate, self.store, self.settings())
             client = await self.client()
             in_scope = []
             for kind in ("issue", "pull"):
                 in_scope += [(kind, item) for item in await client.list_open_items(kind)]
             listed = len(in_scope)
             seen = {(kind, item["number"]) for kind, item in in_scope}
-            self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
-            for link in self.store.list_links("mirror"):
+            posts, closed = await run_store(self._sync_records, seen)
+            for link in posts:
                 data = link["data"]
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
                     seen.add((data["kind"], data["number"]))
                     kind = data["kind"]
-                    if kind == "issue" and (self.store.get_link("item_closed", self._closed_key(kind, data["number"])) or {}).get("converted"):
+                    if kind == "issue" and closed.get(self._closed_key(kind, data["number"]), {}).get("converted"):
                         # The issue's post record keeps its pull request in scope, so that a PR that closed
                         # before it got a post still gets one when the refresh that the conversion queued
                         # was cleared or failed.
@@ -892,15 +943,11 @@ class AutomationService:
                         if (kind, data["number"]) in seen:
                             continue
                         seen.add((kind, data["number"]))
-                    item = await self._closed_item_in_scope(client, kind, data["number"])
+                    item = await self._closed_item_in_scope(client, kind, data["number"],
+                                                            closed.get(self._closed_key(kind, data["number"]), {}))
                     if item is not None:
                         in_scope.append((kind, item))
-            changed, daily = self._refreshes(in_scope)
-            for kind, item in changed + daily:
-                self._enqueue_sync_item(item, kind, job["id"])
-            walked, rechecked = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"],
-                                                               job["id"])
-            self.pr_activity.enqueue_discovery(job["id"])
+            changed, daily, walked, rechecked = await run_store(self._queue_cycle, in_scope, job["id"])
             refreshed = len(changed) + len(daily)
             info(f"Project sync listed {listed} open items and kept {len(in_scope) - listed} recently closed items "
                  f"in scope; queued {refreshed} refreshes ({len(changed)} changed, {len(daily)} daily) and "
@@ -913,20 +960,43 @@ class AutomationService:
     def _closed_key(self, kind, number):
         return f"{self.settings()['repository'].lower()}:{kind}:{number}"
 
-    async def _closed_item_in_scope(self, client, kind, number):
+    def _sync_records(self, seen):
+        """Drop the close records of the `seen` items, which GitHub lists as open, and return the
+        mirror records and the remaining close records of the repository, by key.
+
+        While the root runs, only the root writes close records, and it handles each item once,
+        so the records read here stay current for the rest of the root.
+        """
+        self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
+        closed = self.store.list_links("item_closed", prefix=self.settings()["repository"].lower() + ":")
+        return self.store.list_links("mirror"), {link["key"]: link["data"] for link in closed}
+
+    def _queue_cycle(self, in_scope, cycle):
+        """Queue the refreshes, PR walks and discovery of sync cycle `cycle` for the in-scope items.
+
+        Return the changed and daily refreshes and the changed and daily walk counts.
+        """
+        changed, daily = self._refreshes(in_scope)
+        for kind, item in changed + daily:
+            self._enqueue_sync_item(item, kind, cycle)
+        walked, rechecked = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"], cycle)
+        self.pr_activity.enqueue_discovery(cycle)
+        return changed, daily, walked, rechecked
+
+    async def _closed_item_in_scope(self, client, kind, number, stored):
         """Return a mirrored item missing from the open listing while it still needs refreshing, else None.
 
-        An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
-        time is stored. An unknown close time costs one fetch, which stores it. An item that
-        GitHub reports as moved or deleted is stored as gone and costs no further fetch; a 404
-        counts only when the next cycle gets one again. Both stay out of scope until the open
-        listing shows the item again. Neither answer drops a stored close time. An issue that
-        became a pull request is returned as that pull request until a refresh of its post
-        stores the conversion; from then on the sync root asks for the pull request instead.
+        stored is the item's close record, or an empty dict. An item closed more than
+        CLOSED_SYNC_DAYS ago costs no GitHub call once its close time is stored. An unknown
+        close time costs one fetch, which stores it. An item that GitHub reports as moved or
+        deleted is stored as gone and costs no further fetch; a 404 counts only when the next
+        cycle gets one again. Both stay out of scope until the open listing shows the item
+        again. Neither answer drops a stored close time. An issue that became a pull request is
+        returned as that pull request until a refresh of its post stores the conversion; from
+        then on the sync root asks for the pull request instead.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
-        stored = self.store.get_link("item_closed", key) or {}
         if "gone" in stored or ("closed_at" in stored and stored["closed_at"] < cutoff):
             return None
         try:
@@ -936,19 +1006,19 @@ class AutomationService:
                 raise
             # A 404 also follows a passing loss of the App's access after the listing succeeded.
             if exc.status == 404 and not stored.get("not_found"):
-                self.store.put_link("item_closed", key, {**stored, "not_found": True})
+                await run_store(self.store.put_link, "item_closed", key, {**stored, "not_found": True})
                 return None
-            self.store.put_link("item_closed", key, {**stored, "gone": exc.status})
+            await run_store(self.store.put_link, "item_closed", key, {**stored, "gone": exc.status})
             info(f"Project sync no longer refreshes {kind} #{number}: GitHub reports it moved or deleted.",
                  component="project_automation", event="sync_item_gone")
             return None
         if item.get("state") != "closed":
-            self.store.delete_links("item_closed", [key])
+            await run_store(self.store.delete_links, "item_closed", [key])
             return item
         # Without a usable closed_at, the first time the item was seen closed stands in for it.
         closed_at = closed_time(item) or stored.get("closed_at") or time.time()
         if stored != {"closed_at": closed_at}:
-            self.store.put_link("item_closed", key, {"closed_at": closed_at})
+            await run_store(self.store.put_link, "item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None
 
     def _refreshes(self, in_scope):
@@ -995,43 +1065,74 @@ class AutomationService:
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:
             return False
-        activate(self.store, self.settings())
-        job = self.store.claim_job(lease_seconds=600)
+        job = await self._claim()
         if not job:
             return False
         try:
             await asyncio.wait_for(self.process_job(job), timeout=480)
-            self.store.complete_job(job["id"], lease_token=job["lease_token"])
-            cycle = job["id"] if job["kind"] == "sync" else job["payload"].get("_sync_cycle")
-            if cycle is not None:
-                self.pr_activity.complete_cycle(cycle)
+            await run_store(self._complete, job)
             self._last_error = None
         except asyncio.CancelledError:
             raise
         except Conflict:
-            current = self.store.get_job(job["id"])
-            if current["state"] == "inflight":
-                self.store.fail_job(job["id"], "Delivery completed with a local state conflict; check its destination", lease_token=job["lease_token"])
-            elif current["state"] == "running":
-                self.store.complete_job(job["id"], lease_token=job["lease_token"])
+            await run_store(self._settle_conflict, job)
         except Exception as exc:
             # Persist only a fixed category, never provider responses, credentials, or request headers.
             error = f"{type(exc).__name__}: {job['kind']} needs attention"
             self._last_error = error
             permanent = isinstance(exc, (WorkflowError, GitHubAmbiguousWrite)) or job["attempts"] >= 3
-            self.store.fail_job(job["id"], error, delay=30 * job["attempts"], permanent=permanent, lease_token=job["lease_token"])
-            if job["kind"] == "publish":
-                case = self.get_case(job["payload"]["case_id"])
-                if case and case["state"] == "queued" and self.store.get_job(job["id"])["state"] == "recovery":
-                    self._save(case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
-                        "facts": {"publication_confirmed": False}, "next_step": "A maintainer must check GitHub before another attempt."}})
-            if permanent and job["kind"] == "assess":
-                case = self.get_case(job["payload"]["case_id"])
-                if case and case["state"] == "assessing" and case["revision"] == job["payload"].get("revision"):
-                    self._save(case, {"state": "discussing", "gate": gate("conversation", reporter_actions(case)),
-                        "notice_event": {"action": "assessment_failed", "facts": {"report_saved": True},
-                                         "next_step": "The check could not finish. Write or edit your report, or choose Check my report to retry a saved report. Nothing was published."}})
+            await run_store(self._fail, job, error, permanent)
         return True
+
+    async def _claim(self):
+        """Claim the next due job on the store thread and return it, or None.
+
+        When the worker is cancelled during the claim, the claim still finishes, and its job
+        goes back to the queue with the attempt uncounted, so it does not wait for its lease.
+        """
+        claim = store_future(self._claim_next)
+        try:
+            return await asyncio.shield(claim)
+        except asyncio.CancelledError:
+            try:
+                job = await claim
+                if job:
+                    await run_store(self.store.defer_job, job["id"], job["available_at"], lease_token=job["lease_token"])
+            except Exception:
+                # The lease lapses on its own, which returns the job to the queue later.
+                pass
+            raise
+
+    def _claim_next(self):
+        activate(self.store, self.settings())
+        return self.store.claim_job(lease_seconds=600)
+
+    def _complete(self, job):
+        self.store.complete_job(job["id"], lease_token=job["lease_token"])
+        cycle = job["id"] if job["kind"] == "sync" else job["payload"].get("_sync_cycle")
+        if cycle is not None:
+            self.pr_activity.complete_cycle(cycle)
+
+    def _settle_conflict(self, job):
+        current = self.store.get_job(job["id"])
+        if current["state"] == "inflight":
+            self.store.fail_job(job["id"], "Delivery completed with a local state conflict; check its destination", lease_token=job["lease_token"])
+        elif current["state"] == "running":
+            self.store.complete_job(job["id"], lease_token=job["lease_token"])
+
+    def _fail(self, job, error, permanent):
+        self.store.fail_job(job["id"], error, delay=30 * job["attempts"], permanent=permanent, lease_token=job["lease_token"])
+        if job["kind"] == "publish":
+            case = self.get_case(job["payload"]["case_id"])
+            if case and case["state"] == "queued" and self.store.get_job(job["id"])["state"] == "recovery":
+                self._save(case, {"state": "recovery", "notice_event": {"action": "uncertain_publication",
+                    "facts": {"publication_confirmed": False}, "next_step": "A maintainer must check GitHub before another attempt."}})
+        if permanent and job["kind"] == "assess":
+            case = self.get_case(job["payload"]["case_id"])
+            if case and case["state"] == "assessing" and case["revision"] == job["payload"].get("revision"):
+                self._save(case, {"state": "discussing", "gate": gate("conversation", reporter_actions(case)),
+                    "notice_event": {"action": "assessment_failed", "facts": {"report_saved": True},
+                                     "next_step": "The check could not finish. Write or edit your report, or choose Check my report to retry a saved report. Nothing was published."}})
 
     def queue_sync_cycle(self):
         """Return the queued root's ID, or None while the interval runs or a cycle still has live work."""
@@ -1084,7 +1185,7 @@ class AutomationService:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()
                 if self._automation_runs():
-                    self.queue_sync_cycle()
+                    await run_store(self.queue_sync_cycle)
                     await self.run_once()
             except asyncio.CancelledError:
                 raise
@@ -1129,16 +1230,11 @@ class AutomationService:
         restarts = self._restarts
         if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
             self._reported_restarts = restarts
-            # With nobody to tell, an open alert could never be resolved, and it would keep
-            # the next episode of its signal from alerting once DMs can go out again.
-            rows = await asyncio.to_thread(self.store.list_links, "health_alert")
-            if open_keys := [row["key"] for row in rows if row["data"].get("open")]:
-                await asyncio.to_thread(self.store.delete_links, "health_alert", open_keys)
+            await run_store(self._forget_open_alerts)
             return
         if not self.bots or self.transport is None:
             return
-        facts = await asyncio.to_thread(self._health_facts)
-        records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
+        facts, records = await run_store(self._alert_inputs)
         now = time.time()
         reason = self._restart_reason if restarts > self._reported_restarts else None
         restart_due = False
@@ -1157,9 +1253,19 @@ class AutomationService:
         if not restart_due:
             self._reported_restarts = restarts
 
+    def _forget_open_alerts(self):
+        # With nobody to tell, an open alert could never be resolved, and it would keep
+        # the next episode of its signal from alerting once DMs can go out again.
+        rows = self.store.list_links("health_alert")
+        if open_keys := [row["key"] for row in rows if row["data"].get("open")]:
+            self.store.delete_links("health_alert", open_keys)
+
+    def _alert_inputs(self):
+        return self._health_facts(), {row["key"]: row["data"] for row in self.store.list_links("health_alert")}
+
     async def _save_alert_record(self, key, record) -> bool:
         try:
-            await asyncio.to_thread(self._record_alert, key, record)
+            await run_store(self._record_alert, key, record)
         except Exception as exc:
             warn(f"A Project alert record could not be saved: {type(exc).__name__}.",
                  component="project_automation", event="alert_record_failed")

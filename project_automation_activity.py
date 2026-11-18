@@ -9,6 +9,7 @@ import math
 import time
 
 from project_automation_github import GitHubError
+from project_automation_store import run_store
 
 
 SOURCES = ("comment", "review_comment", "review", "thread", "commits")
@@ -178,6 +179,9 @@ class PRActivity:
         self.service._check_event_binding(payload)
         result = await (await self.service.client()).list_updated_pulls(payload["since"], payload["cursor"])
         self.service._check_event_binding(payload)
+        await run_store(self._record_discovery, payload, result)
+
+    def _record_discovery(self, payload, result):
         cycle, jobs, links = payload["_sync_cycle"], [], []
         for item in result["items"]:
             jobs.extend(self._source_jobs(item["number"], cycle, payload["_binding"]))
@@ -203,9 +207,12 @@ class PRActivity:
         self.service._check_event_binding(payload)
         client = await self.service.client()
         cfg = self.service.settings()
-        baseline = activate(self.store, cfg)
+        baseline = await run_store(activate, self.store, cfg)
         result = await client.list_pr_activity(payload["number"], payload["source"], payload["cursor"])
         self.service._check_event_binding(payload)
+        await run_store(self._record_page, payload, cfg, baseline, result)
+
+    def _record_page(self, payload, cfg, baseline, result):
         links, jobs = [], []
         cycle = payload["_sync_cycle"]
         for raw in result["items"]:
@@ -250,6 +257,9 @@ class PRActivity:
         # Listing endpoints omit deletions. Page only this PR's previously observed
         # comments, and enqueue each remote check separately so the worker can yield.
         self.service._check_event_binding(payload)
+        await run_store(self._queue_checks, payload)
+
+    def _queue_checks(self, payload):
         cycle, cfg = payload["_sync_cycle"], self.service.settings()
         records = self.store.list_pr_sources(mapping_key(cfg), payload["number"], payload["source"],
                                              after=payload["after"], limit=100)
@@ -277,7 +287,9 @@ class PRActivity:
         if current.get("key") != event.get("key") or current.get("number") != event.get("number"):
             raise GitHubError("The activity source changed identity.")
         cfg = self.service.settings()
-        current = {**compact_event(current), "_binding": event["_binding"]}
+        await run_store(self._record_check, cfg, event, {**compact_event(current), "_binding": event["_binding"]})
+
+    def _record_check(self, cfg, event, current):
         key = source_key(cfg, current)
         prior = self.store.get_link("pr_source", key)
         jobs = []
@@ -290,7 +302,7 @@ class PRActivity:
     async def deliver(self, event, job):
         self.service._check_event_binding(event)
         cfg = self.service.settings()
-        baseline = activate(self.store, cfg)
+        baseline = await run_store(activate, self.store, cfg)
         client = await self.service.client()
         current = await client.get_pr_activity(event)
         if current is None:
@@ -299,6 +311,24 @@ class PRActivity:
             raise GitHubError("The activity source changed identity.")
         self.service._check_event_binding(event)
         key = source_key(cfg, current)
+        reserved = await run_store(self._reserve_delivery, cfg, event, job, current, key, baseline)
+        if reserved is None:
+            return
+        prior, prior_head, prepared = reserved
+        pull = await client.get_issue(event["number"])
+        if pull.get("kind") != "pull":
+            raise GitHubError("PR activity did not resolve to a pull request.")
+        prepared["pull"] = {**pull, "body": pull.get("body", "")[:3800]}
+        self.service._check_event_binding(event)
+        await run_store(self._prepare_delivery, job, prepared)
+        await self.service.transport.mirror_activity(prepared)
+        await run_store(self._record_delivery, cfg, event, current, key, prepared, prior, prior_head)
+
+    def _reserve_delivery(self, cfg, event, job, current, key, baseline):
+        """Decide whether `current` is delivered and reserve a code update's head occurrence.
+
+        Return (prior source, prior head, prepared event), or None when nothing is delivered.
+        """
         prior = self.store.get_link("pr_source", key)
         # Replayed historical creation events cannot import pre-activation discussion.
         # Resolution/deletion events have no dependable source timestamp; their accepted
@@ -311,28 +341,27 @@ class PRActivity:
         changed = prior is not None and prior["version"] != current["source_version"]
         if not (recent or changed or (transition and job["created_at"] >= baseline["since"])
                 or event.get("_sync_cycle") is not None):
-            return
-        prepared = {**compact_event(current), "_binding": event["_binding"]}
+            return None
+        prepared, prior_head = {**compact_event(current), "_binding": event["_binding"]}, None
         if current.get("activity_type") == "commits":
             prior_head = self.store.get_link("pr_head", head_key(cfg, current))
             prepared = prepare_head(prepared, prior_head)
             if prepared is None:
-                return
+                return None
             # Reserve the observed occurrence before sending. A second delivery or
             # restart then checks the same receipt, even when a force-push reused a SHA.
             self.store.put_link("pr_head", head_key(cfg, current), {
                 "version": current["source_version"], "event": prepared,
                 "cycle": newer_cycle(event.get("_sync_cycle"), prior_head),
             })
-        pull = await client.get_issue(event["number"])
-        if pull.get("kind") != "pull":
-            raise GitHubError("PR activity did not resolve to a pull request.")
-        prepared["pull"] = {**pull, "body": pull.get("body", "")[:3800]}
-        self.service._check_event_binding(event)
+        return prior, prior_head, prepared
+
+    def _prepare_delivery(self, job, prepared):
         # Keep the original payload immutable for GitHub delivery-ID deduplication.
         self.store.put_link("pr_prepared", str(job["id"]), prepared)
         self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
-        await self.service.transport.mirror_activity(prepared)
+
+    def _record_delivery(self, cfg, event, current, key, prepared, prior, prior_head):
         self.store.put_link("pr_source", key, {
             "version": current["source_version"], "event": compact_event(prepared),
             "cycle": newer_cycle(event.get("_sync_cycle"), prior),

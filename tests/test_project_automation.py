@@ -969,7 +969,7 @@ def stop_report_in(harness, state):
     if state == "processing":
         harness.service.choose(preview["id"], preview["revision"], "submit", user_id="456")
     elif state == "processing-failed":
-        async def broken_branch(case, action):
+        def broken_branch(case, action):
             raise WorkflowError("The decision could not be applied.")
         harness.service._branch = broken_branch
         harness.choose(preview, "submit")
