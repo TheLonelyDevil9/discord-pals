@@ -1,8 +1,9 @@
 import types
 import unittest
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 import module_stubs  # noqa: F401
@@ -349,7 +350,8 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         })
 
         context = {
-            "channel_id": 77,
+            "channel_id": "dm:Nahida:user:42",
+            "discord_channel_id": 77,
             "content": "Please remind me about my flight at 9 AM on Saturday.",
             "user_id": 42,
             "user_name": "Alice",
@@ -385,6 +387,153 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
         self.assertEqual(reminder["target_user_id"], 42)
         self.assertEqual(reminder["creation_mode"], "explicit")
         self.assertEqual(reminder["pre_status"], "pending")
+        self.assertEqual(reminder["source_type"], "dm")
+        self.assertEqual(reminder["source_channel_id"], 77)
+
+    def _make_dm_bot(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Nahida"
+        instance.character_name = "nahida"
+        instance.character = types.SimpleNamespace(name="Nahida", example_dialogue="")
+        instance.client = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+        instance._processed_message_ids = set()
+        instance._gather_mentioned_user_context = AsyncMock(return_value="")
+        instance._recall_channel_history = AsyncMock(return_value=0)
+        instance._send_auxiliary_followup = AsyncMock(return_value=True)
+        return instance
+
+    def _dm_request(self, content):
+        dm_channel = bot_instance_module.discord.DMChannel()
+        dm_channel.id = 77
+        message = types.SimpleNamespace(
+            id=1234,
+            content=content,
+            channel=dm_channel,
+            guild=None,
+            mentions=[],
+            author=types.SimpleNamespace(id=42, bot=False),
+            created_at=None,
+            _interaction=None,
+            reply=AsyncMock(),
+        )
+        return {
+            "message": message,
+            "content": content,
+            "guild": None,
+            "attachments": [],
+            "user_name": "Alice",
+            "is_dm": True,
+            "user_id": 42,
+            "sticker_info": None,
+            "allow_auto_reminders": True,
+            "pending_reminder_clarification": None,
+        }
+
+    async def _build_dm_context(self, instance, request):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bot_instance_module, "get_history", return_value=[]))
+            stack.enter_context(patch.object(bot_instance_module, "was_recently_cleared", return_value=False))
+            stack.enter_context(patch.object(bot_instance_module, "acknowledge_cleared"))
+            stack.enter_context(patch.object(bot_instance_module, "add_to_history"))
+            stack.enter_context(patch.object(bot_instance_module, "set_channel_name"))
+            stack.enter_context(patch.object(bot_instance_module.stats_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.metrics_manager, "record_message"))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_bot_lore", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.memory_manager, "get_all_memories_for_context", return_value=""))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_system_prompt", Mock(return_value="SYSTEM")))
+            stack.enter_context(patch.object(bot_instance_module.character_manager, "build_chatroom_context", Mock(return_value="CHATROOM")))
+            stack.enter_context(patch.object(bot_instance_module, "get_other_bot_names", return_value=[]))
+            stack.enter_context(patch.object(
+                bot_instance_module,
+                "format_history_split",
+                Mock(return_value=([], [{"role": "user", "content": "Alice: hi"}])),
+            ))
+            stack.enter_context(patch.object(
+                bot_instance_module.runtime_config,
+                "get",
+                side_effect=lambda key, default=None: {"time_passage_context_enabled": False}.get(key, default),
+            ))
+            stack.enter_context(patch.object(bot_instance_module.log, "info"))
+            stack.enter_context(patch.object(bot_instance_module.log, "debug"))
+            return await instance._build_request_context(request)
+
+    async def test_reminder_asked_for_in_a_dm_is_created_for_the_dm_channel(self):
+        instance = self._make_dm_bot()
+        request = self._dm_request("Remind me to water the plants tomorrow at 8.")
+        due_local = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=8, minute=0, second=0, microsecond=0)
+        instance._extract_reminder_payload = AsyncMock(return_value={
+            "action": "create",
+            "creation_mode": "explicit",
+            "event_summary": "Water the plants",
+            "normalized_event": "water the plants",
+            "due_local_iso": due_local.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+
+        context = await self._build_dm_context(instance, request)
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager), \
+                patch.object(bot_instance_module.log, "info"):
+            await instance._maybe_handle_reminder_capture(context, request["message"], request)
+
+        self.assertEqual(context["channel_id"], "dm:Nahida:user:42")
+        self.assertEqual(instance._extract_reminder_payload.await_args.kwargs["channel_id"], "dm:Nahida:user:42")
+        reminders = reminders_module.reminder_manager.reminders
+        self.assertEqual(len(reminders), 1)
+        self.assertEqual(reminders[0]["source_type"], "dm")
+        self.assertEqual(reminders[0]["source_channel_id"], 77)
+
+    async def test_clarification_asked_for_in_a_dm_is_stored_for_the_dm_channel(self):
+        instance = self._make_dm_bot()
+        request = self._dm_request("Remind me about the dentist.")
+        instance._extract_reminder_payload = AsyncMock(return_value={
+            "action": "clarify",
+            "event_summary": "Dentist appointment",
+            "normalized_event": "dentist appointment",
+            "clarification_prompt": "When is the appointment?",
+        })
+        instance._generate_reminder_clarification_message = AsyncMock(return_value="When is it?")
+
+        context = await self._build_dm_context(instance, request)
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager):
+            await instance._maybe_handle_reminder_capture(context, request["message"], request)
+
+        draft = reminders_module.reminder_manager.get_pending_clarification(
+            bot_name="Nahida", target_user_id=42, source_channel_id=77,
+        )
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["source_type"], "dm")
+        instance._send_auxiliary_followup.assert_awaited_once()
+
+    def test_dm_message_finds_the_clarification_it_answers(self):
+        instance = self._make_dm_bot()
+        message = self._dm_request("Thursday at 3")["message"]
+        reminders_module.reminder_manager.create_pending_clarification(
+            bot_name="Nahida", target_user_id=42, target_user_name="Alice",
+            source_channel_id=77, source_channel_name="DM", source_guild_id=None,
+            source_guild_name="DM", source_type="dm", timezone_name="UTC",
+            timezone_offset_minutes=0, timezone_source="process",
+            event_summary="Dentist appointment", normalized_event="dentist appointment",
+            creation_mode="explicit", clarification_prompt="When is the appointment?",
+        )
+
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager):
+            draft = instance._pending_reminder_clarification(message)
+
+        self.assertEqual(draft["event_summary"], "Dentist appointment")
+
+    def test_server_clarification_does_not_break_a_dm_message_from_the_same_user(self):
+        instance = self._make_dm_bot()
+        message = self._dm_request("hello again")["message"]
+        reminders_module.reminder_manager.create_pending_clarification(
+            bot_name="Nahida", target_user_id=42, target_user_name="Alice",
+            source_channel_id=88, source_channel_name="tea-room", source_guild_id=5,
+            source_guild_name="Sumeru", source_type="channel", timezone_name="UTC",
+            timezone_offset_minutes=0, timezone_source="process",
+            event_summary="Tea break", normalized_event="tea break",
+            creation_mode="auto", clarification_prompt="What time?",
+        )
+
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager):
+            self.assertIsNone(instance._pending_reminder_clarification(message))
 
     async def test_reminder_cycle_marks_due_delivery_completed(self):
         now = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)

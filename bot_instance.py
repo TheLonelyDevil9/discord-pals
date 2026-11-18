@@ -1079,6 +1079,9 @@ Return exactly one JSON object with this shape:
         action = str(payload.get("action", "none")).strip().lower()
         event_summary = " ".join(str(payload.get("event_summary", "")).split())
         normalized_event = " ".join(str(payload.get("normalized_event", "")).split()).lower() or event_summary.lower()
+        # A DM's history key is not a Discord channel ID; reminders are
+        # delivered to, and clarifications matched by, the Discord channel.
+        source_channel_id = context.get("discord_channel_id", context["channel_id"])
         source_type = "dm" if context["is_dm"] else "channel"
         source_channel_name = getattr(message.channel, "name", None) or ("DM" if context["is_dm"] else f"Channel {context['channel_id']}")
         source_guild_name = request["guild"].name if request.get("guild") else "DM"
@@ -1091,7 +1094,7 @@ Return exactly one JSON object with this shape:
                 reminder_manager.clear_pending_clarification(
                     bot_name=self.name,
                     target_user_id=context["user_id"],
-                    source_channel_id=context["channel_id"],
+                    source_channel_id=source_channel_id,
                 )
             return
 
@@ -1101,7 +1104,7 @@ Return exactly one JSON object with this shape:
                 bot_name=self.name,
                 target_user_id=context["user_id"],
                 target_user_name=context["user_name"],
-                source_channel_id=context["channel_id"],
+                source_channel_id=source_channel_id,
                 source_channel_name=source_channel_name,
                 source_guild_id=context["guild_id"],
                 source_guild_name=source_guild_name,
@@ -1147,7 +1150,7 @@ Return exactly one JSON object with this shape:
                 reminder_manager.clear_pending_clarification(
                     bot_name=self.name,
                     target_user_id=context["user_id"],
-                    source_channel_id=context["channel_id"],
+                    source_channel_id=source_channel_id,
                 )
             return
 
@@ -1170,7 +1173,7 @@ Return exactly one JSON object with this shape:
             target_user_id=context["user_id"],
             target_user_name=context["user_name"],
             source_type=source_type,
-            source_channel_id=context["channel_id"],
+            source_channel_id=source_channel_id,
             source_channel_name=source_channel_name,
             source_guild_id=context["guild_id"],
             source_guild_name=source_guild_name,
@@ -1187,6 +1190,17 @@ Return exactly one JSON object with this shape:
             f"Reminder {status} for {context['user_name']} ({reminder['id']}): "
             f"{reminder['event_summary']} @ {reminder['due_at_utc']}",
             self.name
+        )
+
+    def _pending_reminder_clarification(self, message) -> dict | None:
+        """Return the open reminder question for this author in this Discord channel.
+
+        Drafts are keyed by the Discord channel ID, which a DM's history key is not.
+        """
+        return reminder_manager.get_pending_clarification(
+            bot_name=self.name,
+            target_user_id=message.author.id,
+            source_channel_id=message.channel.id,
         )
 
     async def _resolve_user(self, user_id: int):
@@ -1539,11 +1553,7 @@ Return exactly one JSON object with this shape:
 
             pending_reminder_clarification = None
             if not is_other_bot:
-                pending_reminder_clarification = reminder_manager.get_pending_clarification(
-                    bot_name=self.name,
-                    target_user_id=message.author.id,
-                    source_channel_id=channel_id,
-                )
+                pending_reminder_clarification = self._pending_reminder_clarification(message)
 
             # Prevent self-loop: Don't respond to messages from bots with same character name
             if is_other_bot and self._should_ignore_self_loop(message):
