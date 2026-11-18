@@ -15,6 +15,11 @@ RESTART_EXIT_CODE = 75
 PROC_CGROUP = Path("/proc/self/cgroup")
 SYSTEMCTL_TIMEOUT = 5
 RESTART_PROPERTIES = ("Restart", "SuccessExitStatus", "RestartForceExitStatus", "RestartPreventExitStatus")
+# Covers the client close that follows a bot's queue drain of up to SHUTDOWN_DRAIN_TIMEOUT_SECONDS.
+CLOSE_MARGIN_SECONDS = 5
+# Windows has no exec: os.execv starts a new process from arguments joined without quotes,
+# so a path with a space breaks it, and this process has already ended by then.
+REPLACES_WITH_NEW_PROCESS = os.name == "nt"
 
 
 def systemd_unit() -> str | None:
@@ -76,21 +81,77 @@ def exits_for_systemd() -> bool:
     return restarts_after_exit(dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line))
 
 
-def restart_process(bots) -> None:
-    """Close the bots, then exit for systemd to start the service again, or replace this process."""
-    time.sleep(1)  # Give time for response to be sent
+def replacement_command() -> list[str]:
+    return [sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]]
+
+
+def close_bots(bots, timeout: float) -> None:
+    """Close every bot and wait, at most timeout seconds in all, for the closes to finish."""
+    deadline = time.monotonic() + timeout
+    closing = []
     for bot in bots:
         try:
-            asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
-        except Exception:
-            pass
-    time.sleep(2)  # Wait for connections to close
+            closing.append(asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop))
+        except Exception as e:
+            log.warn(f"Could not close a bot before the restart: {e}")
+    for future in closing:
+        try:
+            future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except Exception as e:
+            future.cancel()
+            log.warn(f"A bot did not finish closing before the restart: {e!r}")
 
-    if exits_for_systemd():
-        log.info(f"Exiting with status {RESTART_EXIT_CODE} so that systemd starts the service again")
-        # os._exit skips the interpreter's shutdown, so write out buffered output first.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(RESTART_EXIT_CODE)
-    else:
-        os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
+
+def persist_runtime_state() -> None:
+    from discord_utils import save_history
+    from memory import memory_manager
+    from reminders import reminder_manager
+    from stats import stats_manager
+
+    # main._persist_runtime_state saves the same stores on SIGTERM; keep both lists in step.
+    for label, save in (
+        ("history", lambda: save_history(force=True)),
+        ("memories", memory_manager.save_all),
+        ("reminders", reminder_manager.save),
+        ("stats", stats_manager.flush),
+    ):
+        try:
+            save()
+        except Exception as e:
+            log.error(f"Failed to save {label} before restart: {e}")
+
+
+def flush_output() -> None:
+    # os._exit and os.execv skip the interpreter's shutdown, so write out buffered output first.
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+
+def restart_process(bots) -> None:
+    """Close the bots, save the state, then start the code on disk; this never returns.
+
+    Under a systemd unit that restarts after RESTART_EXIT_CODE the process exits with it.
+    Otherwise it re-executes in place, or on Windows starts a new process and exits. Any
+    failure ends the process with status 1, so that a supervisor can act.
+    """
+    status = 1
+    try:
+        time.sleep(1)  # Give time for response to be sent
+        from bot_instance import SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+        close_bots(bots, SHUTDOWN_DRAIN_TIMEOUT_SECONDS + CLOSE_MARGIN_SECONDS)
+        persist_runtime_state()
+        if exits_for_systemd():
+            status = RESTART_EXIT_CODE
+            log.info(f"Exiting with status {status} so that systemd starts the service again")
+            flush_output()
+        elif REPLACES_WITH_NEW_PROCESS:
+            flush_output()
+            subprocess.Popen(replacement_command())
+            status = 0
+        else:
+            flush_output()
+            os.execv(sys.executable, replacement_command())
+    except Exception as e:
+        log.error(f"The restart failed, so the process ends with status {status}: {e}")
+    finally:
+        os._exit(status)

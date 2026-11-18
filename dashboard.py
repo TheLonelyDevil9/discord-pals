@@ -4376,23 +4376,6 @@ def api_restart():
         log.error(message)
         return jsonify({'status': 'error', 'message': message}), 409
 
-    from discord_utils import save_history
-    from memory import memory_manager
-    from reminders import reminder_manager
-    from stats import stats_manager
-
-    # main._persist_runtime_state saves the same stores on SIGTERM; keep both lists in step.
-    for label, save in (
-        ("history", lambda: save_history(force=True)),
-        ("memories", memory_manager.save_all),
-        ("reminders", reminder_manager.save),
-        ("stats", stats_manager.flush),
-    ):
-        try:
-            save()
-        except Exception as e:
-            log.error(f"Failed to save {label} before restart: {e}")
-
     # Start restart in background thread
     restart_thread = threading.Thread(target=dashboard_restart.restart_process, args=(bot_instances,), daemon=True)
     restart_thread.start()

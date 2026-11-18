@@ -1,7 +1,12 @@
+import asyncio
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -117,30 +122,121 @@ class ExitDecisionTests(unittest.TestCase):
 
 
 class RestartProcessTests(unittest.TestCase):
-    def restart(self, under_systemd):
+    def restart(self, under_systemd, windows=False, flush=None, execv=None, popen=None):
+        """Run restart_process with the exits recorded; return (events, execv mock, Popen mock)."""
+        events = []
         with patch.object(dashboard_restart, "exits_for_systemd", return_value=under_systemd), \
+                patch.object(dashboard_restart, "REPLACES_WITH_NEW_PROCESS", windows), \
                 patch.object(dashboard_restart.time, "sleep"), \
-                patch.object(dashboard_restart.os, "_exit") as exit_process, \
-                patch.object(dashboard_restart.os, "execv") as execv, \
-                patch("subprocess.run") as run:
+                patch.object(dashboard_restart, "persist_runtime_state", side_effect=lambda: events.append("saved")), \
+                patch.object(dashboard_restart, "flush_output", side_effect=flush), \
+                patch.object(dashboard_restart.os, "_exit", side_effect=lambda status: events.append(("exit", status))), \
+                patch.object(dashboard_restart.os, "execv", side_effect=execv) as execv_mock, \
+                patch.object(dashboard_restart.subprocess, "Popen", side_effect=popen) as popen_mock, \
+                patch.object(sys, "argv", [os.path.join("installed here", "main.py"), "--flag"]):
             dashboard_restart.restart_process([])
-        return exit_process, execv, run
+        return events, execv_mock, popen_mock
+
+    def expected_command(self):
+        return [sys.executable, os.path.abspath(os.path.join("installed here", "main.py")), "--flag"]
 
     def test_under_systemd_the_process_exits_for_the_unit_to_restart_it(self):
-        exit_process, execv, run = self.restart(True)
+        events, execv, popen = self.restart(True)
 
-        exit_process.assert_called_once_with(dashboard_restart.RESTART_EXIT_CODE)
+        self.assertEqual(events, ["saved", ("exit", 75)])
         self.assertEqual(dashboard_restart.RESTART_EXIT_CODE, 75)
         execv.assert_not_called()
-        run.assert_not_called()
+        popen.assert_not_called()
 
-    def test_outside_systemd_the_process_replaces_itself(self):
-        exit_process, execv, run = self.restart(False)
+    def test_outside_systemd_on_posix_the_process_re_executes_in_place(self):
+        events, execv, popen = self.restart(False)
 
-        exit_process.assert_not_called()
-        execv.assert_called_once()
-        self.assertEqual(execv.call_args.args[0], sys.executable)
-        run.assert_not_called()
+        execv.assert_called_once_with(sys.executable, self.expected_command())
+        popen.assert_not_called()
+        self.assertEqual(events[0], "saved")
+
+    def test_on_windows_the_restart_starts_a_new_process_and_exits(self):
+        events, execv, popen = self.restart(False, windows=True)
+
+        popen.assert_called_once_with(self.expected_command())
+        execv.assert_not_called()
+        self.assertEqual(events, ["saved", ("exit", 0)])
+
+    def test_a_replacement_that_cannot_start_ends_the_process_with_status_1(self):
+        events, _execv, _popen = self.restart(False, windows=True, popen=OSError("no such file"))
+
+        self.assertEqual(events[-1], ("exit", 1))
+
+    def test_a_failed_exec_or_flush_ends_the_process_non_zero(self):
+        self.assertEqual(self.restart(False, execv=OSError("exec format error"))[0][-1], ("exit", 1))
+        events, execv, _popen = self.restart(False, flush=OSError("stdout is closed"))
+        self.assertEqual(events[-1], ("exit", 1))
+        execv.assert_not_called()
+        self.assertEqual(self.restart(True, flush=OSError("stdout is closed"))[0][-1], ("exit", 75))
+
+    def test_paths_with_spaces_reach_the_replacement_intact(self):
+        with tempfile.TemporaryDirectory(prefix="restart test ") as temp:
+            script = Path(temp, "main with space.py")
+            output = Path(temp, "arguments out.json")
+            script.write_text("import json, sys\nopen(sys.argv[1], 'w').write(json.dumps(sys.argv))\n", encoding="utf-8")
+            with patch.object(sys, "argv", [str(script), str(output)]):
+                command = dashboard_restart.replacement_command()
+            subprocess.Popen(command).wait(timeout=60)
+
+            self.assertEqual(json.loads(output.read_text()), [str(script), str(output)])
+
+
+class RestartOrderTests(unittest.TestCase):
+    def setUp(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.loop_thread.start()
+
+    def tearDown(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.loop_thread.join(5)
+        self.loop.close()
+
+    def bot(self, events, hangs=False):
+        loop = self.loop
+
+        class Bot:
+            client = types.SimpleNamespace(loop=loop)
+
+            async def close(self):
+                if hangs:
+                    await asyncio.Event().wait()
+                await asyncio.sleep(0.05)
+                events.append("closed")
+
+        return Bot()
+
+    def restart(self, bots, events, drain=10.0):
+        with patch.object(dashboard_restart, "exits_for_systemd", return_value=True), \
+                patch.object(dashboard_restart.time, "sleep"), \
+                patch("bot_instance.SHUTDOWN_DRAIN_TIMEOUT_SECONDS", drain), \
+                patch.object(dashboard_restart, "CLOSE_MARGIN_SECONDS", 0), \
+                patch.object(dashboard_restart, "persist_runtime_state", side_effect=lambda: events.append("saved")), \
+                patch.object(dashboard_restart, "flush_output"), \
+                patch.object(dashboard_restart.os, "_exit", side_effect=lambda status: events.append("exit")):
+            started = time.monotonic()
+            dashboard_restart.restart_process(bots)
+            return time.monotonic() - started
+
+    def test_the_bots_close_before_the_state_is_saved_and_the_process_exits(self):
+        events = []
+
+        self.restart([self.bot(events), self.bot(events)], events)
+
+        self.assertEqual(events, ["closed", "closed", "saved", "exit"])
+
+    def test_a_bot_that_does_not_close_is_waited_for_at_most_the_drain_timeout(self):
+        events = []
+
+        elapsed = self.restart([self.bot(events, hangs=True)], events, drain=0.3)
+
+        self.assertLess(elapsed, 3)
+        self.assertEqual(events, ["saved", "exit"])
 
 
 class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
@@ -164,6 +260,16 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
         saves = (save_history, save_memories, save_reminders, flush_stats)
         return response, check, thread, saves
 
+    def test_the_restart_saves_every_store_even_when_one_fails(self):
+        with patch("discord_utils.save_history", side_effect=OSError("disk full")) as save_history, \
+                patch.object(self.manager, "save_all") as save_memories, \
+                patch("reminders.reminder_manager.save") as save_reminders, \
+                patch("stats.stats_manager.flush") as flush_stats:
+            dashboard_restart.persist_runtime_state()
+
+        for save in (save_history, save_memories, save_reminders, flush_stats):
+            save.assert_called_once()
+
     def test_restart_is_refused_when_the_code_on_disk_does_not_import(self):
         response, check, thread, saves = self.post_restart("ImportError: broken on purpose")
 
@@ -174,14 +280,15 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
         for save in saves:
             save.assert_not_called()
 
-    def test_restart_saves_every_store_and_starts_the_restart(self):
+    def test_restart_starts_the_restart_thread_which_saves_after_the_bots_close(self):
         response, _check, thread, saves = self.post_restart()
 
         self.assertEqual(response.status_code, 200)
         for save in saves:
-            save.assert_called_once()
+            save.assert_not_called()
         thread.assert_called_once()
         self.assertIs(thread.call_args.kwargs["target"], dashboard_restart.restart_process)
+        self.assertEqual(thread.call_args.kwargs["args"], (dashboard_module.bot_instances,))
 
 
 if __name__ == "__main__":
