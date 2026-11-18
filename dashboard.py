@@ -683,6 +683,7 @@ def dashboard():
     
     # Get autonomous channels count (only count channels bots can still access)
     from discord_utils import autonomous_manager
+    from python_support import unsupported_python_notice
     autonomous_count = sum(
         1 for ch_id in autonomous_manager.enabled_channels
         if ch_id in topology["accessible_channel_ids"]
@@ -697,7 +698,8 @@ def dashboard():
         bot_interactions_paused=status_payload["bot_interactions_paused"],
         use_single_user=status_payload["use_single_user"],
         update_branch=status_payload["update_branch"],
-        status_etag=_build_status_etag(status_payload)
+        status_etag=_build_status_etag(status_payload),
+        python_notice=unsupported_python_notice(),
     )
 
 

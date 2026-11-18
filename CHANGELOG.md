@@ -18,6 +18,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - A watchdog starts the Project worker again within a minute when its task stops, and the Worker check shows the restarts and the exception type of the last stop.
 - Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
+- On Python 3.10, which is no longer supported, the bot logs a warning at start and the dashboard home page shows it, naming the supported versions. The bot still starts.
 
 ### Changed
 

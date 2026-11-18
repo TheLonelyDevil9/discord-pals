@@ -195,9 +195,11 @@ async def run_bots():
 if __name__ == "__main__":
     # Run startup validation first
     import sys
+    from python_support import warn_if_unsupported
     from startup import validate_startup
 
     runtime_config.apply_logging_config()
+    warn_if_unsupported(log.warn)
     
     if not validate_startup(interactive=sys.stdin.isatty()):
         log.error("Startup validation failed. Please fix the issues above.")
