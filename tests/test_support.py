@@ -1,9 +1,11 @@
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
@@ -38,6 +40,12 @@ class GitCheckoutCase(unittest.TestCase):
     def setUp(self):
         self._git_temp = tempfile.TemporaryDirectory()
         self.root = Path(self._git_temp.name)
+        # A developer's global or system Git config (signing, hooks, autocrlf) must not change the results.
+        empty_config = self.root / "empty.gitconfig"
+        empty_config.write_text("", encoding="utf-8")
+        environment = patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(empty_config), "GIT_CONFIG_NOSYSTEM": "1"})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.remote, self.seed, self.install = self.root / "remote.git", self.root / "seed", self.root / "install"
         git(self.root, "init", "-q", "--bare", "-b", "main", str(self.remote))
         git(self.root, "clone", "-q", "-c", "core.autocrlf=false", str(self.remote), str(self.seed))
@@ -84,7 +92,7 @@ class GitCheckoutCase(unittest.TestCase):
         return git(self.install, "ls-files", "--unmerged").stdout.strip()
 
     def leave_stash_pop_conflict(self):
-        """Wedge the install the way a stash pop that conflicted used to leave it."""
+        """Leave the install with the unmerged paths of a stash pop that conflicted."""
         self.edit("prompts/other_prompts.md", "local first line\nsecond line\n")
         self.publish({"prompts/other_prompts.md": "upstream first line\nsecond line\n"})
         git(self.install, "fetch", "-q")

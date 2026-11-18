@@ -14,6 +14,13 @@ import update as update_module
 from test_support import GitCheckoutCase, MemorySandboxMixin, git
 
 
+class GitFixtureTests(GitCheckoutCase):
+    def test_git_reads_only_the_repository_config(self):
+        lines = git(self.install, "config", "--list", "--show-scope").stdout.splitlines()
+
+        self.assertEqual({line.split("\t", 1)[0] for line in lines}, {"local"})
+
+
 class PreflightTests(GitCheckoutCase):
     def test_a_clean_checkout_passes(self):
         update_module.preflight(self.install)
