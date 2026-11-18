@@ -3330,15 +3330,20 @@ Return exactly one JSON object with this shape:
                 messages.append(msg)
         
         messages.reverse()
-        
+
         guild = getattr(channel, 'guild', None)
-        bot_member = guild.me if guild else None
-        
+        bot_user_id = getattr(getattr(self.client, "user", None), "id", None)
+
         for msg in messages:
-            is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
+            is_own = bot_user_id is not None and msg.author.id == bot_user_id
             is_any_bot = msg.author.bot  # Track all bots for context filtering
-            role = "assistant" if is_bot else "user"
-            user_name = get_user_display_name(msg.author)  # Always store author, even for bots
+            role = "assistant" if is_own else "user"
+            # Live replies store the character name, and history formatting
+            # renders an assistant turn under any other name as another bot.
+            if is_own and self.character:
+                user_name = self.character.name
+            else:
+                user_name = get_user_display_name(msg.author)  # Always store author, even for bots
             add_to_history(
                 history_key or channel.id, role, strip_discord_ooc_comments(msg.content),
                 author_name=user_name, user_id=msg.author.id, guild=guild,
