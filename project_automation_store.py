@@ -883,6 +883,14 @@ class AutomationStore:
                 ).rowcount
         return deleted
 
+    def database_usage(self):
+        """Return the database size and the bytes held by free pages, both from SQLite's page counts."""
+        with self._connection() as connection:
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+            pages = connection.execute("PRAGMA page_count").fetchone()[0]
+            free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+        return {"bytes": pages * page_size, "free_bytes": free * page_size}
+
     def compact(self):
         """VACUUM when free pages are at least 25% of the file and 16 MB; return whether it ran.
 
@@ -890,13 +898,12 @@ class AutomationStore:
         another connection holds the write lock it returns False, and a later call
         tries again.
         """
+        usage = self.database_usage()
+        if (usage["free_bytes"] < usage["bytes"] * COMPACT_MIN_FREE_SHARE
+                or usage["free_bytes"] < COMPACT_MIN_FREE_BYTES):
+            return False
         try:
             with self._connection(timeout=1) as connection:
-                page_size = connection.execute("PRAGMA page_size").fetchone()[0]
-                pages = connection.execute("PRAGMA page_count").fetchone()[0]
-                free = connection.execute("PRAGMA freelist_count").fetchone()[0]
-                if free < pages * COMPACT_MIN_FREE_SHARE or free * page_size < COMPACT_MIN_FREE_BYTES:
-                    return False
                 # VACUUM is the only point where auto_vacuum can change on an existing
                 # file. Incremental mode lets release_free_pages return later space.
                 connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
