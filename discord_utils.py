@@ -1796,15 +1796,16 @@ def get_mentionable_users(
         # The scan below can stop before it reaches a candidate listed above, so that
         # candidate gets its member aliases, such as the account name, from a lookup.
         get_member = getattr(guild, "get_member", None)
-        for listed_id in list(users_by_id) if callable(get_member) else []:
-            listed_member = get_member(listed_id)
-            if listed_member is not None and not listed_member.bot:
-                register_candidate(
-                    user_id=listed_id,
-                    name=get_user_display_name(listed_member),
-                    aliases=_collect_member_aliases(listed_member),
-                    priority=2,
-                )
+        if callable(get_member):
+            for listed_id in list(users_by_id):
+                listed_member = get_member(listed_id)
+                if listed_member is not None and not listed_member.bot:
+                    register_candidate(
+                        user_id=listed_id,
+                        name=get_user_display_name(listed_member),
+                        aliases=_collect_member_aliases(listed_member),
+                        priority=2,
+                    )
         for member in guild.members:
             if limit is not None and len(users_by_id) >= limit:
                 break
