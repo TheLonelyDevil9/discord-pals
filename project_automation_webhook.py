@@ -104,8 +104,8 @@ def register_github_webhook(app, get_service) -> None:
             normalized = compact_event(normalized)
         normalized["_binding"] = binding
         try:
-            # A delivery ID is accepted once. Its marker outlives the job row, so a
-            # redelivery, even with a changed payload, is answered as accepted and queues nothing.
+            # A delivery ID is accepted once. While its marker exists, a redelivery, even
+            # with a changed payload, is answered as accepted and queues nothing.
             activate(service.store, config)
             service.store.enqueue_delivery(delivery, "event", normalized, key=f"github:{delivery}")
             service.store.record_status(mapping_key(config), "last_webhook_at")

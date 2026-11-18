@@ -351,8 +351,8 @@ class AutomationStore:
     def enqueue_delivery(self, delivery, kind, payload, key):
         """Queue a webhook delivery once per delivery ID; return None when it was seen before.
 
-        The marker keeps only a SHA-256 of the ID, so a redelivery stays a no-op after
-        retention deletes the job row.
+        The marker keeps only a SHA-256 of the ID and lasts DELIVERY_MARKER_DAYS, however
+        long retention keeps the job row.
         """
         marker = hashlib.sha256(_text(delivery, "Delivery ID", 128).encode("utf-8")).hexdigest()
         with self._connection(write=True) as connection:
@@ -794,8 +794,9 @@ class AutomationStore:
 
         Finished jobs go once they are history_days old (at once for 0), but a reconciliation
         cycle keeps its rows while any of its jobs is live. Failed and cancelled jobs go after
-        max(7, history_days) days. Pending, running, inflight and held jobs always stay. A
-        backlog above BULK_DELETE_ROWS goes in one transaction instead of one batch.
+        max(FAILED_RETENTION_DAYS, history_days) days, except failed branch and publish jobs.
+        Pending, running, inflight and held jobs always stay. A backlog above
+        BULK_DELETE_ROWS goes in one transaction instead of one batch.
         """
         history_days, limit = _days(history_days), _limit(limit)
         with self._connection(write=True) as connection:
@@ -901,7 +902,7 @@ class AutomationStore:
 
         Delivery markers go after DELIVERY_MARKER_DAYS, discovery links once their cycle's root
         job is gone, and release, workflow and commit post records, with their attempt records,
-        after max(7, history_days) days.
+        after max(FAILED_RETENTION_DAYS, history_days) days.
         """
         history_days, limit = _days(history_days), _limit(limit)
         now = time.time()
@@ -938,11 +939,11 @@ class AutomationStore:
         return {"bytes": pages * page_size, "free_bytes": free * page_size}
 
     def compact(self):
-        """VACUUM when free pages are at least 25% of the file and 16 MB; return whether it ran.
+        """VACUUM once free pages reach COMPACT_MIN_FREE_SHARE of the file and COMPACT_MIN_FREE_BYTES.
 
-        VACUUM rewrites the whole file, so never call this on the event loop. While
-        another connection holds the write lock it returns False, and a later call
-        tries again.
+        Return whether it ran. VACUUM rewrites the whole file, so never call this on the
+        event loop. While another connection holds the write lock it returns False, and a
+        later call tries again.
         """
         usage = self.database_usage()
         if (usage["free_bytes"] < usage["bytes"] * COMPACT_MIN_FREE_SHARE

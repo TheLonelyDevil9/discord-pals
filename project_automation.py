@@ -845,7 +845,7 @@ class AutomationService:
                                   key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
 
     async def maintain(self):
-        """Apply retention in short batches, each in a worker thread so the bots' loop keeps running."""
+        """Run retention and compaction in worker threads so the bots' event loop keeps running."""
         history_days = self.settings().get("history_days", 0)
         for prune in (self.store.prune_jobs, self.store.prune_links):
             while await asyncio.to_thread(prune, history_days):
