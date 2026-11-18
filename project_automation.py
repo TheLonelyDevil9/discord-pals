@@ -800,20 +800,25 @@ class AutomationService:
 
         An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
         time is stored. An unknown close time costs one fetch, which stores it. An item that
-        GitHub reports as moved or deleted is stored as gone and costs no further fetch.
-        Both stay out of scope until the open listing shows the item again.
+        GitHub reports as moved or deleted is stored as gone and costs no further fetch; a 404
+        counts only when the next cycle gets one again. Both stay out of scope until the open
+        listing shows the item again. Neither answer drops a stored close time.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
-        stored = self.store.get_link("item_closed", key)
-        if stored and ("gone" in stored or stored.get("closed_at", 0) < cutoff):
+        stored = self.store.get_link("item_closed", key) or {}
+        if "gone" in stored or ("closed_at" in stored and stored["closed_at"] < cutoff):
             return None
         try:
             item = await client.get_issue(number)
         except GitHubError as exc:
             if exc.status not in GONE_STATUSES:
                 raise
-            self.store.put_link("item_closed", key, {"gone": exc.status})
+            # A 404 also follows a passing loss of the App's access after the listing succeeded.
+            if exc.status == 404 and not stored.get("not_found"):
+                self.store.put_link("item_closed", key, {**stored, "not_found": True})
+                return None
+            self.store.put_link("item_closed", key, {**stored, "gone": exc.status})
             info(f"Project sync no longer refreshes {kind} #{number}: GitHub reports it moved or deleted.",
                  component="project_automation", event="sync_item_gone")
             return None
@@ -821,8 +826,8 @@ class AutomationService:
             self.store.delete_links("item_closed", [key])
             return item
         # Without a usable closed_at, the first time the item was seen closed stands in for it.
-        closed_at = closed_time(item) or (stored or {}).get("closed_at") or time.time()
-        if not stored or stored.get("closed_at") != closed_at:
+        closed_at = closed_time(item) or stored.get("closed_at") or time.time()
+        if stored != {"closed_at": closed_at}:
             self.store.put_link("item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None
 

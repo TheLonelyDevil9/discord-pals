@@ -776,7 +776,7 @@ def discovery_jobs(setup):
     return [job for job in setup.store.list_jobs(limit=500) if job["kind"] == "pr_sync_discover"]
 
 
-@pytest.mark.parametrize("status", [301, 404, 410])
+@pytest.mark.parametrize("status", [301, 410])
 def test_a_moved_or_deleted_item_leaves_the_sync_without_stopping_it(setup, monkeypatch, status):
     import project_automation
     logged = []
@@ -1003,6 +1003,49 @@ def test_after_clear_the_next_cycle_walks_every_pr_again(setup):
     assert sync_cycle(setup)[1] == []
     setup.service.clear_history()
     assert sync_cycle(setup)[1] == [7, 8]
+
+
+def test_only_a_second_404_in_a_row_ends_the_sync_of_an_item(setup, monkeypatch):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append(message))
+    fetched = gone_world(setup, 9, 404, {8: github_item("pull", 8, closed_days_ago=2)},
+                         open_items=[github_item("issue", 5)])
+    closed_at = time.time() - DAY
+    setup.store.put_link("item_closed", "owner/project:issue:9", {"closed_at": closed_at})
+    assert run_sync_root(setup)[0] == [5, 8]
+    assert len(discovery_jobs(setup)) == 1
+    assert not [message for message in logged if "#9" in message]
+    assert run_sync_root(setup)[0] == [5, 8]
+    assert fetched.count(9) == 2
+    assert [message for message in logged if "#9" in message] == [
+        "Project sync no longer refreshes issue #9: GitHub reports it moved or deleted."]
+    assert setup.store.get_link("item_closed", "owner/project:issue:9")["closed_at"] == closed_at
+    fetched.clear()
+    run_sync_root(setup)
+    assert fetched == [8]
+
+
+def test_access_lost_after_the_listing_does_not_end_the_sync_of_closed_items_for_good(setup):
+    items = {8: github_item("pull", 8, closed_days_ago=2), 9: github_item("issue", 9, closed_days_ago=1)}
+    closed_world(setup, items, open_items=[github_item("issue", 5)])
+    found = setup.client.get_issue
+    lost = [True]
+
+    async def get_issue(number):
+        if lost[0]:
+            raise GitHubError("GitHub returned HTTP 404.", status=404)
+        return await found(number)
+
+    setup.client.get_issue = get_issue
+    assert run_sync_root(setup)[0] == [5]
+    lost[0] = False
+    items[9].update(title="Edited after close", updated_at=LATER)
+    assert run_sync_root(setup)[0] == [5, 8, 9]
+    lost[0] = True
+    run_sync_root(setup)
+    lost[0] = False
+    assert run_sync_root(setup)[0] == [5, 8, 9]
 
 
 @pytest.mark.parametrize("status", [None, 403, 429, 500, 502])
