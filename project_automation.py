@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import datetime
 import re
 import threading
 import time
 from pathlib import Path
 
+from logger import info
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_store import AutomationStore, Conflict
 from project_automation_activity import PRActivity, activate, mapping_key
 
+
+CLOSED_SYNC_DAYS = 7
 
 CHOICES = {
     "write": "Write my report", "check": "Check my report",
@@ -24,6 +28,15 @@ CHOICES = {
 
 def gate(kind: str, actions: list[str]) -> dict:
     return {"kind": kind, "options": [{"key": action, "label": CHOICES[action]} for action in actions]}
+
+
+def closed_time(item):
+    """Return the item's closed_at as a Unix time, or None when GitHub sent no usable value."""
+    try:
+        value = datetime.fromisoformat(item.get("closed_at", "").replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value.timestamp() if value.tzinfo is not None else None
 
 
 def reporter_actions(case):
@@ -47,6 +60,9 @@ class AutomationService:
         self._github = None
         self._github_config = None
         self._last_sync = 0.0
+        self._last_maintenance = 0.0
+        self._queue_cleaned = False
+        self._cleanup_lock = asyncio.Lock()
         self._last_error = None
         self.pr_activity = PRActivity(self)
 
@@ -95,6 +111,35 @@ class AutomationService:
 
     def restore_job(self, job_id, updated_at):
         self.store.restore_job(job_id, updated_at)
+
+    def discard_job(self, job_id, updated_at):
+        job = self.store.get_job(job_id) if type(job_id) is int else None
+        if job and job["kind"] == "publish" and job["state"] == "recovery":
+            # The report stays in recovery until /project-retry resolves this job, so
+            # deleting the job would leave its reporter without controls.
+            raise WorkflowError("A held report publication needs /project-retry so its reporter can approve it again.")
+        self.store.discard_job(job_id, updated_at)
+
+    def clear_history(self):
+        """Clear history and queue, then compact; call from a dashboard or CLI thread, not the event loop."""
+        return {"deleted": self.store.clear_history(), "compacted": self._compact_after_delete()}
+
+    def reset_project_data(self, confirmation):
+        """Delete all Project data while the helper is disabled; confirmation must be the repository name."""
+        cfg = self.settings()
+        if cfg.get("enabled"):
+            raise WorkflowError("Pause the Project helper before resetting its data.")
+        if not isinstance(confirmation, str) or not cfg.get("repository") or confirmation.strip() != cfg["repository"]:
+            raise ValueError("The confirmation does not match the configured repository.")
+        return {"deleted": self.store.reset_project_data(), "compacted": self._compact_after_delete()}
+
+    def _compact_after_delete(self):
+        # The rows are already gone and a later sweep compacts again, so a failed
+        # compaction must not turn the completed delete into a reported failure.
+        try:
+            return self.store.compact()
+        except Exception:
+            return False
 
     def _bound(self, case: dict) -> bool:
         cfg = self.settings()
@@ -322,6 +367,12 @@ class AutomationService:
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
+        # The store writes below run on the bots' event loop. While the one-time cleanup
+        # holds the write lock they would freeze every bot and then fail, so wait here.
+        try:
+            await self.clean_up_old_queue()
+        except Exception:
+            self._last_error = "Background processing needs attention"
         if bot.name == self.settings().get("bot_name"):
             for case in self.store.list_pending_cases():
                 if not self._bound(case) or case["state"] not in {"needs_maintainer", "discussing", "awaiting_report"}:
@@ -623,12 +674,18 @@ class AutomationService:
         if event["kind"] == "comment":
             for case in self.store.cases_for_issue(event["repository"], event["number"]):
                 if self._bound(case):
+                    notice = f"{case['id']}:{event['key']}"
+                    # Retention deletes the finished notify job, so this link is what
+                    # keeps a rerun of the same event from asking the reporter twice.
+                    if self.store.get_link("question_notice", notice) is not None:
+                        continue
                     # Preserve any current draft approval. The question is an independent status note.
                     self.store.put_link("maintainer_question", case["id"], {"key": event["key"], "body": event["body"], "url": event["html_url"]})
-                    self.store.enqueue("notify", {"case_id": case["id"], "event": {"action": "maintainer_question",
-                        "facts": {"question": event["body"], "github_url": event["html_url"]},
-                        "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
-                        key=f"question:{case['id']}:{event['key']}")
+                    self.store.save_links_with_jobs([("question_notice", notice, {})], [{
+                        "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "maintainer_question",
+                            "facts": {"question": event["body"], "github_url": event["html_url"]},
+                            "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
+                        "key": f"question:{notice}"}])
         else:
             self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
@@ -687,14 +744,42 @@ class AutomationService:
                 for item in await client.list_open_items(kind):
                     seen.add((kind, item["number"]))
                     self._enqueue_sync_item(item, kind, job["id"])
+            self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
                 data = link["data"]
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
-                    self._enqueue_sync_item(await client.get_issue(data["number"]), data["kind"], job["id"])
+                    seen.add((data["kind"], data["number"]))
+                    item = await self._closed_item_in_scope(client, data["kind"], data["number"])
+                    if item is not None:
+                        self._enqueue_sync_item(item, data["kind"], job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
         else:
             raise WorkflowError("Unknown job type.")
+
+    def _closed_key(self, kind, number):
+        return f"{self.settings()['repository'].lower()}:{kind}:{number}"
+
+    async def _closed_item_in_scope(self, client, kind, number):
+        """Return a mirrored item missing from the open listing while it still needs refreshing, else None.
+
+        An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
+        time is stored. An unknown close time costs one fetch, which stores it.
+        """
+        key = self._closed_key(kind, number)
+        cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
+        stored = self.store.get_link("item_closed", key)
+        if stored and stored.get("closed_at", 0) < cutoff:
+            return None
+        item = await client.get_issue(number)
+        if item.get("state") != "closed":
+            self.store.delete_links("item_closed", [key])
+            return item
+        # Without a usable closed_at, the first time the item was seen closed stands in for it.
+        closed_at = closed_time(item) or (stored or {}).get("closed_at") or time.time()
+        if not stored or stored.get("closed_at") != closed_at:
+            self.store.put_link("item_closed", key, {"closed_at": closed_at})
+        return item if closed_at >= cutoff else None
 
     def _enqueue_sync_item(self, item, kind, sync_id):
         from project_automation_webhook import webhook_binding
@@ -746,17 +831,51 @@ class AutomationService:
                                          "next_step": "The check could not finish. Write or edit your report, or choose Check my report to retry a saved report. Nothing was published."}})
         return True
 
+    def queue_sync_cycle(self):
+        """Return the queued root's ID, or None while the interval runs or a cycle still has live work."""
+        if self._last_sync and time.monotonic() - self._last_sync <= 900:
+            return None
+        if self.store.reconciliation_live():
+            return None
+        self._last_sync = time.monotonic()
+        from project_automation_webhook import webhook_binding
+        cfg = self.settings()
+        activate(self.store, cfg)
+        return self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
+                                  key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
+
+    async def maintain(self):
+        """Run retention and compaction in worker threads so the bots' event loop keeps running."""
+        history_days = self.settings().get("history_days", 0)
+        for prune in (self.store.prune_jobs, self.store.prune_links):
+            while await asyncio.to_thread(prune, history_days):
+                pass
+        if not await asyncio.to_thread(self.store.compact):
+            await asyncio.to_thread(self.store.release_free_pages)
+
+    async def clean_up_old_queue(self):
+        """Run the one-time queue cleanup once per process; later callers wait for that run to end."""
+        async with self._cleanup_lock:
+            if self._queue_cleaned:
+                return
+            counts = await asyncio.to_thread(self.store.clean_up_old_queue, self.settings().get("history_days", 0))
+            if counts is not None:
+                compacted = await asyncio.to_thread(self.store.compact)
+                info(f"Project queue cleanup deleted {counts['stale']} queued reconciliation jobs and "
+                     f"{counts['expired']} finished or expired jobs; compaction {'ran' if compacted else 'skipped'}.",
+                     component="project_automation", event="queue_cleanup")
+            self._queue_cleaned = True
+
     async def _run(self):
         while True:
             try:
+                if not self._queue_cleaned:
+                    await self.clean_up_old_queue()
+                if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
+                    self._last_maintenance = time.monotonic()
+                    await self.maintain()
                 if not self.paused() and self.settings().get("bot_name") in self.bots:
-                    if not self._last_sync or time.monotonic() - self._last_sync > 900:
-                        self._last_sync = time.monotonic()
-                        from project_automation_webhook import webhook_binding
-                        cfg = self.settings()
-                        activate(self.store, cfg)
-                        self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
-                                           key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
+                    self.queue_sync_cycle()
                     await self.run_once()
             except asyncio.CancelledError:
                 raise

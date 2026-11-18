@@ -282,6 +282,12 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["merged"])
         self.assertTrue(session.calls[-1][1].endswith("/pulls/18"))
 
+    async def test_items_report_when_they_closed(self):
+        client, _ = authenticated_client(FakeResponse(issue(state="closed", closed_at="2026-09-16T03:00:00Z")),
+                                         FakeResponse(issue(state="open", closed_at=None)))
+        self.assertEqual((await client.get_issue(17))["closed_at"], "2026-09-16T03:00:00Z")
+        self.assertEqual((await client.get_issue(17))["closed_at"], "")
+
     async def test_pagination_reconstructs_urls_instead_of_following_headers(self):
         client, session = authenticated_client(FakeResponse([issue(), issue(18, pull_request={})],
             headers={"Link": '<https://evil.test/steal>; rel="next"'}), FakeResponse([issue(19)]))

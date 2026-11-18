@@ -23,6 +23,7 @@ PROJECT_DEFAULTS = {
     "character_name": "",
     "provider_tier": "",
     "max_questions": 3,
+    "history_days": 0,
     "github_app_id": "",
     "github_installation_id": "",
     "github_private_key_env": "PROJECT_GITHUB_PRIVATE_KEY",
@@ -106,6 +107,13 @@ def normalize_project_config(value) -> dict:
         result["max_questions"] = max(1, min(10, int(question_limit)))
     except (TypeError, ValueError, OverflowError):
         result["max_questions"] = 3
+    try:
+        history_days = source.get("history_days", 0)
+        if isinstance(history_days, bool):
+            raise ValueError
+        result["history_days"] = max(0, min(365, int(history_days)))
+    except (TypeError, ValueError, OverflowError):
+        result["history_days"] = 0
     return result
 
 
@@ -141,6 +149,10 @@ def config_input_errors(value) -> list[str]:
         raw = value["max_questions"]
         if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 10:
             errors.append("max_questions: choose a whole number from 1 to 10.")
+    if "history_days" in value:
+        raw = value["history_days"]
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= 365:
+            errors.append("history_days: choose a whole number of days from 0 to 365.")
     return errors
 
 

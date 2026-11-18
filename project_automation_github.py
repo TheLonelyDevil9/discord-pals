@@ -127,6 +127,7 @@ def _item(raw: Any, repository: str, kind: str = "issue") -> dict[str, Any] | No
         "state_reason": _text(raw.get("state_reason"), 40),
         "labels": [label for label in labels if label],
         "updated_at": _text(raw.get("updated_at"), 40),
+        "closed_at": _text(raw.get("closed_at"), 40),
     }
 
 

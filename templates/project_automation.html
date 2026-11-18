@@ -92,9 +92,17 @@
     .project-job-link { display: inline-block; background: none; border: 0; color: var(--text-primary); cursor: pointer; font: inherit; padding: 5px 0; text-decoration: underline; text-underline-offset: 3px; }
     .project-job-marker { display: block; overflow-wrap: anywhere; margin-top: 4px; white-space: pre-wrap; }
     .project-id { font-variant-numeric: tabular-nums; }
+    .project-data-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 16px; }
+    .project-data-action { min-width: 0; padding: 20px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+    .project-data-action h3 { font-size: 1rem; }
+    .project-data-action p { margin: 6px 0 14px; }
+    .project-data-action label { display: block; font-size: 0.875rem; }
+    .project-data-action input { width: 100%; margin: 6px 0 14px; }
+    .project-data-action input:focus-visible, .project-data-action .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #project-data-status { margin-top: 12px; }
     @media (max-width: 950px) { .project-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 650px) {
-        .project-feedback-grid, .project-form-grid { grid-template-columns: minmax(0, 1fr); }
+        .project-feedback-grid, .project-form-grid, .project-data-actions { grid-template-columns: minmax(0, 1fr); }
         .project-form .project-span { grid-column: auto; }
         .project-header h1 { font-size: 1.75rem; }
         .project-case-detail { padding: 16px; }
@@ -288,6 +296,16 @@
                 {% endfor %}
             </div>
         </fieldset>
+        <fieldset>
+            <legend>Job history</legend>
+            <div class="project-form-grid">
+                <div class="form-group">
+                    <label for="project-history-days">Keep finished jobs (days)</label>
+                    <input id="project-history-days" name="history_days" value="{{ project.config.history_days }}" type="number" min="0" max="365" step="1" aria-describedby="project-history-days-hint">
+                    <p class="form-hint" id="project-history-days-hint">0 keeps none: finished jobs are deleted within about 10 minutes. Failed jobs stay at least 7 days. Release, workflow, and commit post records also follow this setting with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued and held jobs, issue and PR posts, receipts, and feedback cases are not affected.</p>
+                </div>
+            </div>
+        </fieldset>
         <div class="project-form-actions">
             <button type="submit" class="btn btn-primary" id="project-save">Save project settings</button>
             <p id="project-save-status" role="status" aria-live="polite"></p>
@@ -298,7 +316,7 @@
 
 <section class="project-section" aria-labelledby="jobs-heading">
     <h2 id="jobs-heading">Delivery activity</h2>
-    <p class="project-hint">Queued work survives restarts. A recovery state means a public write may already exist; check GitHub or Discord before retrying it.</p>
+    <p class="project-hint">Queued work survives restarts. A recovery state means a public write may already exist; check GitHub or Discord before retrying it. <strong>Discard</strong> deletes one held job without retrying its delivery.</p>
     <p class="project-hint">Maintainers can use <code>/project-recover job_id</code> in Discord to find an existing delivery, or <code>/project-retry job_id</code> to resume failed work. An uncertain publication requires a destination check and the reporter’s fresh approval.</p>
     <div class="project-toolbar project-activity-toolbar">
         <div class="project-controls project-activity-views" role="group" aria-label="Delivery activity view">
@@ -325,6 +343,26 @@
     </div>
 </section>
 
+<section class="project-section" aria-labelledby="data-heading">
+    <h2 id="data-heading">Project data</h2>
+    <p class="project-hint">Finished jobs are deleted automatically after the period set under Job history. These controls delete more right away.</p>
+    <div class="project-data-actions">
+        <div class="project-data-action">
+            <h3>Clear history and queue</h3>
+            <p class="project-hint">Deletes every queued, finished, failed, and held job except jobs in progress and the feedback steps open reports still need: queued, failed, and held report checks, decisions, publications, and notices stay. Other queued work never runs, and other held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. Works while automation runs or is paused.</p>
+            <button type="button" class="btn btn-secondary" id="project-clear-history">Clear history and queue</button>
+        </div>
+        <div class="project-data-action">
+            <h3>Reset Project data</h3>
+            <p class="project-hint">Deletes every job, post record, receipt, and feedback case. Afterwards every open issue and pull request is posted again as new, and the old Discord posts stay. Available while automation is paused and no job is in progress.</p>
+            <label for="project-reset-confirm">Type <code id="project-reset-repository">{{ project.config.repository }}</code> to confirm</label>
+            <input id="project-reset-confirm" maxlength="140" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn btn-danger" id="project-reset" disabled>Reset Project data</button>
+        </div>
+    </div>
+    <p class="project-hint project-activity-status" id="project-data-status" role="status" aria-live="polite" aria-atomic="true"></p>
+</section>
+
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const initial = {{ project | tojson }};
@@ -346,6 +384,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let refreshing = false;
     let statusRequest = 0;
     let statusWrites = 0;
+    let dataAction = false;
     const jobViewLabels = {recent: 'Recent', attention: 'Needs attention', dismissed: 'Dismissed'};
     const form = document.getElementById('project-form');
     const purposes = initial.channel_purposes;
@@ -462,6 +501,19 @@ document.addEventListener('DOMContentLoaded', function () {
             const link = url && safeLink(url, label);
             if (link) destinations.append(link);
         });
+        updateDataControls();
+    }
+    function dataMessage(text, state) {
+        const message = document.getElementById('project-data-status');
+        message.textContent = text;
+        message.dataset.state = state || '';
+    }
+    function updateDataControls() {
+        const repository = snapshot.config.repository || '';
+        const typed = document.getElementById('project-reset-confirm').value.trim();
+        document.getElementById('project-reset-repository').textContent = repository || 'owner/repository';
+        document.getElementById('project-clear-history').disabled = dataAction;
+        document.getElementById('project-reset').disabled = dataAction || snapshot.config.enabled || !repository || typed !== repository;
     }
     function discordUrl(guild, channel) {
         return [guild, channel].every(value => typeof value === 'string' && /^[0-9]{1,20}$/.test(value) && /[1-9]/.test(value))
@@ -471,6 +523,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const config = Object.fromEntries(new FormData(form).entries());
         config.enabled = form.elements.enabled.checked;
         config.max_questions = Number(config.max_questions);
+        config.history_days = Number(config.history_days);
         ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });
         return config;
     }
@@ -767,6 +820,29 @@ document.addEventListener('DOMContentLoaded', function () {
             activityMessage('Could not ' + (restore ? 'restore' : 'dismiss') + ' this activity. ' + error.message + ' The list is unchanged. Use Refresh activity before trying again.', 'error');
         } finally { jobsAction = false; updateJobControls(); }
     }
+    async function discardJob(job) {
+        if (jobsLoading || jobsAction || refreshing) return;
+        const confirmed = await confirmAction('Discard held job',
+            'Discard held job ' + job.id + '? Its delivery is not retried and the job is deleted. A public write may already exist, so check the destination first. This cannot be undone.',
+            {confirmText: 'Discard'});
+        if (!confirmed) return;
+        jobsAction = true;
+        ++statusRequest;
+        activityMessage('Discarding held job ' + job.id + '…');
+        updateJobControls();
+        try {
+            await requestJson('/api/project-automation/jobs/' + job.id + '/discard', 'POST', {updated_at: job.updated_at});
+            loadedJobs = loadedJobs.filter(item => item.id !== job.id);
+            renderJobs(loadedJobs);
+            updateJobControls();
+            activityMessage('Held job ' + job.id + ' discarded. Its delivery was not retried.');
+            document.getElementById('project-jobs-status').focus({preventScroll: true});
+            try { await refreshStatus(); }
+            catch (_) { activityMessage(document.getElementById('project-jobs-status').textContent + ' Queue counts could not refresh. Use Refresh activity for current counts.'); }
+        } catch (error) {
+            activityMessage('Could not discard this job. ' + error.message + ' The list is unchanged. Use Refresh activity before trying again.', 'error');
+        } finally { jobsAction = false; updateJobControls(); }
+    }
     function renderJobs(jobs) {
         const body = document.getElementById('project-jobs');
         body.replaceChildren();
@@ -797,6 +873,16 @@ document.addEventListener('DOMContentLoaded', function () {
             const error = job.last_error || job.error;
             if (error) state.append(element('span', error, 'project-job-error'));
             if (held) state.append(element('span', 'A public write may already exist. Check the destination before any retry. Held work cannot be dismissed.', 'project-job-error'));
+            if (held && job.kind !== 'publish') {
+                const discard = element('button', 'Discard', 'btn btn-secondary project-job-action');
+                discard.type = 'button';
+                discard.dataset.jobAction = 'discard';
+                discard.setAttribute('aria-label', 'Discard held job ' + job.id);
+                discard.addEventListener('click', () => discardJob(job));
+                state.append(element('br'), discard);
+            } else if (held) {
+                state.append(element('span', 'Use /project-retry for a held report publication so its reporter can approve it again.', 'project-job-error'));
+            }
             if (dismissed) state.append(element('span', 'Dismissed ' + new Date(job.dismissed_at * 1000).toLocaleString(), 'project-job-error'));
             if (status === 'failed') {
                 const action = element('button', dismissed ? 'Restore' : 'Dismiss', 'btn btn-secondary project-job-action');
@@ -873,6 +959,45 @@ document.addEventListener('DOMContentLoaded', function () {
             await refreshStatus('POST', { enabled: false });
             form.elements.enabled.checked = false;
         } catch (error) { document.getElementById('project-status-detail').textContent = error.message; this.disabled = false; }
+    });
+    document.getElementById('project-reset-confirm').addEventListener('input', updateDataControls);
+    document.getElementById('project-clear-history').addEventListener('click', async function () {
+        if (dataAction) return;
+        const confirmed = await confirmAction('Clear history and queue',
+            'Delete every queued, finished, failed, and held Project job except jobs in progress and the feedback steps open reports still need? Other queued work never runs and other held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. This cannot be undone.',
+            {confirmText: 'Clear'});
+        if (!confirmed) return;
+        dataAction = true;
+        updateDataControls();
+        dataMessage('Clearing history and queue…');
+        try {
+            const result = await requestJson('/api/project-automation/history/clear', 'POST', {});
+            dataMessage(result.deleted + (result.deleted === 1 ? ' job was' : ' jobs were') + ' deleted.' + (result.compacted ? ' The database file was compacted.' : ''));
+        } catch (error) {
+            dataMessage('History was not cleared. ' + error.message, 'error');
+        } finally {
+            dataAction = false;
+            updateDataControls();
+        }
+        refresh();
+    });
+    document.getElementById('project-reset').addEventListener('click', async function () {
+        const repository = document.getElementById('project-reset-confirm').value.trim();
+        if (dataAction || repository !== snapshot.config.repository) return;
+        dataAction = true;
+        updateDataControls();
+        dataMessage('Resetting Project data…');
+        try {
+            const result = await requestJson('/api/project-automation/reset', 'POST', {repository});
+            document.getElementById('project-reset-confirm').value = '';
+            dataMessage('Project data reset: ' + result.deleted.jobs + ' jobs, ' + result.deleted.links + ' records, and ' + result.deleted.cases + ' feedback cases deleted.' + (result.compacted ? ' The database file was compacted.' : ''));
+        } catch (error) {
+            dataMessage('Project data was not reset. ' + error.message, 'error');
+        } finally {
+            dataAction = false;
+            updateDataControls();
+        }
+        refresh();
     });
     document.getElementById('project-refresh').addEventListener('click', refresh);
     document.getElementById('project-jobs-refresh').addEventListener('click', refresh);

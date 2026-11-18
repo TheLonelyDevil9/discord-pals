@@ -7,6 +7,7 @@ then require reconciliation instead of being sent again after a restart.
 """
 
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -19,6 +20,18 @@ MAX_DOCUMENT_BYTES = 256 * 1024
 MAX_LINK_BYTES = 64 * 1024
 MAX_TRANSCRIPT_ENTRIES = 100
 MAX_DECISIONS = 100
+DAY_SECONDS = 86400
+FAILED_RETENTION_DAYS = 7
+# GitHub offers a delivery for redelivery for 3 days, so its marker must outlive that window:
+# https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks
+DELIVERY_MARKER_DAYS = 4
+PRUNE_BATCH_ROWS = 500
+BULK_DELETE_ROWS = 20000
+COMPACT_MIN_FREE_SHARE = 0.25
+COMPACT_MIN_FREE_BYTES = 16 * 1024 * 1024
+JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+# PRAGMA user_version reaches this value once the one-time queue cleanup has run.
+QUEUE_CLEANUP_VERSION = 1
 _MANAGED_CASE_FIELDS = {"id", "source_key", "revision", "created_at", "updated_at", "decisions"}
 _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "repository"}
 
@@ -57,6 +70,12 @@ def _limit(value):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("Limit must be a positive integer")
     return min(value, 500)
+
+
+def _days(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 365:
+        raise ValueError("History days must be a whole number from 0 to 365")
+    return value
 
 
 def _job_id(value):
@@ -136,10 +155,11 @@ class AutomationStore:
             """)
 
     @contextmanager
-    def _connection(self, write=False):
-        connection = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
+    def _connection(self, write=False, timeout=10):
+        connection = sqlite3.connect(str(self.path), timeout=timeout, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
+        connection.execute(f"PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}")
         try:
             if write:
                 connection.execute("BEGIN IMMEDIATE")
@@ -328,6 +348,21 @@ class AutomationStore:
         with self._connection(write=True) as connection:
             return self._enqueue(connection, kind, payload, key, delay)
 
+    def enqueue_delivery(self, delivery, kind, payload, key):
+        """Queue a webhook delivery once per delivery ID; return None when it was seen before.
+
+        The marker keeps only a SHA-256 of the ID and lasts DELIVERY_MARKER_DAYS, however
+        long retention keeps the job row.
+        """
+        marker = hashlib.sha256(_text(delivery, "Delivery ID", 128).encode("utf-8")).hexdigest()
+        with self._connection(write=True) as connection:
+            if connection.execute("SELECT 1 FROM links WHERE kind = 'github_delivery' AND key = ?",
+                                  (marker,)).fetchone():
+                return None
+            connection.execute("INSERT INTO links(kind, key, document, updated_at) VALUES ('github_delivery', ?, '{}', ?)",
+                               (marker, time.time()))
+            return self._enqueue(connection, kind, payload, key, 0)
+
     @staticmethod
     def _expire_leases(connection):
         now = time.time()
@@ -341,6 +376,17 @@ class AutomationStore:
             "WHERE state = 'running' AND lease_until <= ?", (now, now),
         )
 
+    def _expire_due_leases(self):
+        """Release lapsed leases in their own short write, taken only when one has lapsed."""
+        with self._connection() as connection:
+            due = connection.execute(
+                "SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') AND lease_until <= ? LIMIT 1",
+                (time.time(),),
+            ).fetchone()
+        if due:
+            with self._connection(write=True) as connection:
+                self._expire_leases(connection)
+
     @staticmethod
     def _job(row):
         if row is None:
@@ -351,8 +397,8 @@ class AutomationStore:
         return job
 
     def get_job(self, job_id):
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
+        self._expire_due_leases()
+        with self._connection() as connection:
             return self._job(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
 
     def list_jobs(self, limit=100):
@@ -378,8 +424,8 @@ class AutomationStore:
             parameters.append(_job_id(before_id))
             where += " AND j.id < ?"
         parameters.append(limit + 1)
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
+        self._expire_due_leases()
+        with self._connection() as connection:
             rows = connection.execute(
                 "SELECT j.*, CASE WHEN j.state = 'failed' THEN d.updated_at END AS dismissed_at "
                 "FROM jobs j LEFT JOIN links d ON d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
@@ -579,6 +625,12 @@ class AutomationStore:
             )
         return json.loads(document)
 
+    def delete_links(self, kind, keys):
+        keys = [str(key) for key in keys]
+        if keys:
+            with self._connection(write=True) as connection:
+                connection.executemany("DELETE FROM links WHERE kind = ? AND key = ?", [(kind, key) for key in keys])
+
     def ensure_link(self, kind, key, data):
         """Create a durable baseline once, including concurrent webhook arrivals."""
         _text(kind, "Link kind", 80)
@@ -625,16 +677,28 @@ class AutomationStore:
             )
 
     def job_counts(self):
-        with self._connection(write=True) as connection:
-            self._expire_leases(connection)
-            counts = dict(connection.execute(
-                "SELECT CASE WHEN j.state = 'failed' AND d.key IS NOT NULL THEN 'dismissed' ELSE j.state END, COUNT(*) "
-                "FROM jobs j LEFT JOIN links d ON d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
-                "GROUP BY 1"
-            ).fetchall())
+        self._expire_due_leases()
+        with self._connection() as connection:
+            # Listing the unfinished states lets jobs_ready skip every done row,
+            # and only failed rows probe links for a dismissal.
+            rows = connection.execute(
+                "SELECT j.state, COUNT(*), COUNT(d.key) FROM jobs j "
+                "LEFT JOIN links d ON j.state = 'failed' AND d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
+                "WHERE j.state IN ('pending', 'running', 'inflight', 'failed', 'recovery') GROUP BY j.state"
+            ).fetchall()
+        counts = {row[0]: row[1] for row in rows}
+        dismissed = sum(row[2] for row in rows)
         return {"pending": sum(counts.get(state, 0) for state in ("pending", "running", "inflight")),
-                "failed": counts.get("failed", 0), "recovery": counts.get("recovery", 0),
-                "dismissed": counts.get("dismissed", 0)}
+                "failed": counts.get("failed", 0) - dismissed, "recovery": counts.get("recovery", 0),
+                "dismissed": dismissed}
+
+    def reconciliation_live(self):
+        """Report whether a sync root or any job of a sync cycle is pending, running, or inflight."""
+        with self._connection() as connection:
+            return connection.execute(
+                "SELECT 1 FROM jobs WHERE state IN ('pending', 'running', 'inflight') "
+                "AND (kind = 'sync' OR json_extract(payload, '$._sync_cycle') IS NOT NULL) LIMIT 1"
+            ).fetchone() is not None
 
     def unfinished_sync_jobs(self, cycle_id):
         """A sync is successful only after its child deliveries complete."""
@@ -643,3 +707,275 @@ class AutomationStore:
                 "SELECT 1 FROM jobs WHERE json_extract(payload, '$._sync_cycle') = ? AND state != 'done' LIMIT 1",
                 (cycle_id,),
             ).fetchone() is not None
+
+    @staticmethod
+    def _collect_expired_jobs(connection, history_days, now):
+        """Add the jobs retention may delete to temp.doomed, counting rows already there as gone."""
+        connection.execute("CREATE TEMP TABLE IF NOT EXISTS doomed(id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TEMP TABLE IF NOT EXISTS open_cycle_jobs(id INTEGER PRIMARY KEY)")
+        cycles = [row[0] for row in connection.execute(
+            "SELECT json_extract(payload, '$._sync_cycle') FROM jobs WHERE state IN ('pending', 'running', 'inflight') "
+            "AND id NOT IN (SELECT id FROM temp.doomed) AND json_extract(payload, '$._sync_cycle') IS NOT NULL "
+            "UNION SELECT id FROM jobs WHERE state IN ('pending', 'running', 'inflight') AND kind = 'sync' "
+            "AND id NOT IN (SELECT id FROM temp.doomed)"
+        )]
+        # complete_cycle reads the root when the last job of its cycle finishes, so a cycle
+        # keeps all its finished rows, root included, while any of its jobs is live.
+        for cycle in cycles:
+            connection.execute("INSERT OR IGNORE INTO temp.open_cycle_jobs SELECT id FROM jobs "
+                               "WHERE json_extract(payload, '$._sync_cycle') = ? AND state = 'done'", (cycle,))
+            connection.execute("INSERT OR IGNORE INTO temp.open_cycle_jobs SELECT id FROM jobs "
+                               "WHERE id = ? AND state = 'done'", (cycle,))
+        finished, parameters = "state = 'done'", []
+        if history_days:
+            cutoff = now - history_days * DAY_SECONDS
+            # A done row never has available_at above updated_at, so this bound only
+            # lets jobs_ready skip rows that finished inside the window.
+            finished += " AND available_at < ? AND updated_at < ?"
+            parameters += [cutoff, cutoff]
+        parameters.append(now - max(FAILED_RETENTION_DAYS, history_days) * DAY_SECONDS)
+        # A report in processing or queued waits on its branch or publish job, and
+        # /project-retry on that failed job is its only way forward, so those stay.
+        connection.execute(
+            "INSERT OR IGNORE INTO temp.doomed SELECT id FROM jobs WHERE " + finished
+            + " AND id NOT IN (SELECT id FROM temp.open_cycle_jobs) "
+            "UNION ALL SELECT id FROM jobs WHERE state IN ('failed', 'cancelled') AND updated_at < ? "
+            "AND NOT (state = 'failed' AND kind IN ('branch', 'publish'))",
+            parameters,
+        )
+
+    @staticmethod
+    def _skip_zeroing_freed_pages(connection):
+        # SQLite builds with secure_delete on, the Debian and Ubuntu default, overwrite
+        # every freed page and write it to the WAL, so a bulk delete would write as many
+        # bytes as it frees. FAST frees the pages without that extra write.
+        connection.execute("PRAGMA secure_delete=FAST")
+
+    @staticmethod
+    def _replace_jobs(connection, kept_ids):
+        """Keep only the jobs whose IDs the kept_ids query selects, inside the caller's write transaction.
+
+        DELETE without WHERE frees whole table and index pages instead of removing each
+        row and index entry, and it leaves sqlite_sequence alone, so IDs are never reused.
+        """
+        AutomationStore._skip_zeroing_freed_pages(connection)
+        connection.execute("CREATE TEMP TABLE kept AS SELECT * FROM jobs WHERE id IN (" + kept_ids + ")")
+        connection.execute("DELETE FROM jobs")
+        connection.execute("INSERT INTO jobs SELECT * FROM temp.kept")
+        connection.execute("DROP TABLE temp.kept")
+
+    @staticmethod
+    def _delete_doomed(connection, limit=None):
+        """Delete the jobs in temp.doomed and the links that belonged to them, and return the count.
+
+        Past BULK_DELETE_ROWS every listed job goes in one step; otherwise only the
+        lowest `limit` IDs go when a limit is given.
+        """
+        count = connection.execute("SELECT COUNT(*) FROM temp.doomed").fetchone()[0]
+        if count > BULK_DELETE_ROWS:
+            # INDEXED BY keeps the scan of surviving IDs on the small covering index
+            # instead of reading every row of the table.
+            AutomationStore._replace_jobs(
+                connection, "SELECT id FROM jobs INDEXED BY jobs_ready WHERE id NOT IN (SELECT id FROM temp.doomed)")
+            # Only the kept jobs remain, so checking each link against them costs far less
+            # than two index probes for every deleted ID.
+            AutomationStore._delete_orphaned_job_links(connection)
+            return count
+        if limit is not None:
+            connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
+                               "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
+        count = connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
+        connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') "
+                           "AND key IN (SELECT CAST(id AS TEXT) FROM temp.doomed)")
+        return count
+
+    def prune_jobs(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
+        """Delete one batch of jobs that retention allows and return how many were deleted.
+
+        Finished jobs go once they are history_days old (at once for 0), but a reconciliation
+        cycle keeps its rows while any of its jobs is live. Failed and cancelled jobs go after
+        max(FAILED_RETENTION_DAYS, history_days) days, except failed branch and publish jobs.
+        Pending, running, inflight and held jobs always stay. A backlog above
+        BULK_DELETE_ROWS goes in one transaction instead of one batch.
+        """
+        history_days, limit = _days(history_days), _limit(limit)
+        with self._connection(write=True) as connection:
+            self._collect_expired_jobs(connection, history_days, time.time())
+            return self._delete_doomed(connection, limit)
+
+    @staticmethod
+    def _keep_duplicate_guards(connection, now):
+        """Write delivery markers and question notices for job rows that are about to be deleted.
+
+        Rows written before these links existed are their own duplicate guard, so deleting
+        them without the links would let a redelivery or a rerun act twice.
+        """
+        rows = connection.execute(
+            "SELECT key, created_at FROM jobs WHERE key >= 'github:' AND key < 'github;' AND created_at >= ?",
+            (now - DELIVERY_MARKER_DAYS * DAY_SECONDS,),
+        ).fetchall()
+        connection.executemany(
+            "INSERT OR IGNORE INTO links(kind, key, document, updated_at) VALUES ('github_delivery', ?, '{}', ?)",
+            [(hashlib.sha256(row["key"][len("github:"):].encode("utf-8")).hexdigest(), row["created_at"])
+             for row in rows],
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO links(kind, key, document, updated_at) SELECT 'question_notice', "
+            "substr(key, 10), '{}', created_at FROM jobs WHERE key >= 'question:' AND key < 'question;'")
+
+    @staticmethod
+    def _delete_orphaned_job_links(connection):
+        connection.execute(
+            "DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared', 'pr_discovery_cycle') "
+            "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = CAST(links.key AS INTEGER))")
+        connection.execute(
+            "DELETE FROM links WHERE kind = 'pr_discovery_page' AND NOT EXISTS (SELECT 1 FROM jobs "
+            "WHERE jobs.id = CAST(substr(links.key, instr(links.key, ':') + 1) AS INTEGER))")
+
+    def clear_history(self):
+        """Delete every job except running and inflight ones, with their job links; return the count.
+
+        Pending, failed and held feedback steps stay, because an open report cannot
+        continue without them. Post records, receipts, feedback cases and delivery
+        markers stay too.
+        """
+        with self._connection(write=True) as connection:
+            before = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            self._keep_duplicate_guards(connection, time.time())
+            self._replace_jobs(connection, "SELECT id FROM jobs WHERE state IN ('running', 'inflight') "
+                                           "OR (state IN ('pending', 'failed', 'recovery') "
+                                           "AND kind IN ('assess', 'branch', 'publish', 'notify'))")
+            self._delete_orphaned_job_links(connection)
+            return before - connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+    def reset_project_data(self):
+        """Delete every job, link and case and return the counts; raise Conflict while a job is in progress."""
+        with self._connection(write=True) as connection:
+            self._expire_leases(connection)
+            if connection.execute("SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') LIMIT 1").fetchone():
+                raise Conflict("A job is running or sending a delivery")
+            self._skip_zeroing_freed_pages(connection)
+            counts = {}
+            for table in ("jobs", "links", "cases"):
+                counts[table] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                connection.execute(f"DELETE FROM {table}")
+            return counts
+
+    def discard_job(self, job_id, updated_at):
+        """Delete one held job and its job links if it still matches the snapshot the operator saw."""
+        snapshot = _job_snapshot({"id": job_id, "updated_at": updated_at})
+        with self._connection(write=True) as connection:
+            row = connection.execute("SELECT state, updated_at FROM jobs WHERE id = ?", (snapshot["id"],)).fetchone()
+            if row is None:
+                raise KeyError(snapshot["id"])
+            if row["state"] != "recovery" or row["updated_at"] != snapshot["updated_at"]:
+                raise Conflict("The held job changed. Refresh activity before trying again.")
+            connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') AND key = ?",
+                               (str(snapshot["id"]),))
+            connection.execute("DELETE FROM jobs WHERE id = ?", (snapshot["id"],))
+
+    def clean_up_old_queue(self, history_days=0):
+        """Clear work left by overlapping sync cycles once, and return counts or None after the first run.
+
+        Pending sync roots, PR scan jobs and sync-item refreshes go first; pending
+        webhook events, pr-event deliveries and feedback jobs stay. Retention then
+        applies to every remaining row. Both steps share one transaction.
+        """
+        history_days = _days(history_days)
+        with self._connection(write=True) as connection:
+            if connection.execute("PRAGMA user_version").fetchone()[0] >= QUEUE_CLEANUP_VERSION:
+                return None
+            self._keep_duplicate_guards(connection, time.time())
+            connection.execute("CREATE TEMP TABLE IF NOT EXISTS doomed(id INTEGER PRIMARY KEY)")
+            stale = connection.execute(
+                "INSERT INTO temp.doomed SELECT id FROM jobs WHERE state = 'pending' AND (kind IN "
+                "('sync', 'pr_sync_page', 'pr_sync_missing', 'pr_sync_check', 'pr_sync_discover') "
+                "OR (kind = 'event' AND substr(key, 1, 10) = 'sync-item:'))"
+            ).rowcount
+            self._collect_expired_jobs(connection, history_days, time.time())
+            deleted = self._delete_doomed(connection)
+            connection.execute(f"PRAGMA user_version = {QUEUE_CLEANUP_VERSION}")
+        return {"stale": stale, "expired": deleted - stale}
+
+    def prune_links(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
+        """Delete one batch of expired bookkeeping links and return how many were deleted.
+
+        Delivery markers go after DELIVERY_MARKER_DAYS, discovery links once their cycle's root
+        job is gone, and release, workflow and commit post records, with their attempt records,
+        after max(FAILED_RETENTION_DAYS, history_days) days.
+        """
+        history_days, limit = _days(history_days), _limit(limit)
+        now = time.time()
+        with self._connection(write=True) as connection:
+            deleted = connection.execute(
+                "DELETE FROM links WHERE rowid IN (SELECT rowid FROM links WHERE kind = 'github_delivery' "
+                "AND updated_at < ? LIMIT ?)", (now - DELIVERY_MARKER_DAYS * DAY_SECONDS, limit),
+            ).rowcount
+            for kind, cycle in (("pr_discovery_cycle", "links.key"),
+                                ("pr_discovery_page", "substr(links.key, instr(links.key, ':') + 1)")):
+                deleted += connection.execute(
+                    "DELETE FROM links WHERE rowid IN (SELECT rowid FROM links WHERE kind = ? AND NOT EXISTS "
+                    f"(SELECT 1 FROM jobs WHERE jobs.id = CAST({cycle} AS INTEGER)) LIMIT ?)",
+                    (kind, limit - deleted),
+                ).rowcount
+            keys = [row[0] for row in connection.execute(
+                "SELECT key FROM links WHERE kind = 'mirror' AND updated_at < ? "
+                "AND json_extract(document, '$.kind') IN ('general', 'commit') LIMIT ?",
+                (now - max(FAILED_RETENTION_DAYS, history_days) * DAY_SECONDS, (limit - deleted) // 2),
+            )]
+            if keys:
+                deleted += connection.execute(
+                    "DELETE FROM links WHERE kind IN ('mirror', 'mirror_attempt') AND key IN ("
+                    + ",".join("?" * len(keys)) + ")", keys,
+                ).rowcount
+        return deleted
+
+    def database_usage(self):
+        """Return the database size and the bytes held by free pages, both from SQLite's page counts."""
+        with self._connection() as connection:
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+            pages = connection.execute("PRAGMA page_count").fetchone()[0]
+            free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+        return {"bytes": pages * page_size, "free_bytes": free * page_size}
+
+    def compact(self):
+        """VACUUM once free pages reach COMPACT_MIN_FREE_SHARE of the file and COMPACT_MIN_FREE_BYTES.
+
+        Return whether it ran. VACUUM rewrites the whole file, so never call this on the
+        event loop. While another connection holds the write lock it returns False, and a
+        later call tries again.
+        """
+        usage = self.database_usage()
+        if (usage["free_bytes"] < usage["bytes"] * COMPACT_MIN_FREE_SHARE
+                or usage["free_bytes"] < COMPACT_MIN_FREE_BYTES):
+            return False
+        try:
+            with self._connection(timeout=1) as connection:
+                # VACUUM is the only point where auto_vacuum can change on an existing
+                # file. Incremental mode lets release_free_pages return later space.
+                connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                connection.execute("VACUUM")
+                return True
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc):
+                return False
+            raise
+
+    def release_free_pages(self):
+        """Return free pages to the file system after a sweep and report how many were released.
+
+        This does nothing until compact has switched the file to incremental auto_vacuum,
+        or while another connection holds the write lock.
+        """
+        try:
+            with self._connection(timeout=1) as connection:
+                if connection.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+                    return 0
+                free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+                # Each step of this pragma frees one page, so read every row.
+                connection.execute("PRAGMA incremental_vacuum").fetchall()
+                return free
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc):
+                return 0
+            raise

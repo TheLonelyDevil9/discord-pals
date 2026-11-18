@@ -1,10 +1,12 @@
 """Exercise the signed HTTP ingress and real SQLite deduplication locally."""
 
+from contextlib import closing
 import hashlib
 import hmac
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import types
 import unittest
@@ -100,8 +102,28 @@ class WebhookIngressTests(unittest.TestCase):
         self.assertEqual(self.post().status_code, 202)
         changed = event_payload()
         changed["issue"]["body"] = "Changed after first delivery"
-        self.assertEqual(self.post(changed).status_code, 503)
+        response = self.post(changed)
+        self.assertEqual((response.status_code, response.json), (202, {"status": "accepted"}))
+        self.assertEqual(len(self.store.list_jobs()), 1)
         self.assertEqual(self.store.list_jobs()[0]["payload"]["body"], "Details")
+
+    def test_redelivery_queues_nothing_after_its_job_row_is_deleted(self):
+        self.assertEqual(self.post().status_code, 202)
+        with closing(sqlite3.connect(self.store.path)) as connection, connection:
+            connection.execute("DELETE FROM jobs")
+        response = self.post()
+        self.assertEqual((response.status_code, response.json), (202, {"status": "accepted"}))
+        self.assertEqual(self.store.list_jobs(), [])
+        self.assertEqual(self.post(delivery="delivery-2").status_code, 202)
+        self.assertEqual([job["key"] for job in self.store.list_jobs()], ["github:delivery-2"])
+
+    def test_delivery_marker_stores_only_a_digest(self):
+        self.assertEqual(self.post().status_code, 202)
+        markers = self.store.list_links("github_delivery")
+        self.assertEqual(markers, [{"key": hashlib.sha256(b"delivery-1").hexdigest(), "data": {}}])
+        with closing(sqlite3.connect(self.store.path)) as connection:
+            links = connection.execute("SELECT kind, key, document FROM links").fetchall()
+        self.assertNotIn("delivery-1", json.dumps(links))
 
     def test_config_snapshot_binds_all_channels_and_bot(self):
         self.assertEqual(self.post().status_code, 202)
@@ -113,11 +135,12 @@ class WebhookIngressTests(unittest.TestCase):
         self.assertEqual(self.store.list_jobs()[0]["payload"]["_binding"], webhook_binding(self.config))
         self.assertNotIn("github_webhook_secret_env", original)
 
-    def test_changed_scope_with_same_delivery_is_held(self):
+    def test_changed_scope_with_same_delivery_is_not_queued_again(self):
         self.assertEqual(self.post().status_code, 202)
         self.config["guild_id"] = "999"
-        self.assertEqual(self.post().status_code, 503)
+        self.assertEqual(self.post().status_code, 202)
         self.assertEqual(len(self.store.list_jobs()), 1)
+        self.assertEqual(self.store.list_jobs()[0]["payload"]["_binding"]["guild_id"], "101")
 
     def test_missing_wrong_and_tampered_signatures_are_rejected(self):
         body = json.dumps(event_payload()).encode()
@@ -194,7 +217,7 @@ class WebhookIngressTests(unittest.TestCase):
         self.assertEqual(oversized.read_sizes, [MAX_WEBHOOK_BYTES + 1])
 
     def test_outbox_failure_is_retryable_and_never_echoes_exception(self):
-        with patch.object(self.store, "enqueue", side_effect=OSError("private token " + SECRET)):
+        with patch.object(self.store, "enqueue_delivery", side_effect=OSError("private token " + SECRET)):
             response = self.post()
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json, {"status": "unavailable"})

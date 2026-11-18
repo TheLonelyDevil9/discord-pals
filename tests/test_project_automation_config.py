@@ -83,6 +83,21 @@ def test_question_limit_has_a_finite_bound(value, expected):
     assert normalize_project_config({"max_questions": value})["max_questions"] == expected
 
 
+@pytest.mark.parametrize("value,expected", [(None, 0), (0, 0), (14, 14), (400, 365), (-3, 0), (True, 0),
+                                            (float("inf"), 0), ("7", 7), ("many", 0)])
+def test_history_days_default_to_none_kept_and_stay_bounded(value, expected):
+    assert PROJECT_DEFAULTS["history_days"] == 0
+    assert normalize_project_config({"history_days": value})["history_days"] == expected
+
+
+@pytest.mark.parametrize("value,valid", [(0, True), (30, True), (365, True), (366, False), (-1, False),
+                                         (1.5, False), ("7", False), (True, False), (None, False)])
+def test_history_days_input_must_be_whole_days_in_range(value, valid):
+    errors = config_input_errors({"history_days": value})
+    assert (errors == []) is valid
+    assert all("history_days" in error for error in errors)
+
+
 def test_enabled_is_not_python_truthiness():
     assert not normalize_project_config({"enabled": "false"})["enabled"]
     assert not normalize_project_config({"enabled": {"true": 1}})["enabled"]

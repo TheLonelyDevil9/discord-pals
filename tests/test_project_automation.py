@@ -1,7 +1,9 @@
 """Workflow checks use real durable storage and fake external services."""
 
 import asyncio
+from contextlib import closing
 from copy import deepcopy
+import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -582,6 +584,25 @@ def test_github_not_found_without_deletion_event_is_not_claimed_as_deleted(harne
     assert harness.transport.mirrors == []
 
 
+def test_maintainer_question_is_relayed_once_after_its_finished_notice_is_deleted(harness):
+    preview = harness.preview()
+    harness.store.update_case(preview["id"], {"linked_issue_number": 42}, expected_revision=preview["revision"])
+    question = {
+        "repository": harness.cfg["repository"], "kind": "comment", "number": 42,
+        "key": "comment:123", "body": "Which version are you running?",
+        "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/42#issuecomment-123",
+    }
+    harness.event(question, "question-delivery")
+    asyncio.run(harness.drain())
+    with closing(sqlite3.connect(harness.path)) as connection, connection:
+        assert connection.execute("DELETE FROM jobs WHERE key LIKE 'question:%' AND state = 'done'").rowcount == 1
+    harness.event(question, "question-rerun")
+    asyncio.run(harness.drain())
+    relayed = [event for event in harness.ai.spoken if event.get("action") == "maintainer_question"]
+    assert len(relayed) == 1
+    assert not [job for job in harness.store.list_jobs() if job["key"].startswith("question:")]
+
+
 def test_maintainer_question_enters_assessment_and_clears_after_approved_answer(harness):
     filed = harness.choose(harness.preview(), "submit")
     question = {"key": "comment:123", "body": "Which version are you running?", "url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/42#issuecomment-123"}
@@ -914,6 +935,64 @@ def test_forum_title_is_part_of_initial_duplicate_search(harness):
     harness.ready()
     assert "Settings" in harness.github.searches[0]
     assert "save" in harness.github.searches[0]
+
+
+def stop_report_in(harness, state):
+    """Leave an approved report waiting on one feedback job; return the case and that job."""
+    preview = harness.preview()
+    if state == "processing":
+        harness.service.choose(preview["id"], preview["revision"], "submit", user_id="456")
+    elif state == "processing-failed":
+        async def broken_branch(case, action):
+            raise WorkflowError("The decision could not be applied.")
+        harness.service._branch = broken_branch
+        harness.choose(preview, "submit")
+        del harness.service._branch
+    elif state == "queued":
+        harness.service.choose(preview["id"], preview["revision"], "submit", user_id="456")
+        assert asyncio.run(harness.service.run_once())
+    elif state == "queued-failed":
+        async def broken_client():
+            raise WorkflowError("GitHub App credentials are unavailable.")
+        harness.service.client = broken_client
+        harness.choose(preview, "submit")
+        del harness.service.client
+    else:
+        harness.github.failure = GitHubAmbiguousWrite("create_issue", "marker")
+        harness.choose(preview, "submit")
+        harness.github.failure = None
+    case = harness.store.get_case(preview["id"])
+    kind = "branch" if state.startswith("processing") else "publish"
+    job = max((job for job in harness.store.list_jobs()
+               if job["kind"] == kind and job["payload"].get("case_id") == case["id"]), key=lambda job: job["id"])
+    expected = {"processing": ("processing", "pending"), "processing-failed": ("processing", "failed"),
+                "queued": ("queued", "pending"), "queued-failed": ("queued", "failed"),
+                "recovery": ("recovery", "recovery")}[state]
+    assert (case["state"], job["state"]) == expected
+    return case, job
+
+
+@pytest.mark.parametrize("sweep", ["clear", "retention"])
+@pytest.mark.parametrize("state", ["processing", "processing-failed", "queued", "queued-failed", "recovery"])
+def test_open_reports_keep_the_feedback_step_their_controls_need(harness, state, sweep):
+    case, job = stop_report_in(harness, state)
+    if sweep == "clear":
+        harness.store.clear_history()
+    else:
+        with closing(sqlite3.connect(harness.path)) as connection, connection:
+            connection.execute("UPDATE jobs SET created_at = created_at - 8 * 86400, "
+                               "updated_at = updated_at - 8 * 86400, available_at = available_at - 8 * 86400")
+        while harness.store.prune_jobs(0):
+            pass
+    assert harness.store.get_job(job["id"]) is not None
+    if state.endswith("failed"):
+        assert asyncio.run(harness.service.retry(job["id"], user_id="700")) == "Retry queued."
+    elif state == "recovery":
+        assert asyncio.run(harness.service.recover(job["id"], user_id="700")) is True
+    asyncio.run(harness.drain())
+    assert harness.store.get_case(case["id"])["state"] == "filed"
+    assert len(harness.github.posts) == 1
+    assert harness.store.count_active_cases("456", "100") == 0
 
 
 def test_legacy_uncertain_status_card_can_be_recovered_without_new_publication(harness):

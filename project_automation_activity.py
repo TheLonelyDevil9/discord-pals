@@ -75,6 +75,12 @@ def prepare_head(event, prior):
     return prepared
 
 
+def newer_cycle(cycle, record):
+    """Return the higher of cycle and the record's stored stamp; a missing stamp is the lowest."""
+    stamps = [value for value in (cycle, (record or {}).get("cycle")) if isinstance(value, int)]
+    return max(stamps) if stamps else None
+
+
 def event_time(event):
     for field in ("updated_at", "created_at"):
         try:
@@ -164,6 +170,7 @@ class PRActivity:
             event = {**compact_event(raw), "_binding": payload["_binding"]}
             key = source_key(cfg, event)
             prior = self.store.get_link("pr_source", key)
+            source_cycle = newer_cycle(cycle, prior)
             if event.get("activity_type") == "commits":
                 prior = self.store.get_link("pr_head", head_key(cfg, event))
                 if prior:
@@ -175,14 +182,15 @@ class PRActivity:
                       and not (event.get("activity_type") == "thread" and event.get("state") == "unresolved"))
             if changed or recent:
                 jobs.append(self._job(event, cycle))
-            links.append(("pr_source", key, {"version": event["source_version"], "event": event, "cycle": cycle}))
+            links.append(("pr_source", key, {"version": event["source_version"], "event": event, "cycle": source_cycle}))
             if event.get("activity_type") == "commits":
                 head_event = event
                 if prior and prior["event"].get("after") == event.get("after"):
                     head_event = {**prior["event"], "observed_updated_at": max(
                         event.get("observed_updated_at", ""), prior["event"].get("observed_updated_at", ""))}
                 links.append(("pr_head", head_key(cfg, event),
-                              {"version": event["source_version"], "event": head_event, "cycle": cycle}))
+                              {"version": event["source_version"], "event": head_event,
+                               "cycle": newer_cycle(cycle, prior)}))
         cursor = result.get("next_cursor")
         if cursor is not None:
             next_payload = {**payload, "cursor": cursor, "page": payload["page"] + 1}
@@ -206,7 +214,8 @@ class PRActivity:
         jobs = []
         for record in records:
             old = record["data"]
-            if old.get("cycle") != cycle and old["event"].get("action") != "deleted":
+            stamp = old.get("cycle")
+            if (not isinstance(stamp, int) or stamp < cycle) and old["event"].get("action") != "deleted":
                 jobs.append({"kind": "pr_sync_check", "payload": {**old["event"], "_sync_cycle": cycle},
                              "key": f"pr-check:{cycle}:{record['key']}"})
         cursor = records[-1]["key"] if len(records) == 100 else ""
@@ -234,7 +243,7 @@ class PRActivity:
             jobs.append(self._job(current, event["_sync_cycle"]))
         self.store.save_links_with_jobs([
             ("pr_source", key, {"version": current["source_version"], "event": current,
-                                "cycle": event["_sync_cycle"]})], jobs)
+                                "cycle": newer_cycle(event["_sync_cycle"], prior)})], jobs)
 
     async def deliver(self, event, job):
         self.service._check_event_binding(event)
@@ -271,7 +280,7 @@ class PRActivity:
             # restart then checks the same receipt, even when a force-push reused a SHA.
             self.store.put_link("pr_head", head_key(cfg, current), {
                 "version": current["source_version"], "event": prepared,
-                "cycle": event.get("_sync_cycle"),
+                "cycle": newer_cycle(event.get("_sync_cycle"), prior_head),
             })
         pull = await client.get_issue(event["number"])
         if pull.get("kind") != "pull":
@@ -284,13 +293,13 @@ class PRActivity:
         await self.service.transport.mirror_activity(prepared)
         self.store.put_link("pr_source", key, {
             "version": current["source_version"], "event": compact_event(prepared),
-            "cycle": event.get("_sync_cycle", (prior or {}).get("cycle")),
+            "cycle": newer_cycle(event.get("_sync_cycle"), prior),
         })
         self.store.record_status(mapping_key(cfg), "last_activity_at")
         if current.get("activity_type") == "commits":
             self.store.put_link("pr_head", head_key(cfg, current), {
                 "version": current["source_version"], "event": compact_event(prepared),
-                "cycle": event.get("_sync_cycle"),
+                "cycle": newer_cycle(event.get("_sync_cycle"), prior_head),
             })
 
     def complete_cycle(self, cycle):

@@ -126,6 +126,18 @@ def test_partial_save_preserves_existing_values_and_large_ids(setup):
     assert saved["config"]["max_questions"] == 4
 
 
+def test_history_days_are_saved_validated_and_shown(setup):
+    client, saved, _ = setup
+    assert client.post("/api/project-automation", json={"history_days": 14}, headers=csrf()).status_code == 200
+    assert saved["config"]["history_days"] == 14
+    page = client.get("/project-automation").get_data(as_text=True)
+    assert 'name="history_days"' in page and 'value="14"' in page
+    response = client.post("/api/project-automation", json={"history_days": 400}, headers=csrf())
+    assert response.status_code == 400
+    assert any("history_days" in error for error in response.get_json()["errors"])
+    assert saved["config"]["history_days"] == 14
+
+
 def test_enable_rejects_missing_configuration_and_credentials(setup):
     client, saved, _ = setup
     response = client.post("/api/project-automation", json={"enabled": True}, headers=csrf())
@@ -686,6 +698,150 @@ def test_activity_api_never_returns_internal_exceptions(activity_api, setup, mon
                                json={"updated_at": snapshot["updated_at"]}, headers=csrf())
     assert response.status_code == 500
     assert "private-database-provider-secret" not in response.get_data(as_text=True)
+
+
+@pytest.fixture
+def data_api(setup, tmp_path):
+    from project_automation import AutomationService
+    from project_automation_store import AutomationStore
+    client, saved, service = setup
+    store = AutomationStore(tmp_path / "data.sqlite3")
+    real = AutomationService(store, settings=lambda: saved["config"])
+    service.store = store
+    for name in ("clear_history", "reset_project_data", "discard_job", "list_job_activity"):
+        setattr(service, name, getattr(real, name))
+    return client, saved, store
+
+
+def set_state(store, job_id, state):
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (state, job_id))
+
+
+def held_snapshot(store, key="held", kind="event"):
+    job = store.enqueue(kind, {"repository": "SillyBunnyTeam/SillyBunny"}, key)
+    set_state(store, job, "recovery")
+    return {"id": job, "updated_at": store.get_job(job)["updated_at"]}
+
+
+def data_route(name, store):
+    if name == "clear":
+        return "/api/project-automation/history/clear", {}
+    if name == "reset":
+        return "/api/project-automation/reset", {"repository": "SillyBunnyTeam/SillyBunny"}
+    held = held_snapshot(store, key="route-held")
+    return f"/api/project-automation/jobs/{held['id']}/discard", {"updated_at": held["updated_at"]}
+
+
+@pytest.mark.parametrize("name", ["clear", "reset", "discard"])
+def test_data_controls_require_auth_and_csrf(data_api, monkeypatch, name):
+    client, _, store = data_api
+    queued = store.enqueue("event", {}, "queued")
+    path, payload = data_route(name, store)
+    monkeypatch.setenv("DASHBOARD_PASS", "test-password")
+    assert client.post(path, json=payload, headers=csrf()).status_code == 401
+    with client.session_transaction() as session:
+        session["logged_in"] = True
+    assert client.post(path, json=payload).status_code == 403
+    assert store.get_job(queued) is not None
+    assert len(store.list_job_activity()["jobs"]) == (1 if name != "discard" else 2)
+
+
+def test_clear_history_reports_the_count_and_keeps_jobs_in_progress(data_api):
+    client, _, store = data_api
+    store.enqueue("event", {}, "queued")
+    held_snapshot(store)
+    sending = store.enqueue("event", {}, "sending")
+    set_state(store, sending, "inflight")
+    response = client.post("/api/project-automation/history/clear", json={}, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json() == {"deleted": 2, "compacted": False}
+    assert [job["id"] for job in store.list_job_activity()["jobs"]] == [sending]
+
+
+@pytest.mark.parametrize("payload", [None, [], {"confirm": True}, "clear"])
+def test_clear_history_rejects_a_malformed_body(data_api, payload):
+    client, _, store = data_api
+    queued = store.enqueue("event", {}, "queued")
+    response = client.post("/api/project-automation/history/clear", data=json.dumps(payload),
+                           content_type="application/json", headers=csrf())
+    assert response.status_code == 400
+    assert store.get_job(queued) is not None
+
+
+def test_reset_needs_a_paused_helper_the_exact_repository_and_no_job_in_flight(data_api):
+    client, saved, store = data_api
+    queued = store.enqueue("event", {}, "queued")
+    path = "/api/project-automation/reset"
+    saved["config"]["enabled"] = True
+    response = client.post(path, json={"repository": "SillyBunnyTeam/SillyBunny"}, headers=csrf())
+    assert response.status_code == 409 and "Pause" in response.get_json()["message"]
+    saved["config"]["enabled"] = False
+    for typed in ("sillybunnyteam/sillybunny", "SillyBunnyTeam/Other", ""):
+        assert client.post(path, json={"repository": typed}, headers=csrf()).status_code == 400
+    for payload in (None, [], {}, {"repository": 5}, {"repository": "SillyBunnyTeam/SillyBunny", "extra": 1}):
+        assert client.post(path, data=json.dumps(payload), content_type="application/json",
+                           headers=csrf()).status_code == 400
+    set_state(store, queued, "running")
+    response = client.post(path, json={"repository": "SillyBunnyTeam/SillyBunny"}, headers=csrf())
+    assert response.status_code == 409 and "running" in response.get_json()["message"]
+    assert store.get_job(queued) is not None
+    set_state(store, queued, "done")
+    response = client.post(path, json={"repository": "SillyBunnyTeam/SillyBunny"}, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json()["deleted"]["jobs"] == 1
+    assert store.get_job(queued) is None
+
+
+def test_discard_checks_the_held_snapshot_and_keeps_publications_for_recovery(data_api):
+    client, _, store = data_api
+    held = held_snapshot(store)
+    url = f"/api/project-automation/jobs/{held['id']}/discard"
+    assert client.post(url, json={"updated_at": held["updated_at"] - 1}, headers=csrf()).status_code == 409
+    assert client.post(f"/api/project-automation/jobs/{held['id'] + 100}/discard",
+                       json={"updated_at": held["updated_at"]}, headers=csrf()).status_code == 404
+    for payload in (None, [], {}, {"updated_at": "soon"}, {"updated_at": 1, "extra": 1}):
+        assert client.post(url, data=json.dumps(payload), content_type="application/json",
+                           headers=csrf()).status_code == 400
+    assert client.post("/api/project-automation/jobs/0/discard", json={"updated_at": 1}, headers=csrf()).status_code == 400
+    publication = held_snapshot(store, key="publish:case:3", kind="publish")
+    response = client.post(f"/api/project-automation/jobs/{publication['id']}/discard",
+                           json={"updated_at": publication["updated_at"]}, headers=csrf())
+    assert response.status_code == 409 and "/project-retry" in response.get_json()["message"]
+    set_state(store, held["id"], "failed")
+    assert client.post(url, json={"updated_at": held["updated_at"]}, headers=csrf()).status_code == 409
+    set_state(store, held["id"], "recovery")
+    response = client.post(url, json={"updated_at": held["updated_at"]}, headers=csrf())
+    assert (response.status_code, response.get_json()) == (200, {"discarded": True})
+    assert store.get_job(held["id"]) is None
+    assert store.get_job(publication["id"]) is not None
+
+
+@pytest.mark.parametrize("route", ["clear", "reset"])
+def test_a_failed_compaction_does_not_report_completed_deletions_as_failed(data_api, monkeypatch, route):
+    import sqlite3
+    client, _, store = data_api
+    queued = store.enqueue("event", {}, "queued")
+
+    def broken_compact():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store, "compact", broken_compact)
+    path, payload = data_route(route, store)
+    response = client.post(path, json=payload, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json()["compacted"] is False
+    assert store.get_job(queued) is None
+
+
+def test_page_offers_the_data_controls(setup):
+    client, _, _ = setup
+    page = client.get("/project-automation").get_data(as_text=True)
+    for marker in ('id="project-clear-history"', 'id="project-reset"', 'id="project-reset-confirm"',
+                   "/api/project-automation/history/clear", "/api/project-automation/reset", "/discard"):
+        assert marker in page
 
 
 def test_activity_actor_cannot_be_supplied_by_client_and_audit_stays_private(activity_api):
