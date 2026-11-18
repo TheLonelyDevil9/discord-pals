@@ -5,12 +5,20 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 import json
+import math
 import time
 
 from project_automation_github import GitHubError
 
 
 SOURCES = ("comment", "review_comment", "review", "thread", "commits")
+# An in-scope item whose last check is at least this old is due for its daily re-check.
+RECHECK_SECONDS = 86400
+# While the process runs, a sync cycle starts at most once per 900 seconds
+# (AutomationService.queue_sync_cycle), so about this many cycles fit in RECHECK_SECONDS; a restart
+# can start one sooner. Re-checking ceil(N / RECHECK_CYCLES) due items per cycle reaches each of
+# N items within this many cycles of it becoming due.
+RECHECK_CYCLES = 96
 
 
 def activity_receipt_key(config, event):
@@ -75,6 +83,17 @@ def prepare_head(event, prior):
     return prepared
 
 
+def oldest_due(candidates, total, now):
+    """Return the values of the due candidates with the oldest stamps, at most ceil(total / RECHECK_CYCLES).
+
+    Each candidate is a (stamp, tiebreak, value) tuple. A stamp at least RECHECK_SECONDS old is
+    due, and so is a stamp in the future, so that a clock set back cannot pause the re-checks.
+    """
+    due = sorted((entry for entry in candidates if entry[0] <= now - RECHECK_SECONDS or entry[0] > now),
+                 key=lambda entry: entry[:2])
+    return [value for _, _, value in due[:math.ceil(total / RECHECK_CYCLES)]]
+
+
 def newer_cycle(cycle, record):
     """Return the higher of cycle and the record's stored stamp; a missing stamp is the lowest."""
     stamps = [value for value in (cycle, (record or {}).get("cycle")) if isinstance(value, int)]
@@ -106,11 +125,30 @@ class PRActivity:
         self.service = service
         self.store = service.store
 
-    def enqueue_sync(self, item, cycle):
+    def enqueue_walks(self, pulls, cycle):
+        """Queue the five-source walk for the in-scope PRs that need one; return (changed, daily) counts.
+
+        A PR without a walk record, or whose updated_at differs from it, is changed. The other
+        PRs get their daily walk through oldest_due, by when their last walk was queued.
+        """
         from project_automation_webhook import webhook_binding
         cfg = self.service.settings()
-        activate(self.store, cfg)
-        self.store.save_links_with_jobs([], self._source_jobs(item["number"], cycle, webhook_binding(cfg)))
+        mapping, binding, now = mapping_key(cfg), webhook_binding(cfg), time.time()
+        changed, unchanged = [], []
+        for item in pulls:
+            record = self.store.get_link("pr_walk", f"{mapping}:{item['number']}")
+            if record is None or record.get("updated_at") != item.get("updated_at", ""):
+                changed.append(item)
+            else:
+                unchanged.append((record.get("queued_at", 0), item["number"], item))
+        daily = oldest_due(unchanged, len(pulls), now)
+        links, jobs = [], []
+        for item in changed + daily:
+            links.append(("pr_walk", f"{mapping}:{item['number']}",
+                          {"updated_at": item.get("updated_at", ""), "queued_at": now}))
+            jobs.extend(self._source_jobs(item["number"], cycle, binding))
+        self.store.save_links_with_jobs(links, jobs)
+        return len(changed), len(daily)
 
     def _source_jobs(self, number, cycle, binding):
         return [{"kind": "pr_sync_page", "payload": {

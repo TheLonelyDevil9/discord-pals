@@ -561,14 +561,16 @@ def test_missing_or_partial_event_binding_is_rejected(harness, binding):
     assert harness.store.list_jobs()[0]["state"] == "failed"
 
 
-def test_deleted_event_can_close_mirror_after_github_confirms_not_found(harness):
-    harness.github.items[42] = GitHubError("Issue no longer exists", status=404)
-    harness.event({
+@pytest.mark.parametrize("status", [404, 410])
+def test_deleted_event_can_close_mirror_after_github_confirms_the_deletion(harness, status):
+    harness.github.items[42] = GitHubError("Issue no longer exists", status=status)
+    identifier = harness.event({
         "repository": harness.cfg["repository"], "kind": "issue", "number": 42,
         "key": "issue:42", "state": "deleted", "action": "deleted", "title": "Deleted issue",
         "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/42",
     }, "delete:42")
     asyncio.run(harness.drain())
+    assert harness.store.get_job(identifier)["state"] == "done"
     assert harness.transport.mirrors[-1]["state"] == "deleted"
     assert harness.transport.mirrors[-1]["action"] == "deleted"
 

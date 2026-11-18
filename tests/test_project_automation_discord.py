@@ -788,6 +788,150 @@ def _native_suite():
                 self.assertEqual((starter.edit.await_count, thread.edit.await_count), edits)
                 forum.create_thread.assert_awaited_once()
 
+        def reset_writes(self, *mocks):
+            for mock in mocks:
+                mock.reset_mock()
+
+        def apply_thread_writes(self, forum, thread):
+            """Give the mocked thread the name and flags that Discord would now report."""
+            for call in forum.create_thread.await_args_list + thread.edit.await_args_list:
+                for attribute in ("name", "archived", "locked"):
+                    if attribute in call.kwargs:
+                        setattr(thread, attribute, call.kwargs[attribute])
+
+        async def test_identical_refresh_makes_no_discord_write(self):
+            for kind, closed in (("issue", False), ("issue", True), ("pull", False), ("pull", True)):
+                self.store.links.clear()
+                forum, thread, starter = self.configure_forum(kind)
+                item = event(kind, state="closed" if closed else "open", closed=closed)
+                self.assertTrue(await self.transport.mirror(item))
+                self.apply_thread_writes(forum, thread)
+                self.reset_writes(forum.create_thread, starter.edit, thread.edit)
+                self.assertTrue(await self.transport.mirror(item))
+                forum.create_thread.assert_not_awaited()
+                starter.edit.assert_not_awaited()
+                thread.edit.assert_not_awaited()
+
+        async def test_changed_title_state_or_body_is_written_as_before(self):
+            for change in ({"title": "Settings still fail"}, {"body": "New details."},
+                           {"state": "closed", "closed": True}):
+                self.store.links.clear()
+                forum, thread, starter = self.configure_forum()
+                await self.transport.mirror(event())
+                self.reset_writes(forum.create_thread, starter.edit, thread.edit)
+                await self.transport.mirror(event(**change))
+                forum.create_thread.assert_not_awaited()
+                starter.edit.assert_awaited_once()
+                written = starter.edit.await_args.kwargs["embed"]
+                self.assertIn(change.get("title", "Settings fail to save"), written.title)
+                self.assertEqual(written.description, change.get("body", "Reported behavior, not a verified fix."))
+                state = "Closed" if change.get("closed") else "Open"
+                expected = [{"name": f"{state} · {change.get('title', 'Settings fail to save')} · #17"}]
+                if change.get("closed"):
+                    expected.append({"archived": True, "locked": True})
+                self.assertEqual([call.kwargs for call in thread.edit.await_args_list], expected)
+
+        async def test_first_refresh_after_upgrade_writes_once_and_stores_the_digest(self):
+            forum, thread, starter = self.configure_forum()
+            key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            self.store.put_link("mirror", key, {"channel_id": "301", "message_id": "301"})
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            thread.edit.assert_awaited_once()
+            self.assertIn("digest", self.store.get_link("mirror", key))
+            self.apply_thread_writes(forum, thread)
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            thread.edit.assert_awaited_once()
+            forum.create_thread.assert_not_awaited()
+
+        async def test_post_deleted_on_discord_is_posted_again_despite_a_matching_digest(self):
+            forum, thread, starter = self.configure_forum()
+            await self.transport.mirror(event())
+            thread.fetch_message.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "gone")
+            await self.transport.mirror(event())
+            self.assertEqual(forum.create_thread.await_count, 2)
+
+        async def test_failed_write_forgets_the_digest_so_a_later_refresh_writes_again(self):
+            forum, thread, starter = self.configure_forum()
+            key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            await self.transport.mirror(event())
+            thread.edit.side_effect = discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "failed")
+            with self.assertRaises(discord.HTTPException):
+                await self.transport.mirror(event(title="Settings still fail"))
+            self.assertNotIn("digest", self.store.get_link("mirror", key))
+            thread.edit.side_effect = None
+            self.reset_writes(starter.edit, thread.edit)
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            self.assertIn("digest", self.store.get_link("mirror", key))
+
+        async def test_post_reopened_or_renamed_by_hand_is_corrected(self):
+            for change in ({"archived": False, "locked": False}, {"name": "Renamed by a moderator"}):
+                self.store.links.clear()
+                forum, thread, starter = self.configure_forum()
+                item = event(state="closed", closed=True)
+                await self.transport.mirror(item)
+                self.apply_thread_writes(forum, thread)
+                for attribute, value in change.items():
+                    setattr(thread, attribute, value)
+                self.reset_writes(starter.edit, thread.edit)
+                await self.transport.mirror(item)
+                starter.edit.assert_awaited_once()
+                self.assertEqual([call.kwargs for call in thread.edit.await_args_list][-2:],
+                                 [{"name": "Closed · Settings fail to save · #17"}, {"archived": True, "locked": True}])
+
+        def item_record(self, kind="issue", channel=201):
+            return self.store.get_link("item_mirrored", f"100:Project Helper:{channel}:SillyBunnyTeam/SillyBunny:{kind}:17")
+
+        async def test_a_written_or_unchanged_post_records_the_item_version_it_shows_and_when(self):
+            import project_automation_discord
+            for kind in ("issue", "pull"):
+                forum, thread, starter = self.configure_forum(kind)
+                with patch.object(project_automation_discord, "time", SimpleNamespace(time=lambda: 1000.0)):
+                    await self.transport.mirror(event(kind, updated_at="2026-11-01T00:00:00Z"))
+                record = self.item_record(kind, forum.id)
+                self.assertEqual((record["updated_at"], record["mirrored_at"]), ("2026-11-01T00:00:00Z", 1000.0))
+                self.apply_thread_writes(forum, thread)
+                self.reset_writes(starter.edit, thread.edit)
+                with patch.object(project_automation_discord, "time", SimpleNamespace(time=lambda: 2000.0)):
+                    await self.transport.mirror(event(kind, updated_at="2026-11-02T00:00:00Z"))
+                starter.edit.assert_not_awaited()
+                record = self.item_record(kind, forum.id)
+                self.assertEqual((record["updated_at"], record["mirrored_at"]), ("2026-11-02T00:00:00Z", 2000.0))
+
+        async def test_open_post_archived_by_discord_is_reopened_by_a_refresh_with_a_matching_digest(self):
+            forum, thread, starter = self.configure_forum()
+            await self.transport.mirror(event())
+            self.apply_thread_writes(forum, thread)
+            thread.archived = True
+            self.reset_writes(starter.edit, thread.edit)
+            await self.transport.mirror(event())
+            self.assertEqual(thread.edit.await_args_list[0].kwargs, {"archived": False, "locked": False})
+            starter.edit.assert_awaited_once()
+
+        async def test_a_failed_write_or_a_recovery_records_no_item_version(self):
+            forum, thread, starter = self.configure_forum()
+            thread.edit.side_effect = discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "failed")
+            with self.assertRaises(discord.HTTPException):
+                await self.transport.mirror(event(state="closed", closed=True))
+            self.assertIsNone(self.item_record())
+            thread.edit.side_effect = None
+            self.assertTrue(await self.transport.mirror(event(), recover_only=True))
+            self.assertIsNone(self.item_record())
+
+        async def test_the_item_version_is_recorded_for_the_forum_the_mirror_started_with(self):
+            forum, thread, starter = self.configure_forum()
+
+            async def created_while_the_operator_saves(**kwargs):
+                self.config["issues_channel_id"] = "205"
+                return SimpleNamespace(thread=thread, message=starter)
+
+            forum.create_thread.side_effect = created_while_the_operator_saves
+            await self.transport.mirror(event())
+            self.assertIsNotNone(self.item_record(channel=201))
+            self.assertIsNone(self.item_record(channel=205))
+
         async def test_lost_forum_create_receipt_is_recovered_from_its_owned_marker(self):
             forum, thread, starter = self.configure_forum()
             thread.name = "Open · Settings fail to save · #17"

@@ -837,7 +837,8 @@ class AutomationStore:
 
         Pending, failed and held feedback steps stay, because an open report cannot
         continue without them. Post records, receipts, feedback cases and delivery
-        markers stay too.
+        markers stay too. PR walk records go, so the next sync cycle walks every
+        in-scope PR again.
         """
         with self._connection(write=True) as connection:
             before = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
@@ -846,6 +847,9 @@ class AutomationStore:
                                            "OR (state IN ('pending', 'failed', 'recovery') "
                                            "AND kind IN ('assess', 'branch', 'publish', 'notify'))")
             self._delete_orphaned_job_links(connection)
+            # Each walk record stands for queued walk jobs, which the replacement above deleted.
+            # A kept record would leave its PR unwalked until the daily re-check.
+            connection.execute("DELETE FROM links WHERE kind = 'pr_walk'")
             return before - connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
     def reset_project_data(self):

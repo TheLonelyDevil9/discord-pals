@@ -441,8 +441,9 @@ def test_first_start_cleanup_of_a_large_backlog_uses_the_bulk_path(store, monkey
     assert sequence(store) == before
 
 
-RECORD_LINKS = ("mirror", "mirror_attempt", "pr_activity", "pr_activity_delivery", "pr_source", "pr_head",
-                "pr_activation", "notification", "case_status", "question_notice", "project_status", "github_delivery")
+RECORD_LINKS = ("mirror", "mirror_attempt", "item_mirrored", "pr_activity", "pr_activity_delivery", "pr_source",
+                "pr_head", "pr_activation", "notification", "case_status", "question_notice", "project_status",
+                "github_delivery")
 
 
 def add_records(store):
@@ -474,6 +475,13 @@ def test_clear_keeps_jobs_in_progress_and_every_record(store):
         assert link_keys(store, kind) == {f"{kind}:record"}
     assert store.get_case(case["id"]) == case
     assert sequence(store) == before
+
+
+@pytest.mark.parametrize("delete", ["clear", "reset"])
+def test_clear_and_reset_forget_which_pr_walks_were_queued(store, delete):
+    add_link(store, "pr_walk", f"{'e' * 64}:7", {"updated_at": "2026-11-01T00:00:00Z", "queued_at": NOW})
+    {"clear": store.clear_history, "reset": store.reset_project_data}[delete]()
+    assert link_keys(store, "pr_walk") == set()
 
 
 @pytest.mark.parametrize("kind", ["assess", "branch", "publish", "notify", "event"])

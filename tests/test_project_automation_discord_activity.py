@@ -396,6 +396,7 @@ def _native_suite():
             thread = self.forum.threads[0]
             starter = self.messages[thread.id][thread.id]
             starter.edit.side_effect = TimeoutError("Parent edit failed")
+            event["pull"]["body"] = "Edited PR description"
             with self.assertRaises(TimeoutError):
                 await self.transport.mirror_activity(event)
             self.assertTrue(thread.archived and thread.locked)
@@ -404,6 +405,30 @@ def _native_suite():
             with self.assertRaises(asyncio.CancelledError):
                 await self.transport.mirror_activity(event)
             self.assertTrue(thread.archived and thread.locked)
+
+        async def test_activity_delivery_records_the_pr_version_its_post_shows(self):
+            event = self.event()
+            event["pull"]["updated_at"] = "2026-11-01T00:00:00Z"
+            await self.transport.mirror_activity(event)
+            record = self.store.get_link("item_mirrored", receipt_key(self.config, {"kind": "pull", "key": "pull:17"}))
+            self.assertEqual((record["updated_at"], record["state"]), ("2026-11-01T00:00:00Z", "open"))
+
+        async def test_new_activity_leaves_an_unchanged_pr_post_alone(self):
+            for state in ("open", "closed"):
+                event = self.event(key=f"pr:17:comment:{state}", source_id=state)
+                event["pull"].update(state=state, closed=state == "closed")
+                await self.transport.mirror_activity(event)
+                thread = self.forum.threads[0]
+                starter = self.messages[thread.id][thread.id]
+                starter.edit.reset_mock()
+                thread.edit.reset_mock()
+                later = self.event(key=f"pr:17:comment:{state}-later", source_id=f"{state}-later")
+                later["pull"].update(state=state, closed=state == "closed")
+                self.assertTrue(await self.transport.mirror_activity(later))
+                starter.edit.assert_not_awaited()
+                self.assertNotIn("name", str(thread.edit.await_args_list))
+                self.assertEqual(thread.send.await_count, 2 if state == "open" else 4)
+                self.assertEqual((thread.archived, thread.locked), (state == "closed",) * 2)
 
         async def test_lost_edit_ack_recovers_the_exact_new_version(self):
             event = self.event()

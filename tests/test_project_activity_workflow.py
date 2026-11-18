@@ -4,6 +4,7 @@ import asyncio
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
+import itertools
 import sqlite3
 import sys
 import time
@@ -11,9 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from project_automation import AutomationService
+from project_automation import AutomationService, mirror_key, mirror_record
 from project_automation_activity import activate, mapping_key, source_key
 from project_automation_config import PROJECT_DEFAULTS
+from project_automation_github import GitHubError
 from project_automation_store import AutomationStore, Conflict
 from project_automation_webhook import webhook_binding
 
@@ -62,18 +64,24 @@ class Client:
 
 
 class Transport:
+    """Keeps DiscordTransport's contract: a successful issue or PR mirror records the item version,
+    and an activity delivery first refreshes its PR's post."""
+
     def __init__(self):
         self.attempts = []
         self.receipts = set()
         self.fail_after_send = False
         self.recoveries = []
         self.confirmations = []
+        self.service = None
+        self.clock = time.time
 
     async def mirror_activity(self, event, *, recover_only=False):
         identity = (event.get("delivery_key", event["key"]), event["source_version"])
         if recover_only:
             self.recoveries.append(deepcopy(event))
             return identity in self.receipts
+        await self.mirror({**event["pull"], "kind": "pull", "key": f"pull:{event['number']}"})
         if identity not in self.receipts:
             self.attempts.append(deepcopy(event))
             self.receipts.add(identity)
@@ -81,7 +89,10 @@ class Transport:
             raise TimeoutError("Acknowledgment lost")
         return True
 
-    async def mirror(self, event, **kwargs):
+    async def mirror(self, event, *, recover_only=False):
+        key = mirror_key(self.service.settings(), event["kind"], event["key"])
+        if not recover_only and event["kind"] in {"issue", "pull"}:
+            self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": self.clock()})
         return True
 
     def confirm_not_delivered(self, event):
@@ -96,6 +107,7 @@ def setup(tmp_path, monkeypatch):
     store = AutomationStore(tmp_path / "jobs.sqlite3")
     client, transport = Client(), Transport()
     service = AutomationService(store, settings=lambda: cfg, github_factory=lambda _: client, transport=transport)
+    transport.service = service
     service.bots["Helper"] = SimpleNamespace(name="Helper")
     activate(store, cfg)
     return SimpleNamespace(cfg=cfg, store=store, client=client, transport=transport, service=service)
@@ -655,6 +667,7 @@ def mirror_post(setup, kind, number):
 
 def github_item(kind, number, *, closed_days_ago=None):
     item = {"kind": kind, "number": number, "title": "Old item", "body": "", "state": "open", "closed": False,
+            "merged": False, "draft": False, "updated_at": "2026-11-01T00:00:00Z",
             "html_url": f"https://github.com/Owner/Project/{'pull' if kind == 'pull' else 'issues'}/{number}"}
     if closed_days_ago is not None:
         item.update(state="closed", closed=True, closed_at=iso(time.time() - closed_days_ago * DAY))
@@ -678,15 +691,23 @@ def closed_world(setup, items, open_items=()):
     return fetched
 
 
+ROOT_NUMBERS = itertools.count(1)
+
+
+def queued_by(setup, root):
+    """Return the item numbers that sync root `root` queued for a refresh and for a walk."""
+    with closing(sqlite3.connect(setup.store.path)) as connection:
+        rows = connection.execute("SELECT kind, key, json_extract(payload, '$.number') FROM jobs "
+                                  "WHERE json_extract(payload, '$._sync_cycle') = ?", (root,)).fetchall()
+    return (sorted(number for kind, key, number in rows if key.startswith(f"sync-item:{root}:")),
+            sorted({number for kind, key, number in rows if kind == "pr_sync_page"}))
+
+
 def run_sync_root(setup):
     root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
-                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{time.time()}")
+                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
     asyncio.run(setup.service.process_job(setup.store.get_job(root)))
-    refreshed = sorted(job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
-                       if job["kind"] == "event" and job["key"].startswith(f"sync-item:{root}:"))
-    walked = sorted({job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
-                     if job["kind"] == "pr_sync_page" and job["payload"]["_sync_cycle"] == root})
-    return refreshed, walked
+    return queued_by(setup, root)
 
 
 def test_items_closed_past_the_cutoff_cost_no_fetch_refresh_or_walk(setup):
@@ -742,6 +763,372 @@ def test_reopened_item_returns_to_scope_and_loses_its_close_time(setup):
     assert run_sync_root(setup) == ([8], [8])
     assert setup.store.get_link("item_closed", "owner/project:pull:8") is None
     assert fetched == []
+
+
+def gone_world(setup, number, status, items, open_items=()):
+    """A closed_world in which GitHub answers the fetch of issue `number` with HTTP `status`."""
+    fetched = closed_world(setup, items, open_items)
+    mirror_post(setup, "issue", number)
+    found = setup.client.get_issue
+
+    async def get_issue(requested):
+        if requested == number:
+            fetched.append(requested)
+            raise GitHubError(f"GitHub returned HTTP {status}.", status=status,
+                              retryable=status in {403, 429} or status >= 500)
+        return await found(requested)
+
+    setup.client.get_issue = get_issue
+    return fetched
+
+
+def discovery_jobs(setup):
+    return [job for job in setup.store.list_jobs(limit=500) if job["kind"] == "pr_sync_discover"]
+
+
+@pytest.mark.parametrize("status", [301, 410])
+def test_a_moved_or_deleted_item_leaves_the_sync_without_stopping_it(setup, monkeypatch, status):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append(message))
+    fetched = gone_world(setup, 9, status, {8: github_item("pull", 8, closed_days_ago=2)},
+                         open_items=[github_item("issue", 5)])
+    assert run_sync_root(setup) == ([5, 8], [8])
+    assert sorted(fetched) == [8, 9]
+    assert len(discovery_jobs(setup)) == 1
+    assert [message for message in logged if "#9" in message] == [
+        "Project sync no longer refreshes issue #9: GitHub reports it moved or deleted."]
+    fetched.clear()
+    assert run_sync_root(setup)[0] == [5, 8]
+    assert fetched == [8]
+    assert len(discovery_jobs(setup)) == 2
+
+    async def listed_again(kind):
+        return [github_item("issue", 9)] if kind == "issue" else []
+
+    setup.client.list_open_items = listed_again
+    assert run_sync_root(setup)[0] == [8, 9]
+
+
+LATER = "2026-11-02T00:00:00Z"
+
+
+def open_world(setup, items):
+    """GitHub lists the open entries of `items` and returns the current copy of any entry."""
+    async def get_issue(number):
+        return deepcopy(items[number])
+
+    async def list_open_items(kind):
+        return [deepcopy(item) for item in items.values() if item["kind"] == kind and item["state"] == "open"]
+
+    setup.client.get_issue = get_issue
+    setup.client.list_open_items = list_open_items
+
+
+def drain(setup):
+    for _ in range(1000):
+        if not run(setup):
+            return
+    raise AssertionError("The queue did not settle")
+
+
+def sync_cycle(setup):
+    """Run one sync root, then all work it queued; return the numbers the root queued for refresh and walk."""
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    queued = queued_by(setup, root)
+    drain(setup)
+    return queued
+
+
+def test_the_root_refreshes_only_items_that_changed_since_their_last_mirror(setup):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[0] == [5, 6, 7]
+    assert sync_cycle(setup)[0] == []
+    items[6]["updated_at"] = LATER
+    assert sync_cycle(setup)[0] == [6]
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_state_change_alone_queues_a_refresh(setup):
+    issue = github_item("issue", 9)
+    listing = [issue]
+    closed_world(setup, {9: issue}, open_items=listing)
+    assert sync_cycle(setup)[0] == [9]
+    assert sync_cycle(setup)[0] == []
+    issue.update(state="closed", closed=True, closed_at=iso(time.time() - DAY))
+    listing.clear()
+    assert sync_cycle(setup)[0] == [9]
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_change_the_post_shows_queues_a_refresh_even_with_the_same_updated_at(setup):
+    items = {5: github_item("issue", 5), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5]["title"] = "Renamed"
+    items[7]["draft"] = True
+    assert sync_cycle(setup)[0] == [5, 7]
+
+
+def test_a_failed_mirror_keeps_the_old_record_so_the_next_cycle_refreshes_again(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5]["updated_at"] = LATER
+
+    async def unavailable(event, **kwargs):
+        raise OSError("Discord is unavailable")
+
+    setup.transport.mirror = unavailable
+    assert sync_cycle(setup)[0] == [5]
+    assert [job["state"] for job in setup.store.list_jobs() if job["key"].startswith("sync-item:")].count("recovery") == 1
+    assert sync_cycle(setup)[0] == [5]
+
+
+def test_a_webhook_mirror_updates_the_record_so_the_next_cycle_skips_the_item(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5].update(title="Renamed", updated_at=LATER)
+    enqueue(setup, {"repository": "Owner/Project", "kind": "issue", "number": 5, "key": "issue:5",
+                    "state": "open", "action": "edited"}, key="github:edit-5")
+    drain(setup)
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_pr_activity_delivery_updates_the_record_of_its_pull_request_post(setup):
+    items = {7: github_item("pull", 7)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[7]["updated_at"] = LATER
+    enqueue(setup)
+    drain(setup)
+    assert len(setup.transport.attempts) == 1
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_channel_change_during_a_mirror_still_posts_to_the_new_forum(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    setup.cfg["issues_channel_id"] = "210"
+    original = setup.transport.mirror
+
+    async def mirror_while_the_operator_saves(event, **kwargs):
+        result = await original(event, **kwargs)
+        setup.cfg["issues_channel_id"] = "250"
+        return result
+
+    setup.transport.mirror = mirror_while_the_operator_saves
+    assert sync_cycle(setup)[0] == [5]
+    setup.transport.mirror = original
+    assert sync_cycle(setup)[0] == [5]
+
+
+def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    setup.cfg["issues_channel_id"] = "250"
+    assert sync_cycle(setup)[0] == [5]
+
+
+def test_the_root_walks_only_new_and_changed_prs_until_a_daily_recheck_is_due(setup):
+    items = {7: github_item("pull", 7), 8: github_item("pull", 8), 5: github_item("issue", 5)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[1] == [7, 8]
+    assert sync_cycle(setup)[1] == []
+    items[8]["updated_at"] = LATER
+    assert sync_cycle(setup)[1] == [8]
+    items[9] = github_item("pull", 9)
+    assert sync_cycle(setup)[1] == [9]
+    assert sync_cycle(setup)[1] == []
+
+
+def test_a_closed_pr_inside_the_window_is_walked_again_only_when_it_changes(setup):
+    pull = github_item("pull", 8, closed_days_ago=2)
+    closed_world(setup, {8: pull})
+    assert sync_cycle(setup)[1] == [8]
+    assert sync_cycle(setup)[1] == []
+    pull["updated_at"] = LATER
+    assert sync_cycle(setup)[1] == [8]
+
+
+@pytest.fixture
+def walk_clock(monkeypatch):
+    import project_automation_activity
+    clock = [time.time()]
+    monkeypatch.setattr(project_automation_activity, "time", SimpleNamespace(time=lambda: clock[0]))
+    return clock
+
+
+@pytest.fixture
+def clock(setup, walk_clock, monkeypatch):
+    """Extend walk_clock to the sync root and to the time each post's record is written."""
+    import project_automation
+    monkeypatch.setattr(project_automation, "time", SimpleNamespace(time=lambda: walk_clock[0], monotonic=time.monotonic))
+    setup.transport.clock = lambda: walk_clock[0]
+    return walk_clock
+
+
+def test_each_unchanged_post_gets_one_daily_refresh_and_no_cycle_refreshes_two(setup, clock):
+    items = {number: github_item("issue" if number <= 3 else "pull", number) for number in range(1, 6)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[0] == [1, 2, 3, 4, 5]
+    clock[0] += DAY
+    refreshed = []
+    for _ in range(96):
+        refreshed.append(sync_cycle(setup)[0])
+        clock[0] += 900
+    assert all(len(numbers) <= 1 for numbers in refreshed)
+    assert sorted(number for numbers in refreshed for number in numbers) == [1, 2, 3, 4, 5]
+    assert sync_cycle(setup)[0] == refreshed[0]
+
+
+def test_thirteen_prs_get_one_daily_walk_each_and_no_cycle_walks_two(setup, walk_clock):
+    open_world(setup, {number: github_item("pull", number) for number in range(1, 14)})
+    assert sync_cycle(setup)[1] == list(range(1, 14))
+    walk_clock[0] += DAY
+    walked = []
+    for _ in range(96):
+        walked.append(run_sync_root(setup)[1])
+        walk_clock[0] += 900
+    assert all(len(numbers) <= 1 for numbers in walked)
+    assert sorted(number for numbers in walked for number in numbers) == list(range(1, 14))
+    assert run_sync_root(setup)[1] == walked[0]
+
+
+def test_the_daily_share_walks_the_prs_whose_last_walk_is_oldest(setup, walk_clock):
+    first, second = github_item("pull", 1), github_item("pull", 2)
+    assert setup.service.pr_activity.enqueue_walks([second], 1) == (1, 0)
+    walk_clock[0] += 5 * 3600
+    assert setup.service.pr_activity.enqueue_walks([first, second], 2) == (1, 0)
+    walk_clock[0] += DAY
+    assert setup.service.pr_activity.enqueue_walks([first, second], 3) == (0, 1)
+    assert queued_by(setup, 3)[1] == [2]
+
+
+def test_a_clock_set_back_does_not_pause_the_daily_share(setup, walk_clock):
+    pulls = [github_item("pull", 1), github_item("pull", 2)]
+    setup.service.pr_activity.enqueue_walks(pulls, 1)
+    walk_clock[0] -= 2 * DAY
+    assert [setup.service.pr_activity.enqueue_walks(pulls, cycle) for cycle in (2, 3, 4)] == [(0, 1), (0, 1), (0, 0)]
+
+
+def test_the_daily_share_grows_with_the_number_of_prs(setup, walk_clock):
+    pulls = [github_item("pull", number) for number in range(1, 98)]
+    assert setup.service.pr_activity.enqueue_walks(pulls, 1) == (97, 0)
+    walk_clock[0] += DAY
+    assert setup.service.pr_activity.enqueue_walks(pulls, 2) == (0, 2)
+    assert setup.service.pr_activity.enqueue_walks(pulls[:96], 3) == (0, 1)
+
+
+def test_the_first_cycle_after_upgrade_does_all_work_once_and_the_next_only_the_daily_share(setup):
+    items = {1: github_item("issue", 1), 2: github_item("issue", 2), 3: github_item("pull", 3),
+             4: github_item("pull", 4), 5: github_item("pull", 5, closed_days_ago=2),
+             6: github_item("issue", 6, closed_days_ago=2), 7: github_item("issue", 7, closed_days_ago=30)}
+    closed_world(setup, items, open_items=[items[number] for number in (1, 2, 3, 4)])
+    setup.store.put_link("item_closed", "owner/project:issue:7", {"closed_at": time.time() - 30 * DAY})
+    assert sync_cycle(setup) == ([1, 2, 3, 4, 5, 6], [3, 4, 5])
+    assert len(setup.store.list_links("item_mirrored")) == 6
+    assert len(setup.store.list_links("pr_walk")) == 3
+    assert sync_cycle(setup) == ([], [])
+    assert len(discovery_jobs(setup)) == 2
+
+
+def test_each_finished_root_logs_one_line_with_counts_only(setup, monkeypatch, clock):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append((message, fields)))
+    items = {1: {**github_item("issue", 1), "title": "Secret title", "body": "Secret body"},
+             3: github_item("pull", 3), 5: github_item("pull", 5, closed_days_ago=2)}
+    closed_world(setup, items, open_items=[items[1], items[3]])
+    sync_cycle(setup)
+    items[3]["updated_at"] = LATER
+    sync_cycle(setup)
+    clock[0] += DAY
+    sync_cycle(setup)
+    lines = [message for message, fields in logged if fields.get("event") == "sync_cycle"]
+    assert lines == [
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 3 refreshes "
+        "(3 changed, 0 daily) and 2 PR walks (2 changed, 0 daily); skipped 0 unchanged items.",
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 1 refreshes "
+        "(1 changed, 0 daily) and 1 PR walks (1 changed, 0 daily); skipped 2 unchanged items.",
+        "Project sync listed 2 open items and kept 1 recently closed items in scope; queued 1 refreshes "
+        "(0 changed, 1 daily) and 1 PR walks (0 changed, 1 daily); skipped 2 unchanged items.",
+    ]
+    assert all(fields == {"component": "project_automation", "event": "sync_cycle"}
+               for _, fields in logged if fields.get("event") == "sync_cycle")
+    assert not [message for message, _ in logged if "Secret" in message or "Old item" in message]
+
+
+def test_after_clear_the_next_cycle_walks_every_pr_again(setup):
+    open_world(setup, {7: github_item("pull", 7), 8: github_item("pull", 8)})
+    sync_cycle(setup)
+    assert sync_cycle(setup)[1] == []
+    setup.service.clear_history()
+    assert sync_cycle(setup)[1] == [7, 8]
+
+
+def test_only_a_second_404_in_a_row_ends_the_sync_of_an_item(setup, monkeypatch):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append(message))
+    fetched = gone_world(setup, 9, 404, {8: github_item("pull", 8, closed_days_ago=2)},
+                         open_items=[github_item("issue", 5)])
+    closed_at = time.time() - DAY
+    setup.store.put_link("item_closed", "owner/project:issue:9", {"closed_at": closed_at})
+    assert run_sync_root(setup)[0] == [5, 8]
+    assert len(discovery_jobs(setup)) == 1
+    assert not [message for message in logged if "#9" in message]
+    assert run_sync_root(setup)[0] == [5, 8]
+    assert fetched.count(9) == 2
+    assert [message for message in logged if "#9" in message] == [
+        "Project sync no longer refreshes issue #9: GitHub reports it moved or deleted."]
+    assert setup.store.get_link("item_closed", "owner/project:issue:9")["closed_at"] == closed_at
+    fetched.clear()
+    run_sync_root(setup)
+    assert fetched == [8]
+
+
+def test_access_lost_after_the_listing_does_not_end_the_sync_of_closed_items_for_good(setup):
+    items = {8: github_item("pull", 8, closed_days_ago=2), 9: github_item("issue", 9, closed_days_ago=1)}
+    closed_world(setup, items, open_items=[github_item("issue", 5)])
+    found = setup.client.get_issue
+    lost = [True]
+
+    async def get_issue(number):
+        if lost[0]:
+            raise GitHubError("GitHub returned HTTP 404.", status=404)
+        return await found(number)
+
+    setup.client.get_issue = get_issue
+    assert run_sync_root(setup)[0] == [5]
+    lost[0] = False
+    items[9].update(title="Edited after close", updated_at=LATER)
+    assert run_sync_root(setup)[0] == [5, 8, 9]
+    lost[0] = True
+    run_sync_root(setup)
+    lost[0] = False
+    assert run_sync_root(setup)[0] == [5, 8, 9]
+
+
+@pytest.mark.parametrize("status", [None, 403, 429, 500, 502])
+def test_a_failed_fetch_of_a_closed_item_still_fails_and_retries_the_root(setup, status):
+    gone_world(setup, 9, status or 500, {}, open_items=[github_item("issue", 5)])
+    if status is None:
+        async def unreachable(number):
+            raise GitHubError("GitHub could not be reached or returned an invalid response.", retryable=True)
+        setup.client.get_issue = unreachable
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, "sync:transient")
+    assert run(setup)
+    job = setup.store.get_job(root)
+    assert job["state"] == "pending" and job["attempts"] == 1 and job["available_at"] > time.time()
+    assert discovery_jobs(setup) == []
+    assert setup.store.get_link("item_closed", "owner/project:issue:9") is None
 
 
 def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monkeypatch):

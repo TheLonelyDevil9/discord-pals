@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
+import time
 import weakref
 import discord
 from discord import app_commands
 
 from logger import warn
-from project_automation import WorkflowError
+from project_automation import MIRROR_CHANNELS, WorkflowError, mirror_key, mirror_record
 from project_automation_discord_activity import (
     activity_version, confirm_not_delivered, mirror_activity, receipt_key,
 )
@@ -38,6 +41,12 @@ async def say(service, case, action, facts, next_step):
 def in_case_thread(interaction, case):
     return bool(case and str(interaction.guild_id) == case["guild_id"]
                 and str(interaction.channel_id) == case["channel_id"])
+
+
+def mirror_digest(embed, name, closed):
+    """Digest everything mirror() writes to a post: the embed, the thread name and the archived state."""
+    rendered = {"embed": embed.to_dict(), "name": name, "closed": closed}
+    return hashlib.sha256(json.dumps(rendered, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def feedback_order(receipt):
@@ -448,8 +457,8 @@ class DiscordTransport:
 
     async def mirror(self, event, *, recover_only=False):
         cfg = self.service.settings()
-        field = {"issue": "issues_channel_id", "pull": "reviews_channel_id", "commit": "commits_channel_id", "general": "github_channel_id"}[event["kind"]]
-        key = f"{cfg['guild_id']}:{cfg['bot_name']}:{cfg[field]}:{cfg['repository']}:{event['key']}"
+        field = MIRROR_CHANNELS[event["kind"]]
+        key = mirror_key(cfg, event["kind"], event["key"])
         channel = await self._channel(cfg[field])
         if event["kind"] in {"issue", "pull"} and not isinstance(channel, discord.ForumChannel):
             raise WorkflowError("Issue tracking and Pull requests require forum channels.")
@@ -471,6 +480,7 @@ class DiscordTransport:
                     raise WorkflowError("The saved mirror has a different delivery marker.")
             except discord.NotFound:
                 thread = message = None
+        saved = message is not None
         if message is None and isinstance(channel, discord.ForumChannel):
             # Active posts plus a bounded archived search recover a lost create acknowledgement.
             async for candidate in self._forum_threads(channel):
@@ -495,9 +505,22 @@ class DiscordTransport:
                               url=event.get("html_url") or event.get("url"), color=COLOUR)
         embed.set_footer(text=marker)
         name = f"{state} · {event['title']}"[:75] + f" · #{event.get('number')}"
+        closed = bool(event.get("closed"))
+        digest = mirror_digest(embed, name, closed)
+        # The thread's own name and flags count too, so a post renamed, archived or reopened by hand
+        # is still corrected. Lost-receipt recovery finds a post by its name.
+        if saved and link.get("digest") == digest and (
+                not isinstance(thread, discord.Thread)
+                or (thread.name, bool(thread.archived), bool(thread.locked)) == (name, closed, closed)):
+            self._record_item(key, event)
+            return True
         attempt = self.service.store.get_link("mirror_attempt", key)
         if not message and attempt and attempt.get("state") == "pending":
             raise WorkflowError("An earlier project mirror send needs recovery before it can be repeated.")
+        if link and "digest" in link:
+            # A write that fails part way leaves the post unknown. A kept digest could then match
+            # a later rendering and skip the write that would repair the post.
+            self.service.store.put_link("mirror", key, {k: v for k, v in link.items() if k != "digest"})
         original = (bool(thread.archived), bool(thread.locked)) if isinstance(thread, discord.Thread) else (False, False)
         opened, complete = False, False
         try:
@@ -515,7 +538,8 @@ class DiscordTransport:
                     thread, message = created.thread, created.message
                 else:
                     thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
-            self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]})
+            record = {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]}
+            self.service.store.put_link("mirror", key, record)
             self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
             complete = True
         finally:
@@ -524,4 +548,17 @@ class DiscordTransport:
                     await thread.edit(archived=True, locked=True)
                 elif opened and not complete:
                     await thread.edit(archived=original[0], locked=original[1])
+        self.service.store.put_link("mirror", key, {**record, "digest": digest})
+        self._record_item(key, event)
         return True
+
+    def _record_item(self, key, event):
+        """Store the issue or PR version that the post at `key` now shows, and when it was checked.
+
+        The sync root compares the version with GitHub and schedules the daily post check by
+        the time. `key` must be the one this mirror call computed: the settings can change
+        while it waits on Discord, and a record under another destination's key would stop
+        the sync root from ever posting the item there.
+        """
+        if event["kind"] in {"issue", "pull"}:
+            self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": time.time()})

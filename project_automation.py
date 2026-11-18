@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime
+import hashlib
+import json
 import re
 import threading
 import time
@@ -14,10 +16,16 @@ from logger import info
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_store import AutomationStore, Conflict
-from project_automation_activity import PRActivity, activate, mapping_key
+from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
 
 CLOSED_SYNC_DAYS = 7
+# GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
+# and 404 for either when the App cannot read the repository involved:
+# https://docs.github.com/en/rest/issues/issues#get-an-issue
+GONE_STATUSES = {301, 404, 410}
+MIRROR_CHANNELS = {"issue": "issues_channel_id", "pull": "reviews_channel_id",
+                   "commit": "commits_channel_id", "general": "github_channel_id"}
 
 CHOICES = {
     "write": "Write my report", "check": "Check my report",
@@ -37,6 +45,26 @@ def closed_time(item):
     except (AttributeError, TypeError, ValueError):
         return None
     return value.timestamp() if value.tzinfo is not None else None
+
+
+def mirror_key(config, kind, key):
+    """Key of the mirror link for GitHub object `key` in the channel configured for `kind`.
+
+    Existing mirror links and the footer marker on each Discord post use this exact format.
+    A changed format matches neither, so every item would be posted again as new.
+    """
+    return f"{config['guild_id']}:{config['bot_name']}:{config[MIRROR_CHANNELS[kind]]}:{config['repository']}:{key}"
+
+
+def mirror_record(item):
+    """Return the record the sync root compares to decide whether an issue or PR post needs a refresh.
+
+    GitHub does not document which changes move updated_at, so besides updated_at and
+    state the record keeps a digest of every field the post shows.
+    """
+    shown = {name: item.get(name) for name in ("title", "body", "state", "merged", "draft", "html_url")}
+    return {"updated_at": item.get("updated_at", ""), "state": item.get("state", ""),
+            "shown": hashlib.sha256(json.dumps(shown, sort_keys=True).encode()).hexdigest()}
 
 
 def reporter_actions(case):
@@ -668,7 +696,8 @@ class AutomationService:
                 item = await client.get_issue(event["number"])
                 event = {**event, **item, "key": event["key"], "kind": event["kind"]}
             except GitHubError as exc:
-                if not (exc.status == 404 and event.get("action") == "deleted"):
+                # GitHub answers a deleted issue with 410, or with 404 when the App cannot read it.
+                if not (exc.status in {404, 410} and event.get("action") == "deleted"):
                     raise
         self._check_event_binding(event)
         if event["kind"] == "comment":
@@ -739,11 +768,11 @@ class AutomationService:
                 self._check_event_binding(payload)
             activate(self.store, self.settings())
             client = await self.client()
-            seen = set()
+            in_scope = []
             for kind in ("issue", "pull"):
-                for item in await client.list_open_items(kind):
-                    seen.add((kind, item["number"]))
-                    self._enqueue_sync_item(item, kind, job["id"])
+                in_scope += [(kind, item) for item in await client.list_open_items(kind)]
+            listed = len(in_scope)
+            seen = {(kind, item["number"]) for kind, item in in_scope}
             self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
                 data = link["data"]
@@ -752,8 +781,19 @@ class AutomationService:
                     seen.add((data["kind"], data["number"]))
                     item = await self._closed_item_in_scope(client, data["kind"], data["number"])
                     if item is not None:
-                        self._enqueue_sync_item(item, data["kind"], job["id"])
+                        in_scope.append((data["kind"], item))
+            changed, daily = self._refreshes(in_scope)
+            for kind, item in changed + daily:
+                self._enqueue_sync_item(item, kind, job["id"])
+            walked, rechecked = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"],
+                                                               job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
+            refreshed = len(changed) + len(daily)
+            info(f"Project sync listed {listed} open items and kept {len(in_scope) - listed} recently closed items "
+                 f"in scope; queued {refreshed} refreshes ({len(changed)} changed, {len(daily)} daily) and "
+                 f"{walked + rechecked} PR walks ({walked} changed, {rechecked} daily); "
+                 f"skipped {len(in_scope) - refreshed} unchanged items.",
+                 component="project_automation", event="sync_cycle")
         else:
             raise WorkflowError("Unknown job type.")
 
@@ -764,22 +804,55 @@ class AutomationService:
         """Return a mirrored item missing from the open listing while it still needs refreshing, else None.
 
         An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
-        time is stored. An unknown close time costs one fetch, which stores it.
+        time is stored. An unknown close time costs one fetch, which stores it. An item that
+        GitHub reports as moved or deleted is stored as gone and costs no further fetch; a 404
+        counts only when the next cycle gets one again. Both stay out of scope until the open
+        listing shows the item again. Neither answer drops a stored close time.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
-        stored = self.store.get_link("item_closed", key)
-        if stored and stored.get("closed_at", 0) < cutoff:
+        stored = self.store.get_link("item_closed", key) or {}
+        if "gone" in stored or ("closed_at" in stored and stored["closed_at"] < cutoff):
             return None
-        item = await client.get_issue(number)
+        try:
+            item = await client.get_issue(number)
+        except GitHubError as exc:
+            if exc.status not in GONE_STATUSES:
+                raise
+            # A 404 also follows a passing loss of the App's access after the listing succeeded.
+            if exc.status == 404 and not stored.get("not_found"):
+                self.store.put_link("item_closed", key, {**stored, "not_found": True})
+                return None
+            self.store.put_link("item_closed", key, {**stored, "gone": exc.status})
+            info(f"Project sync no longer refreshes {kind} #{number}: GitHub reports it moved or deleted.",
+                 component="project_automation", event="sync_item_gone")
+            return None
         if item.get("state") != "closed":
             self.store.delete_links("item_closed", [key])
             return item
         # Without a usable closed_at, the first time the item was seen closed stands in for it.
-        closed_at = closed_time(item) or (stored or {}).get("closed_at") or time.time()
-        if not stored or stored.get("closed_at") != closed_at:
+        closed_at = closed_time(item) or stored.get("closed_at") or time.time()
+        if stored != {"closed_at": closed_at}:
             self.store.put_link("item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None
+
+    def _refreshes(self, in_scope):
+        """Return the (kind, item) pairs to refresh: the changed ones and the daily share of the rest.
+
+        An item changed when its post has no record or the record differs from GitHub. The others
+        get a daily check through oldest_due, by when their post was last written or found unchanged,
+        so that a post changed on Discord alone is still corrected.
+        """
+        cfg = self.settings()
+        mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
+        changed, unchanged = [], []
+        for kind, item in in_scope:
+            record = mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}"))
+            if record is None or any(record.get(name) != value for name, value in mirror_record(item).items()):
+                changed.append((kind, item))
+            else:
+                unchanged.append((record.get("mirrored_at", 0), (kind, item["number"]), (kind, item)))
+        return changed, oldest_due(unchanged, len(in_scope), time.time())
 
     def _enqueue_sync_item(self, item, kind, sync_id):
         from project_automation_webhook import webhook_binding
@@ -787,8 +860,6 @@ class AutomationService:
         event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
                  "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
         self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
-        if kind == "pull":
-            self.pr_activity.enqueue_sync(item, sync_id)
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:
