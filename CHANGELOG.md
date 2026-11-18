@@ -20,8 +20,8 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Reconciliation runs one cycle at a time and no longer refreshes issues and PRs that closed more than 7 days ago. Discovery of recently updated PRs is unchanged.
 - A GitHub delivery received again within 4 days is answered as accepted and queues nothing, even when its payload changed; such a repeat was answered with 503 before. The guard keeps only a hash of the delivery ID.
 - The database file is compacted when at least 25% of it and 16 MB are free. The first compaction switches the file to incremental auto-vacuum; from then on, sweeps also return freed space to the disk.
-- Reconciliation refreshes an issue or PR post only when the item's last-update time, its state, or anything the post shows has changed since the post was last written. A refresh that would write the same post makes no Discord change, unless the post was renamed, archived, or reopened by hand. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
-- A PR's activity is scanned when the PR is new or its last-update time changed, and each PR in scope gets one full scan about once a day, spread over the day's cycles, instead of every PR being scanned from its first page every 15 minutes. Discovery of recently updated PRs is unchanged.
+- Reconciliation refreshes an issue or PR post when the item's last-update time, its state, or anything the post shows has changed since the post was last written, instead of every 15 minutes. A refresh that would write the same post makes no Discord change. Each post also gets a daily check, about once a day once the queue has settled, which writes only when the post drifted, for example when Discord archived an open item's post or someone renamed, reopened, unlocked, or deleted it. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
+- A PR's activity is scanned when the PR is new or its last-update time changed, and each PR in scope gets one full scan about once a day once the queue has settled, spread over the day's cycles, instead of every PR being scanned from its first page every 15 minutes. Discovery of recently updated PRs is unchanged.
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 
 ### Fixed
@@ -29,13 +29,14 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Loading the Project page no longer locks the database while it counts every stored job, which could stall the worker and fail webhook deliveries on a large queue.
 - Overlapping reconciliation cycles no longer queue a recheck of every stored PR comment, and a new cycle no longer starts while the previous one is unfinished.
 - A maintainer question is not relayed to the reporter twice when its finished notice has been deleted.
-- An issue that was transferred or deleted on GitHub no longer fails every reconciliation cycle before PR discovery runs. It leaves reconciliation with one log line and returns if it appears among the open items again.
+- An issue that was transferred or deleted on GitHub no longer fails every reconciliation cycle before PR discovery runs. It leaves reconciliation with one log line, after a second 404 in a row when GitHub answers 404, and returns if it appears among the open items again.
+- The webhook for a deleted issue marks its post deleted when GitHub answers 410 for the issue; such a job failed on every attempt before.
 
 ### Upgrade notes
 
 - Back up `bot_data/project_automation.sqlite3` before updating. The first start runs a one-time cleanup that deletes queued reconciliation work left by overlapping cycles, every finished job, and failed and cancelled jobs older than 7 days, then compacts the file. Queued webhook deliveries, PR activity deliveries, the feedback steps open reports need, and held jobs are kept. On a large database the cleanup can hold the database for a minute or more; webhooks that arrive meanwhile get 503, so redeliver them from GitHub's delivery history. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - An earlier version can still open the cleaned database, but deleted jobs do not come back and that version stops deleting finished jobs.
-- The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily re-checks. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
+- The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 
 ## [v2.9.0] - 2026-09-29
 
