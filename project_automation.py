@@ -444,6 +444,9 @@ class AutomationService:
 
     async def attach(self, bot):
         self.bots[bot.name] = bot
+        # Started before the steps below, so that a step that raises still leaves a watchdog to
+        # start the worker for this attached bot.
+        self._tasks.start_once(self._watchdog(), name="watchdog")
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
@@ -473,7 +476,6 @@ class AutomationService:
                 self.store.enqueue("assess", {"case_id": case["id"], "revision": 1}, key=f"initial:{case['id']}")
         if self._worker is None or self._worker.done():
             self._start_worker()
-        self._tasks.start_once(self._watchdog(), name="watchdog")
 
     def _start_worker(self):
         self._worker = asyncio.create_task(self._run(), name="project-automation")
@@ -1020,16 +1022,21 @@ class AutomationService:
             await asyncio.sleep(1)
 
     async def _revive_worker(self):
-        """Start the worker again while the service is attached and its task is missing or finished.
+        """Start the worker while the service is attached and its task is missing or finished.
 
         A live task is never replaced, however old its heartbeat, because its current job may
-        hold a lease or an unconfirmed remote write.
+        hold a lease or an unconfirmed remote write. Only the end of a started task counts as a
+        restart: a missing task belongs to an attach that raised or that still waits for the
+        first-start cleanup, and the worker has not run yet.
         """
         if not self.bots or (self._worker is not None and not self._worker.done()):
             return
         if self._worker is None:
-            reason = "no task"
-        elif self._worker.cancelled():
+            self._start_worker()
+            info("The watchdog started the Project worker, which no attach had started.",
+                 component="project_automation", event="worker_started")
+            return
+        if self._worker.cancelled():
             reason = "CancelledError"
         else:
             error = self._worker.exception()

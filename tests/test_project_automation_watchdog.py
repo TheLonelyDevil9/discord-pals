@@ -1,6 +1,7 @@
 """The worker heartbeat and the watchdog that restarts a dead worker task."""
 
 import asyncio
+import sqlite3
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -118,6 +119,38 @@ def test_a_failing_check_is_logged_and_the_next_check_still_runs(service, monkey
         asyncio.run(service._watchdog())
     assert calls == [1, 2, 3]
     assert len(logged) == 1 and "RuntimeError" in logged[0][0] and "private failure text" not in logged[0][0]
+
+
+def test_an_attach_that_raises_still_leaves_a_watchdog_that_starts_the_worker(service, monkeypatch):
+    started = []
+
+    async def run():
+        started.append(True)
+        await idle()
+
+    async def locked(bot):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(service, "_run", run)
+    service.transport = SimpleNamespace(attach=locked)
+    service.bots.clear()
+    helper = SimpleNamespace(name="Helper")
+
+    async def scenario():
+        with pytest.raises(sqlite3.OperationalError):
+            await service.attach(helper)
+        watchdogs = [task for task in asyncio.all_tasks() if task.get_name().endswith("watchdog") and not task.done()]
+        await service.supervise_once()
+        await asyncio.sleep(0)
+        try:
+            return len(watchdogs), service.health()
+        finally:
+            await service.detach(helper)
+
+    watchdogs, signals = asyncio.run(scenario())
+    assert watchdogs == 1 and started == [True]
+    # Starting a worker that an attach never started is not a restart.
+    assert signal(signals, "worker")["value"] == "Running"
 
 
 def test_attach_starts_one_watchdog_and_the_last_detach_stops_it(service, monkeypatch):
