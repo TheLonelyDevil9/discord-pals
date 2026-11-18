@@ -1,4 +1,5 @@
 # Discord Pals Dependencies
+# Edit this file, then regenerate requirements.lock as CONTRIBUTING.md describes.
 discord.py==2.3.2
 openai>=1.51.0
 python-dotenv==1.2.2
@@ -14,6 +15,3 @@ tzdata>=2024.1
 
 # Monitoring & Metrics
 prometheus-client==0.20.0
-
-# Security scanning (dev dependencies)
-# pip install bandit safety  # Run: bandit -r . && safety check

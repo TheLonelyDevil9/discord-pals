@@ -32,6 +32,19 @@ jobs:
       - name: Repository guardrails
         run: python tools/quality_check.py
 
+      # Regenerating keeps every pin the lock has while requirements.txt still
+      # allows it, so a new upstream release changes nothing; only an edit to
+      # requirements.txt that the lock does not reflect produces a diff. uv is
+      # pinned because another uv version can write the same resolution differently.
+      - name: Lock file matches requirements.txt
+        run: |
+          pip install uv==0.13.5
+          uv pip compile requirements.txt --universal --python-version 3.11 --quiet -o requirements.lock
+          git diff --exit-code requirements.lock || {
+            echo "::error file=requirements.lock::requirements.lock does not match requirements.txt. Regenerate it as CONTRIBUTING.md describes."
+            exit 1
+          }
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

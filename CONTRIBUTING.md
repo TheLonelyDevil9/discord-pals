@@ -79,6 +79,16 @@ Thank you for your interest in contributing to Discord Pals! This document provi
 
    Run the checks in [Quality Guardrails](docs/quality.md), including the real-server dashboard smoke test. `requirements-dev.txt` includes runtime dependencies and pytest.
 
+### Dependencies
+
+`requirements.txt` lists the direct dependencies and is the file to edit. `requirements.lock` is generated from it and pins every package, including indirect ones, for Python 3.11 to 3.14 on Linux, Windows, and macOS. After you edit `requirements.txt`, regenerate the lock with [uv](https://docs.astral.sh/uv/) 0.13.5, the version CI uses, and commit both files:
+
+```bash
+uv pip compile requirements.txt --universal --python-version 3.11 -o requirements.lock
+```
+
+The command keeps every existing pin that `requirements.txt` still allows. To move a package to its newest allowed version, add `--upgrade-package NAME`; `--upgrade` moves all of them. `--python-version` names the oldest supported Python, so raise it when that version changes. CI runs the same command and fails when the lock changes.
+
 ### Project Structure Notes
 
 - **Slash commands** live in `commands/` — `core.py` for core/moderation, `memory.py` for memory/lore, `time.py` for timezone/reminder commands, `fun.py` for interactions, and `registry.py` for command metadata

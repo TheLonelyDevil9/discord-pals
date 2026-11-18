@@ -28,7 +28,7 @@ python tools/dashboard_smoke.py
 
 | Job | What it protects |
 | --- | --- |
-| Quality checks | `tools/quality_check.py` guardrails |
+| Quality checks | `tools/quality_check.py` guardrails, and `requirements.lock` matches `requirements.txt` (see [Dependencies](../CONTRIBUTING.md#dependencies)) |
 | Lint | Ruff correctness rules only: undefined and redefined names, syntax errors, identity comparison against literals |
 | Tests | Full suite on Python 3.11, 3.12, 3.13, and 3.14 |
 | Dashboard smoke test | The authenticated access boundary against a running server |
