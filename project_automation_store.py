@@ -7,6 +7,7 @@ then require reconciliation instead of being sent again after a restart.
 """
 
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -327,6 +328,21 @@ class AutomationStore:
     def enqueue(self, kind, payload, key, delay=0):
         with self._connection(write=True) as connection:
             return self._enqueue(connection, kind, payload, key, delay)
+
+    def enqueue_delivery(self, delivery, kind, payload, key):
+        """Queue a webhook delivery once per delivery ID; return None when it was seen before.
+
+        The marker keeps only a SHA-256 of the ID, so a redelivery stays a no-op after
+        retention deletes the job row.
+        """
+        marker = hashlib.sha256(_text(delivery, "Delivery ID", 128).encode("utf-8")).hexdigest()
+        with self._connection(write=True) as connection:
+            if connection.execute("SELECT 1 FROM links WHERE kind = 'github_delivery' AND key = ?",
+                                  (marker,)).fetchone():
+                return None
+            connection.execute("INSERT INTO links(kind, key, document, updated_at) VALUES ('github_delivery', ?, '{}', ?)",
+                               (marker, time.time()))
+            return self._enqueue(connection, kind, payload, key, 0)
 
     @staticmethod
     def _expire_leases(connection):

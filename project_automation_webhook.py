@@ -104,10 +104,10 @@ def register_github_webhook(app, get_service) -> None:
             normalized = compact_event(normalized)
         normalized["_binding"] = binding
         try:
-            # SQLite's unique key makes simultaneous GitHub redeliveries one job.
-            # Conflicting payloads never replace previously accepted work.
+            # A delivery ID is accepted once. Its marker outlives the job row, so a
+            # redelivery, even with a changed payload, is answered as accepted and queues nothing.
             activate(service.store, config)
-            service.store.enqueue("event", normalized, key=f"github:{delivery}")
+            service.store.enqueue_delivery(delivery, "event", normalized, key=f"github:{delivery}")
             service.store.record_status(mapping_key(config), "last_webhook_at")
         except Exception:
             return jsonify(status="unavailable"), 503
