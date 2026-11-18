@@ -935,7 +935,9 @@ class AutomationService:
         so that a post changed on Discord alone is still corrected.
         """
         cfg = self.settings()
-        mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
+        # Only records under the current destinations' keys can match, so the others are not read.
+        mirrored = {link["key"]: link["data"] for kind in ("issue", "pull")
+                    for link in self.store.list_links("item_mirrored", prefix=mirror_key(cfg, kind, f"{kind}:"))}
         changed, unchanged = [], []
         for kind, item in in_scope:
             record = mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}"))

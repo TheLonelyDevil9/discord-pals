@@ -283,6 +283,14 @@ def test_links_are_namespaced_and_do_not_change_case_revision(store):
     assert store.get_case(case["id"]) == case
 
 
+def test_links_listed_by_prefix_are_exactly_those_whose_key_starts_with_it(store):
+    for key in ("a:b:1", "a:b:2", "a:b:é", "a:b;", "a:bc:1", "a:b", "a:", "b:b:1"):
+        store.put_link("item_mirrored", key, {"key": key})
+    store.put_link("mirror", "a:b:3", {})
+    assert [row["key"] for row in store.list_links("item_mirrored", prefix="a:b:")] == ["a:b:1", "a:b:2", "a:b:é"]
+    assert len(store.list_links("item_mirrored")) == 8
+
+
 def test_document_bounds_preserve_original_report_and_recent_context(store):
     transcript = [{"content": f"Message {index}"} for index in range(110)]
     case = store.create_case(report(transcript=transcript), "source")
