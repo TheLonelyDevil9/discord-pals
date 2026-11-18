@@ -1,0 +1,11 @@
+# Secrets and runtime state stay out of the build context, so no image layer
+# carries them. Supply them at run time through environment variables or mounts.
+.env
+providers.json
+bots.json
+bot_data/
+
+# A local virtual environment and bytecode are built for the host, not the image.
+venv/
+**/__pycache__/
+**/*.pyc

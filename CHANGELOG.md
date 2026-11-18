@@ -37,6 +37,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Supported Python versions are 3.11, 3.12, 3.13, and 3.14, and CI tests all four. Python 3.10 is no longer supported, and `setup.sh` and `setup.bat` require 3.11 or newer.
 - PyYAML 6.0.3 replaces 6.0.2, which had no Python 3.14 wheels and had to be built from source there.
 - `setup.sh`, `setup.bat`, `requirements-dev.txt`, and CI install from `requirements.lock`, and the dependency audit in CI checks the versions pinned there. A failed install now stops setup; it used to retry once and then report success.
+- The documented Docker image runs the bot as an unprivileged user, and a new `.dockerignore` keeps `.env`, `providers.json`, `bots.json`, and `bot_data/` out of the build, so they no longer end up in image layers. See [Docker](docs/operations.md#docker).
 - `python diagnose.py` runs the same check as **Test model** on every saved provider, so keys saved in the dashboard and the Anthropic, Gemini, and Responses formats are tested correctly instead of failing. It no longer lists models from `/models`; the test itself shows whether the saved model answers.
 
 ### Fixed
@@ -61,6 +62,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 - An install on Python 3.10 keeps starting after this update and shows a warning. To move to a supported version, install Python 3.11, 3.12, 3.13, or 3.14 and build a new virtual environment beside the old one, for example `python3.13 -m venv venv-new` and `venv-new/bin/pip install -r requirements.lock` (on Windows, `py -3.13 -m venv venv-new` and `venv-new\Scripts\pip install -r requirements.lock`). Stop the bot, rename `venv` to `venv-old` and `venv-new` to `venv`, and start it again. Delete `venv-old` once the bot runs. `requirements.lock` needs Python 3.11 or newer; on 3.10, `pip install -r requirements.txt` still works.
 - `setup.sh` now creates `.env` readable only by its owner. An existing `.env` keeps its permissions; on Linux and macOS, run `chmod 600 .env` to restrict it.
+- Docker images built from the updated Dockerfile run as UID 1000 unless you pass `--build-arg APP_UID`. Give that UID ownership of mounted folders that root created, such as `bot_data`, and mount `providers.json` and `bots.json` if the image used to carry them, because the build now leaves them out.
 
 ## [v2.9.0] - 2026-09-29
 

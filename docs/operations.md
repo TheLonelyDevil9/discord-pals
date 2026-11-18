@@ -115,17 +115,26 @@ sudo journalctl -u discord-pals -f
 Minimal `Dockerfile`:
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.13-slim
+
+ARG APP_UID=1000
+RUN useradd --create-home --uid "$APP_UID" discordpals
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock
 
-COPY . .
+COPY --chown=discordpals:discordpals . .
+RUN chown discordpals:discordpals /app
+USER discordpals
 RUN python startup.py --init-configs
 
 CMD ["python", "main.py"]
 ```
+
+The bot runs as the unprivileged user `discordpals`, not as root. Its UID must own the folders you mount, so that the bot can write to them. It defaults to 1000; if your user has another UID, build with `docker-compose build --build-arg APP_UID=$(id -u)`. Create `bot_data` before the first start (`mkdir -p bot_data`); otherwise Docker creates it owned by root.
+
+The repository's `.dockerignore` keeps `.env`, `providers.json`, `bots.json`, `bot_data/`, and a local `venv/` out of the build, so no image layer carries tokens, keys, or runtime state.
 
 Minimal `docker-compose.yml`:
 
@@ -146,9 +155,9 @@ services:
       - "5000:5000"
 ```
 
-`python startup.py --init-configs` creates starter `.env` and `providers.json` files without prompts and without writing secrets. Runtime environment variables from Docker, Compose, systemd, or a host shell can satisfy startup validation, so mounting `.env` is optional. Mount `providers.json` or `bots.json` only when you want to manage those files outside the container image.
+`python startup.py --init-configs` creates starter `.env` and `providers.json` files without prompts and without writing secrets. Runtime environment variables from Docker, Compose, systemd, or a host shell can satisfy startup validation, so mounting `.env` is optional. Mount `providers.json` or `bots.json` to manage those files outside the container; the build leaves out the host's copies.
 
-For multi-bot Docker runs, mount or bake a `bots.json` file and add one environment variable per bot `token_env`:
+For multi-bot Docker runs, mount a `bots.json` file and add one environment variable per bot `token_env`:
 
 ```yaml
 environment:
