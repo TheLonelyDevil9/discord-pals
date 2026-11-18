@@ -292,6 +292,74 @@ def test_store_connections_bound_the_write_ahead_log(store):
         assert connection.execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
 
 
+def old_backlog(store):
+    """Store rows shaped like the overlapping-cycle backlog; return (kept IDs, stale count, expired count)."""
+    kept, stale, expired = set(), 0, 0
+
+    def child(root, kind, state, key):
+        return add_job(store, f"{key}:{root}", kind=kind, state=state, payload={"_sync_cycle": root})
+
+    finished = add_job(store, "sync:finished", kind="sync")
+    for kind, key in (("pr_sync_page", "pr-page"), ("pr_sync_missing", "pr-missing"), ("pr_sync_check", "pr-check"),
+                      ("pr_sync_discover", "pr-discover"), ("event", "sync-item"), ("event", "pr-event")):
+        child(finished, kind, "done", key)
+    expired += 7
+    overlapping = add_job(store, "sync:overlapping", kind="sync")
+    kept |= {overlapping, child(overlapping, "pr_sync_page", "done", "pr-page:done"),
+             child(overlapping, "event", "pending", "pr-event")}
+    for kind, key in (("pr_sync_page", "pr-page"), ("pr_sync_missing", "pr-missing"), ("pr_sync_check", "pr-check"),
+                      ("pr_sync_discover", "pr-discover"), ("event", "sync-item")):
+        child(overlapping, kind, "pending", key)
+    stale += 5
+    unstarted = add_job(store, "sync:unstarted", kind="sync", state="pending")
+    stale += 1
+    interrupted = add_job(store, "sync:interrupted", kind="sync")
+    kept |= {interrupted, child(interrupted, "pr_sync_page", "done", "pr-page:done"),
+             child(interrupted, "event", "inflight", "sync-item")}
+    child(interrupted, "pr_sync_page", "pending", "pr-page")
+    stale += 1
+    kept |= {add_job(store, "github:pending"), add_job(store, "assess:case:2", kind="assess", state="pending"),
+             add_job(store, "failure:recent", state="failed", age_days=1),
+             add_job(store, "held", state="recovery", payload={"_sync_cycle": unstarted})}
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = 'pending' WHERE key IN ('github:pending', 'assess:case:2')")
+    add_job(store, "github:done")
+    add_job(store, "notify:case:3", kind="notify")
+    add_job(store, "failure:old", state="failed", age_days=8)
+    expired += 3
+    return kept, stale, expired
+
+
+def test_first_start_cleanup_keeps_only_live_held_and_recent_work_and_runs_once(store):
+    kept, stale, expired = old_backlog(store)
+    assert store.clean_up_old_queue(0) == {"stale": stale, "expired": expired}
+    assert job_ids(store) == kept
+    before = snapshot_rows(store, sorted(kept))
+    assert store.clean_up_old_queue(0) is None
+    assert snapshot_rows(store, sorted(kept)) == before
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("PRAGMA user_version = 0")
+    assert store.clean_up_old_queue(0) == {"stale": 0, "expired": 0}
+    assert snapshot_rows(store, sorted(kept)) == before
+
+
+def test_first_start_cleanup_of_a_large_backlog_uses_the_bulk_path(store, monkeypatch):
+    root = add_job(store, "sync:overlapping", kind="sync")
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.executemany(
+            "INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
+            "VALUES ('pr_sync_page', ?, ?, 'pending', ?, ?, ?)",
+            ((f"pr-page:{root}:{index}", json.dumps({"_sync_cycle": root}), NOW, NOW, NOW) for index in range(20_050)))
+    kept = add_kept_rows(store)
+    before = sequence(store)
+    deletes = trace_job_deletes(monkeypatch)
+    assert store.clean_up_old_queue(0) == {"stale": 20_050, "expired": 1}
+    assert deletes == ["DELETE FROM jobs"]
+    assert job_ids(store) == {row[0] for row in kept}
+    assert snapshot_rows(store, [row[0] for row in kept]) == kept
+    assert sequence(store) == before
+
+
 def test_redelivery_inside_four_days_queues_nothing_after_retention(store, clock):
     first = store.enqueue_delivery("delivery-1", "event", {"kind": "issue"}, "github:delivery-1")
     with closing(sqlite3.connect(store.path)) as connection, connection:

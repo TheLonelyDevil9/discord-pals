@@ -30,6 +30,8 @@ BULK_DELETE_ROWS = 20000
 COMPACT_MIN_FREE_SHARE = 0.25
 COMPACT_MIN_FREE_BYTES = 16 * 1024 * 1024
 JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+# PRAGMA user_version reaches this value once the one-time queue cleanup has run.
+QUEUE_CLEANUP_VERSION = 1
 _MANAGED_CASE_FIELDS = {"id", "source_key", "revision", "created_at", "updated_at", "decisions"}
 _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "repository"}
 
@@ -780,6 +782,28 @@ class AutomationStore:
         with self._connection(write=True) as connection:
             self._collect_expired_jobs(connection, history_days, time.time())
             return self._delete_doomed(connection, limit)
+
+    def clean_up_old_queue(self, history_days=0):
+        """Clear work left by overlapping sync cycles once, and return counts or None after the first run.
+
+        Pending sync roots, PR scan jobs and sync-item refreshes go first; pending
+        webhook events, pr-event deliveries and feedback jobs stay. Retention then
+        applies to every remaining row. Both steps share one transaction.
+        """
+        history_days = _days(history_days)
+        with self._connection(write=True) as connection:
+            if connection.execute("PRAGMA user_version").fetchone()[0] >= QUEUE_CLEANUP_VERSION:
+                return None
+            connection.execute("CREATE TEMP TABLE IF NOT EXISTS doomed(id INTEGER PRIMARY KEY)")
+            stale = connection.execute(
+                "INSERT INTO temp.doomed SELECT id FROM jobs WHERE state = 'pending' AND (kind IN "
+                "('sync', 'pr_sync_page', 'pr_sync_missing', 'pr_sync_check', 'pr_sync_discover') "
+                "OR (kind = 'event' AND substr(key, 1, 10) = 'sync-item:'))"
+            ).rowcount
+            self._collect_expired_jobs(connection, history_days, time.time())
+            deleted = self._delete_doomed(connection)
+            connection.execute(f"PRAGMA user_version = {QUEUE_CLEANUP_VERSION}")
+        return {"stale": stale, "expired": deleted - stale}
 
     def prune_links(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
         """Delete one batch of expired bookkeeping links and return how many were deleted.

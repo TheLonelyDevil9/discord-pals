@@ -9,6 +9,7 @@ import threading
 import time
 from pathlib import Path
 
+from logger import info
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_store import AutomationStore, Conflict
@@ -48,6 +49,7 @@ class AutomationService:
         self._github_config = None
         self._last_sync = 0.0
         self._last_maintenance = 0.0
+        self._queue_cleaned = False
         self._last_error = None
         self.pr_activity = PRActivity(self)
 
@@ -775,9 +777,21 @@ class AutomationService:
         if not await asyncio.to_thread(self.store.compact):
             await asyncio.to_thread(self.store.release_free_pages)
 
+    async def clean_up_old_queue(self):
+        """Run the store's one-time queue cleanup and compaction off the event loop and log the counts."""
+        counts = await asyncio.to_thread(self.store.clean_up_old_queue, self.settings().get("history_days", 0))
+        if counts is not None:
+            compacted = await asyncio.to_thread(self.store.compact)
+            info(f"Project queue cleanup deleted {counts['stale']} queued reconciliation jobs and "
+                 f"{counts['expired']} finished jobs; compaction {'ran' if compacted else 'skipped'}.",
+                 component="project_automation", event="queue_cleanup")
+
     async def _run(self):
         while True:
             try:
+                if not self._queue_cleaned:
+                    await self.clean_up_old_queue()
+                    self._queue_cleaned = True
                 if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()

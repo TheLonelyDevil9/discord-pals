@@ -619,6 +619,30 @@ def test_worker_applies_retention_while_paused(setup, monkeypatch):
     assert setup.store.get_job(held)["state"] == "recovery"
 
 
+def test_first_start_cleans_up_the_old_queue_before_claiming_work(setup, monkeypatch):
+    import project_automation
+    stale_root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                              "_binding": webhook_binding(setup.cfg)}, "sync:old")
+    stale_page = setup.store.enqueue("pr_sync_page", page_job(setup, stale_root), f"pr-page:{stale_root}:7:comment:1")
+    delivery = enqueue(setup, key="github:kept")
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append((message, fields)))
+
+    async def stop(_):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(project_automation.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(setup.service._run())
+    assert setup.store.get_job(stale_root) is None and setup.store.get_job(stale_page) is None
+    assert setup.client.page_calls == []
+    assert setup.store.get_job(delivery)["state"] == "done"
+    assert len(sync_roots(setup.store)) == 1 and stale_root not in sync_roots(setup.store)
+    assert len(logged) == 1 and "2 queued reconciliation jobs" in logged[0][0]
+    with sqlite3.connect(setup.store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")
