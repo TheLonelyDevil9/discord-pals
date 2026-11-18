@@ -42,6 +42,13 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The webhook for a deleted issue marks its post deleted when GitHub answers 410 for the issue; such a job failed on every attempt before.
 - Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
+- DM conversation history is kept across restarts. Each history file now stores its conversation key under a file name that every platform accepts; DM history was skipped at start on Linux and could not be saved on Windows.
+- When history is short, the bot's own DM replies pulled back from Discord count as its replies again instead of as messages from another speaker.
+- A reminder or reminder question asked for in a DM is created; such requests were acknowledged but created nothing.
+- Edits, deletions, `/recall`, reminders, and reminder questions in a DM update that DM's history instead of a history the bot never reads.
+- Deleting a bot message removes only that message from history. It could remove the newest reply of any bot instead, also each time the bot deleted one of its own error notices.
+- A reconnect no longer discards history that was not saved yet: history loads once at start, before the bots connect.
+- A startup step that fails after a bot connects is logged and no longer leaves a bot that ignores every message. Slash commands sync once per start, and again only when the command list changed or a sync failed, instead of on every reconnect.
 
 ### Upgrade notes
 
@@ -51,6 +58,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
+- The first start rewrites each file under `bot_data/history_channels` once: channel files keep their names and gain their conversation key, and DM files named after their key, such as `dm:Firefly:user:123.json` on Linux, get new names. An earlier version still reads the channel files and ignores DM history, as it did before; DM messages it records are not merged back after you update again.
 
 ## [v2.9.0] - 2026-09-29
 
