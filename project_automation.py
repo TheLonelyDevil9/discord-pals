@@ -692,7 +692,8 @@ class AutomationService:
                 item = await client.get_issue(event["number"])
                 event = {**event, **item, "key": event["key"], "kind": event["kind"]}
             except GitHubError as exc:
-                if not (exc.status == 404 and event.get("action") == "deleted"):
+                # GitHub answers a deleted issue with 410, or with 404 when the App cannot read it.
+                if not (exc.status in {404, 410} and event.get("action") == "deleted"):
                     raise
         self._check_event_binding(event)
         if event["kind"] == "comment":
