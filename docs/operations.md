@@ -30,7 +30,9 @@ Dashboard write routes use CSRF tokens. If a custom script calls dashboard APIs,
 
 ## Updates And Recovery
 
-The dashboard updater is the normal update path. It checks GitHub releases and remote tags, backs up local state, installs dependencies, and requests a restart when new code is staged. Its branch selector defaults to **Current**, which preserves the historical current checkout/upstream and release-tag behavior for existing installs. Choosing **Main** or **Staging** explicitly updates from that remote branch and skips the release-tag override for that run.
+The dashboard updater is the normal update path. It checks GitHub releases and remote tags, backs up local state, installs dependencies, and checks that the new code imports. It restarts the bot by itself only after a clean update: one that applied, produced no warning, and installed its dependencies. Otherwise the panel under the controls lists the warnings, and you restart when ready. Its branch selector defaults to **Current**, which preserves the historical current checkout/upstream and release-tag behavior for existing installs. Choosing **Main** or **Staging** explicitly updates from that remote branch and skips the release-tag override for that run.
+
+Version checks run in the background when a page needs one, at most once every 30 minutes, or every 5 minutes after a failed check, so a page load never waits for GitHub. `/api/version` reports `running_commit`, the commit the process started from, and `disk_commit`, the commit checked out now; when they differ, the bot needs a restart. The check also fetches the branch that updates follow, and `commits_behind` counts the commits on it that the checkout lacks. With **Main** or **Staging** selected, the dashboard shows those commits as an update.
 
 If the dashboard updater is too old or reports that it is current while a newer badge is visible, run:
 
@@ -40,9 +42,15 @@ python update.py
 
 If `update.py` is missing in an old install, download the latest `update.py` from the repository into the Discord Pals folder and run it with Python.
 
-When an update moves the checkout to another commit, the updater first backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. An update that leaves the checkout at its commit takes no snapshot, so repeated **Update** clicks keep the last real one. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: their own rotation already limits them by size and age, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents.
+When an update moves the checkout to another commit, the updater first backs up local state under `bot_data/update_backups/pre-update-<timestamp>/`. An update that leaves the checkout at its commit takes no snapshot, so repeated **Update** clicks keep the last real one. Backups include bot/provider config, runtime data, characters, and local prompt files. Rotated logs under `bot_data/logs/` are deliberately excluded: their own rotation already limits them by size and age, and copying them made each retained snapshot as large as the whole log budget. Three snapshots are kept. Update outcomes are recorded in `bot_data/update_log.json` without tokens or message contents. Entries from the dashboard updater record `before_head` and `after_head`, the commit the update started from and the commit it left, also for refused, rolled-back, and failed updates.
 
 Both built-in update paths snapshot `bot_data/project_automation.sqlite3` through SQLite's backup API in one step, including committed WAL data, so writes from the running helper cannot restart the copy. A database larger than 256 MB is left out of the snapshot, and the update log records a warning; back it up separately, for example with the command in [Renaming the helper bot](project-automation.md#renaming-the-helper-bot). Keep this database with `bot_data/runtime_config.json`: it holds feedback cases, approvals, delivery receipts, and reconciliation checkpoints. For other backup tools, use SQLite's backup API or stop the service before copying the data directory. Keep an off-host copy for host-loss recovery.
+
+The dashboard updater refuses to start, and changes nothing, when the checkout holds unresolved conflicts or an unfinished merge, rebase, cherry-pick, or revert. The message names the files or the Git command that ends the operation. Resolve or abort it, then update again.
+
+Local changes to tracked files, such as an edited prompt or a deleted example character, are stashed while the checkout moves and then reapplied. When they conflict with the new commit, the update rolls back: the checkout returns to the commit it started from with the changes in place, a copy stays in the Git stash, and the page names the conflicting files. To take the update, discard those changes, for example with `git checkout -- prompts/other_prompts.md`, or move them out of tracked files, then update again. `git stash list` shows the kept copies, and `git stash drop` removes one you no longer need.
+
+After the checkout moves and the dependencies install, the updater imports `main` and `dashboard` from the new code in a separate process. When that fails, the checkout returns to the previous commit, the page shows the import error, and the bot keeps running. Packages installed for the new version stay installed. The **Restart** button runs the same check on the code on disk and refuses with the error when it fails.
 
 The dashboard's configuration ZIP export contains only `providers.json`, `bots.json`, and `autonomous.json`. It is not a full-state backup and does not include Project helper configuration or its database. Back up service-managed secrets and GitHub App private-key files separately; files outside the checkout are not captured by update snapshots.
 
@@ -50,9 +58,9 @@ The dashboard's configuration ZIP export contains only `providers.json`, `bots.j
 
 For a release, commit `version.py` and the matching dated `CHANGELOG.md` entry together, update any README version references, and verify the annotated `vX.Y.Z` tag resolves to that release commit on `main`. Check CI on the exact commit, including the dashboard smoke test and supported Python versions. A later documentation-only commit can follow the release without moving its tag or changing the version.
 
-`bump_version.py --tag` changes the version and changelog, commits them, pushes `HEAD` to `origin/main`, and creates and pushes the tag. `--commit` also pushes to `main`; it is not a local-only commit option. For review before publication, use the default `--no-tag` mode, replace the generic generated changelog with release-specific categorized notes, and commit and publish manually after checks pass. Running the helper again would perform another bump. It does not create a GitHub Release; do not rerun it to check an existing release.
+`bump_version.py --tag` changes the version and changelog, commits them, pushes `HEAD` to `origin/main`, and creates and pushes the tag. `--commit` also pushes to `main`; it is not a local-only commit option. With either option the helper first checks that the branch is `main` or `release/*`, unless `--allow-non-main-release` is set, and that no file other than `version.py` and `CHANGELOG.md` has changes, and it stops before writing anything when a check fails. For review before publication, use the default `--no-tag` mode, replace the generic generated changelog with release-specific categorized notes, and commit and publish manually after checks pass. Running the helper again would perform another bump. It does not create a GitHub Release; do not rerun it to check an existing release.
 
-After deployment, sign in and check `/api/version`: `running_version` and `file_version` should match the intended release. For the latest release, `github_version` and `latest_version` should match too, with `update_available` and `restart_required` false. `/healthz` proves liveness only. Check `/api/status` for connected bots, and the **Health** card and **Delivery activity** on the Project page for a stopped worker, a growing queue, and failed or held work; an online helper alone does not prove synchronization is completing.
+After deployment, sign in and check `/api/version`: `running_version` and `file_version` should match the intended release, and `running_commit` should equal `disk_commit`. For the latest release, `github_version` and `latest_version` should match too, with `update_available` and `restart_required` false. `/healthz` proves liveness only. Check `/api/status` for connected bots, and the **Health** card and **Delivery activity** on the Project page for a stopped worker, a growing queue, and failed or held work; an online helper alone does not prove synchronization is completing.
 
 For v2.9.0, follow the [upgrade notes](../CHANGELOG.md#upgrade-notes), install the updated requirements, and restart the process. Failure dismissal uses metadata in the existing database; no manual migration is required. Older code may show dismissed failures again after rollback. For Project helper installations, run **Check setup** after updating GitHub App subscriptions and allow the three review events through any filtering proxy. Verify public ingress separately; see [Project helper deployment](project-automation-oci.md#public-webhook-endpoint).
 
@@ -78,25 +86,46 @@ Set WshShell = Nothing
 
 ### Linux systemd
 
-Create `/etc/systemd/system/discord-pals.service`:
+Run the bot as a service user that owns the installation, for example one created with `sudo useradd --system --home-dir /opt/discord-pals --shell /usr/sbin/nologin discord-pals` and `sudo chown -R discord-pals: /opt/discord-pals`. Then create `/etc/systemd/system/discord-pals.service`:
 
 ```ini
 [Unit]
 Description=Discord Pals Bot
 After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
-User=your-username
+User=discord-pals
 WorkingDirectory=/opt/discord-pals
 ExecStart=/opt/discord-pals/venv/bin/python main.py
 Restart=always
 RestartSec=10
+RestartForceExitStatus=75
+SuccessExitStatus=75
 Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/discord-pals
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+The dashboard's **Restart** button calls neither `systemctl` nor `sudo`. When systemd runs the bot as a service, which it detects from `INVOCATION_ID` and a `.service` cgroup, the button saves history, memories, reminders, and statistics, closes the bots, and exits with status 75, and systemd starts the service again. The unit therefore needs `Restart=always`, or `RestartForceExitStatus=75` with another `Restart=` value. `SuccessExitStatus=75` records that exit as a success, so `OnFailure=` units do not run on a dashboard restart. Started any other way, for example with `./run.sh` in a terminal or in Docker, the bot replaces its own process instead.
+
+Because no restart path needs root, the unit can set `NoNewPrivileges=yes`, which blocks `sudo`. `ProtectSystem=strict` makes the file system read-only outside `ReadWritePaths`; the updater writes the checkout and `venv/`, so keep both inside the installation directory. For an installation under `/home`, replace `ProtectHome=yes` with `ProtectHome=read-only` and list the installation directory in `ReadWritePaths`. The updater stashes local changes with Git, which needs a committer identity; set one in the checkout with `sudo -u discord-pals git -C /opt/discord-pals config user.name "Discord Pals"` and `sudo -u discord-pals git -C /opt/discord-pals config user.email discord-pals@localhost`.
+
+`StartLimitBurst=10` within `StartLimitIntervalSec=600` stops a crash loop after ten starts in ten minutes instead of restarting forever, and dashboard restarts count as starts. After fixing the cause, run `sudo systemctl reset-failed discord-pals` and start the service again.
 
 Enable and start it:
 
