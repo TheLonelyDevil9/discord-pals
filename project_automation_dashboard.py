@@ -20,6 +20,19 @@ from project_automation_store import Conflict
 from security import requires_auth, requires_csrf
 
 
+def _missing_helper(message, config) -> str:
+    """Return the message about a helper bot missing from Config, with the rename warning when one is named.
+
+    The helper keys its posts and receipts by the bot name, so choosing a renamed bot
+    without moving those records first posts every open issue and PR again.
+    """
+    if not config["bot_name"]:
+        return message
+    return (message + " If you renamed this bot in Config, pause automation and run python tools/project_data.py "
+            "rename-helper --from OLD --to NEW before you choose the new name here. Otherwise the helper "
+            "posts every open issue and PR again.")
+
+
 def _bot_names() -> list[str]:
     from env_config import load_bot_mode_config
     return [entry["name"] for entry in load_bot_mode_config().get("bots", [])]
@@ -246,7 +259,7 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
                 if not credentials["webhook_secret"]:
                     errors.append("Configure the GitHub webhook secret before enabling.")
                 if config["bot_name"] not in _names(bot_names):
-                    errors.append("Add the dedicated helper bot in Config before enabling.")
+                    errors.append(_missing_helper("Add the dedicated helper bot in Config before enabling.", config))
                 if config["character_name"] and config["character_name"] not in _names(character_names):
                     errors.append("Choose an installed character before enabling.")
                 if errors:
@@ -269,7 +282,8 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
             return jsonify({"message": "Discord choices could not be loaded.", "errors": errors}), 400
         config = normalize_project_config({**existing, **draft})
         if config["bot_name"] not in _names(bot_names):
-            result = setup.unavailable_options(config, "Choose a configured helper bot to load its servers and channels.")
+            result = setup.unavailable_options(config, _missing_helper(
+                "Choose a configured helper bot to load its servers and channels.", config))
             result["status"] = "attention"
             return jsonify(result)
         bot = selected_bot(config)
@@ -295,7 +309,8 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
         result = on_bot_loop(bot, lambda: setup.setup_checks(config, bot), setup.CHECK_TIMEOUT)
         checks.extend(result if result is not None else setup.unavailable_checks("The selected helper is offline or did not respond. Start it and run Check setup again."))
         if config["bot_name"] not in _names(bot_names):
-            checks.append(setup.check("helper_configured", "Helper configuration", "attention", "Add the dedicated helper in Config and select it here."))
+            checks.append(setup.check("helper_configured", "Helper configuration", "attention", _missing_helper(
+                "Add the dedicated helper in Config and select it here.", config)))
         if config["character_name"] and config["character_name"] not in _names(character_names):
             checks.append(setup.check("character", "Personality", "attention", "Choose an installed character or use this bot's character."))
         return jsonify({"checks": checks, "saved": False})

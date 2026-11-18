@@ -200,6 +200,23 @@ def test_enable_rejects_unknown_bot_or_personality(setup, monkeypatch):
     assert len(response.get_json()["errors"]) == 2
 
 
+def test_a_missing_helper_bot_tells_the_operator_to_run_rename_helper_before_choosing_another(setup, monkeypatch):
+    client, saved, _ = setup
+    monkeypatch.setenv("PROJECT_GITHUB_PRIVATE_KEY", "test-key")
+    monkeypatch.setenv("PROJECT_GITHUB_WEBHOOK_SECRET", "test-webhook")
+    saved["config"] = normalize_project_config({**valid_config(), "enabled": False, "bot_name": "Renamed bot"})
+    options = client.get("/api/project-automation/discord-options").get_json()
+    check = client.post("/api/project-automation/check", json={"bot_name": "Renamed bot"}, headers=csrf()).get_json()
+    enable = client.post("/api/project-automation", json={"enabled": True}, headers=csrf())
+    assert options["status"] == "attention" and enable.status_code == 400
+    for message in (options["detail"], next(row for row in check["checks"] if row["key"] == "helper_configured")["detail"],
+                    next(error for error in enable.get_json()["errors"] if "helper bot" in error)):
+        assert "python tools/project_data.py rename-helper --from OLD --to NEW" in message
+        assert "posts every open issue and PR again" in message
+    saved["config"] = normalize_project_config({})
+    assert "rename-helper" not in client.get("/api/project-automation/discord-options").get_json()["detail"]
+
+
 def test_api_and_page_never_return_environment_secret_values(setup, monkeypatch):
     client, _, _ = setup
     monkeypatch.setenv("PROJECT_GITHUB_PRIVATE_KEY", "private-key-must-not-leak")
