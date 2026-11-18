@@ -63,6 +63,10 @@ class LocalChangesConflict(Exception):
         self.paths = paths
 
 
+class LocalChangesNotReapplied(Exception):
+    """Git could not reapply the stashed local changes for a reason other than a conflict."""
+
+
 class ImportCheckFailed(Exception):
     """The new code failed its import check; the message is the error line."""
 
@@ -421,6 +425,9 @@ def failure_report(error: BaseException) -> tuple[str, str, str]:
         changes = f"your local changes to {', '.join(error.paths)}" if error.paths else "your local changes"
         return ("local_changes_conflict", f"{changes} conflict with the new version",
                 "Discard or move those changes, then update again.")
+    if isinstance(error, LocalChangesNotReapplied):
+        return ("reapply_failed", f"your local changes could not be reapplied on the new version ({error})",
+                "Try the update again.")
     if isinstance(error, ImportCheckFailed):
         return ("import_failed", f"the new version failed its import check ({error})",
                 "The bot keeps running the current version.")
@@ -468,13 +475,22 @@ class UpdateAttempt:
                 self.stash = {"sha": after}
 
     def reapply(self) -> None:
-        """Apply the stashed local changes on the new commit; raise LocalChangesConflict when they do not apply."""
+        """Apply the stashed local changes on the new commit.
+
+        Raise LocalChangesConflict when they conflict with it, and LocalChangesNotReapplied
+        when Git fails for another reason, such as a file that another process holds open.
+        """
         if not self.stash:
             return
-        result = run(["git", "stash", "apply", "--index", self.stash["sha"]], self.repo, timeout=120)
-        if result.returncode != 0:
+        try:
+            git_until_unlocked(self.repo, ["stash", "apply", "--index", self.stash["sha"]])
+        except RuntimeError as error:
             unmerged = run(["git", "diff", "--name-only", "--diff-filter=U", "-z"], self.repo, timeout=30).stdout
-            raise LocalChangesConflict(sorted(path for path in unmerged.split("\0") if path), command_output(result))
+            paths = sorted(path for path in unmerged.split("\0") if path)
+            # Staged changes that do not apply leave no unmerged path; Git reports "conflicts in index".
+            if paths or "conflict" in str(error).lower():
+                raise LocalChangesConflict(paths, str(error)) from error
+            raise LocalChangesNotReapplied(str(error)) from error
 
     def keep(self) -> list[str]:
         """Drop the stash entry of the reapplied changes and prune older snapshots; return warnings."""

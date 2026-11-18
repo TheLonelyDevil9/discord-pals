@@ -687,11 +687,79 @@ class DashboardRollbackTests(DashboardUpdateCase):
         self.assert_restored(before)
         self.assertEqual(delays, [])
 
+    def lock_before_the_reapply(self):
+        """Patch update.run so that index.lock exists when the reapply first runs `git stash apply`."""
+        real_run = update_module.run
+        made = []
+
+        def run(args, cwd, timeout=update_module.GIT_TIMEOUT, check=False):
+            if args[:3] == ["git", "stash", "apply"] and not made:
+                made.append(True)
+                (self.install / ".git" / "index.lock").write_text("", encoding="utf-8")
+            return real_run(args, cwd, timeout=timeout, check=check)
+
+        return patch.object(update_module, "run", side_effect=run)
+
+    def test_a_lock_released_while_the_reapply_waits_lets_the_update_finish(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        upstream = self.publish({"main.py": "STARTED = 2\n"})
+        lock = self.install / ".git" / "index.lock"
+
+        with self.lock_before_the_reapply(), self.waits(lambda _delay: lock.unlink()):
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(self.head(), upstream)
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+
+    def test_a_reapply_that_fails_without_a_conflict_says_so(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        def unlink_fails(_result, args):
+            return subprocess.CompletedProcess(args, 1, "", "error: unable to unlink old 'characters/firefly.md': "
+                                                            "Invalid argument\n")
+
+        with self.fail_once(unlink_fails):
+            response = self.post_update()
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 409, data)
+        self.assertIn("could not be reapplied", data["message"])
+        self.assertIn("unable to unlink", data["message"])
+        self.assertNotIn("conflict", data["message"])
+        self.assertNotIn("Discard", data["message"])
+        self.assertEqual(self.last_log_entry()["cause"], "reapply_failed")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+
+    def test_staged_changes_that_do_not_apply_are_a_conflict(self):
+        self.edit("prompts/other_prompts.md", self.LOCAL_PROMPT)
+        git(self.install, "add", "prompts/other_prompts.md")
+        self.publish({"prompts/other_prompts.md": "upstream first line\nsecond line\n"})
+
+        data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("conflict with the new version", data["message"])
+        self.assertEqual(self.last_log_entry()["cause"], "local_changes_conflict")
+
+    def failing_rollback_reset(self, error):
+        real = update_module.git_until_unlocked
+
+        def run(repo, args, *rest, **options):
+            if args[0] == "reset":
+                raise error
+            return real(repo, args, *rest, **options)
+
+        return patch.object(update_module, "git_until_unlocked", side_effect=run)
+
     def test_a_rollback_that_cannot_restore_the_checkout_says_how_to_restore_it(self):
         self.stage_conflict()
         before = self.head()
 
-        with patch.object(update_module, "git_until_unlocked", side_effect=RuntimeError("disk is full")):
+        with self.failing_rollback_reset(RuntimeError("disk is full")):
             response = self.post_update()
 
         data = response.get_json()
