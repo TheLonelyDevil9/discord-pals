@@ -288,6 +288,16 @@
                 {% endfor %}
             </div>
         </fieldset>
+        <fieldset>
+            <legend>Job history</legend>
+            <div class="project-form-grid">
+                <div class="form-group">
+                    <label for="project-history-days">Keep finished jobs (days)</label>
+                    <input id="project-history-days" name="history_days" value="{{ project.config.history_days }}" type="number" min="0" max="365" step="1" aria-describedby="project-history-days-hint">
+                    <p class="form-hint" id="project-history-days-hint">0 keeps none: finished jobs are deleted within about 10 minutes. Failed jobs stay at least 7 days. Queued and held jobs, posts, receipts, and feedback cases are not affected.</p>
+                </div>
+            </div>
+        </fieldset>
         <div class="project-form-actions">
             <button type="submit" class="btn btn-primary" id="project-save">Save project settings</button>
             <p id="project-save-status" role="status" aria-live="polite"></p>
@@ -471,6 +481,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const config = Object.fromEntries(new FormData(form).entries());
         config.enabled = form.elements.enabled.checked;
         config.max_questions = Number(config.max_questions);
+        config.history_days = Number(config.history_days);
         ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });
         return config;
     }

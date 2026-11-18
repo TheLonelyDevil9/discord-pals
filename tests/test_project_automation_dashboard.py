@@ -126,6 +126,18 @@ def test_partial_save_preserves_existing_values_and_large_ids(setup):
     assert saved["config"]["max_questions"] == 4
 
 
+def test_history_days_are_saved_validated_and_shown(setup):
+    client, saved, _ = setup
+    assert client.post("/api/project-automation", json={"history_days": 14}, headers=csrf()).status_code == 200
+    assert saved["config"]["history_days"] == 14
+    page = client.get("/project-automation").get_data(as_text=True)
+    assert 'name="history_days"' in page and 'value="14"' in page
+    response = client.post("/api/project-automation", json={"history_days": 400}, headers=csrf())
+    assert response.status_code == 400
+    assert any("history_days" in error for error in response.get_json()["errors"])
+    assert saved["config"]["history_days"] == 14
+
+
 def test_enable_rejects_missing_configuration_and_credentials(setup):
     client, saved, _ = setup
     response = client.post("/api/project-automation", json={"enabled": True}, headers=csrf())

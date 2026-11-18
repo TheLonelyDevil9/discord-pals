@@ -600,6 +600,25 @@ def test_older_cycle_delivery_keeps_newer_stamps(setup):
     assert setup.store.get_link("pr_head", head_key(setup.cfg, second))["cycle"] == 126
 
 
+def test_worker_applies_retention_while_paused(setup, monkeypatch):
+    import project_automation
+    finished = setup.store.enqueue("event", {}, "github:finished")
+    held = setup.store.enqueue("event", {}, "github:held")
+    with sqlite3.connect(setup.store.path) as connection:
+        connection.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (finished,))
+        connection.execute("UPDATE jobs SET state = 'recovery' WHERE id = ?", (held,))
+    setup.cfg["enabled"] = False
+
+    async def stop(_):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(project_automation.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(setup.service._run())
+    assert setup.store.get_job(finished) is None
+    assert setup.store.get_job(held)["state"] == "recovery"
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")

@@ -47,6 +47,7 @@ class AutomationService:
         self._github = None
         self._github_config = None
         self._last_sync = 0.0
+        self._last_maintenance = 0.0
         self._last_error = None
         self.pr_activity = PRActivity(self)
 
@@ -765,9 +766,19 @@ class AutomationService:
         return self.store.enqueue("sync", {"repository": cfg["repository"], "_binding": webhook_binding(cfg)},
                                   key=f"sync:{mapping_key(cfg)}:{int(time.time() // 900)}")
 
+    async def maintain(self):
+        """Apply retention in short batches, each in a worker thread so the bots' loop keeps running."""
+        history_days = self.settings().get("history_days", 0)
+        for prune in (self.store.prune_jobs, self.store.prune_links):
+            while await asyncio.to_thread(prune, history_days):
+                pass
+
     async def _run(self):
         while True:
             try:
+                if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
+                    self._last_maintenance = time.monotonic()
+                    await self.maintain()
                 if not self.paused() and self.settings().get("bot_name") in self.bots:
                     self.queue_sync_cycle()
                     await self.run_once()

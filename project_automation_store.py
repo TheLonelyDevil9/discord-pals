@@ -20,6 +20,12 @@ MAX_DOCUMENT_BYTES = 256 * 1024
 MAX_LINK_BYTES = 64 * 1024
 MAX_TRANSCRIPT_ENTRIES = 100
 MAX_DECISIONS = 100
+DAY_SECONDS = 86400
+FAILED_RETENTION_DAYS = 7
+# GitHub offers a delivery for redelivery for 3 days, so its marker must outlive that window:
+# https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks
+DELIVERY_MARKER_DAYS = 4
+PRUNE_BATCH_ROWS = 500
 _MANAGED_CASE_FIELDS = {"id", "source_key", "revision", "created_at", "updated_at", "decisions"}
 _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "repository"}
 
@@ -58,6 +64,12 @@ def _limit(value):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("Limit must be a positive integer")
     return min(value, 500)
+
+
+def _days(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 365:
+        raise ValueError("History days must be a whole number from 0 to 365")
+    return value
 
 
 def _job_id(value):
@@ -682,3 +694,91 @@ class AutomationStore:
                 "SELECT 1 FROM jobs WHERE json_extract(payload, '$._sync_cycle') = ? AND state != 'done' LIMIT 1",
                 (cycle_id,),
             ).fetchone() is not None
+
+    @staticmethod
+    def _collect_expired_jobs(connection, history_days, now):
+        """Add the jobs retention may delete to temp.doomed, counting rows already there as gone."""
+        connection.execute("CREATE TEMP TABLE IF NOT EXISTS doomed(id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TEMP TABLE IF NOT EXISTS open_cycle_jobs(id INTEGER PRIMARY KEY)")
+        cycles = [row[0] for row in connection.execute(
+            "SELECT json_extract(payload, '$._sync_cycle') FROM jobs WHERE state IN ('pending', 'running', 'inflight') "
+            "AND id NOT IN (SELECT id FROM temp.doomed) AND json_extract(payload, '$._sync_cycle') IS NOT NULL "
+            "UNION SELECT id FROM jobs WHERE state IN ('pending', 'running', 'inflight') AND kind = 'sync' "
+            "AND id NOT IN (SELECT id FROM temp.doomed)"
+        )]
+        # complete_cycle reads the root when the last job of its cycle finishes, so a cycle
+        # keeps all its finished rows, root included, while any of its jobs is live.
+        for cycle in cycles:
+            connection.execute("INSERT OR IGNORE INTO temp.open_cycle_jobs SELECT id FROM jobs "
+                               "WHERE json_extract(payload, '$._sync_cycle') = ? AND state = 'done'", (cycle,))
+            connection.execute("INSERT OR IGNORE INTO temp.open_cycle_jobs SELECT id FROM jobs "
+                               "WHERE id = ? AND state = 'done'", (cycle,))
+        finished, parameters = "state = 'done'", []
+        if history_days:
+            cutoff = now - history_days * DAY_SECONDS
+            # A done row never has available_at above updated_at, so this bound only
+            # lets jobs_ready skip rows that finished inside the window.
+            finished += " AND available_at < ? AND updated_at < ?"
+            parameters += [cutoff, cutoff]
+        parameters.append(now - max(FAILED_RETENTION_DAYS, history_days) * DAY_SECONDS)
+        connection.execute(
+            "INSERT OR IGNORE INTO temp.doomed SELECT id FROM jobs WHERE " + finished
+            + " AND id NOT IN (SELECT id FROM temp.open_cycle_jobs) "
+            "UNION ALL SELECT id FROM jobs WHERE state IN ('failed', 'cancelled') AND updated_at < ?",
+            parameters,
+        )
+
+    @staticmethod
+    def _delete_doomed(connection, limit=None):
+        """Delete the jobs in temp.doomed, or only the lowest `limit` IDs, with links keyed by their ID."""
+        if limit is not None:
+            connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
+                               "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
+        connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') "
+                           "AND key IN (SELECT CAST(id AS TEXT) FROM temp.doomed)")
+        return connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
+
+    def prune_jobs(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
+        """Delete one batch of jobs that retention allows and return how many were deleted.
+
+        Finished jobs go once they are history_days old (at once for 0), but a reconciliation
+        cycle keeps its rows while any of its jobs is live. Failed and cancelled jobs go after
+        max(7, history_days) days. Pending, running, inflight and held jobs always stay.
+        """
+        history_days, limit = _days(history_days), _limit(limit)
+        with self._connection(write=True) as connection:
+            self._collect_expired_jobs(connection, history_days, time.time())
+            return self._delete_doomed(connection, limit)
+
+    def prune_links(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
+        """Delete one batch of expired bookkeeping links and return how many were deleted.
+
+        Delivery markers go after DELIVERY_MARKER_DAYS, discovery links once their cycle's root
+        job is gone, and release, workflow and commit post records, with their attempt records,
+        after max(7, history_days) days.
+        """
+        history_days, limit = _days(history_days), _limit(limit)
+        now = time.time()
+        with self._connection(write=True) as connection:
+            deleted = connection.execute(
+                "DELETE FROM links WHERE rowid IN (SELECT rowid FROM links WHERE kind = 'github_delivery' "
+                "AND updated_at < ? LIMIT ?)", (now - DELIVERY_MARKER_DAYS * DAY_SECONDS, limit),
+            ).rowcount
+            for kind, cycle in (("pr_discovery_cycle", "links.key"),
+                                ("pr_discovery_page", "substr(links.key, instr(links.key, ':') + 1)")):
+                deleted += connection.execute(
+                    "DELETE FROM links WHERE rowid IN (SELECT rowid FROM links WHERE kind = ? AND NOT EXISTS "
+                    f"(SELECT 1 FROM jobs WHERE jobs.id = CAST({cycle} AS INTEGER)) LIMIT ?)",
+                    (kind, limit - deleted),
+                ).rowcount
+            keys = [row[0] for row in connection.execute(
+                "SELECT key FROM links WHERE kind = 'mirror' AND updated_at < ? "
+                "AND json_extract(document, '$.kind') IN ('general', 'commit') LIMIT ?",
+                (now - max(FAILED_RETENTION_DAYS, history_days) * DAY_SECONDS, (limit - deleted) // 2),
+            )]
+            if keys:
+                deleted += connection.execute(
+                    "DELETE FROM links WHERE kind IN ('mirror', 'mirror_attempt') AND key IN ("
+                    + ",".join("?" * len(keys)) + ")", keys,
+                ).rowcount
+        return deleted
