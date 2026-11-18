@@ -3866,6 +3866,7 @@ def _create_update_backup_branch(repo_dir: str) -> str:
 def _perform_git_update(repo_dir: str, expected_version: str | None = None, update_branch: str = "") -> dict:
     """Fetch and update the checkout while preserving user changes where possible."""
     warnings = []
+    snapshot_warnings = []
     selected_branch = _normalize_update_branch(update_branch)
 
     fetch = _fetch_all_with_tag_recovery(repo_dir)
@@ -3883,7 +3884,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     # Only an update that moves HEAD takes a snapshot, so idle Update clicks cannot rotate
     # the last real one out of the _UPDATE_BACKUP_RETENTION kept.
     moves_head = before_head != upstream_head and not _git_is_ancestor(repo_dir, upstream_head, before_head)
-    backup_path = _create_update_state_backup(repo_dir, warnings) if moves_head else None
+    backup_path = _create_update_state_backup(repo_dir, snapshot_warnings) if moves_head else None
     stash = _stash_local_changes(repo_dir)
     output = fetch_output
     updated = False
@@ -3928,6 +3929,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
         "updated": updated or before_head != after_head,
         "output": output,
         "warnings": warnings,
+        "snapshot_warnings": snapshot_warnings,
         "before_head": before_head,
         "after_head": after_head,
         "upstream": upstream,
@@ -4073,11 +4075,15 @@ def api_update():
         warnings = list(git_result["warnings"])
         if dependency_result.get("warning"):
             warnings.append(dependency_result["warning"])
+        # A database left out of the snapshot goes into the log and the response, but it is
+        # no local recovery step, so it does not change the message.
+        snapshot_warnings = list(git_result.get("snapshot_warnings", []))
 
         verification_error = _update_verification_failure(expected_version, new_version, git_result)
         if verification_error:
             if dependency_result.get("warning"):
                 verification_error["warnings"] = list(verification_error["warnings"]) + [dependency_result["warning"]]
+            verification_error["warnings"] = list(verification_error["warnings"]) + snapshot_warnings
             verification_error["dependency_status"] = dependency_result["status"]
             _write_update_log({
                 "status": "verification_failed",
@@ -4131,7 +4137,7 @@ def api_update():
             "before_head": git_result.get("before_head"),
             "after_head": git_result.get("after_head"),
             "dependency_status": dependency_result.get("status"),
-            "warnings": warnings,
+            "warnings": warnings + snapshot_warnings,
         })
 
         payload = _update_payload_base(
@@ -4140,7 +4146,7 @@ def api_update():
             git_result=git_result,
             dependency_result=dependency_result,
             update_branch=update_branch,
-            warnings=warnings,
+            warnings=warnings + snapshot_warnings,
         )
         payload.update({
             'status': 'ok',

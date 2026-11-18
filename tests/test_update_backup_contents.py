@@ -203,7 +203,9 @@ class DashboardUpdateSnapshotTests(unittest.TestCase):
                 result = self.update(repo, {"HEAD": "aaa111", "origin/main": "bbb222"}, {("aaa111", "bbb222")})
             self.assertTrue(result["updated"])
             self.assertEqual([str(path) for path in self.snapshots(repo)], [result["backup_path"]])
-            self.assertTrue(any("project_automation.sqlite3" in warning for warning in result["warnings"]))
+            self.assertEqual(result["warnings"], [])
+            self.assertEqual(len(result["snapshot_warnings"]), 1)
+            self.assertIn("project_automation.sqlite3", result["snapshot_warnings"][0])
 
 
 if __name__ == "__main__":

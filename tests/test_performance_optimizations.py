@@ -848,6 +848,27 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         self.assertEqual(data["new_version"], "9.9.9")
         self.assertEqual(len(data["warnings"]), 2)
 
+    def test_update_that_only_left_out_a_large_project_database_needs_no_recovery_step(self):
+        note = ("The update snapshot left out bot_data/project_automation.sqlite3 because it is larger than "
+                "256 MB. Back it up separately.")
+        git_update = {"updated": True, "output": "Fast-forward", "warnings": [], "snapshot_warnings": [note],
+                      "before_head": "abc123", "after_head": "def456", "upstream": "origin/main"}
+        dependencies = {"status": "ok", "message": " Dependencies updated.", "warning": None}
+        logged = []
+
+        with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
+                patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
+                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
+                patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]), \
+                patch.object(dashboard_module, "_write_update_log", side_effect=logged.append):
+            data = self.client.post("/api/update", headers=self.csrf_headers()).get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertNotIn("recovery steps", data["message"])
+        self.assertEqual(data["warnings"], [note])
+        self.assertEqual(logged[-1]["warnings"], [note])
+
     def test_github_latest_version_uses_highest_release_or_tag(self):
         responses = [
             {"tag_name": "v2.2.3"},
