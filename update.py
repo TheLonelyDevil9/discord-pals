@@ -286,6 +286,37 @@ def preflight(repo: Path) -> None:
             )
 
 
+def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
+    """Raise UpdateRefused when target adds a path that exists in the worktree but not in the index.
+
+    Such a file is untracked or ignored (the repository ignores characters/*.md). A
+    fast-forward and a reset overwrite an ignored file without asking, and a rollback then
+    deletes it, because the old commit does not track it.
+    """
+    added = run(["git", "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", head, target],
+                repo, timeout=60, check=True).stdout
+    indexed = set(run(["git", "ls-files", "-z"], repo, timeout=60, check=True).stdout.split("\0"))
+    in_the_way = set()
+    for path in filter(None, added.split("\0")):
+        parts = path.split("/")
+        for depth in range(1, len(parts) + 1):
+            candidate = "/".join(parts[:depth])
+            local = repo / candidate
+            is_leaf = depth == len(parts)
+            if candidate not in indexed and os.path.lexists(local) and (is_leaf or not local.is_dir()):
+                in_the_way.add(candidate)
+                break
+    if not in_the_way:
+        return
+    paths = sorted(in_the_way)
+    if len(paths) == 1:
+        detail = f"{paths[0]} exists in the checkout but is not tracked by Git, and the update would overwrite it. Move or rename it"
+    else:
+        detail = (f"{', '.join(paths)} exist in the checkout but are not tracked by Git, and the update would "
+                  "overwrite them. Move or rename them")
+    raise UpdateRefused(f"{detail}, then try again.")
+
+
 def restore_checkout(repo: Path, commit: str, stash_sha: str | None) -> None:
     """Put the checkout back on commit and reapply the stashed local changes.
 

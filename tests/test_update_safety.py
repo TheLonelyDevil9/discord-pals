@@ -109,6 +109,59 @@ class DashboardPreflightTests(DashboardUpdateCase):
         self.assertTrue((self.install / ".git" / "MERGE_HEAD").exists())
 
 
+class DashboardUntrackedFileTests(DashboardUpdateCase):
+    OWN_FILE = b"# My own Luna\r\nwritten by the operator\r\n"
+
+    def check_refused(self, ignored, conflicting_edit):
+        if ignored:
+            self.publish({".gitignore": "characters/*.md\n!characters/firefly.md\n"})
+            git(self.install, "pull", "-q", "--ff-only")
+        own = self.install / "characters" / "luna.md"
+        own.write_bytes(self.OWN_FILE)
+        self.assertEqual(git(self.install, "check-ignore", "-q", "characters/luna.md", check=False).returncode,
+                         0 if ignored else 1)
+        if conflicting_edit:
+            self.edit("prompts/other_prompts.md", "local first line\nsecond line\n")
+        (self.seed / "characters" / "luna.md").write_text("# Upstream Luna\n", encoding="utf-8", newline="\n")
+        git(self.seed, "add", "-f", "characters/luna.md")
+        self.publish({"prompts/other_prompts.md": "upstream first line\nsecond line\n"} if conflicting_edit
+                     else {"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        response = self.post_update()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("characters/luna.md", response.get_json()["message"])
+        self.assertEqual(own.read_bytes(), self.OWN_FILE)
+        self.assertEqual(self.head(), before)
+        self.assertFalse((self.install / "bot_data" / "update_backups").exists())
+        if conflicting_edit:
+            self.assertEqual(self.read("prompts/other_prompts.md"), "local first line\nsecond line\n")
+        self.assertEqual(self.last_log_entry()["status"], "refused")
+
+    def test_an_ignored_file_at_a_path_the_update_adds_refuses_the_update(self):
+        self.check_refused(ignored=True, conflicting_edit=False)
+
+    def test_an_ignored_file_and_a_conflicting_edit_refuse_the_update(self):
+        self.check_refused(ignored=True, conflicting_edit=True)
+
+    def test_an_untracked_file_at_a_path_the_update_adds_refuses_the_update(self):
+        self.check_refused(ignored=False, conflicting_edit=False)
+
+    def test_an_untracked_file_and_a_conflicting_edit_refuse_the_update(self):
+        self.check_refused(ignored=False, conflicting_edit=True)
+
+    def test_an_untracked_file_where_the_update_adds_a_folder_refuses_the_update(self):
+        (self.install / "extras").write_bytes(self.OWN_FILE)
+        self.publish({"extras/notes.md": "upstream notes\n"})
+
+        response = self.post_update()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("extras", response.get_json()["message"])
+        self.assertEqual((self.install / "extras").read_bytes(), self.OWN_FILE)
+
+
 class DashboardLocalChangesTests(DashboardUpdateCase):
     def stash_entries(self):
         return git(self.install, "stash", "list").stdout.splitlines()

@@ -178,7 +178,7 @@ class DashboardUpdateSnapshotTests(unittest.TestCase):
 
     def update(self, repo, refs, ancestors):
         with patch.object(dashboard_module, "_run_git", side_effect=fake_git(refs, ancestors)), \
-                patch.object(update_module, "preflight"):
+                patch.object(update_module, "preflight"), patch.object(update_module, "refuse_overwriting_untracked"):
             return dashboard_module._perform_git_update(str(repo), update_branch="main")
 
     def snapshots(self, repo):

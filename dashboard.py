@@ -4020,6 +4020,8 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     # Only an update that moves HEAD takes a snapshot, so idle Update clicks cannot rotate
     # the last real one out of the _UPDATE_BACKUP_RETENTION kept.
     moves_head = before_head != upstream_head and not _git_is_ancestor(repo_dir, upstream_head, before_head)
+    if moves_head:
+        update_engine.refuse_overwriting_untracked(Path(repo_dir), before_head, upstream_head)
     backup_path = _create_update_state_backup(repo_dir, snapshot_warnings) if moves_head else None
     stash = _stash_local_changes(repo_dir) if moves_head else None
     output = fetch_output
