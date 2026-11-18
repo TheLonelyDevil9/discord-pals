@@ -232,7 +232,7 @@ def test_small_backlog_is_deleted_by_id(store, monkeypatch):
     add_finished_rows(store, 50)
     deletes = trace_job_deletes(monkeypatch)
     assert store.prune_jobs(0) == 50
-    assert deletes ==["DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)"]
+    assert deletes == ["DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)"]
 
 
 def database_bytes(store):

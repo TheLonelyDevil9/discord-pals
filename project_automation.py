@@ -838,7 +838,6 @@ class AutomationService:
             await asyncio.to_thread(self.store.release_free_pages)
 
     async def clean_up_old_queue(self):
-        """Run the store's one-time queue cleanup and compaction off the event loop and log the counts."""
         counts = await asyncio.to_thread(self.store.clean_up_old_queue, self.settings().get("history_days", 0))
         if counts is not None:
             compacted = await asyncio.to_thread(self.store.compact)

@@ -791,7 +791,6 @@ class AutomationStore:
 
     @staticmethod
     def _delete_orphaned_job_links(connection):
-        """Delete dismissal, prepared-version and discovery links whose job or cycle root is gone."""
         connection.execute(
             "DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared', 'pr_discovery_cycle') "
             "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = CAST(links.key AS INTEGER))")
