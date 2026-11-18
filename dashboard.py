@@ -4030,6 +4030,11 @@ def _install_update_dependencies(repo_dir: str) -> dict:
         except FileNotFoundError:
             errors.append(f"{' '.join(pip_base)} was not found")
             continue
+        except subprocess.TimeoutExpired:
+            # Every candidate installs the same requirements, so stop at the first timeout
+            # rather than wait out one timeout per candidate.
+            errors.append(f"{' '.join(pip_base)} timed out after {_UPDATE_PIP_TIMEOUT} seconds")
+            break
 
         if result.returncode == 0:
             log.info(f"Dependencies installed with {' '.join(pip_base)}")
@@ -4151,6 +4156,8 @@ def api_update():
                 "file_version": file_version_before,
                 "expected_version": expected_version,
                 "update_branch": update_branch,
+                "before_head": before_head,
+                "after_head": before_head,
             })
             return jsonify(payload)
 
@@ -4280,21 +4287,24 @@ def api_update():
         return jsonify({'status': 'error', 'message': message}), 409
     except subprocess.TimeoutExpired:
         log.error("Update command timed out")
-        _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION})
+        _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': 'Update timed out while fetching, applying, or installing dependencies'
         }), 500
     except FileNotFoundError:
         log.error("Git not found")
-        _write_update_log({"status": "error", "error": "git_not_found", "from_version": VERSION})
+        _write_update_log({"status": "error", "error": "git_not_found", "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': 'Git is not installed or not in PATH'
         }), 500
     except Exception as e:
         log.error(f"Update error: {e}")
-        _write_update_log({"status": "error", "error": type(e).__name__, "from_version": VERSION})
+        _write_update_log({"status": "error", "error": type(e).__name__, "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': str(e)

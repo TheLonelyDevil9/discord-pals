@@ -238,6 +238,48 @@ class DashboardLocalChangesTests(DashboardUpdateCase):
         self.assertEqual(self.stash_entries(), [])
 
 
+class DashboardUpdateLogTests(DashboardUpdateCase):
+    def test_a_failed_fetch_logs_the_commit_before_and_after(self):
+        git(self.install, "remote", "set-url", "origin", str(self.root / "missing.git"))
+        before = self.head()
+
+        response = self.post_update()
+
+        self.assertEqual(response.status_code, 500)
+        entry = self.last_log_entry()
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual((entry["before_head"], entry["after_head"]), (before, before))
+
+    def test_a_timeout_logs_the_commit_before_and_after(self):
+        before = self.head()
+        with patch.object(dashboard_module, "_perform_git_update",
+                          side_effect=subprocess.TimeoutExpired(["git", "fetch"], 180)):
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 500)
+        entry = self.last_log_entry()
+        self.assertEqual((entry["error"], entry["before_head"], entry["after_head"]), ("timeout", before, before))
+
+    def test_an_update_already_on_disk_logs_the_commit(self):
+        before = self.head()
+        with patch.object(dashboard_module, "VERSION", "0.9.0"):
+            response = self.post_update()
+
+        self.assertTrue(response.get_json()["restart_required"])
+        entry = self.last_log_entry()
+        self.assertEqual((entry["status"], entry["before_head"], entry["after_head"]), ("restart_required", before, before))
+
+    def test_a_pip_timeout_is_a_dependency_warning_not_an_error(self):
+        (self.install / "requirements.txt").write_text("flask\n", encoding="utf-8")
+        with patch.object(dashboard_module, "_run_command",
+                          side_effect=subprocess.TimeoutExpired(["pip"], dashboard_module._UPDATE_PIP_TIMEOUT)) as run:
+            result = dashboard_module._install_update_dependencies(str(self.install))
+
+        self.assertEqual(result["status"], "warning")
+        self.assertIn("timed out", result["warning"])
+        self.assertEqual(run.call_count, 1)
+
+
 class ImportCheckTests(unittest.TestCase):
     def check(self, files):
         with tempfile.TemporaryDirectory() as temp:
