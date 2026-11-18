@@ -40,10 +40,14 @@ class GitCheckoutCase(unittest.TestCase):
     def setUp(self):
         self._git_temp = tempfile.TemporaryDirectory()
         self.root = Path(self._git_temp.name)
-        # A developer's global or system Git config (signing, hooks, autocrlf) must not change the results.
+        # A developer's global or system Git config (signing, hooks, autocrlf) and the per-user
+        # ignore and attributes files under the home folder must not change the results.
         empty_config = self.root / "empty.gitconfig"
         empty_config.write_text("", encoding="utf-8")
-        environment = patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(empty_config), "GIT_CONFIG_NOSYSTEM": "1"})
+        environment = patch.dict(os.environ, {
+            "GIT_CONFIG_GLOBAL": str(empty_config), "GIT_CONFIG_NOSYSTEM": "1",
+            "HOME": str(self.root), "USERPROFILE": str(self.root), "XDG_CONFIG_HOME": str(self.root),
+        })
         environment.start()
         self.addCleanup(environment.stop)
         self.remote, self.seed, self.install = self.root / "remote.git", self.root / "seed", self.root / "install"

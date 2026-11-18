@@ -1,6 +1,7 @@
 """Failure paths of the dashboard updater, run against real Git checkouts (see GitCheckoutCase)."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,25 @@ class GitFixtureTests(GitCheckoutCase):
         lines = git(self.install, "config", "--list", "--show-scope").stdout.splitlines()
 
         self.assertEqual({line.split("\t", 1)[0] for line in lines}, {"local"})
+
+
+class GitFixtureUserFileTests(GitCheckoutCase):
+    def setUp(self):
+        # Git reads a per-user ignore file from the home folder even when GIT_CONFIG_GLOBAL
+        # names another config file.
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        user_git = Path(home.name, ".config", "git")
+        user_git.mkdir(parents=True)
+        (user_git / "ignore").write_text("*.md\n", encoding="utf-8")
+        environment = patch.dict(os.environ, {"HOME": home.name, "USERPROFILE": home.name,
+                                              "XDG_CONFIG_HOME": str(user_git.parent)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        super().setUp()
+
+    def test_a_per_user_ignore_file_does_not_change_the_fixtures(self):
+        self.assertIn("characters/firefly.md", git(self.install, "ls-files").stdout.split())
 
 
 class PreflightTests(GitCheckoutCase):
