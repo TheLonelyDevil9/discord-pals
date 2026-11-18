@@ -4,6 +4,7 @@ import asyncio
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
+import itertools
 import sqlite3
 import sys
 import time
@@ -14,6 +15,7 @@ import pytest
 from project_automation import AutomationService
 from project_automation_activity import activate, mapping_key, source_key
 from project_automation_config import PROJECT_DEFAULTS
+from project_automation_github import GitHubError
 from project_automation_store import AutomationStore, Conflict
 from project_automation_webhook import webhook_binding
 
@@ -678,9 +680,12 @@ def closed_world(setup, items, open_items=()):
     return fetched
 
 
+ROOT_NUMBERS = itertools.count(1)
+
+
 def run_sync_root(setup):
     root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
-                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{time.time()}")
+                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
     asyncio.run(setup.service.process_job(setup.store.get_job(root)))
     refreshed = sorted(job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
                        if job["kind"] == "event" and job["key"].startswith(f"sync-item:{root}:"))
@@ -742,6 +747,67 @@ def test_reopened_item_returns_to_scope_and_loses_its_close_time(setup):
     assert run_sync_root(setup) == ([8], [8])
     assert setup.store.get_link("item_closed", "owner/project:pull:8") is None
     assert fetched == []
+
+
+def gone_world(setup, number, status, items, open_items=()):
+    """A closed_world in which GitHub answers the fetch of issue `number` with HTTP `status`."""
+    fetched = closed_world(setup, items, open_items)
+    mirror_post(setup, "issue", number)
+    found = setup.client.get_issue
+
+    async def get_issue(requested):
+        if requested == number:
+            fetched.append(requested)
+            raise GitHubError(f"GitHub returned HTTP {status}.", status=status,
+                              retryable=status in {403, 429} or status >= 500)
+        return await found(requested)
+
+    setup.client.get_issue = get_issue
+    return fetched
+
+
+def discovery_jobs(setup):
+    return [job for job in setup.store.list_jobs(limit=500) if job["kind"] == "pr_sync_discover"]
+
+
+@pytest.mark.parametrize("status", [301, 404, 410])
+def test_a_moved_or_deleted_item_leaves_the_sync_without_stopping_it(setup, monkeypatch, status):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append(message))
+    fetched = gone_world(setup, 9, status, {8: github_item("pull", 8, closed_days_ago=2)},
+                         open_items=[github_item("issue", 5)])
+    assert run_sync_root(setup) == ([5, 8], [8])
+    assert sorted(fetched) == [8, 9]
+    assert len(discovery_jobs(setup)) == 1
+    assert [message for message in logged if "#9" in message] == [
+        "Project sync no longer refreshes issue #9: GitHub reports it moved or deleted."]
+    fetched.clear()
+    assert run_sync_root(setup) == ([5, 8], [8])
+    assert fetched == [8]
+    assert len(discovery_jobs(setup)) == 2
+
+    async def listed_again(kind):
+        return [github_item("issue", 9)] if kind == "issue" else []
+
+    setup.client.list_open_items = listed_again
+    assert run_sync_root(setup)[0] == [8, 9]
+
+
+@pytest.mark.parametrize("status", [None, 403, 429, 500, 502])
+def test_a_failed_fetch_of_a_closed_item_still_fails_and_retries_the_root(setup, status):
+    gone_world(setup, 9, status or 500, {}, open_items=[github_item("issue", 5)])
+    if status is None:
+        async def unreachable(number):
+            raise GitHubError("GitHub could not be reached or returned an invalid response.", retryable=True)
+        setup.client.get_issue = unreachable
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, "sync:transient")
+    assert run(setup)
+    job = setup.store.get_job(root)
+    assert job["state"] == "pending" and job["attempts"] == 1 and job["available_at"] > time.time()
+    assert discovery_jobs(setup) == []
+    assert setup.store.get_link("item_closed", "owner/project:issue:9") is None
 
 
 def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monkeypatch):

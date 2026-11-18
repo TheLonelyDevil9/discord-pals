@@ -18,6 +18,10 @@ from project_automation_activity import PRActivity, activate, mapping_key
 
 
 CLOSED_SYNC_DAYS = 7
+# GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
+# and 404 for either when the App cannot read the repository involved:
+# https://docs.github.com/en/rest/issues/issues#get-an-issue
+GONE_STATUSES = {301, 404, 410}
 
 CHOICES = {
     "write": "Write my report", "check": "Check my report",
@@ -764,14 +768,24 @@ class AutomationService:
         """Return a mirrored item missing from the open listing while it still needs refreshing, else None.
 
         An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
-        time is stored. An unknown close time costs one fetch, which stores it.
+        time is stored. An unknown close time costs one fetch, which stores it. An item that
+        GitHub reports as moved or deleted is stored as gone and costs no further fetch.
+        Both stay out of scope until the open listing shows the item again.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
         stored = self.store.get_link("item_closed", key)
-        if stored and stored.get("closed_at", 0) < cutoff:
+        if stored and ("gone" in stored or stored.get("closed_at", 0) < cutoff):
             return None
-        item = await client.get_issue(number)
+        try:
+            item = await client.get_issue(number)
+        except GitHubError as exc:
+            if exc.status not in GONE_STATUSES:
+                raise
+            self.store.put_link("item_closed", key, {"gone": exc.status})
+            info(f"Project sync no longer refreshes {kind} #{number}: GitHub reports it moved or deleted.",
+                 component="project_automation", event="sync_item_gone")
+            return None
         if item.get("state") != "closed":
             self.store.delete_links("item_closed", [key])
             return item
