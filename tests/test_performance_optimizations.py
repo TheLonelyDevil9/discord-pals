@@ -1317,7 +1317,7 @@ class HistoryPersistenceTests(unittest.TestCase):
         discord_utils_module.conversation_history = {
             11: [
                 {"role": "user", "content": "before edit"},
-                {"role": "assistant", "content": "assistant reply"},
+                {"role": "assistant", "content": "assistant reply", "message_id": 5},
             ],
             22: [{"role": "user", "content": "untouched"}],
         }
@@ -1330,7 +1330,7 @@ class HistoryPersistenceTests(unittest.TestCase):
         untouched_before = self._channel_file(22).read_text(encoding="utf-8")
 
         discord_utils_module.update_history_on_edit(11, "before", "after")
-        discord_utils_module.remove_assistant_from_history(11, 1)
+        discord_utils_module.remove_message_from_history(11, 5)
         discord_utils_module.save_history(force=True)
 
         touched = json.loads(self._channel_file(11).read_text(encoding="utf-8"))

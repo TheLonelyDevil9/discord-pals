@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from typing import Optional, Set
 
-from discord_utils import clear_history, remove_assistant_from_history, dm_history_key
+from discord_utils import clear_history, remove_deleted_bot_message, dm_history_key
 from character import character_manager
 from .registry import maintenance_visibility, register_command_metadata
 import logger as log
@@ -243,14 +243,16 @@ def setup_core_commands(bot_instance) -> None:
     async def cmd_delete_messages(interaction: discord.Interaction, count: int = 1) -> None:
         count = max(1, min(20, count))
         await interaction.response.defer(ephemeral=True)
-        
+        history_key = _history_key(bot_instance, interaction)
+        author_name = bot_instance.character.name if bot_instance.character else None
+
         deleted = 0
         async for msg in interaction.channel.history(limit=100):
             if msg.author == bot_instance.client.user:
                 try:
                     await msg.delete()
                     deleted += 1
-                    remove_assistant_from_history(interaction.channel_id, 1)
+                    remove_deleted_bot_message(history_key, msg.id, author_name=author_name, created_at=msg.created_at)
                     if deleted >= count:
                         break
                 except Exception as e:

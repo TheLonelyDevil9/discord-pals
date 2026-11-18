@@ -30,7 +30,7 @@ from discord_utils import (
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
-    update_history_on_edit, remove_assistant_from_history, remove_message_from_history,
+    update_history_on_edit, remove_deleted_bot_message,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
@@ -498,6 +498,23 @@ class BotInstance:
         is_dm = isinstance(channel, discord.DMChannel)
         channel_id = getattr(channel, "id", channel)
         return conversation_history_id(self.name, channel_id, is_dm=is_dm, user_id=user_id)
+
+    def _history_key_for_own_message(self, message):
+        """Return the history key of a message this bot sent, or None for an unknown DM.
+
+        A DM channel that arrives through the gateway often has no recipient,
+        so the user is looked up in the DM state that each incoming DM updates.
+        """
+        channel = message.channel
+        if not isinstance(channel, discord.DMChannel):
+            return channel.id
+        recipient = getattr(channel, "recipient", None)
+        if recipient is not None:
+            return self._conversation_key(channel, recipient.id)
+        for user_id, state in getattr(self, "_dm_followup_state", {}).items():
+            if state.get("channel_id") == channel.id:
+                return self._conversation_key(channel, user_id)
+        return None
 
     def _context_builder(self) -> ContextBuilder:
         """Return this bot's context identity builder, creating it lazily for tests."""
@@ -1725,9 +1742,17 @@ Return exactly one JSON object with this shape:
         
         @self.client.event
         async def on_message_delete(message: discord.Message):
-            if message.author == self.client.user:
-                if not remove_message_from_history(message.channel.id, message.id):
-                    remove_assistant_from_history(message.channel.id, 1)
+            if message.author != self.client.user:
+                return
+            history_key = self._history_key_for_own_message(message)
+            if history_key is None:
+                return
+            remove_deleted_bot_message(
+                history_key,
+                message.id,
+                author_name=self.character.name if self.character else None,
+                created_at=getattr(message, "created_at", None),
+            )
 
     def _split_response_for_delivery(self, response: str) -> list[str]:
         """Turn one model response into natural Discord-sized message parts."""

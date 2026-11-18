@@ -950,25 +950,37 @@ def update_history_on_edit(channel_id: int, old_content: str, new_content: str, 
                 return
 
 
-def remove_assistant_from_history(channel_id: int, count: int = 1):
-    """Remove last N assistant messages from history."""
-    if channel_id not in conversation_history:
-        return
-    
-    history = conversation_history[channel_id]
-    removed = 0
-    
-    for i in range(len(history) - 1, -1, -1):
-        if removed >= count:
-            break
-        if history[i]["role"] == "assistant":
-            del history[i]
-            removed += 1
+def remove_deleted_bot_message(channel_id, message_id: int, *, author_name: str | None, created_at) -> bool:
+    """Remove the history entry of a bot message that was deleted on Discord.
 
-    if removed:
+    An entry with a message ID matches only that ID. An entry without one
+    matches when this bot recorded it in the second the deleted message was
+    created. Nothing else is removed, because the bot also deletes its own
+    notices, which were never recorded.
+    """
+    if remove_message_from_history(channel_id, message_id):
+        return True
+
+    created = _parse_history_timestamp(created_at)
+    if not author_name or created is None or channel_id not in conversation_history:
+        return False
+    created = created.replace(microsecond=0)
+
+    history = conversation_history[channel_id]
+    for i in range(len(history) - 1, -1, -1):
+        entry = history[i]
+        if entry.get("role") != "assistant" or entry.get("message_id"):
+            continue
+        if str(entry.get("author") or "").lower() != author_name.lower():
+            continue
+        if _parse_history_timestamp(entry.get("timestamp")) != created:
+            continue
+        del history[i]
         _rebuild_recent_message_hashes(channel_id)
         _mark_history_dirty(channel_id)
         save_history()
+        return True
+    return False
 
 
 def remove_message_from_history(channel_id: int, message_id: int) -> bool:
