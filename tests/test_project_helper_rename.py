@@ -431,6 +431,27 @@ def test_rename_refuses_and_changes_nothing(tmp_path, scenario):
     assert not any("Private" in line for line in lines)
 
 
+def test_send_guards_of_other_helpers_and_unattributed_settled_guards_are_left_as_they_are(tmp_path):
+    store = seed(tmp_path / "project.sqlite3")
+    other = activity_receipt_key(settings(bot_name=OTHER), COMMENT)
+    unattributed = {"pr:" + "1" * 64: "delivered", "pr:" + "2" * 64: "retry_authorized"}
+    with closing(sqlite3.connect(store.path, isolation_level=None)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        set_guard(connection, "pr_activity_attempt", other, "pending")
+        set_guard(connection, "mirror_attempt", mirror_key(settings(bot_name=OTHER), "issue", "issue:7"), "pending")
+        for key, state in unattributed.items():
+            put(connection, "pr_activity_attempt", key, {"state": state}, 1)
+        connection.execute("COMMIT")
+    before = rows(store)[0]
+    report = run(store)
+    assert report.verdict == "applied" and report.before.unattributed_guards == 2
+    after = rows(store)[0]
+    for item in [("pr_activity_attempt", other), ("mirror_attempt", mirror_key(settings(bot_name=OTHER), "issue", "issue:7"))] + [
+            ("pr_activity_attempt", key) for key in unattributed]:
+        assert after[item] == before[item]
+    assert "Left as they are: 2 PR activity send guards" in "\n".join(rename.format_report(report, OLD, NEW, True))
+
+
 def test_a_failure_part_way_through_the_writes_rolls_everything_back(seeded, monkeypatch):
     real = AutomationStore._apply_changes
 

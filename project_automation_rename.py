@@ -307,6 +307,7 @@ class Plan:
     refusals: collections.Counter = field(default_factory=collections.Counter)
     counts: dict = field(default_factory=lambda: collections.defaultdict(collections.Counter))
     markers: collections.Counter = field(default_factory=collections.Counter)
+    unattributed_guards: int = 0
 
 
 def _revision_bound(rows):
@@ -414,7 +415,9 @@ def plan_rename(rows, old, new):
             plan.refusals[("pr_activity_attempt", "an unconfirmed send matches no stored receipt or source, so its "
                                                   "helper is unknown; resolve that delivery first")] += 1
         else:
-            plan.refusals[("pr_activity_attempt", "attempt matches no stored receipt, so its helper is unknown")] += 1
+            # A settled guard blocks no send, so leaving one that no record attributes changes
+            # nothing for any helper, while refusing would block every rename until a reset.
+            plan.unattributed_guards += 1
 
     old_texts = [old.mapping] + [old.mirror_prefix(kind) for kind in MIRROR_CHANNELS
                                  if old.settings[MIRROR_CHANNELS[kind]]]
@@ -497,6 +500,9 @@ def format_report(report, old_name, new_name, apply):
     if report.before is not None and report.before.markers and report.verdict in ("dry-run", "applied"):
         lines.append("Stored footers: " + ", ".join(f"{name} {count}" for name, count in
                                                     sorted(report.before.markers.items())))
+    if report.before is not None and report.before.unattributed_guards:
+        lines.append(f"Left as they are: {report.before.unattributed_guards} PR activity send guards that no stored "
+                     "receipt or source attributes to a helper; none of them blocks a send.")
     total = len(report.before.changes) if report.before is not None else 0
     lines += [f"REFUSED: {reason}" for reason in report.reasons]
     lines.append({
