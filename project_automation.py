@@ -1046,17 +1046,29 @@ class AutomationService:
         restarts, self._reported_restarts = self._reported_restarts, self._restarts
         if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
             return
+        if not self.bots or self.transport is None:
+            return
         facts = await asyncio.to_thread(self._health_facts)
         records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
         now = time.time()
         reason = self._restart_reason if self._restarts > restarts else None
         for key, kind, text in due_alerts(facts, records, now, new_restart_reason=reason):
-            delivered = await self._message_operators(text)
-            if delivered is None:
+            # The record is written before the DM, so a record that cannot be written stops
+            # the DM instead of letting every pass send it again.
+            sent_at = records[key]["sent_at"] if kind == "resolved" else now
+            if not await self._save_alert_record(key, {"sent_at": sent_at, "open": False}):
                 continue
-            record = ({**records[key], "open": False} if kind == "resolved"
-                      else {"sent_at": now, "open": kind == "alert" and delivered})
+            if await self._message_operators(text) and kind == "alert":
+                await self._save_alert_record(key, {"sent_at": now, "open": True})
+
+    async def _save_alert_record(self, key, record) -> bool:
+        try:
             await asyncio.to_thread(self._record_alert, key, record)
+        except Exception as exc:
+            warn(f"A Project alert record could not be saved: {type(exc).__name__}.",
+                 component="project_automation", event="alert_record_failed")
+            return False
+        return True
 
     def _record_alert(self, key, record):
         self.store.put_link("health_alert", key, record)

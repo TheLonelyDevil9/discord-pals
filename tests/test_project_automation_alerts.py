@@ -218,6 +218,42 @@ def test_a_failed_dm_is_logged_once_per_attempt_and_never_raises(alerts, monkeyp
     assert send(alerts) == []
 
 
+def locked_writes(store, monkeypatch, failing):
+    """Make the store's link writes raise like a database locked past its busy timeout, for the write numbers in failing."""
+    real_put, writes = store.put_link, []
+
+    def put_link(kind, key, data):
+        writes.append(data)
+        if len(writes) in failing:
+            raise sqlite3.OperationalError("database is locked")
+        return real_put(kind, key, data)
+
+    monkeypatch.setattr(store, "put_link", put_link)
+    return writes
+
+
+def test_an_alert_whose_record_cannot_be_written_is_not_sent(alerts, monkeypatch):
+    logged = []
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: logged.append(fields["event"]))
+    locked_writes(alerts.store, monkeypatch, failing={1, 2})
+    late_job(alerts)
+    for _ in range(2):
+        asyncio.run(alerts.supervise_once())
+    assert alerts.transport.sent == []
+    assert logged == ["alert_record_failed", "alert_record_failed"]
+    assert len(send(alerts)) == 2
+    assert send(alerts) == []
+
+
+def test_a_delivered_alert_is_not_repeated_when_marking_it_open_fails(alerts, monkeypatch):
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: None)
+    writes = locked_writes(alerts.store, monkeypatch, failing={2})
+    late_job(alerts)
+    assert len(send(alerts)) == 2
+    assert [write["open"] for write in writes] == [False, True]
+    assert send(alerts) == []
+
+
 def test_no_online_bot_sends_nothing_and_a_later_pass_sends_the_alert(alerts):
     bots = dict(alerts.bots)
     alerts.bots.clear()
