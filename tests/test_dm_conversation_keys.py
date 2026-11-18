@@ -162,6 +162,20 @@ class DeleteTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._contents(DM_KEY), ["first"])
 
 
+class HistoryClearTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
+    async def test_history_clear_in_a_dm_clears_only_that_dm(self):
+        bot = _make_registered_bot()
+        alice = _user(42, "Alice")
+        discord_utils_module.add_to_history(DM_KEY, "user", "forget me", author_name="Alice", message_id=1)
+        discord_utils_module.add_to_history(77, "user", "keep me", author_name="Bob", message_id=2)
+        clear = next(command for command in _command(bot, "history").commands if command.name == "clear")
+
+        await clear.callback(_interaction(_dm_channel(555), alice))
+
+        self.assertEqual(discord_utils_module.get_history(DM_KEY), [])
+        self.assertEqual(discord_utils_module.get_history(77)[0]["content"], "keep me")
+
+
 class EditTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
     async def test_an_edit_in_a_dm_updates_that_dms_history(self):
         bot = _make_registered_bot()
