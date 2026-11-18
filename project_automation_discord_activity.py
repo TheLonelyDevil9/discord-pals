@@ -171,13 +171,34 @@ def _message_version(message, prefix):
     return None
 
 
-def _record(transport, config, event, thread, message, version, *, current):
+def _saved_footer(message, receipt, prefix):
+    """Return (prefix, version) from the footer of a saved activity message, or None when it is not ours.
+
+    A message keeps the footer prefix it was written with. After the rename-helper command moves
+    its receipt to a new key, that prefix differs from the computed one, so the receipt stores it
+    as "marker_prefix". An edit whose acknowledgement was lost can leave the message on the
+    computed prefix while the receipt still names the earlier one, so either is accepted.
+    """
+    stored = (receipt or {}).get("marker_prefix")
+    for candidate in ([stored] if isinstance(stored, str) and stored else []) + [prefix]:
+        version = _message_version(message, candidate)
+        if version:
+            return candidate, version
+    return None
+
+
+def _record(transport, config, event, thread, message, version, *, current, prefix):
+    """Save the receipt of `message` at `version`.
+
+    `prefix` must be the footer prefix the message shows, because the next check of the saved
+    message accepts only that prefix or the computed one.
+    """
     key = receipt_key(config, event)
     receipt = {"channel_id": str(thread.id), "message_id": str(message.id),
                "source_version": version, "source_key": event["key"],
                "number": event["number"], "activity_type": event["activity_type"],
                "forum_id": config["reviews_channel_id"], "repository": config["repository"],
-               "guild_id": config["guild_id"], "bot_name": config["bot_name"],
+               "guild_id": config["guild_id"], "bot_name": config["bot_name"], "marker_prefix": prefix,
                "jump_url": f"https://discord.com/channels/{config['guild_id']}/{thread.id}/{message.id}"}
     transport.service.store.put_link("pr_activity_delivery", f"{key}:{version}", receipt)
     previous = transport.service.store.get_link("pr_activity", key)
@@ -204,7 +225,7 @@ async def _with_parent_reply(transport, config, event, thread):
     except discord.NotFound:
         return event
     if (message.author.id != transport._bot().client.user.id
-            or not _message_version(message, marker_prefix(key))):
+            or not _saved_footer(message, receipt, marker_prefix(key))):
         return event
     return {**event, "reply_to_discord_url": f"https://discord.com/channels/{config['guild_id']}/{thread.id}/{message.id}"}
 
@@ -224,7 +245,7 @@ async def mirror_activity(transport, event, *, recover_only=False):
 
     prefix = marker_prefix(key)
     link = transport.service.store.get_link("pr_activity", key)
-    message, observed = None, None
+    message, observed, shown = None, None, prefix
     if link:
         if str(link["channel_id"]) != str(thread.id):
             raise WorkflowError("The saved PR activity belongs to a different thread.")
@@ -232,9 +253,10 @@ async def mirror_activity(transport, event, *, recover_only=False):
             message = await thread.fetch_message(int(link["message_id"]))
             if message.author.id != transport._bot().client.user.id:
                 raise WorkflowError("The saved PR activity belongs to a different Discord author.")
-            observed = _message_version(message, prefix)
-            if not observed:
+            footer = _saved_footer(message, link, prefix)
+            if not footer:
                 raise WorkflowError("The saved PR activity has a different delivery marker.")
+            shown, observed = footer
         except discord.NotFound:
             message = None
     if message is None:
@@ -245,10 +267,10 @@ async def mirror_activity(transport, event, *, recover_only=False):
                     message = candidate
                     break
     if message:
-        _record(transport, config, event, thread, message, observed, current=False)
+        _record(transport, config, event, thread, message, observed, current=False, prefix=shown)
         if observed == version:
             if not recover_only:
-                _record(transport, config, event, thread, message, version, current=True)
+                _record(transport, config, event, thread, message, version, current=True, prefix=shown)
             return True
         if recover_only:
             # A persisted receipt proves that exact version was applied before a
@@ -276,7 +298,7 @@ async def mirror_activity(transport, event, *, recover_only=False):
             await message.edit(embed=embed, allowed_mentions=NO_MENTIONS)
         else:
             message = await thread.send(embed=embed, allowed_mentions=NO_MENTIONS)
-        _record(transport, config, event, thread, message, version, current=True)
+        _record(transport, config, event, thread, message, version, current=True, prefix=prefix)
     finally:
         if opened or parent["closed"]:
             await thread.edit(archived=parent["closed"], locked=parent["closed"])
