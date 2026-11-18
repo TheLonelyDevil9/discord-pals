@@ -273,6 +273,27 @@ def test_a_restart_notice_that_no_bot_could_deliver_stays_due(alerts, monkeypatc
         "Check the logs for the cause. Dashboard → Project"] * 2
 
 
+@pytest.mark.parametrize("mute", ["alerts off", "no operators"])
+def test_muted_alerts_forget_their_open_episode_so_the_next_one_alerts(alerts, cfg, runtime, mute):
+    def muted(on):
+        if mute == "alerts off":
+            cfg["alerts_enabled"] = not on
+        else:
+            runtime["operator_user_ids"] = [] if on else ["800", "801"]
+
+    late_job(alerts)
+    assert len(send(alerts)) == 2
+    muted(True)
+    finish_jobs(alerts)
+    assert send(alerts) == []
+    muted(False)
+    # The episode that ended while alerts were muted gets no late resolved DM.
+    assert send(alerts) == []
+    add_job(alerts, "late again", "pending", available_ago=2 * 3600)
+    sent = send(alerts)
+    assert len(sent) == 2 and all(text.startswith("Project helper alert. Queue lag") for _, _, text in sent)
+
+
 def locked_writes(store, monkeypatch, failing):
     """Make the store's link writes raise like a database locked past its busy timeout, for the write numbers in failing."""
     real_put, writes = store.put_link, []

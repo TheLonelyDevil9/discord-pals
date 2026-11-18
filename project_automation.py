@@ -1051,6 +1051,11 @@ class AutomationService:
         restarts = self._restarts
         if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
             self._reported_restarts = restarts
+            # With nobody to tell, an open alert could never be resolved, and it would keep
+            # the next episode of its signal from alerting once DMs can go out again.
+            rows = await asyncio.to_thread(self.store.list_links, "health_alert")
+            if open_keys := [row["key"] for row in rows if row["data"].get("open")]:
+                await asyncio.to_thread(self.store.delete_links, "health_alert", open_keys)
             return
         if not self.bots or self.transport is None:
             return
