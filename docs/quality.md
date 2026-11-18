@@ -43,7 +43,7 @@ Lint deliberately runs a narrow rule set. The codebase has hundreds of pre-exist
 - New runtime settings belong in `runtime_config.py`, must be dashboard-visible, and need tests for invalid values when they influence bot behavior.
 - Legacy memory JSON endpoints stay retired; use v2 memory APIs and the unified stores.
 - Provider fallback, output sanitization, and impersonation prevention should stay centralized.
-- Authenticated dashboard write routes must keep CSRF protection.
+- Authenticated dashboard write routes must keep CSRF protection. `tests/test_dashboard_csrf_coverage.py` walks the URL map and fails on any POST, PUT, PATCH, or DELETE route that runs without a token; routes exempt by design are listed there with their reason.
 
 ## Review Focus
 
