@@ -60,6 +60,8 @@ _github_version_cache = {
     "tracked_ref": None, "update_branch": None, "refreshing": False,
 }
 _update_lock = threading.Lock()
+# Set while an accepted restart holds _update_lock, so that a refused request names the restart.
+_restart_accepted = threading.Event()
 # Held by every git fetch, so the background version check never fetches the same
 # refs as an update at the same time.
 _git_fetch_lock = threading.Lock()
@@ -4143,10 +4145,8 @@ def api_update():
     log.info("Git update requested via dashboard")
 
     if not _update_lock.acquire(blocking=False):
-        return jsonify({
-            'status': 'error',
-            'message': 'An update is already running'
-        }), 409
+        running = 'Update refused: Discord Pals is restarting.' if _restart_accepted.is_set() else 'An update is already running'
+        return jsonify({'status': 'error', 'message': running}), 409
 
     repo_dir = None
     before_head = None
@@ -4358,7 +4358,8 @@ def api_restart():
     log.warn("Application restart requested via dashboard")
 
     if not _update_lock.acquire(blocking=False):
-        return jsonify({'status': 'error', 'message': 'Restart refused: an update is running. Restart when it has finished.'}), 409
+        running = 'a restart is already running' if _restart_accepted.is_set() else 'an update is running. Restart when it has finished'
+        return jsonify({'status': 'error', 'message': f'Restart refused: {running}.'}), 409
     started = False
     try:
         refusal = dashboard_restart.refusal(Path(__file__).resolve().parent)
@@ -4366,10 +4367,12 @@ def api_restart():
             log.error(refusal)
             return jsonify({'status': 'error', 'message': refusal}), 409
         # The update lock stays held, so no update can start while the process restarts.
+        _restart_accepted.set()
         dashboard_restart.start_restart(bot_instances)
         started = True
     finally:
         if not started:
+            _restart_accepted.clear()
             _update_lock.release()
 
     return jsonify({

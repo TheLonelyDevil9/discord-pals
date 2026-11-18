@@ -265,6 +265,7 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
             session["logged_in"] = True
         # An accepted restart keeps the update lock until the process ends.
         self.addCleanup(lambda: dashboard_module._update_lock.locked() and dashboard_module._update_lock.release())
+        self.addCleanup(dashboard_module._restart_accepted.clear)
 
     def tearDown(self):
         self.tearDownMemorySandbox()
@@ -285,7 +286,33 @@ class RestartEndpointTests(MemorySandboxMixin, unittest.TestCase):
         response = self.client.post("/api/update", json={"update_branch": "main"}, headers=self.csrf_headers())
 
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.get_json()["message"], "An update is already running")
+        self.assertEqual(response.get_json()["message"], "Update refused: Discord Pals is restarting.")
+
+    def test_a_second_restart_during_the_first_names_the_restart(self):
+        self.assertEqual(self.post_restart()[0].status_code, 200)
+
+        response, check, thread, _saves = self.post_restart()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["message"], "Restart refused: a restart is already running.")
+        thread.assert_not_called()
+        check.assert_not_called()
+
+    def test_a_restart_that_cannot_start_leaves_no_restart_behind(self):
+        with patch.object(dashboard_restart, "start_restart", side_effect=RuntimeError("can't start new thread")), \
+                patch.object(update_module, "check_imports", return_value=None):
+            with self.assertRaises(RuntimeError):
+                self.client.post("/api/restart", headers=self.csrf_headers())
+
+        self.assertFalse(dashboard_module._update_lock.locked())
+        self.assertIn("an update is running", self.post_restart_during_an_update())
+
+    def post_restart_during_an_update(self):
+        self.assertTrue(dashboard_module._update_lock.acquire(blocking=False))
+        try:
+            return self.post_restart()[0].get_json()["message"]
+        finally:
+            dashboard_module._update_lock.release()
 
     def test_an_install_without_git_can_still_restart(self):
         with patch.object(update_module, "preflight", side_effect=RuntimeError("not a git repository")):

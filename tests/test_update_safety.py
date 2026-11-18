@@ -414,6 +414,7 @@ class DashboardRestartRefusalTests(DashboardUpdateCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("Restart refused", response.get_json()["message"])
         self.assertIn("prompts/other_prompts.md", response.get_json()["message"])
+        self.assertNotIn("update", response.get_json()["message"])
         thread.assert_not_called()
         check.assert_not_called()
         self.assertFalse(dashboard_module._update_lock.locked())
@@ -425,6 +426,7 @@ class DashboardRestartRefusalTests(DashboardUpdateCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("git merge --abort", response.get_json()["message"])
+        self.assertNotIn("update", response.get_json()["message"])
         thread.assert_not_called()
 
 

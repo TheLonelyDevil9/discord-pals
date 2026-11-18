@@ -316,13 +316,13 @@ def preflight(repo: Path) -> None:
     if paths:
         raise UpdateRefused(
             f"the checkout has unresolved conflicts in {', '.join(paths)}. Resolve them with Git, "
-            "or discard the conflicted version of a file with `git checkout HEAD -- <file>`, then update again."
+            "or discard the conflicted version of a file with `git checkout HEAD -- <file>`, then try again."
         )
     git_dir = Path(run(["git", "rev-parse", "--absolute-git-dir"], repo, timeout=30, check=True).stdout.strip())
     for name, operation, abort in UNFINISHED_OPERATIONS:
         if (git_dir / name).exists():
             raise UpdateRefused(
-                f"a Git {operation} is in progress in the checkout. Finish it or run `{abort}`, then update again."
+                f"a Git {operation} is in progress in the checkout. Finish it or run `{abort}`, then try again."
             )
 
 
