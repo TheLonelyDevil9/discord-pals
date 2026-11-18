@@ -89,8 +89,8 @@ def _issue_number(value):
 
 
 def _post_key(binding, kind, key) -> str:
-    """Return mirror_key for event key `key` under a job's recorded binding, or "" when the stored
-    binding lacks a field that mirror_key reads."""
+    """Return mirror_key for event key `key` under a job's recorded binding, or "" for a kind that
+    mirror_key does not know, a key that is not text, or a binding that lacks a field mirror_key reads."""
     channel = MIRROR_CHANNELS.get(kind)
     if not channel or not isinstance(key, str) or not all(
             isinstance(binding.get(name), str) for name in ("guild_id", "bot_name", "repository", channel)):
@@ -147,7 +147,8 @@ def _job_target(job: dict, service) -> dict:
         if number:
             target["issue_number"] = number
             if repository and not target["github_url"] and payload.get("kind") in {"issue", "pull"}:
-                # A refresh that reconciliation queues names its item without the item's URL.
+                # The payload's own URL is missing, as in a reconciliation refresh, or failed the
+                # check above, so the item's number gives the link.
                 path = "pull" if payload["kind"] == "pull" else "issues"
                 target["github_url"] = f"https://github.com/{repository}/{path}/{number}"
         if field and repository and binding.get("repository") == repository:
