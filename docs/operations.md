@@ -252,7 +252,7 @@ discord-pals/
 |-- characters/              # Character definitions
 |-- prompts/                 # Prompt text
 |-- templates/               # Dashboard HTML
-|-- images/                  # Dashboard/readme images
+|-- images/                  # Dashboard images, served without login under /static
 `-- bot_data/                # Runtime state
 ```
 

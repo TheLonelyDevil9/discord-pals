@@ -9,7 +9,7 @@ Discord Pals is a local Discord bot project for running one or more character bo
 It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/SpicyMarinara/Discord-Buddy). The system prompt was authored by Geechan.
 
 <p align="center">
-  <img src="images/banner.jpg" alt="Discord Pals" width="1200">
+  <img src="docs/images/banner.jpg" alt="Discord Pals" width="1200">
 </p>
 
 ## Start Here

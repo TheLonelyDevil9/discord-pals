@@ -23,6 +23,11 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('content="Discord Pals"', page)
         self.assertIn('href="/static/site.webmanifest"', page)
 
+    def test_readme_banner_is_not_served_without_a_login(self):
+        response = self.client.get("/static/banner.jpg")
+
+        self.assertEqual(response.status_code, 404)
+
     def test_manifest_icons_use_static_asset_paths(self):
         response = self.client.get("/static/site.webmanifest")
         manifest = json.loads(response.get_data(as_text=True))
