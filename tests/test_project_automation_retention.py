@@ -2,11 +2,12 @@
 
 from contextlib import closing
 import json
+from pathlib import Path
 import sqlite3
 
 import pytest
 
-from project_automation_store import AutomationStore, Conflict
+from project_automation_store import BULK_DELETE_ROWS, AutomationStore, Conflict
 
 
 DAY = 86400.0
@@ -226,6 +227,27 @@ def test_large_backlog_is_cleared_in_one_step_and_kept_rows_stay_exact(store, mo
     assert sequence(store) == before
     assert link_keys(store, "job_dismissal") == {str(kept[-1][0])}
     assert store.enqueue("event", {}, "after-bulk") > before[0]
+
+
+@pytest.mark.parametrize("delete", ["retention", "clear", "reset"])
+def test_bulk_deletes_do_not_rewrite_freed_pages_when_secure_delete_is_on(store, monkeypatch, delete):
+    add_finished_rows(store, BULK_DELETE_ROWS + 1_000, body_bytes=2_000)
+    wal = Path(str(store.path) + "-wal")
+    wal_sizes = []
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        # Debian and Ubuntu compile SQLite with secure_delete on by default.
+        connection.execute("PRAGMA secure_delete=ON")
+        connection.set_trace_callback(lambda _: wal_sizes.append(wal.stat().st_size if wal.exists() else 0))
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    {"retention": lambda: store.prune_jobs(0), "clear": store.clear_history,
+     "reset": store.reset_project_data}[delete]()
+    assert job_ids(store) == set()
+    assert max(wal_sizes) < 4 * 1024 * 1024
 
 
 def test_small_backlog_is_deleted_by_id(store, monkeypatch):

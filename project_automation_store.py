@@ -742,13 +742,20 @@ class AutomationStore:
         )
 
     @staticmethod
+    def _skip_zeroing_freed_pages(connection):
+        # SQLite builds with secure_delete on, the Debian and Ubuntu default, overwrite
+        # every freed page and write it to the WAL, so a bulk delete would write as many
+        # bytes as it frees. FAST frees the pages without that extra write.
+        connection.execute("PRAGMA secure_delete=FAST")
+
+    @staticmethod
     def _replace_jobs(connection, kept_ids):
         """Keep only the jobs whose IDs the kept_ids query selects, inside the caller's write transaction.
 
-        DELETE without WHERE frees the table and index pages in one pass instead of
-        updating every index row by row, and it leaves sqlite_sequence alone, so IDs
-        are never reused.
+        DELETE without WHERE frees whole table and index pages instead of removing each
+        row and index entry, and it leaves sqlite_sequence alone, so IDs are never reused.
         """
+        AutomationStore._skip_zeroing_freed_pages(connection)
         connection.execute("CREATE TEMP TABLE kept AS SELECT * FROM jobs WHERE id IN (" + kept_ids + ")")
         connection.execute("DELETE FROM jobs")
         connection.execute("INSERT INTO jobs SELECT * FROM temp.kept")
@@ -835,6 +842,7 @@ class AutomationStore:
         with self._connection(write=True) as connection:
             if connection.execute("SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') LIMIT 1").fetchone():
                 raise Conflict("A job is running or sending a delivery")
+            self._skip_zeroing_freed_pages(connection)
             counts = {}
             for table in ("jobs", "links", "cases"):
                 counts[table] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
