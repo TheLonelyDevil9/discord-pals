@@ -991,21 +991,24 @@ class AutomationService:
                      component="project_automation", event="queue_cleanup")
             self._queue_cleaned = True
 
+    def _automation_runs(self) -> bool:
+        return not self.paused() and self.settings().get("bot_name") in self.bots
+
     async def _run(self):
         while True:
             self._heartbeat = time.monotonic()
             try:
+                # Recorded before the cleanup and the sweep, which can run long after downtime,
+                # so that the downtime does not raise the sync age while they run.
+                self._active_since = (self._active_since or time.time()) if self._automation_runs() else None
                 if not self._queue_cleaned:
                     await self.clean_up_old_queue()
                 if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()
-                if not self.paused() and self.settings().get("bot_name") in self.bots:
-                    self._active_since = self._active_since or time.time()
+                if self._automation_runs():
                     self.queue_sync_cycle()
                     await self.run_once()
-                else:
-                    self._active_since = None
             except asyncio.CancelledError:
                 raise
             except Exception:

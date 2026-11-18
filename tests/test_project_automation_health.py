@@ -173,6 +173,30 @@ def test_sync_age_counts_from_when_automation_last_started_running(service, cfg,
     assert levels(service)["sync"] == "ok"
 
 
+def test_a_long_first_maintenance_after_downtime_does_not_raise_the_sync_age(service, cfg, monkeypatch):
+    import project_automation
+    service.store.record_status(mapping_key(cfg), "last_sync_at", time.time() - 2 * 86400)
+    during = []
+
+    async def maintain():
+        during.append(signal(service.health(), "sync")["level"])
+
+    async def stop(_):
+        raise asyncio.CancelledError
+
+    async def nothing():
+        return None
+
+    monkeypatch.setattr(project_automation.asyncio, "sleep", stop)
+    monkeypatch.setattr(service, "maintain", maintain)
+    monkeypatch.setattr(service, "run_once", nothing)
+    monkeypatch.setattr(service, "queue_sync_cycle", lambda: None)
+    service._queue_cleaned = True
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(service._run())
+    assert during == ["ok"]
+
+
 def test_status_carries_the_health_signals_without_job_payloads_titles_or_user_names(service):
     service.store.enqueue("publish", {"title": "Private report title", "reporter_name": "private-user"}, "publish:private")
     status = service.status()
