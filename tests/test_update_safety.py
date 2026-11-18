@@ -558,6 +558,19 @@ class DashboardRollbackTests(DashboardUpdateCase):
         self.assertEqual(self.snapshots(), kept)
         self.assertEqual(git(self.install, "branch", "--list", "dashboard-update-backup-*").stdout, "")
 
+    def test_a_snapshot_that_fails_part_way_leaves_no_folder(self):
+        (self.install / "bot_data").mkdir(exist_ok=True)
+        (self.install / "bot_data" / "stats.json").write_text("{}", encoding="utf-8")
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        with patch.object(update_module, "backup_project_database", side_effect=OSError("disk full")):
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 500, response.get_json())
+        self.assertEqual(self.snapshots(), [])
+        self.assertEqual(self.head(), before)
+
     def test_a_kept_update_prunes_the_oldest_snapshots(self):
         older = ["pre-update-20250101000000", "pre-update-20250102000000", "pre-update-20250103000000"]
         for name in older:

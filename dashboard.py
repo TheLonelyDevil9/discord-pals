@@ -3843,31 +3843,34 @@ def _create_update_state_backup(repo_dir: str, warnings: list | None = None) -> 
     """Snapshot local state before an update; a note about a left-out database goes into warnings.
 
     The caller prunes older snapshots once the update is kept, and deletes this one when
-    the update is rolled back.
+    the update is rolled back. A copy that fails part-way deletes its folder, then raises.
     """
     backup_root = Path(repo_dir) / _UPDATE_BACKUP_ROOT
-    # Microseconds keep two attempts in one second from writing into the same snapshot,
-    # which a rollback would then delete.
+    # Microseconds keep two attempts in one second from writing into one snapshot folder,
+    # which the cleanup of a failed copy would then delete.
     backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
     copied = False
+    try:
+        for name in _UPDATE_BACKUP_FILES:
+            source = Path(repo_dir) / name
+            if source.exists():
+                _copy_update_backup_item(source, backup_dir / name)
+                copied = True
 
-    for name in _UPDATE_BACKUP_FILES:
-        source = Path(repo_dir) / name
-        if source.exists():
-            _copy_update_backup_item(source, backup_dir / name)
-            copied = True
+        for name in _UPDATE_BACKUP_DIRS:
+            source = Path(repo_dir) / name
+            if source.exists():
+                _copy_update_backup_item(source, backup_dir / name, _UPDATE_BACKUP_DIR_IGNORES.get(name, ()))
+                copied = True
 
-    for name in _UPDATE_BACKUP_DIRS:
-        source = Path(repo_dir) / name
-        if source.exists():
-            _copy_update_backup_item(source, backup_dir / name, _UPDATE_BACKUP_DIR_IGNORES.get(name, ()))
-            copied = True
+        if not copied:
+            return None
 
-    if not copied:
-        return None
-
-    from update import backup_project_database
-    note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+        from update import backup_project_database
+        note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    except Exception:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
     if note and warnings is not None:
         warnings.append(note)
     return str(backup_dir)
