@@ -319,4 +319,4 @@ Run:
 python diagnose.py
 ```
 
-The script checks config files, environment variables, provider connectivity, and model availability.
+The script checks the config files, then runs the same check as **Test model** on every saved provider and lists the ones that fail. When a provider's key variable is not set, it names the variable.

@@ -7,8 +7,9 @@ Run this script to diagnose provider connectivity issues.
 import os
 import sys
 import json
-import asyncio
 from pathlib import Path
+
+import dashboard_provider_health
 
 # Colors for terminal output
 class Colors:
@@ -75,176 +76,51 @@ def check_files():
     return issues
 
 
-def check_env_vars():
-    """Check environment variables."""
-    header("2. Checking Environment Variables")
-    
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    # Load providers to see which env vars we need
-    providers_file = Path(__file__).parent / "providers.json"
-    required_keys = []
-    
-    if providers_file.exists():
-        with open(providers_file) as f:
-            data = json.load(f)
-        for p in data.get("providers", []):
-            key_env = p.get("key_env")
-            if key_env:
-                required_keys.append((key_env, p.get("name", "Unknown")))
-    
-    issues = []
-    for key_env, provider_name in required_keys:
-        value = os.getenv(key_env)
-        if value:
-            ok(f"{key_env} is set (for {provider_name})")
-        else:
-            warn(f"{key_env} is NOT SET (for {provider_name})")
-            issues.append(f"missing {key_env}")
-    
-    if not required_keys:
-        warn("No providers configured, can't check env vars")
-    
-    return issues
+def check_providers(base_dir=None):
+    """Run the dashboard's Test model check on each saved provider and return one issue per failure.
 
+    Key variables come from .env, which config.py loads when the provider test first imports it,
+    the same way the bot reads them.
+    """
+    header("2. Testing Providers")
 
-async def check_connectivity():
-    """Test connectivity to each provider."""
-    header("3. Testing Provider Connectivity")
-    
-    providers_file = Path(__file__).parent / "providers.json"
-    if not providers_file.exists():
-        fail("Cannot test - providers.json not found")
-        return ["no providers.json"]
-    
-    with open(providers_file) as f:
-        data = json.load(f)
-    
-    from dotenv import load_dotenv
-    load_dotenv()
-    
+    base_dir = Path(base_dir) if base_dir else Path(__file__).parent
+    try:
+        data = json.loads((base_dir / "providers.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fail("Cannot test - providers.json is missing or not valid JSON")
+        return ["providers not tested"]
+    if not isinstance(data, dict) or not isinstance(data.get("providers"), list):
+        fail("Cannot test - providers.json has no providers list")
+        return ["providers not tested"]
+    if not data["providers"]:
+        warn("providers.json lists no providers")
+
     issues = []
-    
-    for p in data.get("providers", []):
-        name = p.get("name", "Unknown")
-        url = p.get("url", "")
-        model = p.get("model", "unknown")
-        key_env = p.get("key_env", "")
-        api_key = os.getenv(key_env, "")
-        
+    for index, provider in enumerate(data["providers"]):
+        entry = provider if isinstance(provider, dict) else {}
+        name = entry.get("name") or f"Provider {index + 1}"
         print(f"\n{Colors.BOLD}Testing: {name}{Colors.END}")
-        info(f"  URL: {url}")
-        info(f"  Model: {model}")
-        
-        if not url:
-            fail("  No URL configured")
-            issues.append(f"{name}: no URL")
+
+        result = dashboard_provider_health.test_provider_connection(
+            provider, index=index, default_timeout=data.get("timeout", 60))
+        for check in result["checks"]:
+            report = {"passed": ok, "failed": fail}.get(check["status"], info)
+            report(f"  {check['label']}: {check['detail']}")
+        if result["success"]:
             continue
-        
-        # Test /models endpoint first (basic connectivity)
-        import httpx
-        
-        try:
-            models_url = url.rstrip('/') + '/models'
-            info(f"  Checking {models_url}...")
-            
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                headers = {}
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-                
-                resp = await client.get(models_url, headers=headers)
-                
-                if resp.status_code == 200:
-                    ok(f"  /models endpoint responded (HTTP 200)")
-                    try:
-                        models_data = resp.json()
-                        if "data" in models_data:
-                            available_models = [m.get("id", "?") for m in models_data["data"]]
-                            info(f"  Available models: {available_models[:5]}{'...' if len(available_models) > 5 else ''}")
-                            if model not in available_models and model != "local-model":
-                                warn(f"  Configured model '{model}' not in available models!")
-                    except:
-                        pass
-                else:
-                    warn(f"  /models returned HTTP {resp.status_code}")
-                    info(f"  Response: {resp.text[:200]}")
-                    
-        except httpx.ConnectError as e:
-            fail(f"  CONNECTION FAILED: Cannot reach {url}")
-            fail(f"  Error: {e}")
-            issues.append(f"{name}: connection failed")
-            info("  → Check if the server is running")
-            info("  → Check firewall settings")
-            info("  → Verify the URL is correct")
-        except httpx.TimeoutException:
-            fail(f"  TIMEOUT: Server didn't respond in 10s")
-            issues.append(f"{name}: timeout")
-        except Exception as e:
-            fail(f"  ERROR: {type(e).__name__}: {e}")
-            issues.append(f"{name}: {type(e).__name__}")
-    
+
+        issues.append(f"{name}: {result['error']}")
+        key_env = entry.get("key_env")
+        settings_failed = result["checks"][0]["status"] == "failed"
+        if settings_failed and isinstance(key_env, str) and key_env and not entry.get("api_key") \
+                and not os.getenv(key_env):
+            info(f"  {key_env} is not set in .env or the process environment")
+
     return issues
 
 
-async def test_chat_completion():
-    """Try an actual chat completion."""
-    header("4. Testing Chat Completion")
-    
-    providers_file = Path(__file__).parent / "providers.json"
-    if not providers_file.exists():
-        fail("Cannot test - providers.json not found")
-        return
-    
-    with open(providers_file) as f:
-        data = json.load(f)
-    
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    from openai import AsyncOpenAI
-    
-    for p in data.get("providers", []):
-        name = p.get("name", "Unknown")
-        url = p.get("url", "")
-        model = p.get("model", "unknown")
-        key_env = p.get("key_env", "")
-        api_key = os.getenv(key_env, "") or "not-needed"
-        
-        print(f"\n{Colors.BOLD}Chat test: {name}{Colors.END}")
-        
-        try:
-            client = AsyncOpenAI(
-                base_url=url,
-                api_key=api_key,
-                timeout=30.0
-            )
-            
-            info("  Sending test message...")
-            response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": "Say 'test successful' and nothing else."}
-                    ],
-                    max_tokens=20,
-                    temperature=0
-                ),
-                timeout=30.0
-            )
-            
-            content = response.choices[0].message.content
-            ok(f"  Response received: {content[:100]}")
-            
-        except asyncio.TimeoutError:
-            fail(f"  TIMEOUT after 30s")
-        except Exception as e:
-            fail(f"  ERROR: {type(e).__name__}: {e}")
-
-
-async def main():
+def main():
     print(f"\n{Colors.BOLD}Discord Pals - Provider Diagnostics{Colors.END}")
     print(f"Running from: {Path(__file__).parent}\n")
     
@@ -253,25 +129,11 @@ async def main():
     # Check files
     all_issues.extend(check_files())
     
-    # Check env vars
     try:
-        all_issues.extend(check_env_vars())
-    except ImportError:
-        fail("python-dotenv not installed. Run: pip install python-dotenv")
-        all_issues.append("missing python-dotenv")
-    
-    # Check connectivity
-    try:
-        all_issues.extend(await check_connectivity())
-    except ImportError:
-        fail("httpx not installed. Run: pip install httpx")
-        all_issues.append("missing httpx")
-    
-    # Test actual completion
-    try:
-        await test_chat_completion()
-    except Exception as e:
-        fail(f"Chat completion test failed: {e}")
+        all_issues.extend(check_providers())
+    except ImportError as e:
+        fail(f"A dependency is missing ({e.name}). Run: pip install -r requirements.lock")
+        all_issues.append(f"missing {e.name}")
     
     # Summary
     header("SUMMARY")
@@ -286,4 +148,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

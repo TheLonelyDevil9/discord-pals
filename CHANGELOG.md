@@ -37,6 +37,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Supported Python versions are 3.11, 3.12, 3.13, and 3.14, and CI tests all four. Python 3.10 is no longer supported, and `setup.sh` and `setup.bat` require 3.11 or newer.
 - PyYAML 6.0.3 replaces 6.0.2, which had no Python 3.14 wheels and had to be built from source there.
 - `setup.sh`, `setup.bat`, `requirements-dev.txt`, and CI install from `requirements.lock`, and the dependency audit in CI checks the versions pinned there. A failed install now stops setup; it used to retry once and then report success.
+- `python diagnose.py` runs the same check as **Test model** on every saved provider, so keys saved in the dashboard and the Anthropic, Gemini, and Responses formats are tested correctly instead of failing. It no longer lists models from `/models`; the test itself shows whether the saved model answers.
 
 ### Fixed
 
