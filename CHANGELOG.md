@@ -19,7 +19,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
 - A panel under the dashboard controls shows the result of an update: its message, every warning, the commit before and after, the dependency status, and the snapshot path, also for refused and rolled-back updates and for a refused restart.
-- `/api/version` reports `running_commit`, `disk_commit`, `tracked_ref`, and `commits_behind`. A commit on disk that is not running needs a restart, and with **Main** or **Staging** selected, new commits on that branch show as an update. See [Updates And Recovery](docs/operations.md#updates-and-recovery).
+- `/api/version` reports `running_commit`, `disk_commit`, `tracked_ref`, and `commits_behind`. A commit on disk that is not running needs a restart, and with **Main** or **Staging** selected, only new commits on that branch show as an update. See [Updates And Recovery](docs/operations.md#updates-and-recovery).
 
 ### Changed
 
@@ -34,9 +34,11 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
-- The dashboard restarts by itself after an update only when the update applied with no warning and its dependencies installed; otherwise restart when ready. The new code must import in a separate process before an update is kept or a restart goes ahead.
-- The **Restart** button no longer calls `systemctl` or `sudo`. Under systemd it exits with status 75 and the unit's `Restart=` policy starts the service again; started any other way, the process replaces itself as before. It saves reminders and statistics as well as history and memories first.
-- Version checks run in a background thread, so a page load never waits for GitHub or `git fetch`. A result is kept for 30 minutes, a failed check for 5.
+- The dashboard restarts by itself after an update only when the update applied with no warning and its dependencies installed; otherwise restart when ready. The new code must pass an import check in a separate process before an update is kept or a restart goes ahead.
+- The **Restart** button no longer calls `systemctl` or `sudo`. It waits for the bots to close, saves history, memories, reminders, and statistics, and then starts the code on disk. When the bot is the main process of a system service whose unit starts again after exit status 75, it exits with 75; otherwise it re-executes in place, or on Windows starts a new process from an argument list, so an install path with a space works. Any failure ends the process with a non-zero status. The page reloads once the bot answers again instead of after ten seconds.
+- The **Restart** button refuses while an update runs and while the checkout holds unresolved conflicts or an unfinished Git operation.
+- Version checks run in a background thread, so a page load never waits for GitHub or `git fetch`. A result is kept for 30 minutes, a failed check for 5. No check runs while an update holds the checkout, and the tracked-branch fetch leaves tags alone.
+- With **Main** or **Staging** selected, an update is complete when the checkout reaches that branch's tip, and a newer release tag on another branch is no longer reported as an update or a failed one.
 - `bump_version.py --commit` and `--tag` check the branch and the worktree before writing or pushing anything.
 
 ### Fixed
@@ -48,8 +50,9 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The webhook for a deleted issue marks its post deleted when GitHub answers 410 for the issue; such a job failed on every attempt before.
 - Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
-- When local changes conflict with an update, the update rolls back to the commit it started from with the changes in place and a copy in the Git stash, where it used to leave conflict markers and unmerged files that stopped every later update.
-- The updater refuses a checkout with unresolved conflicts or an unfinished merge, rebase, cherry-pick, or revert, and changes nothing. An update whose code does not import rolls back to the previous commit.
+- When local changes conflict with an update, the update rolls back to the commit it started from with the changes in place, where it used to leave conflict markers and unmerged files that stopped every later update. A failed import check, or any error after the checkout moved, rolls back the same way and reinstalls the previous requirements when they changed. A rollback deletes the stash entry, backup branch and snapshot of its attempt; when it cannot restore the checkout, the page gives the commands that do.
+- The updater refuses a checkout with unresolved conflicts or an unfinished merge, rebase, cherry-pick, or revert, and changes nothing. It also refuses an update that would overwrite a file Git does not track, such as an operator's own ignored character file.
+- Only a kept update prunes older snapshots, so refused, failed and rolled-back updates can no longer rotate the last real snapshot out.
 - A pip timeout during an update is a dependency warning instead of an error, and every dashboard update log entry records the commit before and after.
 
 ### Upgrade notes
@@ -60,7 +63,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
-- Under systemd the **Restart** button needs `Restart=always` in the unit, or `RestartForceExitStatus=75`. Add `SuccessExitStatus=75` so a dashboard restart is not recorded as a failure. A unit that relied on the old `sudo systemctl restart` can now set `NoNewPrivileges=yes`. See [Linux systemd](docs/operations.md#linux-systemd).
+- Under systemd the **Restart** button exits with status 75 only when the unit starts the service again after it (`Restart=always`, `Restart=on-failure`, or `RestartForceExitStatus=75`); otherwise the process re-executes in place. To record that exit as a success, add `SuccessExitStatus=75` together with `RestartForceExitStatus=75`: under `Restart=on-failure`, `SuccessExitStatus=75` alone stops the restart. A unit that relied on the old `sudo systemctl restart` can now set `NoNewPrivileges=yes`. See [Linux systemd](docs/operations.md#linux-systemd).
 
 ## [v2.9.0] - 2026-09-29
 
