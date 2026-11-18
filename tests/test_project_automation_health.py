@@ -206,6 +206,19 @@ def test_status_carries_the_health_signals_without_job_payloads_titles_or_user_n
     assert "Private report title" not in shown and "private-user" not in shown
 
 
+def test_status_counts_the_jobs_once_and_still_releases_lapsed_leases(service, monkeypatch):
+    add_job(service, "pending", "pending", available_ago=60)
+    add_job(service, "inflight", "inflight", available_ago=60)
+    with closing(sqlite3.connect(service.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET lease_until = ? WHERE key = 'inflight'", (time.time() - 60,))
+    statements = []
+    trace_store_statements(monkeypatch, statements.append)
+    status = service.status()
+    assert sum("COUNT(" in statement for statement in statements) == 1
+    assert status["job_counts"] == {"pending": 1, "failed": 0, "recovery": 1, "dismissed": 0}
+    assert signal(status["health"], "held")["value"] == "1"
+
+
 def test_health_reads_leave_the_write_lock_free(service, cfg, monkeypatch):
     add_job(service, "pending", "pending", available_ago=60)
     add_job(service, "failed", "failed")

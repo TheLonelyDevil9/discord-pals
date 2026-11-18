@@ -136,8 +136,8 @@ class AutomationService:
         """
         return health_signals(self._health_facts())
 
-    def _health_facts(self) -> HealthFacts:
-        """Read the facts of the health signals.
+    def _health_facts(self, queue=None) -> HealthFacts:
+        """Read the facts of the health signals, or use queue when the caller read it already.
 
         Queue lag and sync age count from the later of their own start and the time automation
         last started running, so a restart or a resumed pause does not raise them for the time
@@ -145,7 +145,7 @@ class AutomationService:
         """
         import runtime_config
         cfg = self.settings()
-        queue = self.store.queue_health()
+        queue = self.store.queue_health() if queue is None else queue
         last_sync = (self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at")
         started = self._active_since or 0
         now = time.time()
@@ -166,13 +166,15 @@ class AutomationService:
     def status(self) -> dict:
         cfg = self.settings()
         persisted = self.store.get_link("project_status", mapping_key(cfg)) or {}
+        queue = self.store.queue_health(expire_leases=True)
         return {"enabled": cfg.get("enabled", False), "paused": self.paused(),
                 "bot_online": cfg.get("bot_name") in self.bots,
                 "worker_running": bool(self._worker and not self._worker.done()),
                 "last_error": self._last_error,
                 "repository": cfg.get("repository", ""),
                 **{name: persisted.get(name) for name in ("last_webhook_at", "last_sync_at", "last_activity_at")},
-                "job_counts": self.store.job_counts(), "health": self.health()}
+                "job_counts": {name: queue[name] for name in ("pending", "failed", "recovery", "dismissed")},
+                "health": health_signals(self._health_facts(queue))}
 
     def list_cases(self, limit=100):
         return self.store.list_cases(limit=limit)

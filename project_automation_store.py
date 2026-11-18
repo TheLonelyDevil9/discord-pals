@@ -722,13 +722,16 @@ class AutomationStore:
         with self._connection() as connection:
             return self._job_counts(connection)
 
-    def queue_health(self):
+    def queue_health(self, *, expire_leases=False):
         """Return job_counts plus oldest_due_at and database_bytes, without taking the write lock.
 
         oldest_due_at is the available_at of the oldest pending job that is due, or None.
         database_bytes is the size of the main database file. Lapsed leases stay for claim_job
-        to release, so a job whose lease lapsed still counts as pending here.
+        to release, so a job whose lease lapsed still counts as pending here, unless
+        expire_leases releases them first in a short write, as job_counts does.
         """
+        if expire_leases:
+            self._expire_due_leases()
         with self._connection() as connection:
             counts = self._job_counts(connection)
             oldest = connection.execute("SELECT MIN(available_at) FROM jobs WHERE state = 'pending' AND available_at <= ?",
