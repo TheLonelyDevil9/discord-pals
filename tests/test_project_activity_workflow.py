@@ -790,6 +790,48 @@ def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monke
     assert any(job["key"] == f"initial:{case['id']}" for job in setup.store.list_jobs())
 
 
+@pytest.mark.parametrize("history_days,kept", [(30, True), (0, False)])
+@pytest.mark.parametrize("deletion", ["sweep", "first start"])
+def test_saved_history_days_reach_the_sweep_and_the_first_start_cleanup(setup, monkeypatch, deletion,
+                                                                        history_days, kept):
+    import project_automation
+    monkeypatch.setattr(project_automation, "info", lambda *args, **kwargs: None)
+    setup.cfg["history_days"] = history_days
+    finished = setup.store.enqueue("event", {}, "github:yesterday")
+    yesterday = time.time() - DAY
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = 'done', created_at = ?, updated_at = ?, available_at = ? "
+                           "WHERE id = ?", (yesterday, yesterday, yesterday, finished))
+    asyncio.run(setup.service.maintain() if deletion == "sweep" else setup.service.clean_up_old_queue())
+    assert (setup.store.get_job(finished) is not None) is kept
+
+
+def test_worker_sweeps_at_most_every_ten_minutes(setup, monkeypatch):
+    import project_automation
+    clock = [10_000.0]
+    monkeypatch.setattr(project_automation, "time", SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    sweeps = []
+
+    async def maintain():
+        sweeps.append(clock[0])
+
+    steps = iter([300, 299, 1, 600, 0])
+
+    async def sleep(_):
+        try:
+            clock[0] += next(steps)
+        except StopIteration:
+            raise asyncio.CancelledError from None
+
+    monkeypatch.setattr(setup.service, "maintain", maintain)
+    monkeypatch.setattr(project_automation.asyncio, "sleep", sleep)
+    setup.service._queue_cleaned = True
+    setup.cfg["enabled"] = False
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(setup.service._run())
+    assert sweeps == [10_000.0, 10_600.0, 11_200.0]
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")

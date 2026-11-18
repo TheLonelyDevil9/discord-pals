@@ -278,11 +278,19 @@ def test_link_cleanup_after_a_bulk_delete_does_not_probe_every_deleted_id(store,
     assert link_steps < 100
 
 
-def test_small_backlog_is_deleted_by_id(store, monkeypatch):
+def test_small_backlog_goes_in_batches_of_the_lowest_ids_and_leaves_other_rows_untouched(store):
     add_finished_rows(store, 50)
-    deletes = trace_job_deletes(monkeypatch)
-    assert store.prune_jobs(0) == 50
-    assert deletes == ["DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)"]
+    kept = add_kept_rows(store)
+    with closing(sqlite3.connect(store.path)) as connection:
+        finished = [row[0] for row in connection.execute("SELECT id FROM jobs WHERE state = 'done' ORDER BY id")]
+        later = connection.execute("SELECT * FROM jobs WHERE id IN (%s) ORDER BY id" % ",".join("?" * 30),
+                                   finished[20:]).fetchall()
+    before = sequence(store)
+    assert store.prune_jobs(0, limit=20) == 20
+    assert job_ids(store) == set(finished[20:]) | {row[0] for row in kept}
+    assert snapshot_rows(store, finished[20:]) == later
+    assert snapshot_rows(store, [row[0] for row in kept]) == kept
+    assert sequence(store) == before
 
 
 def database_bytes(store):
