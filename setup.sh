@@ -22,9 +22,9 @@ PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
 
 echo "[OK] Python $PYTHON_VERSION found"
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]); then
-    echo "ERROR: Python 3.10 or higher is required!"
-    echo "You have Python $PYTHON_VERSION"
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]); then
+    echo "ERROR: Python 3.11 or higher is required!"
+    echo "You have Python $PYTHON_VERSION. Supported versions: 3.11, 3.12, 3.13 and 3.14."
     exit 1
 fi
 

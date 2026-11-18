@@ -59,10 +59,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Quoted so YAML keeps them as strings; bare 3.10 parses as the float
-        # 3.1. 3.10 matches the deployment host, 3.12 is the version the README
-        # recommends, and 3.13 is the audioop-lts compatibility path.
-        python-version: ["3.10", "3.12", "3.13"]
+        # Quoted so YAML keeps them as strings; a bare 3.10 parses as the float
+        # 3.1. These are the supported versions, and python_support.py names
+        # the same list in its notice; a test keeps the two in step.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4

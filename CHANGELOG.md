@@ -33,6 +33,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
+- Supported Python versions are 3.11, 3.12, 3.13, and 3.14, and CI tests all four. Python 3.10 is no longer supported, and `setup.sh` and `setup.bat` require 3.11 or newer.
 
 ### Fixed
 
@@ -52,6 +53,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
+- An install on Python 3.10 keeps starting after this update and shows a warning. To move to a supported version, install Python 3.11, 3.12, 3.13, or 3.14 and build a new virtual environment beside the old one, for example `python3.13 -m venv venv-new` and `venv-new/bin/pip install -r requirements.txt` (on Windows, `py -3.13 -m venv venv-new` and `venv-new\Scripts\pip install -r requirements.txt`). Stop the bot, rename `venv` to `venv-old` and `venv-new` to `venv`, and start it again. Delete `venv-old` once the bot runs.
 
 ## [v2.9.0] - 2026-09-29
 

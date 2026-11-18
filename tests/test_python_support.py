@@ -1,11 +1,16 @@
 """The notice an install gets when it still runs a Python version that is no longer supported."""
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+import yaml
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
 import python_support
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class UnsupportedPythonNoticeTests(unittest.TestCase):
@@ -34,6 +39,13 @@ class UnsupportedPythonNoticeTests(unittest.TestCase):
         python_support.warn_if_unsupported(warnings.append, (3, 13, 1))
 
         self.assertEqual(warnings, [])
+
+    def test_ci_tests_exactly_the_versions_the_notice_names(self):
+        workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+
+        matrix = workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+
+        self.assertEqual(tuple(matrix), python_support.SUPPORTED_PYTHON_VERSIONS)
 
 
 class DashboardPythonNoticeTests(unittest.TestCase):

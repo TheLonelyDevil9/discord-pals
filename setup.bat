@@ -28,14 +28,14 @@ for /f "tokens=1,2 delims=." %%a in ("!PYTHON_VER!") do (
 echo [OK] Python !PYTHON_VER! found
 
 if !PYTHON_MAJOR! LSS 3 (
-    echo ERROR: Python 3.10 or higher is required!
-    echo You have Python !PYTHON_VER!
+    echo ERROR: Python 3.11 or higher is required.
+    echo You have Python !PYTHON_VER!. Supported versions: 3.11, 3.12, 3.13 and 3.14.
     pause
     exit /b 1
 )
-if !PYTHON_MAJOR! EQU 3 if !PYTHON_MINOR! LSS 10 (
-    echo ERROR: Python 3.10 or higher is required!
-    echo You have Python !PYTHON_VER!
+if !PYTHON_MAJOR! EQU 3 if !PYTHON_MINOR! LSS 11 (
+    echo ERROR: Python 3.11 or higher is required.
+    echo You have Python !PYTHON_VER!. Supported versions: 3.11, 3.12, 3.13 and 3.14.
     pause
     exit /b 1
 )

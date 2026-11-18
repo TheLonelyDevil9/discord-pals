@@ -30,7 +30,7 @@ python tools/dashboard_smoke.py
 | --- | --- |
 | Quality checks | `tools/quality_check.py` guardrails |
 | Lint | Ruff correctness rules only: undefined and redefined names, syntax errors, identity comparison against literals |
-| Tests | Full suite on Python 3.10, 3.12, and 3.13 |
+| Tests | Full suite on Python 3.11, 3.12, 3.13, and 3.14 |
 | Dashboard smoke test | The authenticated access boundary against a running server |
 | Security scan | Bandit at high severity and high confidence; `pip-audit` fails on known dependency advisories. |
 

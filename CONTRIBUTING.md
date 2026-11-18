@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Discord Pals! This document provi
 
 ### Prerequisites
 
-- Python 3.10 or higher (3.11/3.12 recommended)
+- Python 3.11, 3.12, 3.13, or 3.14 (CI tests all four)
 - Git
 - A Discord account for testing
 

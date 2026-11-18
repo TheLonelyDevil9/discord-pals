@@ -333,7 +333,7 @@ Common causes:
 
 - Invalid JSON in `providers.json`, `bots.json`, or runtime config.
 - Missing environment variables.
-- Python older than 3.10.
+- Python older than 3.10. Discord Pals supports 3.11, 3.12, 3.13, and 3.14; 3.10 still starts with a warning.
 - Missing dependencies.
 
 Run `pip install -r requirements.txt`, then `python diagnose.py`.

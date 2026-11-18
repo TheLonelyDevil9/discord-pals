@@ -1,6 +1,6 @@
 # Discord Pals
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python 3.11-3.14](https://img.shields.io/badge/python-3.11--3.14-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Discord.py](https://img.shields.io/badge/discord.py-2.3.2-7289da)
 
@@ -37,7 +37,7 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 
 ## Requirements
 
-- Python 3.10 or newer. Python 3.11 or 3.12 is the safest default; Python 3.13+ is supported through `audioop-lts`.
+- Python 3.11, 3.12, 3.13, or 3.14. Python 3.10 still starts, with a warning, but is no longer supported.
 - A Discord bot token.
 - At least one supported AI provider, either cloud-hosted or local.
 
