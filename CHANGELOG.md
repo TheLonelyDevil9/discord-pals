@@ -36,6 +36,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
 - `@Name` in a reply is looked up once among at most 1,000 candidates: the reply target, mentioned users, recent speakers, then server members. A reply without `@` no longer reads the member list. On a large server, each reply held up every bot for a time that grew with the member count and wrote one log line per member alias; it now writes one line with the counts. See [Split Replies And Mentions](docs/features.md#split-replies-and-mentions).
+- Each bot posts at most one failure notice per channel per minute, so an outage no longer posts one notice for every queued request. The skipped notices are logged. See [All providers failed](docs/operations.md#all-providers-failed).
 
 ### Fixed
 

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
+import failure_notices
 import request_queue as request_queue_module
 import runtime_config
 
@@ -221,6 +222,67 @@ class RequestTimeBudgetTests(unittest.IsolatedAsyncioTestCase):
         instance._build_request_context.assert_awaited_once()
         request["message"].channel.send.assert_not_awaited()
         self.assertEqual(patches.lines("request_time_budget_exceeded"), [])
+
+
+class FailureNoticeLimitTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.clock = {"now": 0.0}
+
+    def _bot(self, name="Nahida"):
+        instance = make_bot(name)
+        instance._failure_notice_limit = failure_notices.FailureNoticeLimit(clock=lambda: self.clock["now"])
+        return instance
+
+    async def _fail(self, instance, channel, *, at, build_error=None):
+        self.clock["now"] = at
+        if build_error:
+            instance._build_request_context = AsyncMock(side_effect=build_error)
+        else:
+            instance._build_request_context = AsyncMock(return_value={"channel_id": channel.id})
+            instance._generate_ai_response = AsyncMock(return_value=None)
+        with RequestPatches({"provider_retry_attempts": 1, "provider_retry_window_seconds": 0}) as patches, \
+                patch("coordinator.coordinator.acquire_slot", new=AsyncMock(return_value=object())), \
+                patch("coordinator.coordinator.release_slot", new=Mock()):
+            await instance._process_request(make_request(waited=1, channel=channel))
+        return patches.lines("failure_notice_skipped")
+
+    async def test_an_outage_posts_one_notice_per_channel_per_minute(self):
+        instance, channel = self._bot(), types.SimpleNamespace(id=77, send=AsyncMock())
+
+        skipped = []
+        for at in (0, 10, 59, 61):
+            skipped += await self._fail(instance, channel, at=at)
+
+        self.assertEqual(channel.send.await_count, 2)
+        self.assertEqual(channel.send.await_args.args[0], "Something went wrong - all providers failed.")
+        self.assertEqual(len(skipped), 2)
+
+    async def test_each_channel_gets_its_own_notice(self):
+        instance = self._bot()
+        first, second = types.SimpleNamespace(id=77, send=AsyncMock()), types.SimpleNamespace(id=78, send=AsyncMock())
+
+        await self._fail(instance, first, at=0)
+        await self._fail(instance, second, at=1)
+
+        first.send.assert_awaited_once()
+        second.send.assert_awaited_once()
+
+    async def test_error_and_timeout_notices_share_the_limit(self):
+        instance, channel = self._bot(), types.SimpleNamespace(id=77, send=AsyncMock())
+
+        await self._fail(instance, channel, at=0, build_error=RuntimeError("broken context"))
+        await self._fail(instance, channel, at=5)
+
+        channel.send.assert_awaited_once()
+        self.assertIn("Something went wrong", channel.send.await_args.args[0])
+
+    async def test_each_bot_has_its_own_limit_in_a_shared_channel(self):
+        channel = types.SimpleNamespace(id=77, send=AsyncMock())
+
+        await self._fail(self._bot("Nahida"), channel, at=0)
+        await self._fail(self._bot("Nilou"), channel, at=1)
+
+        self.assertEqual(channel.send.await_count, 2)
 
 
 class RequestGuardSettingTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase):

@@ -42,6 +42,7 @@ from response_delivery import format_response_for_delivery
 from runtime_delivery import RuntimeDeliveryBatch, deliver_channel_multipart, deliver_reply_multipart
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
+from failure_notices import FailureNoticeLimit
 from image_attachments import process_attachments
 from stats import stats_manager
 import dm_images, runtime_config
@@ -2833,10 +2834,11 @@ Return exactly one JSON object with this shape:
                         if context.get("identity_guard_blocked"):
                             log.warn("Identity guard dropped response after retry", self.name, component="guard", event="identity_guard_drop", req_id=req_id)
                             return
-                        await message.channel.send(
-                            "Something went wrong - all providers failed.",
-                            delete_after=ERROR_DELETE_AFTER
-                        )
+                        if self._may_post_failure_notice(message.channel, req_id):
+                            await message.channel.send(
+                                "Something went wrong - all providers failed.",
+                                delete_after=ERROR_DELETE_AFTER
+                            )
                         return
 
                     # Get stagger delay for multi-bot responses (prevents simultaneous sends)
@@ -2862,8 +2864,28 @@ Return exactly one JSON object with this shape:
                 log.error(f"Error processing ({type(e).__name__}): {e}", self.name, component="request", event="request_error", req_id=req_id, error_type=type(e).__name__)
                 await self._send_user_error(message.channel, "default")
 
+    def _may_post_failure_notice(self, channel, req_id: str | None = None) -> bool:
+        """Return whether this bot may post a failure notice in channel, at most one a minute."""
+        limit = getattr(self, "_failure_notice_limit", None)
+        if limit is None:
+            limit = self._failure_notice_limit = FailureNoticeLimit()
+        channel_id = getattr(channel, "id", None)
+        if limit.allow(channel_id):
+            return True
+        log.diagnostic(
+            "Failure notice skipped: this channel had one within the last minute",
+            self.name,
+            component="request",
+            event="failure_notice_skipped",
+            req_id=req_id,
+            channel_id=channel_id,
+        )
+        return False
+
     async def _send_user_error(self, channel, error_type: str):
         """Send a user-friendly error message."""
+        if not self._may_post_failure_notice(channel):
+            return
         from constants import USER_FRIENDLY_ERRORS, ERROR_DELETE_AFTER
         msg = USER_FRIENDLY_ERRORS.get(error_type, USER_FRIENDLY_ERRORS["default"])
         try:
