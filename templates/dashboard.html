@@ -107,6 +107,7 @@
                 </button>
             </div>
         </div>
+        <div id="update-result" class="update-result hidden" role="status" aria-live="polite"></div>
 
         <div class="control-help">
             <details class="advanced-panel">
@@ -309,6 +310,44 @@
 .update-branch-select:focus {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+}
+
+.update-result {
+    margin-top: 12px;
+    padding: 14px 16px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--success);
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
+}
+
+.update-result.hidden {
+    display: none;
+}
+
+.update-result.is-warning {
+    border-left-color: var(--warning);
+}
+
+.update-result.is-error {
+    border-left-color: var(--danger);
+}
+
+.update-result-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.update-result ul {
+    margin: 8px 0 0 18px;
+    color: var(--text-secondary);
+}
+
+.update-result-details {
+    margin-top: 8px;
+    color: var(--text-muted);
 }
 
 .control-help {
@@ -731,6 +770,58 @@ async function checkPendingUpdate() {
     }
 }
 
+function renderUpdateResult(data) {
+    const panel = document.getElementById('update-result');
+    if (!panel || !data) return;
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const failed = data.status !== 'ok';
+
+    panel.replaceChildren();
+    panel.classList.remove('hidden', 'is-warning', 'is-error');
+    if (failed) {
+        panel.classList.add('is-error');
+    } else if (warnings.length || data.dependency_status === 'warning') {
+        panel.classList.add('is-warning');
+    }
+
+    const title = document.createElement('div');
+    title.className = 'update-result-title';
+    title.textContent = data.message || (failed ? 'Update failed' : 'Update finished');
+    panel.appendChild(title);
+
+    if (warnings.length) {
+        const list = document.createElement('ul');
+        warnings.forEach((warning) => {
+            const item = document.createElement('li');
+            item.textContent = warning;
+            list.appendChild(item);
+        });
+        panel.appendChild(list);
+    }
+
+    const details = [];
+    if (data.before_head && data.after_head) {
+        details.push(data.before_head === data.after_head
+            ? 'Commit ' + data.before_head.slice(0, 7)
+            : 'Commit ' + data.before_head.slice(0, 7) + ' → ' + data.after_head.slice(0, 7));
+    }
+    if (data.dependency_status && data.dependency_status !== 'skipped') {
+        details.push('Dependencies: ' + data.dependency_status);
+    }
+    if (data.backup_path) {
+        details.push('Snapshot: ' + data.backup_path);
+    }
+    if (!failed && data.restart_required && !data.auto_restart) {
+        details.push('Restart the bot when you are ready to run the new code.');
+    }
+    details.forEach((text) => {
+        const line = document.createElement('div');
+        line.className = 'update-result-details';
+        line.textContent = text;
+        panel.appendChild(line);
+    });
+}
+
 // Update bot (git pull)
 async function updateBot() {
     const btn = document.getElementById('update-btn');
@@ -748,6 +839,7 @@ async function updateBot() {
             body: JSON.stringify({ update_branch: selectedUpdateBranch() })
         });
         const data = await response.json();
+        renderUpdateResult(data);
 
         if (data.status === 'ok') {
             if (typeof window.renderGlobalUpdateIndicator === 'function') {
@@ -759,18 +851,12 @@ async function updateBot() {
                     restart_required: Boolean(data.restart_required)
                 });
             }
-            if (data.restart_required && !data.updated) {
-                showNewVersionBadge(data.new_version || data.file_version, true);
-                showToast(data.message || ('Restart to apply v' + (data.new_version || data.file_version)), 'success');
-            } else if (data.updated) {
-                if (data.new_version) {
-                    showNewVersionBadge(data.new_version, true);
-                    showToast('Updated to v' + data.new_version + '! Restarting...', 'success');
-                } else {
-                    showToast('Update successful! Restarting...', 'success');
-                }
-                // Auto-restart after 2 seconds
+            if (data.auto_restart) {
+                showToast('Update applied. Restarting...', 'success');
                 setTimeout(() => restartBot(true), 2000);
+            } else if (data.restart_required) {
+                showNewVersionBadge(data.new_version || data.file_version, true);
+                showToast(data.message || 'Restart to apply the update', data.warnings && data.warnings.length ? 'warning' : 'success');
             } else {
                 hideNewVersionBadge();
                 showToast(data.message || 'Already up to date', 'success');
@@ -787,7 +873,8 @@ async function updateBot() {
                     });
                 }
             }
-            showToast('Update failed: ' + (data.message || 'Unknown error'), 'error');
+            const message = data.message || 'Unknown error';
+            showToast(/^Update /.test(message) ? message : 'Update failed: ' + message, 'error');
         }
     } catch (e) {
         showToast('Failed to update - check connection', 'error');
@@ -828,6 +915,7 @@ async function restartBot(skipConfirm = false) {
             setTimeout(() => { location.reload(); }, 10000);
         } else {
             showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
+            renderUpdateResult({ status: 'error', message: data.message || 'Restart failed' });
             btn.disabled = false;
             btn.querySelector('.toggle-status').textContent = 'Restart';
         }

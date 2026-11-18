@@ -3421,6 +3421,7 @@ def _update_payload_base(
         'backup_path': git_result.get("backup_path"),
         'dependency_status': dependency_result.get("status"),
         'warnings': warnings or [],
+        'auto_restart': False,
     }
 
 
@@ -4270,8 +4271,13 @@ def api_update():
             'message': message,
             'output': git_result["output"],
             'updated': git_result["updated"],
-            'restart_required': version_changed,
+            'restart_required': version_changed or git_result["updated"],
             'new_version': new_version if version_changed else None,
+            'auto_restart': (
+                git_result["updated"]
+                and not payload["warnings"]
+                and dependency_result.get("status") != "warning"
+            ),
         })
         return jsonify(payload)
 

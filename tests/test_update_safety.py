@@ -238,6 +238,52 @@ class DashboardLocalChangesTests(DashboardUpdateCase):
         self.assertEqual(self.stash_entries(), [])
 
 
+class DashboardAutoRestartTests(DashboardUpdateCase):
+    def test_a_clean_update_restarts_automatically(self):
+        self.publish({"main.py": "STARTED = 2\n"})
+
+        data = self.post_update().get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["updated"])
+        self.assertTrue(data["restart_required"])
+        self.assertEqual(data["warnings"], [])
+        self.assertTrue(data["auto_restart"])
+
+    def test_a_failed_dependency_install_keeps_the_update_without_restarting(self):
+        upstream = self.publish({"requirements.txt": "=this is not a requirement=\n", "main.py": "STARTED = 2\n"})
+
+        with patch.object(dashboard_module, "_pip_command_candidates",
+                          return_value=[[sys.executable, "-m", "pip"]]):
+            data = self.post_update().get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(self.head(), upstream)
+        self.assertEqual(data["dependency_status"], "warning")
+        self.assertTrue(any("Dependency install failed" in warning for warning in data["warnings"]))
+        self.assertFalse(data["auto_restart"])
+        entry = self.last_log_entry()
+        self.assertEqual((entry["dependency_status"], entry["after_head"]), ("warning", upstream))
+
+    def test_any_warning_stops_the_automatic_restart(self):
+        git(self.install, "commit", "-q", "--allow-empty", "-m", "local commit")
+        self.publish({"main.py": "STARTED = 2\n"})
+
+        data = self.post_update().get_json()
+
+        self.assertEqual(data["status"], "ok")
+        self.assertTrue(data["updated"])
+        self.assertTrue(any("diverged" in warning for warning in data["warnings"]))
+        self.assertFalse(data["auto_restart"])
+
+    def test_the_page_restarts_only_on_auto_restart_and_shows_the_result(self):
+        page = self.client.get("/").get_data(as_text=True)
+
+        self.assertIn('id="update-result"', page)
+        self.assertEqual(page.count("restartBot(true)"), 1)
+        self.assertRegex(page, r"if \(data\.auto_restart\) \{[^}]*restartBot\(true\)")
+
+
 class DashboardUpdateLogTests(DashboardUpdateCase):
     def test_a_failed_fetch_logs_the_commit_before_and_after(self):
         git(self.install, "remote", "set-url", "origin", str(self.root / "missing.git"))
