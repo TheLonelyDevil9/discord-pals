@@ -26,6 +26,10 @@ FAILED_RETENTION_DAYS = 7
 # https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks
 DELIVERY_MARKER_DAYS = 4
 PRUNE_BATCH_ROWS = 500
+BULK_DELETE_ROWS = 20000
+COMPACT_MIN_FREE_SHARE = 0.25
+COMPACT_MIN_FREE_BYTES = 16 * 1024 * 1024
+JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
 _MANAGED_CASE_FIELDS = {"id", "source_key", "revision", "created_at", "updated_at", "decisions"}
 _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "repository"}
 
@@ -149,10 +153,11 @@ class AutomationStore:
             """)
 
     @contextmanager
-    def _connection(self, write=False):
-        connection = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
+    def _connection(self, write=False, timeout=10):
+        connection = sqlite3.connect(str(self.path), timeout=timeout, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
+        connection.execute(f"PRAGMA journal_size_limit={JOURNAL_SIZE_LIMIT}")
         try:
             if write:
                 connection.execute("BEGIN IMMEDIATE")
@@ -729,21 +734,47 @@ class AutomationStore:
         )
 
     @staticmethod
+    def _replace_jobs(connection, kept_ids):
+        """Keep only the jobs whose IDs the kept_ids query selects, inside the caller's write transaction.
+
+        DELETE without WHERE frees the table and index pages in one pass instead of
+        updating every index row by row, and it leaves sqlite_sequence alone, so IDs
+        are never reused.
+        """
+        connection.execute("CREATE TEMP TABLE kept AS SELECT * FROM jobs WHERE id IN (" + kept_ids + ")")
+        connection.execute("DELETE FROM jobs")
+        connection.execute("INSERT INTO jobs SELECT * FROM temp.kept")
+        connection.execute("DROP TABLE temp.kept")
+
+    @staticmethod
     def _delete_doomed(connection, limit=None):
-        """Delete the jobs in temp.doomed, or only the lowest `limit` IDs, with links keyed by their ID."""
-        if limit is not None:
-            connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
-                               "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
+        """Delete the jobs in temp.doomed, with links keyed by their ID, and return the count.
+
+        Past BULK_DELETE_ROWS every listed job goes in one step; otherwise only the
+        lowest `limit` IDs go when a limit is given.
+        """
+        count = connection.execute("SELECT COUNT(*) FROM temp.doomed").fetchone()[0]
+        if count > BULK_DELETE_ROWS:
+            # INDEXED BY keeps the scan of surviving IDs on the small covering index
+            # instead of reading every row of the table.
+            AutomationStore._replace_jobs(
+                connection, "SELECT id FROM jobs INDEXED BY jobs_ready WHERE id NOT IN (SELECT id FROM temp.doomed)")
+        else:
+            if limit is not None:
+                connection.execute("DELETE FROM temp.doomed WHERE id NOT IN "
+                                   "(SELECT id FROM temp.doomed ORDER BY id LIMIT ?)", (limit,))
+            count = connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
         connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') "
                            "AND key IN (SELECT CAST(id AS TEXT) FROM temp.doomed)")
-        return connection.execute("DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)").rowcount
+        return count
 
     def prune_jobs(self, history_days=0, *, limit=PRUNE_BATCH_ROWS):
         """Delete one batch of jobs that retention allows and return how many were deleted.
 
         Finished jobs go once they are history_days old (at once for 0), but a reconciliation
         cycle keeps its rows while any of its jobs is live. Failed and cancelled jobs go after
-        max(7, history_days) days. Pending, running, inflight and held jobs always stay.
+        max(7, history_days) days. Pending, running, inflight and held jobs always stay. A
+        backlog above BULK_DELETE_ROWS goes in one transaction instead of one batch.
         """
         history_days, limit = _days(history_days), _limit(limit)
         with self._connection(write=True) as connection:
@@ -782,3 +813,46 @@ class AutomationStore:
                     + ",".join("?" * len(keys)) + ")", keys,
                 ).rowcount
         return deleted
+
+    def compact(self):
+        """VACUUM when free pages are at least 25% of the file and 16 MB; return whether it ran.
+
+        VACUUM rewrites the whole file, so never call this on the event loop. While
+        another connection holds the write lock it returns False, and a later call
+        tries again.
+        """
+        try:
+            with self._connection(timeout=1) as connection:
+                page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+                pages = connection.execute("PRAGMA page_count").fetchone()[0]
+                free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+                if free < pages * COMPACT_MIN_FREE_SHARE or free * page_size < COMPACT_MIN_FREE_BYTES:
+                    return False
+                # VACUUM is the only point where auto_vacuum can change on an existing
+                # file. Incremental mode lets release_free_pages return later space.
+                connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                connection.execute("VACUUM")
+                return True
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc):
+                return False
+            raise
+
+    def release_free_pages(self):
+        """Return free pages to the file system after a sweep and report how many were released.
+
+        This does nothing until compact has switched the file to incremental auto_vacuum,
+        or while another connection holds the write lock.
+        """
+        try:
+            with self._connection(timeout=1) as connection:
+                if connection.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+                    return 0
+                free = connection.execute("PRAGMA freelist_count").fetchone()[0]
+                # Each step of this pragma frees one page, so read every row.
+                connection.execute("PRAGMA incremental_vacuum").fetchall()
+                return free
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc):
+                return 0
+            raise

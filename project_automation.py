@@ -772,6 +772,8 @@ class AutomationService:
         for prune in (self.store.prune_jobs, self.store.prune_links):
             while await asyncio.to_thread(prune, history_days):
                 pass
+        if not await asyncio.to_thread(self.store.compact):
+            await asyncio.to_thread(self.store.release_free_pages)
 
     async def _run(self):
         while True:

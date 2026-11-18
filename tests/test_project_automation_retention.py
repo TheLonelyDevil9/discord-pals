@@ -115,8 +115,7 @@ def test_deleted_jobs_take_their_dismissal_and_prepared_links(store):
 
 
 def test_prune_batches_respect_the_bound(store):
-    for index in range(1_200):
-        add_job(store, f"github:{index}")
+    add_finished_rows(store, 1_200)
     assert [store.prune_jobs(0) for _ in range(4)] == [500, 500, 200, 0]
     assert store.prune_jobs(0, limit=10) == 0
 
@@ -161,9 +160,136 @@ def test_post_records_follow_a_longer_history_setting(store):
 
 
 def test_link_batches_respect_the_bound(store):
-    for index in range(700):
-        add_link(store, "github_delivery", f"{index:064d}", age_days=5)
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.executemany("INSERT INTO links(kind, key, document, updated_at) VALUES ('github_delivery', ?, '{}', ?)",
+                               ((f"{index:064d}", NOW - 5 * DAY) for index in range(700)))
     assert [store.prune_links(0) for _ in range(3)] == [500, 200, 0]
+
+
+def add_finished_rows(store, count, *, body_bytes=60):
+    body = "x" * body_bytes
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.executemany(
+            "INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
+            "VALUES ('event', ?, ?, 'done', ?, ?, ?)",
+            ((f"github:bulk:{index}", json.dumps({"body": body}), NOW, NOW, NOW) for index in range(count)))
+
+
+def add_kept_rows(store):
+    """Store one row per surviving state, with notes and a dismissal, and return them exactly."""
+    ids = [add_job(store, f"kept:{state}", state=state, payload={"body": f"{state} payload"})
+           for state in ("pending", "running", "inflight", "recovery", "failed")]
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET recovery_notes = ?, last_error = 'kept error', attempts = 2, "
+                           "lease_token = 'token' WHERE id IN (?, ?, ?, ?, ?)",
+                           (json.dumps([{"actor": "dashboard", "outcome": "dismiss"}]), *ids))
+    add_link(store, "job_dismissal", ids[-1], {"actor": "dashboard"})
+    return snapshot_rows(store, ids)
+
+
+def snapshot_rows(store, ids):
+    with closing(sqlite3.connect(store.path)) as connection:
+        marks = ",".join("?" * len(ids))
+        return connection.execute(f"SELECT * FROM jobs WHERE id IN ({marks}) ORDER BY id", ids).fetchall()
+
+
+def sequence(store):
+    with closing(sqlite3.connect(store.path)) as connection:
+        return connection.execute("SELECT seq FROM sqlite_sequence WHERE name = 'jobs'").fetchone()
+
+
+def trace_job_deletes(monkeypatch):
+    statements = []
+    original = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = original(*args, **kwargs)
+        connection.set_trace_callback(
+            lambda sql: statements.append(" ".join(sql.split())) if sql.lstrip().upper().startswith("DELETE FROM JOBS") else None)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    return statements
+
+
+def test_large_backlog_is_cleared_in_one_step_and_kept_rows_stay_exact(store, monkeypatch):
+    add_finished_rows(store, 20_100)
+    expired = [add_job(store, f"failure:old:{index}", state="failed", age_days=8) for index in range(3)]
+    add_link(store, "job_dismissal", expired[0], {"actor": "dashboard"})
+    kept = add_kept_rows(store)
+    before = sequence(store)
+    deletes = trace_job_deletes(monkeypatch)
+    assert store.prune_jobs(0) == 20_103
+    assert deletes == ["DELETE FROM jobs"]
+    assert snapshot_rows(store, [row[0] for row in kept]) == kept
+    assert job_ids(store) == {row[0] for row in kept}
+    assert sequence(store) == before
+    assert link_keys(store, "job_dismissal") == {str(kept[-1][0])}
+    assert store.enqueue("event", {}, "after-bulk") > before[0]
+
+
+def test_small_backlog_is_deleted_by_id(store, monkeypatch):
+    add_finished_rows(store, 50)
+    deletes = trace_job_deletes(monkeypatch)
+    assert store.prune_jobs(0) == 50
+    assert deletes ==["DELETE FROM jobs WHERE id IN (SELECT id FROM temp.doomed)"]
+
+
+def database_bytes(store):
+    with closing(sqlite3.connect(store.path)) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return store.path.stat().st_size
+
+
+def test_fat_history_shrinks_to_near_its_live_size_after_compaction(store):
+    add_finished_rows(store, 50_000, body_bytes=1_000)
+    kept = add_kept_rows(store)
+    before = database_bytes(store)
+    assert before > 50_000 * 1_000
+    assert store.prune_jobs(0) == 50_000
+    assert store.compact() is True
+    after = database_bytes(store)
+    assert after < 1024 * 1024
+    assert snapshot_rows(store, [row[0] for row in kept]) == kept
+    with closing(sqlite3.connect(store.path)) as connection:
+        assert connection.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_compaction_waits_for_enough_free_space(store):
+    add_finished_rows(store, 2_000, body_bytes=1_000)
+    assert store.prune_jobs(0) == 500
+    assert store.compact() is False
+
+
+def test_compaction_skips_cleanly_while_another_connection_holds_the_lock(store):
+    add_finished_rows(store, 30_000, body_bytes=1_000)
+    store.prune_jobs(0)
+    size = database_bytes(store)
+    with closing(sqlite3.connect(store.path, timeout=0, isolation_level=None)) as holder:
+        holder.execute("BEGIN IMMEDIATE")
+        assert store.compact() is False
+        holder.execute("ROLLBACK")
+    assert database_bytes(store) == size
+    assert store.compact() is True
+
+
+def test_sweeps_release_freed_pages_once_compaction_switched_on_incremental_mode(store):
+    add_finished_rows(store, 30_000, body_bytes=1_000)
+    store.prune_jobs(0)
+    assert store.compact() is True
+    add_finished_rows(store, 3_000, body_bytes=1_000)
+    grown = database_bytes(store)
+    assert store.prune_jobs(0) == 500
+    assert store.release_free_pages() > 0
+    with closing(sqlite3.connect(store.path)) as connection:
+        assert connection.execute("PRAGMA freelist_count").fetchone()[0] == 0
+    assert database_bytes(store) < grown
+
+
+def test_store_connections_bound_the_write_ahead_log(store):
+    with store._connection() as connection:
+        assert connection.execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
 
 
 def test_redelivery_inside_four_days_queues_nothing_after_retention(store, clock):
