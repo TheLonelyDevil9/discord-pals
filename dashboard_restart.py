@@ -143,8 +143,15 @@ def persist_runtime_state() -> None:
 
 def flush_output() -> None:
     # os._exit and os.execv skip the interpreter's shutdown, so write out buffered output first.
-    sys.stdout.flush()
-    sys.stderr.flush()
+    # pythonw.exe and some service wrappers start the process with no stdout or stderr, and a
+    # closed or broken stream raises; neither may stop the restart.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
 
 
 def start_restart(bots) -> threading.Thread:
@@ -157,8 +164,9 @@ def restart_process(bots) -> None:
     """Close the bots, save the state, then start the code on disk; this never returns.
 
     Under a systemd unit that restarts after RESTART_EXIT_CODE the process exits with it.
-    Otherwise it re-executes in place, or on Windows starts a new process and exits. Any
-    failure ends the process with status 1, so that a supervisor can act.
+    Otherwise it re-executes in place, or on Windows starts a new process and exits. A
+    failure before the exit for systemd or the start of the code on disk ends the process
+    with status 1, so that a supervisor can act.
     """
     status = 1
     try:

@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import subprocess
@@ -9,7 +10,7 @@ import time
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import module_stubs  # noqa: F401
 import dashboard as dashboard_module
@@ -167,12 +168,29 @@ class RestartProcessTests(unittest.TestCase):
 
         self.assertEqual(events[-1], ("exit", 1))
 
-    def test_a_failed_exec_or_flush_ends_the_process_non_zero(self):
+    def test_a_failed_exec_ends_the_process_non_zero(self):
         self.assertEqual(self.restart(False, execv=OSError("exec format error"))[0][-1], ("exit", 1))
-        events, execv, _popen = self.restart(False, flush=OSError("stdout is closed"))
-        self.assertEqual(events[-1], ("exit", 1))
-        execv.assert_not_called()
-        self.assertEqual(self.restart(True, flush=OSError("stdout is closed"))[0][-1], ("exit", 75))
+
+    def test_a_process_without_console_streams_still_restarts(self):
+        flush = dashboard_restart.flush_output
+        with patch.object(sys, "stdout", None), patch.object(sys, "stderr", None):
+            windows = self.restart(False, windows=True, flush=flush)
+            posix = self.restart(False, flush=flush)
+            systemd = self.restart(True, flush=flush)
+
+        self.assertEqual(windows[0], ["saved", ("exit", 0)])
+        windows[2].assert_called_once_with(self.expected_command())
+        posix[1].assert_called_once_with(sys.executable, self.expected_command())
+        self.assertEqual(systemd[0], ["saved", ("exit", 75)])
+
+    def test_a_closed_or_broken_stream_does_not_stop_the_flush(self):
+        closed = io.StringIO()
+        closed.close()
+        broken = types.SimpleNamespace(flush=Mock(side_effect=BrokenPipeError(32, "Broken pipe")))
+        with patch.object(sys, "stdout", closed), patch.object(sys, "stderr", broken):
+            dashboard_restart.flush_output()
+
+        broken.flush.assert_called_once()
 
     def test_paths_with_spaces_reach_the_replacement_intact(self):
         with tempfile.TemporaryDirectory(prefix="restart test ") as temp:
