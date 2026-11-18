@@ -4321,14 +4321,53 @@ def api_update():
 
 # --- Restart API ---
 
+# Exit status of a dashboard restart under systemd. docs/operations.md lists the unit
+# settings that start the service again after it.
+_RESTART_EXIT_CODE = 75
+_PROC_CGROUP = Path("/proc/self/cgroup")
+
+
+def _running_under_systemd() -> bool:
+    """True when systemd started this process as part of a service unit.
+
+    INVOCATION_ID alone is not enough: a shell in a terminal that runs as a systemd user
+    service can inherit it, and exiting there would leave nothing to start the bot again.
+    The processes of a service run in a cgroup whose name ends in ".service".
+    """
+    if not os.environ.get("INVOCATION_ID"):
+        return False
+    try:
+        cgroups = _PROC_CGROUP.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    return any(line.split(":", 2)[-1].strip().endswith(".service") for line in cgroups.splitlines())
+
+
+def _restart_process() -> None:
+    """Close the bots, then exit for systemd to start the service again, or replace this process."""
+    time.sleep(1)  # Give time for response to be sent
+    for bot in bot_instances:
+        try:
+            asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
+        except Exception:
+            pass
+    time.sleep(2)  # Wait for connections to close
+
+    if _running_under_systemd():
+        log.info(f"Exiting with status {_RESTART_EXIT_CODE} so that systemd starts the service again")
+        # os._exit skips the interpreter's shutdown, so write out buffered output first.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(_RESTART_EXIT_CODE)
+    else:
+        os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
+
+
 @app.route('/api/restart', methods=['POST'])
 @requires_csrf
 @requires_auth
 def api_restart():
     """Restart the bot application without terminal restart."""
-    import sys
-    import subprocess
-
     log.warn("Application restart requested via dashboard")
 
     import_error = update_engine.check_imports(Path(__file__).resolve().parent, sys.executable)
@@ -4337,73 +4376,25 @@ def api_restart():
         log.error(message)
         return jsonify({'status': 'error', 'message': message}), 409
 
-    # Save current state before restart
-    try:
-        from discord_utils import save_history
-        from memory import memory_manager
-        save_history(force=True)
-        memory_manager.save_all()
-        log.info("State saved before restart")
-    except Exception as e:
-        log.error(f"Failed to save state before restart: {e}")
+    from discord_utils import save_history
+    from memory import memory_manager
+    from reminders import reminder_manager
+    from stats import stats_manager
 
-    def do_restart():
-        """Perform the actual restart in a separate thread."""
-        import time
-        import signal
-        time.sleep(1)  # Give time for response to be sent
-
-        # Check if running under systemd (simplified detection - don't require INVOCATION_ID)
-        is_systemd = os.path.exists('/run/systemd/system')
-        service_name = 'discord-pals'
-
-        if is_systemd:
-            log.info("Detected systemd environment, attempting restart")
-
-            # Try multiple approaches in order of preference
-            restart_commands = [
-                ['systemctl', '--user', 'restart', service_name],      # User service
-                ['systemctl', 'restart', service_name],                 # System service (if running as root)
-                ['sudo', '-n', 'systemctl', 'restart', service_name],  # With passwordless sudo
-            ]
-
-            for cmd in restart_commands:
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0:
-                        log.info(f"Restart successful with: {' '.join(cmd)}")
-                        return
-                    log.debug(f"Command {cmd} failed: {result.stderr}")
-                except Exception as e:
-                    log.debug(f"Command {cmd} error: {e}")
-                    continue
-
-            log.warn("All systemctl restart attempts failed, falling back to SIGTERM")
-
-            # Fallback: Send SIGTERM - systemd will restart us (if Restart=always)
-            log.info("Sending SIGTERM for systemd to restart us")
-            os.kill(os.getpid(), signal.SIGTERM)
-            return
-
-        # Non-systemd fallback: Direct process restart
-        # Get the current Python executable and script
-        python = sys.executable
-        script = os.path.abspath(sys.argv[0])
-
-        # Close all bot connections gracefully
-        import asyncio
-        for bot in bot_instances:
-            try:
-                asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
-            except Exception:
-                pass
-
-        time.sleep(2)  # Wait for connections to close
-        # Restart the process
-        os.execv(python, [python, script] + sys.argv[1:])
+    # main._persist_runtime_state saves the same stores on SIGTERM; keep both lists in step.
+    for label, save in (
+        ("history", lambda: save_history(force=True)),
+        ("memories", memory_manager.save_all),
+        ("reminders", reminder_manager.save),
+        ("stats", stats_manager.flush),
+    ):
+        try:
+            save()
+        except Exception as e:
+            log.error(f"Failed to save {label} before restart: {e}")
 
     # Start restart in background thread
-    restart_thread = threading.Thread(target=do_restart, daemon=True)
+    restart_thread = threading.Thread(target=_restart_process, daemon=True)
     restart_thread.start()
 
     return jsonify({

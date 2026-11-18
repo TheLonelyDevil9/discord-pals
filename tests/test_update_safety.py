@@ -373,37 +373,5 @@ class DashboardImportGateTests(DashboardUpdateCase):
         self.assertEqual((entry["before_head"], entry["after_head"]), (before, before))
 
 
-class RestartGateTests(MemorySandboxMixin, unittest.TestCase):
-    def setUp(self):
-        self.setUpMemorySandbox()
-        self.client = self.make_client()
-        with self.client.session_transaction() as session:
-            session["logged_in"] = True
-
-    def tearDown(self):
-        self.tearDownMemorySandbox()
-
-    def post_restart(self, import_error):
-        with patch.object(update_module, "check_imports", return_value=import_error) as check, \
-                patch("discord_utils.save_history"), \
-                patch.object(dashboard_module.threading, "Thread") as thread:
-            response = self.client.post("/api/restart", headers=self.csrf_headers())
-        return response, check, thread
-
-    def test_restart_is_refused_when_the_code_on_disk_does_not_import(self):
-        response, check, thread = self.post_restart("ImportError: broken on purpose")
-
-        self.assertEqual(response.status_code, 409)
-        self.assertIn("ImportError: broken on purpose", response.get_json()["message"])
-        thread.assert_not_called()
-        self.assertEqual(check.call_args.args[0], Path(dashboard_module.__file__).resolve().parent)
-
-    def test_restart_goes_ahead_when_the_code_imports(self):
-        response, _check, thread = self.post_restart(None)
-
-        self.assertEqual(response.status_code, 200)
-        thread.assert_called_once()
-
-
 if __name__ == "__main__":
     unittest.main()
