@@ -1073,15 +1073,33 @@ class AutomationService:
             return None
         delivered = False
         for user_id in runtime_config.get("operator_user_ids", []) or []:
-            try:
-                await asyncio.wait_for(self.transport.direct_message(bot, user_id, text), ALERT_DM_TIMEOUT_SECONDS)
-                delivered = True
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                warn(f"A Project alert DM to an operator failed with {type(exc).__name__}.",
-                     component="project_automation", event="alert_dm_failed", user_id=str(user_id))
+            delivered = await self._direct_message(bot, user_id, text) or delivered
         return delivered
+
+    async def _direct_message(self, bot, user_id, text) -> bool:
+        """Send one alert DM and return whether it arrived; a failure is logged, never raised.
+
+        The send runs as its own task, so a CancelledError that the send raises counts as a
+        failed DM, and only a cancellation of the calling task ends the watchdog.
+        """
+        async def send():
+            await self.transport.direct_message(bot, user_id, text)
+
+        task = asyncio.ensure_future(send())
+        try:
+            done, _ = await asyncio.wait({task}, timeout=ALERT_DM_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            error = asyncio.TimeoutError()
+        else:
+            error = asyncio.CancelledError() if task.cancelled() else task.exception()
+        if error is not None:
+            warn(f"A Project alert DM to an operator failed with {type(error).__name__}.",
+                 component="project_automation", event="alert_dm_failed", user_id=str(user_id))
+        return error is None
 
     async def supervise_once(self):
         """Run each watchdog check once; a check that raises is logged and the checks after it still run."""

@@ -251,6 +251,52 @@ def test_a_watchdog_restart_sends_one_dm_with_the_exception_type_only(alerts, mo
     assert later == []
 
 
+def test_a_cancelled_error_raised_by_a_dm_send_does_not_end_the_watchdog(alerts, monkeypatch):
+    class Cancelling(Messenger):
+        async def direct_message(self, bot, user_id, text):
+            raise asyncio.CancelledError
+
+    alerts.transport = Cancelling()
+    late_job(alerts)
+    passes, logged = [], []
+
+    async def sleep(_):
+        if len(passes) == 3:
+            raise asyncio.CancelledError
+        passes.append(True)
+
+    monkeypatch.setattr(project_automation.asyncio, "sleep", sleep)
+    monkeypatch.setattr(project_automation, "warn", lambda message, **fields: logged.append(fields["event"]))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(alerts._watchdog())
+    assert len(passes) == 3
+    assert "alert_dm_failed" in logged and "watchdog_check_failed" not in logged
+
+
+def test_cancelling_the_watchdog_during_a_dm_ends_the_watchdog_and_the_dm(alerts):
+    sends = []
+
+    class Hanging(Messenger):
+        async def direct_message(self, bot, user_id, text):
+            sends.append(asyncio.current_task())
+            await asyncio.Event().wait()
+
+    alerts.transport = Hanging()
+    late_job(alerts)
+
+    async def scenario():
+        watchdog = asyncio.create_task(alerts.supervise_once())
+        while not sends:
+            await asyncio.sleep(0.01)
+        watchdog.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await watchdog
+        await asyncio.sleep(0)
+        return sends[0].cancelled()
+
+    assert asyncio.run(scenario())
+
+
 def test_a_failing_watchdog_check_does_not_stop_the_alert_check(alerts, monkeypatch):
     async def broken():
         raise RuntimeError("revive failed")
