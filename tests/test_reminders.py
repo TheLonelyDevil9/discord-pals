@@ -523,6 +523,31 @@ class ReminderBotFlowTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase)
 
         self.assertEqual(draft["event_summary"], "Dentist appointment")
 
+    async def test_a_capture_context_without_the_discord_channel_id_fails_on_that_field(self):
+        instance = self._make_dm_bot()
+        instance._extract_reminder_payload = AsyncMock(return_value={
+            "action": "create",
+            "event_summary": "Water the plants",
+            "due_local_iso": "2099-01-01T08:00:00",
+        })
+        context = {
+            "channel_id": "dm:Nahida:user:42",
+            "content": "Remind me to water the plants.",
+            "user_id": 42,
+            "user_name": "Alice",
+            "is_dm": True,
+            "guild_id": None,
+            "timezone_context": {"timezone_name": "UTC", "timezone_source": "process", "offset_minutes": 0, "tzinfo": timezone.utc},
+        }
+        request = self._dm_request(context["content"])
+
+        with patch.object(bot_instance_module, "reminder_manager", reminders_module.reminder_manager), \
+                self.assertRaises(KeyError) as raised:
+            await instance._maybe_handle_reminder_capture(context, request["message"], request)
+
+        self.assertEqual(raised.exception.args[0], "discord_channel_id")
+        self.assertEqual(reminders_module.reminder_manager.reminders, [])
+
     async def test_a_dm_answer_is_queued_with_the_question_it_answers(self):
         bot = bot_instance_module.BotInstance("Nahida", "token", "nahida")
         bot.character = types.SimpleNamespace(name="Nahida")

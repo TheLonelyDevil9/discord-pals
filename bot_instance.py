@@ -1129,7 +1129,7 @@ Return exactly one JSON object with this shape:
         normalized_event = " ".join(str(payload.get("normalized_event", "")).split()).lower() or event_summary.lower()
         # A DM's history key is not a Discord channel ID; reminders are
         # delivered to, and clarifications matched by, the Discord channel.
-        source_channel_id = context.get("discord_channel_id", context["channel_id"])
+        source_channel_id = context["discord_channel_id"]
         source_type = "dm" if context["is_dm"] else "channel"
         source_channel_name = getattr(message.channel, "name", None) or ("DM" if context["is_dm"] else f"Channel {context['channel_id']}")
         source_guild_name = request["guild"].name if request.get("guild") else "DM"
