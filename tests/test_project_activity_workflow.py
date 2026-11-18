@@ -971,6 +971,32 @@ def test_the_first_cycle_after_upgrade_does_all_work_once_and_the_next_only_the_
     assert len(discovery_jobs(setup)) == 2
 
 
+def test_each_finished_root_logs_one_line_with_counts_only(setup, monkeypatch, walk_clock):
+    import project_automation
+    logged = []
+    monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append((message, fields)))
+    items = {1: {**github_item("issue", 1), "title": "Secret title", "body": "Secret body"},
+             3: github_item("pull", 3), 5: github_item("pull", 5, closed_days_ago=2)}
+    closed_world(setup, items, open_items=[items[1], items[3]])
+    sync_cycle(setup)
+    items[3]["updated_at"] = LATER
+    sync_cycle(setup)
+    walk_clock[0] += DAY
+    sync_cycle(setup)
+    lines = [message for message, fields in logged if fields.get("event") == "sync_cycle"]
+    assert lines == [
+        "Project sync listed 2 open items and checked 1 recently closed ones; queued 3 refreshes "
+        "and 2 PR walks (2 changed, 0 daily); skipped 0 unchanged items.",
+        "Project sync listed 2 open items and checked 1 recently closed ones; queued 1 refreshes "
+        "and 1 PR walks (1 changed, 0 daily); skipped 2 unchanged items.",
+        "Project sync listed 2 open items and checked 1 recently closed ones; queued 0 refreshes "
+        "and 1 PR walks (0 changed, 1 daily); skipped 3 unchanged items.",
+    ]
+    assert all(fields == {"component": "project_automation", "event": "sync_cycle"}
+               for _, fields in logged if fields.get("event") == "sync_cycle")
+    assert not [message for message, _ in logged if "Secret" in message or "Old item" in message]
+
+
 def test_after_clear_the_next_cycle_walks_every_pr_again(setup):
     open_world(setup, {7: github_item("pull", 7), 8: github_item("pull", 8)})
     sync_cycle(setup)

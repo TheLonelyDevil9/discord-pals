@@ -768,6 +768,7 @@ class AutomationService:
             in_scope = []
             for kind in ("issue", "pull"):
                 in_scope += [(kind, item) for item in await client.list_open_items(kind)]
+            listed = len(in_scope)
             seen = {(kind, item["number"]) for kind, item in in_scope}
             self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
@@ -779,10 +780,14 @@ class AutomationService:
                     if item is not None:
                         in_scope.append((data["kind"], item))
             mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
-            for kind, item in in_scope:
-                self._enqueue_sync_item(item, kind, job["id"], mirrored)
-            self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"], job["id"])
+            refreshed = sum(self._enqueue_sync_item(item, kind, job["id"], mirrored) for kind, item in in_scope)
+            changed, daily = self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"],
+                                                            job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
+            info(f"Project sync listed {listed} open items and checked {len(in_scope) - listed} recently closed "
+                 f"ones; queued {refreshed} refreshes and {changed + daily} PR walks ({changed} changed, "
+                 f"{daily} daily); skipped {len(in_scope) - refreshed} unchanged items.",
+                 component="project_automation", event="sync_cycle")
         else:
             raise WorkflowError("Unknown job type.")
 
@@ -821,12 +826,15 @@ class AutomationService:
         return item if closed_at >= cutoff else None
 
     def _enqueue_sync_item(self, item, kind, sync_id, mirrored):
+        """Queue a refresh unless the item's record in `mirrored` still matches; return whether it queued one."""
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        if mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}")) != mirror_record(item):
-            event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
-                     "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
-            self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        if mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}")) == mirror_record(item):
+            return False
+        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
+                 "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
+        self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        return True
 
     def _record_mirror(self, item):
         """Store what an issue or PR post now shows; call only after its mirror succeeded.
