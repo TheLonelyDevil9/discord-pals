@@ -775,7 +775,8 @@ class AutomationService:
         if item.get("state") != "closed":
             self.store.delete_links("item_closed", [key])
             return item
-        closed_at = closed_time(item) or time.time()
+        # Without a usable closed_at, the first time the item was seen closed stands in for it.
+        closed_at = closed_time(item) or (stored or {}).get("closed_at") or time.time()
         if not stored or stored.get("closed_at") != closed_at:
             self.store.put_link("item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None

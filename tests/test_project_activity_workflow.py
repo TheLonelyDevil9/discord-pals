@@ -719,6 +719,22 @@ def test_unknown_close_time_costs_one_fetch_and_is_then_stored(setup):
     assert fetched == [9]
 
 
+def test_close_time_without_closed_at_counts_from_when_it_was_first_seen_closed(setup, monkeypatch):
+    import project_automation
+    start = time.time()
+    clock = [start]
+    monkeypatch.setattr(project_automation, "time", SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic))
+    item = {**github_item("issue", 9, closed_days_ago=0), "closed_at": ""}
+    fetched = closed_world(setup, {9: item})
+    refreshed = []
+    for day in (0, 3, 6, 9):
+        clock[0] = start + day * DAY
+        refreshed.append(run_sync_root(setup)[0])
+    assert refreshed == [[9], [9], [9], []]
+    assert fetched == [9, 9, 9]
+    assert setup.store.get_link("item_closed", "owner/project:issue:9") == {"closed_at": start}
+
+
 def test_reopened_item_returns_to_scope_and_loses_its_close_time(setup):
     old = github_item("pull", 8, closed_days_ago=30)
     fetched = closed_world(setup, {8: old}, open_items=[github_item("pull", 8)])
