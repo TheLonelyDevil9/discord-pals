@@ -538,6 +538,68 @@ def test_next_root_waits_for_the_interval_and_an_idle_queue(setup, monkeypatch):
     assert second is not None and sync_roots(setup.store) == [second, first]
 
 
+def stored_source(setup, source_id, cycle, version="v1"):
+    event = {**activity(version, timestamp=time.time() - 3600, source_id=source_id),
+             "_binding": webhook_binding(setup.cfg)}
+    record = {"event": event, "version": version}
+    if cycle is not None:
+        record["cycle"] = cycle
+    setup.store.put_link("pr_source", source_key(setup.cfg, event), record)
+    return event
+
+
+def test_missing_scan_checks_only_records_stamped_by_older_cycles(setup):
+    for source_id, cycle in (("newer", 125), ("current", 124), ("older", 123), ("unstamped", None)):
+        stored_source(setup, source_id, cycle)
+    asyncio.run(setup.service.pr_activity.sync_missing({**page_job(setup, 124), "after": ""}))
+    checked = sorted(job["payload"]["source_id"] for job in setup.store.list_jobs()
+                     if job["kind"] == "pr_sync_check")
+    assert checked == ["older", "unstamped"]
+
+
+def test_page_and_check_never_lower_a_stored_stamp(setup):
+    newer = stored_source(setup, "10", 125)
+    setup.client.pages[("comment", None)] = {"items": [newer], "next_cursor": None}
+    asyncio.run(setup.service.pr_activity.sync_page(page_job(setup, 124)))
+    assert setup.store.get_link("pr_source", source_key(setup.cfg, newer))["cycle"] == 125
+    setup.client.current = newer
+    asyncio.run(setup.service.pr_activity.sync_check({**newer, "_sync_cycle": 123}))
+    assert setup.store.get_link("pr_source", source_key(setup.cfg, newer))["cycle"] == 125
+    asyncio.run(setup.service.pr_activity.sync_page(page_job(setup, 126)))
+    assert setup.store.get_link("pr_source", source_key(setup.cfg, newer))["cycle"] == 126
+
+
+def test_page_never_lowers_a_stored_head_stamp(setup):
+    from project_automation_activity import head_key
+    head = {**activity("a", source="commits", source_id="a" * 40), "after": "a" * 40}
+    setup.client.pages[("commits", None)] = {"items": [head], "next_cursor": None}
+    payload = {**page_job(setup, 125), "source": "commits"}
+    asyncio.run(setup.service.pr_activity.sync_page(payload))
+    asyncio.run(setup.service.pr_activity.sync_page({**payload, "_sync_cycle": 124}))
+    assert setup.store.get_link("pr_head", head_key(setup.cfg, head))["cycle"] == 125
+    assert setup.store.get_link("pr_source", source_key(setup.cfg, head))["cycle"] == 125
+
+
+def test_older_cycle_delivery_keeps_newer_stamps(setup):
+    from project_automation_activity import head_key
+    stored = stored_source(setup, "10", 125)
+    setup.client.current = {**stored, "source_version": "v2", "body": "Edited"}
+    enqueue(setup, {**setup.client.current, "_sync_cycle": 124}, key="older-cycle-event")
+    run(setup)
+    assert len(setup.transport.attempts) == 1
+    assert setup.store.get_link("pr_source", source_key(setup.cfg, stored))["cycle"] == 125
+    first = {**activity("a", source="commits", source_id="a" * 40), "after": "a" * 40}
+    setup.client.pages[("commits", None)] = {"items": [first], "next_cursor": None}
+    asyncio.run(setup.service.pr_activity.sync_page({**page_job(setup, 126), "source": "commits"}))
+    second = {**activity("b", source="commits", source_id="b" * 40), "after": "b" * 40,
+              "before": "a" * 40, "action": "synchronize"}
+    setup.client.current = second
+    enqueue(setup, {**second, "_sync_cycle": 124}, key="older-cycle-head")
+    run(setup)
+    assert len(setup.transport.attempts) == 2
+    assert setup.store.get_link("pr_head", head_key(setup.cfg, second))["cycle"] == 126
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")
