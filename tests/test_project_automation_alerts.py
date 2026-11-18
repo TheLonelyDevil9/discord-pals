@@ -137,6 +137,17 @@ def test_queue_lag_counts_from_when_automation_runs_and_resolves_on_the_whole_wa
     assert [text.split(". ")[0] for text in about(send(reopened), "Queue lag")] == ["Project helper resolved"] * 2
 
 
+def test_a_used_up_github_quota_sends_one_alert_dm_to_each_operator(alerts):
+    from project_automation_github import RateLimit
+    limits = RateLimit()
+    limits.observe({"x-ratelimit-limit": "5000", "x-ratelimit-remaining": "0",
+                    "x-ratelimit-reset": str(int(time.time()) + 600)}, time.time())
+    alerts._github = SimpleNamespace(rate_limit=limits)
+    texts = about(send(alerts), "GitHub rate limit")
+    assert len(texts) == 2 and texts[0].startswith("Project helper alert. GitHub rate limit: 0 of 5,000 left, calls wait")
+    assert send(alerts) == []
+
+
 def test_an_alert_reaches_each_operator_once_through_the_helper_bot(alerts):
     alerts.bots["Other"] = SimpleNamespace(name="Other")
     late_job(alerts)

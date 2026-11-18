@@ -157,6 +157,17 @@ class AutomationService:
         now = time.time()
         due = queue["oldest_due_at"]
         synced = max(last_sync or 0, started)
+        github = {}
+        limits = getattr(self._github, "rate_limit", None)
+        if isinstance(limits, RateLimit):
+            quota, waits = limits.tightest(now), limits.reconciliation_waits_until(now)
+            if quota is not None:
+                github.update(github_remaining=quota.remaining, github_limit=quota.limit,
+                              github_reset_in=quota.reset_at - now)
+            if waits is not None:
+                github["github_waits"] = waits - now
+            if limits.paused_until > now:
+                github["github_paused"] = limits.paused_until - now
         return HealthFacts(
             pause_reason=self.pause_reason(), bot_online=cfg.get("bot_name") in self.bots,
             worker_running=bool(self._worker and not self._worker.done()),
@@ -167,7 +178,7 @@ class AutomationService:
             queue_wait=None if due is None else max(0.0, now - due),
             sync_age=max(0.0, now - synced) if synced else None, last_sync_at=last_sync,
             database_bytes=queue["database_bytes"], alerts_enabled=cfg.get("alerts_enabled", True),
-            operators=len(runtime_config.get("operator_user_ids", []) or []))
+            operators=len(runtime_config.get("operator_user_ids", []) or []), **github)
 
     def status(self) -> dict:
         cfg = self.settings()

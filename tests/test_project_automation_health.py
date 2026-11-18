@@ -19,7 +19,7 @@ from project_automation_store import AutomationStore
 from test_project_automation_store import trace_store_statements
 
 MB = 1024 * 1024
-ENABLED_ONLY = {"worker", "heartbeat", "helper_bot", "queue_lag", "sync"}
+ENABLED_ONLY = {"worker", "heartbeat", "helper_bot", "queue_lag", "sync", "github"}
 ALWAYS = {"pending", "held", "failed", "database"}
 
 
@@ -68,10 +68,29 @@ def test_nothing_due_or_recorded_is_not_a_fault():
     assert signal(signals, "sync")["level"] == "ok"
 
 
+QUOTA = {"github_limit": 5000, "github_reset_in": 23 * 60}
+
+
+@pytest.mark.parametrize("changes,level,value", [
+    ({}, "ok", "Not measured"),
+    ({**QUOTA, "github_remaining": 4210}, "ok", "4,210 of 5,000 left, resets in 23 minutes"),
+    ({**QUOTA, "github_remaining": 812, "github_waits": 23 * 60}, "warn",
+     "812 of 5,000 left, reconciliation waits 23 minutes for the reset"),
+    ({**QUOTA, "github_remaining": 0, "github_waits": 23 * 60}, "alert",
+     "0 of 5,000 left, calls wait 23 minutes for the reset"),
+    ({**QUOTA, "github_remaining": 4210, "github_paused": 120}, "warn", "GitHub paused every call for 2 minutes"),
+])
+def test_the_github_rate_limit_signal_shows_the_headroom_and_any_wait(changes, level, value):
+    item = signal(health_signals(healthy(**changes)), "github")
+    assert (item["name"], item["level"], item["value"]) == ("GitHub rate limit", level, value)
+
+
 def test_every_signal_has_a_name_a_value_a_level_and_one_sentence():
     for facts in (healthy(), healthy(pending=20000, held=3, failed=2, queue_lag=7200, sync_age=20000,
                                      database_bytes=600 * MB, heartbeat_age=900),
-                  healthy(pause_reason="disabled")):
+                  healthy(pause_reason="disabled"),
+                  healthy(**QUOTA, github_remaining=4210), healthy(**QUOTA, github_remaining=812, github_waits=60),
+                  healthy(**QUOTA, github_remaining=0, github_waits=60), healthy(github_paused=60)):
         for item in health_signals(facts):
             assert set(item) == {"key", "name", "value", "level", "sentence"}
             assert item["level"] in {"ok", "warn", "alert"}
@@ -141,6 +160,20 @@ def test_service_health_reads_the_queue_the_last_sync_and_the_database_size(serv
     assert result["helper_bot"]["level"] == "ok"
     # No worker task was started in this test.
     assert result["worker"]["level"] == "alert"
+
+
+def test_service_health_reads_the_rate_limit_that_github_reported(service, cfg):
+    from project_automation_github import RateLimit
+    limits = RateLimit()
+    limits.observe({"x-ratelimit-limit": "5000", "x-ratelimit-remaining": "900",
+                    "x-ratelimit-reset": str(int(time.time()) + 600)}, time.time())
+    service._github = SimpleNamespace(rate_limit=limits)
+    github = signal(service.health(), "github")
+    assert github["level"] == "warn"
+    assert github["value"].startswith("900 of 5,000 left, reconciliation waits ")
+    assert signal(service.status()["health"], "github") == github
+    cfg["enabled"] = False
+    assert "github" not in {item["key"] for item in service.health()}
 
 
 def test_service_health_reports_the_helper_bot_and_pause_state(service, cfg, runtime):

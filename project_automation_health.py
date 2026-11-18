@@ -33,6 +33,11 @@ class HealthFacts:
     job's whole wait and last_sync_at the time of the last completed sync. A queue_lag or
     queue_wait of None means no pending job is due, and a sync_age or last_sync_at of None
     means no completed sync is recorded.
+
+    The github fields describe GitHub's rate limit as the helper's latest GitHub responses
+    reported it: what is left of the quota, its size and the seconds until it resets, all None
+    while no current report exists; the seconds that reconciliation still waits for the quota,
+    and the seconds left of a pause that GitHub asked for, each None while there is no wait.
     """
 
     pause_reason: str | None
@@ -51,6 +56,11 @@ class HealthFacts:
     restart_reason: str | None = None
     queue_wait: float | None = None
     last_sync_at: float | None = None
+    github_remaining: int | None = None
+    github_limit: int | None = None
+    github_reset_in: float | None = None
+    github_waits: float | None = None
+    github_paused: float | None = None
 
 
 PAUSED = {
@@ -84,12 +94,36 @@ def _duration(seconds):
     return _count(seconds // 86400, "day")
 
 
+def _github_signal(facts):
+    name = "GitHub rate limit"
+    if facts.github_limit is not None and facts.github_remaining == 0:
+        return _signal("github", name, f"0 of {facts.github_limit:,} left, calls wait "
+                       f"{_duration(facts.github_reset_in)} for the reset", "alert", {
+                           "alert": "Check what else uses this GitHub App installation, because the helper's "
+                                    "reconciliation leaves a fifth of the quota unused."})
+    if facts.github_paused is not None:
+        return _signal("github", name, f"GitHub paused every call for {_duration(facts.github_paused)}", "warn", {
+            "warn": "GitHub asked for fewer requests at once, and the work resumes on its own when the pause ends."})
+    if facts.github_limit is None:
+        return _signal("github", name, "Not measured", "ok", {
+            "ok": "The helper's next GitHub call reports the quota."})
+    left = f"{facts.github_remaining:,} of {facts.github_limit:,} left"
+    if facts.github_waits is not None:
+        return _signal("github", name, f"{left}, reconciliation waits {_duration(facts.github_waits)} for the reset",
+                       "warn", {"warn": "Webhook deliveries and report publications use the reserve meanwhile, "
+                                        "and reconciliation resumes on its own."})
+    return _signal("github", name, f"{left}, resets in {_duration(facts.github_reset_in)}", "ok", {
+        "ok": "Reconciliation waits when a fifth of the quota is left, so that webhook deliveries and report "
+              "publications keep a reserve."})
+
+
 def health_signals(facts: HealthFacts) -> list[dict]:
     """Return the signals for facts in display order.
 
     While automation is paused, one informational signal names the pause instead of the
-    worker, heartbeat, helper bot, queue lag and sync signals, which only measure a running
-    helper. The heartbeat needs a live worker task, and the worker needs the helper bot online.
+    worker, heartbeat, helper bot, queue lag, sync and GitHub rate limit signals, which only
+    measure a running helper. The heartbeat needs a live worker task, and the worker needs the
+    helper bot online.
     """
     signals = []
     if facts.pause_reason is not None:
@@ -126,6 +160,7 @@ def health_signals(facts: HealthFacts) -> list[dict]:
                                    "ok": "Reconciliation completes on schedule.",
                                    "warn": "Reconciliation runs late, so check Delivery activity for failing sync jobs.",
                                    "alert": "Check Delivery activity and the logs for the sync jobs that keep a cycle open."}))
+        signals.append(_github_signal(facts))
     signals.append(_signal("pending", "Pending jobs", f"{facts.pending:,}",
                            _level(facts.pending, PENDING_WARN_JOBS, PENDING_ALERT_JOBS), {
                                "ok": "The queue is short.",

@@ -141,6 +141,12 @@ class RateLimit:
                  if (until := self.waits_until(resource, now, reconciliation=True)) is not None]
         return max(waits, default=None)
 
+    def tightest(self, now: float) -> Quota | None:
+        """Return the current quota of reconciliation's resources with the smallest share left, or None."""
+        current = [quota for resource, quota in self.quotas.items()
+                   if resource in RECONCILIATION_RESOURCES and quota.reset_at > now]
+        return min(current, key=lambda quota: quota.remaining / quota.limit, default=None)
+
 
 def rate_limit_refusal(status: int, headers: dict, message: str, now: float) -> tuple[float, bool] | None:
     """Return (retry_at, pause_all) when a response is one of GitHub's rate limits, else None.
