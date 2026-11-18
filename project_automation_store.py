@@ -734,10 +734,13 @@ class AutomationStore:
             finished += " AND available_at < ? AND updated_at < ?"
             parameters += [cutoff, cutoff]
         parameters.append(now - max(FAILED_RETENTION_DAYS, history_days) * DAY_SECONDS)
+        # A report in processing or queued waits on its branch or publish job, and
+        # /project-retry on that failed job is its only way forward, so those stay.
         connection.execute(
             "INSERT OR IGNORE INTO temp.doomed SELECT id FROM jobs WHERE " + finished
             + " AND id NOT IN (SELECT id FROM temp.open_cycle_jobs) "
-            "UNION ALL SELECT id FROM jobs WHERE state IN ('failed', 'cancelled') AND updated_at < ?",
+            "UNION ALL SELECT id FROM jobs WHERE state IN ('failed', 'cancelled') AND updated_at < ? "
+            "AND NOT (state = 'failed' AND kind IN ('branch', 'publish'))",
             parameters,
         )
 
@@ -831,12 +834,16 @@ class AutomationStore:
     def clear_history(self):
         """Delete every job except running and inflight ones, with their job links; return the count.
 
-        Post records, receipts, feedback cases and delivery markers stay.
+        Pending, failed and held feedback steps stay, because an open report cannot
+        continue without them. Post records, receipts, feedback cases and delivery
+        markers stay too.
         """
         with self._connection(write=True) as connection:
             before = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
             self._keep_duplicate_guards(connection, time.time())
-            self._replace_jobs(connection, "SELECT id FROM jobs WHERE state IN ('running', 'inflight')")
+            self._replace_jobs(connection, "SELECT id FROM jobs WHERE state IN ('running', 'inflight') "
+                                           "OR (state IN ('pending', 'failed', 'recovery') "
+                                           "AND kind IN ('assess', 'branch', 'publish', 'notify'))")
             self._delete_orphaned_job_links(connection)
             return before - connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 

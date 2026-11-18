@@ -107,7 +107,7 @@ Project jobs are working data. A sweep deletes them at most every 10 minutes, al
 | Data | Kept |
 | --- | --- |
 | Finished jobs | Until the next sweep, or for the Job history days. A reconciliation cycle keeps its finished jobs while any of its jobs is still queued, running, or sending. |
-| Failed jobs, dismissed or not, and cancelled publications | 7 days after their last change, or the Job history days when that is longer. |
+| Failed jobs, dismissed or not, and cancelled publications | 7 days after their last change, or the Job history days when that is longer. A failed report decision or publication stays until `/project-retry` resumes it, because its report cannot continue without it. |
 | Queued, running, sending, and held jobs | Until they finish or you remove them. The sweep never deletes them. |
 | Duplicate-delivery markers | 4 days. A marker holds only a SHA-256 of the GitHub delivery ID. A delivery received again within that time is answered as accepted and queues nothing; GitHub offers redelivery for 3 days. |
 | Release, workflow, and commit post records | 7 days, or the Job history days when that is longer. A later update to the same release or workflow run then posts a new message instead of editing the old one. |
@@ -115,7 +115,7 @@ Project jobs are working data. A sweep deletes them at most every 10 minutes, al
 
 **Project → Project data** has two controls:
 
-- **Clear history and queue** deletes every job except jobs in progress. Queued work, including pending feedback steps, never runs, and held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. It works while automation runs or is paused.
+- **Clear history and queue** deletes every job except jobs in progress and the feedback steps that open reports still need: queued, failed, and held report checks, decisions, publications, and notices stay, so every report can still continue or be retried. Other queued work never runs, and other held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. It works while automation runs or is paused.
 - **Reset Project data** deletes every job, post record, receipt, and feedback case. It is available only while automation is paused and no job is in progress, and you confirm it by typing the repository name. Afterwards every open issue and PR is posted again as new, and the old Discord posts stay in their channels.
 
 After a clear or reset, the database file is compacted when at least 25% of it, and at least 16 MB, is free. Compaction switches the file to incremental auto-vacuum, so later sweeps return freed space to the disk. If another process holds the database, a later sweep compacts it instead.

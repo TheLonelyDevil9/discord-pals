@@ -468,6 +468,25 @@ def test_clear_keeps_jobs_in_progress_and_every_record(store):
     assert sequence(store) == before
 
 
+@pytest.mark.parametrize("kind", ["assess", "branch", "publish", "notify", "event"])
+@pytest.mark.parametrize("state", ["pending", "failed", "recovery", "done", "cancelled"])
+def test_clear_keeps_the_feedback_steps_open_reports_need(store, kind, state):
+    job = add_job(store, f"{kind}:case:2", kind=kind, state=state)
+    store.clear_history()
+    needed = kind != "event" and state in ("pending", "failed", "recovery")
+    assert (job in job_ids(store)) is needed
+
+
+@pytest.mark.parametrize("kind,kept", [("branch", True), ("publish", True), ("assess", False),
+                                       ("notify", False), ("event", False)])
+def test_retention_keeps_failed_decisions_and_publications(store, kind, kept):
+    failed = add_job(store, f"{kind}:case:2", kind=kind, state="failed", age_days=30)
+    cancelled = add_job(store, f"{kind}:case:3", kind=kind, state="cancelled", age_days=30)
+    prune_all(store)
+    assert (failed in job_ids(store)) is kept
+    assert cancelled not in job_ids(store)
+
+
 def test_reset_deletes_all_project_data_but_ids_keep_growing(store):
     add_cycle(store, "finished", ["done", "pending", "failed", "recovery"])
     add_records(store)

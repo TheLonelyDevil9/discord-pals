@@ -349,7 +349,7 @@
     <div class="project-data-actions">
         <div class="project-data-action">
             <h3>Clear history and queue</h3>
-            <p class="project-hint">Deletes every queued, finished, failed, and held job except jobs in progress. Queued work, including pending feedback steps, never runs, and held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. Works while automation runs or is paused.</p>
+            <p class="project-hint">Deletes every queued, finished, failed, and held job except jobs in progress and the feedback steps open reports still need: queued, failed, and held report checks, decisions, publications, and notices stay. Other queued work never runs, and other held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. Works while automation runs or is paused.</p>
             <button type="button" class="btn btn-secondary" id="project-clear-history">Clear history and queue</button>
         </div>
         <div class="project-data-action">
@@ -964,7 +964,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('project-clear-history').addEventListener('click', async function () {
         if (dataAction) return;
         const confirmed = await confirmAction('Clear history and queue',
-            'Delete every queued, finished, failed, and held Project job except jobs in progress? Queued work never runs and held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. This cannot be undone.',
+            'Delete every queued, finished, failed, and held Project job except jobs in progress and the feedback steps open reports still need? Other queued work never runs and other held deliveries are not checked again. Posts, receipts, feedback cases, and duplicate-delivery markers stay. This cannot be undone.',
             {confirmText: 'Clear'});
         if (!confirmed) return;
         dataAction = true;
