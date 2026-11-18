@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime
+import hashlib
+import json
 import re
 import threading
 import time
@@ -22,6 +24,8 @@ CLOSED_SYNC_DAYS = 7
 # and 404 for either when the App cannot read the repository involved:
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
 GONE_STATUSES = {301, 404, 410}
+MIRROR_CHANNELS = {"issue": "issues_channel_id", "pull": "reviews_channel_id",
+                   "commit": "commits_channel_id", "general": "github_channel_id"}
 
 CHOICES = {
     "write": "Write my report", "check": "Check my report",
@@ -41,6 +45,22 @@ def closed_time(item):
     except (AttributeError, TypeError, ValueError):
         return None
     return value.timestamp() if value.tzinfo is not None else None
+
+
+def mirror_key(config, kind, key):
+    """Key of the mirror link for GitHub object `key` in the channel configured for `kind`."""
+    return f"{config['guild_id']}:{config['bot_name']}:{config[MIRROR_CHANNELS[kind]]}:{config['repository']}:{key}"
+
+
+def mirror_record(item):
+    """Return the record the sync root compares to decide whether an issue or PR post needs a refresh.
+
+    GitHub does not document which changes move updated_at, so besides updated_at and
+    state the record keeps a digest of every field the post shows.
+    """
+    shown = {name: item.get(name) for name in ("title", "body", "state", "merged", "draft", "html_url")}
+    return {"updated_at": item.get("updated_at", ""), "state": item.get("state", ""),
+            "shown": hashlib.sha256(json.dumps(shown, sort_keys=True).encode()).hexdigest()}
 
 
 def reporter_actions(case):
@@ -693,6 +713,8 @@ class AutomationService:
         else:
             self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
+            if event["kind"] in {"issue", "pull"}:
+                self._record_mirror(event)
             if event["kind"] == "issue":
                 for case in self.store.cases_for_issue(event["repository"], event["number"]):
                     if self._bound(case):
@@ -743,11 +765,12 @@ class AutomationService:
                 self._check_event_binding(payload)
             activate(self.store, self.settings())
             client = await self.client()
+            mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
             seen = set()
             for kind in ("issue", "pull"):
                 for item in await client.list_open_items(kind):
                     seen.add((kind, item["number"]))
-                    self._enqueue_sync_item(item, kind, job["id"])
+                    self._enqueue_sync_item(item, kind, job["id"], mirrored)
             self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
                 data = link["data"]
@@ -756,7 +779,7 @@ class AutomationService:
                     seen.add((data["kind"], data["number"]))
                     item = await self._closed_item_in_scope(client, data["kind"], data["number"])
                     if item is not None:
-                        self._enqueue_sync_item(item, data["kind"], job["id"])
+                        self._enqueue_sync_item(item, data["kind"], job["id"], mirrored)
             self.pr_activity.enqueue_discovery(job["id"])
         else:
             raise WorkflowError("Unknown job type.")
@@ -795,14 +818,24 @@ class AutomationService:
             self.store.put_link("item_closed", key, {"closed_at": closed_at})
         return item if closed_at >= cutoff else None
 
-    def _enqueue_sync_item(self, item, kind, sync_id):
+    def _enqueue_sync_item(self, item, kind, sync_id, mirrored):
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
-                 "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
-        self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        if mirrored.get(mirror_key(cfg, kind, f"{kind}:{item['number']}")) != mirror_record(item):
+            event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
+                     "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
+            self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
         if kind == "pull":
             self.pr_activity.enqueue_sync(item, sync_id)
+
+    def _record_mirror(self, item):
+        """Store what an issue or PR post now shows; call only after its mirror succeeded.
+
+        The sync root skips the item while GitHub still matches this record, so a record
+        written for a failed or held mirror would hide the change from every later cycle.
+        """
+        key = mirror_key(self.settings(), item["kind"], f"{item['kind']}:{item['number']}")
+        self.store.put_link("item_mirrored", key, mirror_record(item))
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:

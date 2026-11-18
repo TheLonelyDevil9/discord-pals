@@ -657,6 +657,7 @@ def mirror_post(setup, kind, number):
 
 def github_item(kind, number, *, closed_days_ago=None):
     item = {"kind": kind, "number": number, "title": "Old item", "body": "", "state": "open", "closed": False,
+            "merged": False, "draft": False, "updated_at": "2026-11-01T00:00:00Z",
             "html_url": f"https://github.com/Owner/Project/{'pull' if kind == 'pull' else 'issues'}/{number}"}
     if closed_days_ago is not None:
         item.update(state="closed", closed=True, closed_at=iso(time.time() - closed_days_ago * DAY))
@@ -792,6 +793,117 @@ def test_a_moved_or_deleted_item_leaves_the_sync_without_stopping_it(setup, monk
 
     setup.client.list_open_items = listed_again
     assert run_sync_root(setup)[0] == [8, 9]
+
+
+LATER = "2026-11-02T00:00:00Z"
+
+
+def open_world(setup, items):
+    """GitHub lists the open entries of `items` and returns the current copy of any entry."""
+    async def get_issue(number):
+        return deepcopy(items[number])
+
+    async def list_open_items(kind):
+        return [deepcopy(item) for item in items.values() if item["kind"] == kind and item["state"] == "open"]
+
+    setup.client.get_issue = get_issue
+    setup.client.list_open_items = list_open_items
+
+
+def drain(setup):
+    for _ in range(1000):
+        if not run(setup):
+            return
+    raise AssertionError("The queue did not settle")
+
+
+def sync_cycle(setup):
+    """Run one sync root, then all work it queued; return the numbers the root queued for refresh and walk."""
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    with closing(sqlite3.connect(setup.store.path)) as connection:
+        rows = connection.execute("SELECT kind, json_extract(payload, '$.number') FROM jobs "
+                                  "WHERE json_extract(payload, '$._sync_cycle') = ?", (root,)).fetchall()
+    drain(setup)
+    return (sorted(number for kind, number in rows if kind == "event"),
+            sorted({number for kind, number in rows if kind == "pr_sync_page"}))
+
+
+def test_the_root_refreshes_only_items_that_changed_since_their_last_mirror(setup):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[0] == [5, 6, 7]
+    assert sync_cycle(setup)[0] == []
+    items[6]["updated_at"] = LATER
+    assert sync_cycle(setup)[0] == [6]
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_state_change_alone_queues_a_refresh(setup):
+    issue = github_item("issue", 9)
+    listing = [issue]
+    closed_world(setup, {9: issue}, open_items=listing)
+    assert sync_cycle(setup)[0] == [9]
+    assert sync_cycle(setup)[0] == []
+    issue.update(state="closed", closed=True, closed_at=iso(time.time() - DAY))
+    listing.clear()
+    assert sync_cycle(setup)[0] == [9]
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_change_the_post_shows_queues_a_refresh_even_with_the_same_updated_at(setup):
+    items = {5: github_item("issue", 5), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5]["title"] = "Renamed"
+    items[7]["draft"] = True
+    assert sync_cycle(setup)[0] == [5, 7]
+
+
+def test_a_failed_mirror_keeps_the_old_record_so_the_next_cycle_refreshes_again(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5]["updated_at"] = LATER
+
+    async def unavailable(event, **kwargs):
+        raise OSError("Discord is unavailable")
+
+    setup.transport.mirror = unavailable
+    assert sync_cycle(setup)[0] == [5]
+    assert [job["state"] for job in setup.store.list_jobs() if job["key"].startswith("sync-item:")].count("recovery") == 1
+    assert sync_cycle(setup)[0] == [5]
+
+
+def test_a_webhook_mirror_updates_the_record_so_the_next_cycle_skips_the_item(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[5].update(title="Renamed", updated_at=LATER)
+    enqueue(setup, {"repository": "Owner/Project", "kind": "issue", "number": 5, "key": "issue:5",
+                    "state": "open", "action": "edited"}, key="github:edit-5")
+    drain(setup)
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_pr_activity_delivery_updates_the_record_of_its_pull_request_post(setup):
+    items = {7: github_item("pull", 7)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    items[7]["updated_at"] = LATER
+    enqueue(setup)
+    drain(setup)
+    assert len(setup.transport.attempts) == 1
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    setup.cfg["issues_channel_id"] = "250"
+    assert sync_cycle(setup)[0] == [5]
 
 
 @pytest.mark.parametrize("status", [None, 403, 429, 500, 502])

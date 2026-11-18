@@ -301,6 +301,8 @@ class PRActivity:
                 "version": current["source_version"], "event": compact_event(prepared),
                 "cycle": newer_cycle(event.get("_sync_cycle"), prior_head),
             })
+        # mirror_activity refreshed the PR's own post from `pull` before it sent the activity.
+        self.service._record_mirror(pull)
 
     def complete_cycle(self, cycle):
         job = self.store.get_job(cycle)

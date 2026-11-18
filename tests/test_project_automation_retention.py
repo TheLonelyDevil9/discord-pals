@@ -441,8 +441,9 @@ def test_first_start_cleanup_of_a_large_backlog_uses_the_bulk_path(store, monkey
     assert sequence(store) == before
 
 
-RECORD_LINKS = ("mirror", "mirror_attempt", "pr_activity", "pr_activity_delivery", "pr_source", "pr_head",
-                "pr_activation", "notification", "case_status", "question_notice", "project_status", "github_delivery")
+RECORD_LINKS = ("mirror", "mirror_attempt", "item_mirrored", "pr_activity", "pr_activity_delivery", "pr_source",
+                "pr_head", "pr_activation", "notification", "case_status", "question_notice", "project_status",
+                "github_delivery")
 
 
 def add_records(store):

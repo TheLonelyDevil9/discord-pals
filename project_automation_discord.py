@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from logger import warn
-from project_automation import WorkflowError
+from project_automation import MIRROR_CHANNELS, WorkflowError, mirror_key
 from project_automation_discord_activity import (
     activity_version, confirm_not_delivered, mirror_activity, receipt_key,
 )
@@ -448,8 +448,8 @@ class DiscordTransport:
 
     async def mirror(self, event, *, recover_only=False):
         cfg = self.service.settings()
-        field = {"issue": "issues_channel_id", "pull": "reviews_channel_id", "commit": "commits_channel_id", "general": "github_channel_id"}[event["kind"]]
-        key = f"{cfg['guild_id']}:{cfg['bot_name']}:{cfg[field]}:{cfg['repository']}:{event['key']}"
+        field = MIRROR_CHANNELS[event["kind"]]
+        key = mirror_key(cfg, event["kind"], event["key"])
         channel = await self._channel(cfg[field])
         if event["kind"] in {"issue", "pull"} and not isinstance(channel, discord.ForumChannel):
             raise WorkflowError("Issue tracking and Pull requests require forum channels.")
