@@ -185,6 +185,29 @@ class VersionDriftTests(VersionApiCase):
         self.assertFalse(data["update_available"])
 
 
+class UpdatePageTests(VersionApiCase):
+    def page(self):
+        return self.client.get("/").get_data(as_text=True)
+
+    def test_the_navigation_and_the_badge_name_an_update_before_a_restart(self):
+        page = self.page()
+
+        self.assertLess(page.index("if (data.update_available && version)"),
+                        page.index("if (data.restart_required && version)"))
+        self.assertIn("window.restartLabel(data.latest_version, data.running_version)", page)
+
+    def test_a_generic_error_title_says_the_update_failed(self):
+        self.assertIn("title.textContent = failed && !/^(Update|Restart) /.test(message) ? 'Update failed: ' + message",
+                      self.page())
+
+    def test_the_page_reloads_after_a_restart_once_the_bot_answers_again(self):
+        page = self.page()
+
+        self.assertIn("async function reloadWhenRestarted()", page)
+        self.assertIn("fetch('/healthz'", page)
+        self.assertNotIn("Page will reload in 10 seconds", page)
+
+
 class TrackedBranchTests(GitCheckoutCase):
     def test_the_tracked_branch_is_fetched_and_its_new_commits_counted(self):
         self.publish({"main.py": "STARTED = 2\n"})

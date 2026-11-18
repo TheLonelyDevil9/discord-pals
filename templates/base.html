@@ -1168,6 +1168,10 @@
             return data.commits_behind + (data.commits_behind === 1 ? ' new commit on ' : ' new commits on ') + data.update_branch;
         }
 
+        function restartLabel(version, runningVersion) {
+            return version === runningVersion ? 'Restart to apply update' : 'Restart for v' + version;
+        }
+
         function renderGlobalUpdateIndicator(data) {
             var indicator = document.getElementById('nav-update-status');
             var label = document.getElementById('nav-update-label');
@@ -1176,20 +1180,21 @@
             var version = data.latest_version || data.file_version || data.github_version;
             indicator.classList.remove('update-available', 'restart-required');
 
-            if (data.restart_required && version) {
-                label.textContent = version === data.running_version ? 'Restart to apply update' : 'Restart for v' + version;
-                indicator.href = '/#restart-bot-control';
-                indicator.title = 'Restart Discord Pals to run v' + version;
-                indicator.classList.add('restart-required');
-                indicator.classList.remove('hidden');
-                return;
-            }
-
+            // Same order as the dashboard badge, so both name the same next step.
             if (data.update_available && version) {
                 label.textContent = updateCommitsLabel(data) || ('Update to v' + version);
                 indicator.href = '/#update-bot-control';
                 indicator.title = 'A Discord Pals update is available on GitHub';
                 indicator.classList.add('update-available');
+                indicator.classList.remove('hidden');
+                return;
+            }
+
+            if (data.restart_required && version) {
+                label.textContent = restartLabel(version, data.running_version);
+                indicator.href = '/#restart-bot-control';
+                indicator.title = 'Restart Discord Pals to run the code on disk';
+                indicator.classList.add('restart-required');
                 indicator.classList.remove('hidden');
                 return;
             }
@@ -1218,6 +1223,7 @@
         }
 
         window.updateCommitsLabel = updateCommitsLabel;
+        window.restartLabel = restartLabel;
         window.renderGlobalUpdateIndicator = renderGlobalUpdateIndicator;
         window.hideGlobalUpdateIndicator = hideGlobalUpdateIndicator;
         window.checkGlobalUpdateStatus = checkGlobalUpdateStatus;

@@ -679,7 +679,7 @@ function showNewVersionBadge(version, restartOnly = false, label = null) {
 
     if (badge && version) {
         if (restartOnly) {
-            badge.textContent = 'Restart for v' + version;
+            badge.textContent = label || ('Restart for v' + version);
             if (updateBtn) updateBtn.classList.add('hidden');
         } else {
             badge.textContent = label || ('v' + version + ' available');
@@ -748,7 +748,7 @@ function applyPendingUpdateState(data) {
     if (data.update_available) {
         showNewVersionBadge(data.latest_version, false, window.updateCommitsLabel ? window.updateCommitsLabel(data) : null);
     } else if (data.restart_required) {
-        showNewVersionBadge(data.latest_version, true);
+        showNewVersionBadge(data.latest_version, true, window.restartLabel(data.latest_version, data.running_version));
     } else {
         hideNewVersionBadge();
     }
@@ -784,9 +784,10 @@ function renderUpdateResult(data) {
         panel.classList.add('is-warning');
     }
 
+    const message = data.message || (failed ? 'Update failed' : 'Update finished');
     const title = document.createElement('div');
     title.className = 'update-result-title';
-    title.textContent = data.message || (failed ? 'Update failed' : 'Update finished');
+    title.textContent = failed && !/^(Update|Restart) /.test(message) ? 'Update failed: ' + message : message;
     panel.appendChild(title);
 
     if (warnings.length) {
@@ -855,7 +856,8 @@ async function updateBot() {
                 showToast('Update applied. Restarting...', 'success');
                 setTimeout(() => restartBot(true), 2000);
             } else if (data.restart_required) {
-                showNewVersionBadge(data.new_version || data.file_version, true);
+                const version = data.new_version || data.file_version;
+                showNewVersionBadge(version, true, window.restartLabel(version, data.running_version));
                 showToast(data.message || 'Restart to apply the update', data.warnings && data.warnings.length ? 'warning' : 'success');
             } else {
                 hideNewVersionBadge();
@@ -882,6 +884,27 @@ async function updateBot() {
         btn.disabled = false;
         btn.querySelector('.toggle-status').textContent = 'Update';
     }
+}
+
+// The old process answers /healthz until it exits, and a systemd unit waits RestartSec before
+// it starts the new one, so wait for the server to go away and come back (2 minutes at most).
+async function reloadWhenRestarted() {
+    const started = Date.now();
+    let wentDown = false;
+    while (Date.now() - started < 120000) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        try {
+            const response = await fetch('/healthz', { cache: 'no-store' });
+            if (!response.ok) {
+                wentDown = true;
+            } else if (wentDown || Date.now() - started > 30000) {
+                break;
+            }
+        } catch (e) {
+            wentDown = true;
+        }
+    }
+    location.reload();
 }
 
 // Restart bot
@@ -911,11 +934,12 @@ async function restartBot(skipConfirm = false) {
         const data = await response.json();
 
         if (data.status === 'ok') {
-            showToast('Restart initiated. Page will reload in 10 seconds...', 'warning');
-            setTimeout(() => { location.reload(); }, 10000);
+            showToast('Restart initiated. The page reloads when the bot is back.', 'warning');
+            reloadWhenRestarted();
         } else {
-            showToast('Restart failed: ' + (data.message || 'Unknown error'), 'error');
-            renderUpdateResult({ status: 'error', message: data.message || 'Restart failed' });
+            const message = data.message || 'Unknown error';
+            showToast('Restart failed: ' + message, 'error');
+            renderUpdateResult({ status: 'error', message: /^Restart /.test(message) ? message : 'Restart failed: ' + message });
             btn.disabled = false;
             btn.querySelector('.toggle-status').textContent = 'Restart';
         }
