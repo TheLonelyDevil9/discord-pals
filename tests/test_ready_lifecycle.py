@@ -10,6 +10,7 @@ import bot_instance as bot_instance_module
 import discord_utils as discord_utils_module
 import main as main_module
 import project_automation as project_automation_module
+from commands.registry import register_command_metadata
 from history_sandbox import HistorySandbox
 
 
@@ -32,8 +33,10 @@ class ReadyTestCase(HistorySandbox, unittest.IsolatedAsyncioTestCase):
         stack.enter_context(patch.object(discord_utils_module, "register_bot"))
         stack.enter_context(patch.object(project_automation_module, "get_automation", return_value=self.automation))
         stack.enter_context(patch.object(bot_instance_module.metrics_manager, "update_bot_status"))
-        for level in ("online", "ok", "info", "warn", "error", "debug"):
-            stack.enter_context(patch.object(bot_instance_module.log, level))
+        self.log = {
+            level: stack.enter_context(patch.object(bot_instance_module.log, level))
+            for level in ("online", "ok", "info", "warn", "error", "debug")
+        }
 
     def make_bot(self):
         bot = _make_registered_bot()
@@ -55,6 +58,60 @@ class ReadyHistoryTests(ReadyTestCase):
         self.assertEqual(discord_utils_module.get_history(77)[0]["content"], "said just before a reconnect")
         self.assertIn(77, discord_utils_module._dirty_history_channels)
         self.assertTrue(discord_utils_module._history_save_pending)
+
+
+class ReadyRobustnessTests(ReadyTestCase):
+    async def test_ready_sets_the_request_processor_before_a_step_can_fail(self):
+        bot = self.make_bot()
+        self.character_load.side_effect = RuntimeError("character file unreadable")
+
+        await bot.client.on_ready()
+
+        self.assertEqual(bot.request_queue.process_callback, bot._process_request)
+        started = {call.kwargs["name"] for call in bot._track_background_task.call_args_list}
+        self.assertTrue({"periodic-state-cleanup", "dm-followups", "reminders"} <= started)
+        self.automation.attach.assert_awaited_once_with(bot)
+        bot._sync_slash_commands.assert_awaited_once()
+        self.log["error"].assert_called_once()
+        self.assertIn("character file unreadable", self.log["error"].call_args.args[0])
+
+    async def test_a_failing_step_does_not_stop_the_later_steps(self):
+        bot = self.make_bot()
+        self.automation.attach.side_effect = RuntimeError("helper store locked")
+
+        await bot.client.on_ready()
+
+        bot._sync_slash_commands.assert_awaited_once()
+        self.log["online"].assert_called_once()
+        self.assertIn("helper store locked", self.log["error"].call_args.args[0])
+
+
+class SlashCommandSyncTests(ReadyTestCase):
+    async def test_commands_sync_once_per_process(self):
+        bot = self.make_bot()
+
+        await bot.client.on_ready()
+        await bot.client.on_ready()
+
+        bot._sync_slash_commands.assert_awaited_once()
+
+    async def test_commands_sync_again_after_the_inventory_changed(self):
+        bot = self.make_bot()
+        await bot.client.on_ready()
+
+        register_command_metadata(bot, name="extra", audience="user", description="Added later")
+        await bot.client.on_ready()
+
+        self.assertEqual(bot._sync_slash_commands.await_count, 2)
+
+    async def test_a_failed_sync_is_tried_again_on_the_next_ready(self):
+        bot = self.make_bot()
+        bot._sync_slash_commands.return_value = {"global": {"ok": False}, "guilds": []}
+
+        await bot.client.on_ready()
+        await bot.client.on_ready()
+
+        self.assertEqual(bot._sync_slash_commands.await_count, 2)
 
 
 class RunBotsHistoryTests(unittest.IsolatedAsyncioTestCase):

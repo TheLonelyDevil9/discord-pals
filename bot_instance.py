@@ -10,6 +10,7 @@ import json
 import random
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
@@ -291,6 +292,35 @@ class BotInstance:
         )
         self.command_sync_status = status
         return status
+
+    async def _sync_slash_commands_once(self) -> None:
+        """Sync slash commands unless this command inventory already synced in this process.
+
+        on_ready runs again after every reconnect that cannot resume, and each
+        sync clears and rewrites this bot's commands in every guild. A sync with
+        any failure is tried again on the next ready.
+        """
+        inventory = self._get_command_inventory()
+        if inventory == getattr(self, "_synced_command_inventory", None):
+            log.debug("Slash commands unchanged since the last sync; skipping", self.name)
+            return
+        status = await self._sync_slash_commands()
+        if status["global"]["ok"] and all(guild["ok"] for guild in status["guilds"]):
+            self._synced_command_inventory = inventory
+
+    @contextmanager
+    def _ready_step(self, label: str):
+        """Log a failed on_ready step instead of ending on_ready, so later steps still run."""
+        try:
+            yield
+        except Exception as e:
+            log.error(
+                f"Startup step '{label}' failed ({type(e).__name__}): {e}",
+                self.name,
+                component="lifecycle",
+                event="ready_step_failed",
+                step=label,
+            )
 
     # === MESSAGE HANDLING HELPERS (for on_message) ===
 
@@ -1461,51 +1491,61 @@ Return exactly one JSON object with this shape:
         
         @self.client.event
         async def on_ready():
-            ensure_data_dir()
-            # Load character
-            self.character = character_manager.load(self.character_name)
-            if self.character:
-                log.ok(f"Loaded character: {self.character.name}", self.name)
-            else:
-                log.warn(f"Character '{self.character_name}' not found!", self.name)
-                available = character_manager.list_available()
-                if available:
-                    self.character = character_manager.load(available[0])
-                    log.info(f"Loaded fallback: {self.character.name}", self.name)
-
-            # Set up request processor
+            # Set up request processor first, so that a step below that fails
+            # cannot leave a connected bot that drops every queued request.
             self.request_queue.set_processor(self._process_request)
 
-            # Register this bot for cross-bot awareness (mention features)
-            from discord_utils import register_bot
-            register_bot(self)
+            with self._ready_step("data directory"):
+                ensure_data_dir()
 
-            # Start periodic state cleanup task (every 5 minutes)
-            self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
+            with self._ready_step("character"):
+                # Load character
+                self.character = character_manager.load(self.character_name)
+                if self.character:
+                    log.ok(f"Loaded character: {self.character.name}", self.name)
+                else:
+                    log.warn(f"Character '{self.character_name}' not found!", self.name)
+                    available = character_manager.list_available()
+                    if available:
+                        self.character = character_manager.load(available[0])
+                        log.info(f"Loaded fallback: {self.character.name}", self.name)
 
-            # Start DM follow-up loop
-            self._track_background_task(self._dm_followup_loop(), name="dm-followups")
+            with self._ready_step("bot registry"):
+                # Register this bot for cross-bot awareness (mention features)
+                from discord_utils import register_bot
+                register_bot(self)
 
-            # Start durable reminder loop
-            self._track_background_task(self._reminder_loop(), name="reminders")
+            with self._ready_step("background tasks"):
+                # Start periodic state cleanup task (every 5 minutes)
+                self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
 
-            # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
-            if getattr(provider_manager, "providers", None):
-                self._track_background_task(
-                    memory_manager.retry_pending_auto_profiles(provider_manager),
-                    name="retry-pending-auto-profiles",
+                # Start DM follow-up loop
+                self._track_background_task(self._dm_followup_loop(), name="dm-followups")
+
+                # Start durable reminder loop
+                self._track_background_task(self._reminder_loop(), name="reminders")
+
+                # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
+                if getattr(provider_manager, "providers", None):
+                    self._track_background_task(
+                        memory_manager.retry_pending_auto_profiles(provider_manager),
+                        name="retry-pending-auto-profiles",
+                    )
+
+            with self._ready_step("metrics"):
+                # Initialize Prometheus metrics for this bot
+                metrics_manager.update_bot_status(
+                    bot_name=self.name,
+                    character_name=self.character.name if self.character else 'None',
+                    online=True
                 )
 
-            # Initialize Prometheus metrics for this bot
-            metrics_manager.update_bot_status(
-                bot_name=self.name,
-                character_name=self.character.name if self.character else 'None',
-                online=True
-            )
+            with self._ready_step("Project helper"):
+                from project_automation import get_automation
+                await get_automation().attach(self)
 
-            from project_automation import get_automation
-            await get_automation().attach(self)
-            await self._sync_slash_commands()
+            with self._ready_step("slash commands"):
+                await self._sync_slash_commands_once()
 
             log.online(f"{self.client.user} is online!", self.name)
         
