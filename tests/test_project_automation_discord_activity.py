@@ -26,9 +26,10 @@ def _native_suite():
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import discord
-    from project_automation import WorkflowError
+    from project_automation import AutomationService, WorkflowError, mirror_key
     from project_automation_discord import DiscordTransport, receipt_key
-    from project_automation_discord_activity import activity_embed, activity_marker
+    from project_automation_discord_activity import activity_embed, activity_marker, marker_prefix
+    from project_automation_rename import rename_helper
     from project_automation_store import AutomationStore
 
     async def iterate(items):
@@ -449,6 +450,123 @@ def _native_suite():
             self.assertEqual(receipt["message_id"], str(message.id))
             thread.send.assert_awaited_once()
             message.edit.assert_awaited_once()
+
+        def show_earlier_prefix(self, event):
+            """Give the delivered message of `event` an earlier helper's footer prefix and store it, as rename-helper leaves them."""
+            earlier = marker_prefix(receipt_key({**self.config, "bot_name": "Earlier Helper"}, event))
+            thread, message, link = self.delivered(event)
+            message.embeds[0].set_footer(text=earlier + link["source_version"])
+            self.store.put_link("pr_activity", receipt_key(self.config, event), {**link, "marker_prefix": earlier})
+            return thread, message, earlier
+
+        async def test_edit_rewrites_in_place_a_message_that_shows_an_earlier_prefix(self):
+            event = self.event()
+            await self.transport.mirror_activity(event)
+            thread, message, earlier = self.show_earlier_prefix(event)
+            self.assertTrue(await self.transport.mirror_activity(event))
+            message.edit.assert_not_awaited()
+            self.assertEqual(self.delivered(event)[2]["marker_prefix"], earlier)
+            await self.transport.mirror_activity({**event, "source_version": "version-2", "action": "edited",
+                                                  "body": "Edited source text."})
+            message.edit.assert_awaited_once()
+            thread.send.assert_awaited_once()
+            current = marker_prefix(receipt_key(self.config, event))
+            self.assertEqual(message.embeds[0].footer.text, current + "version-2")
+            self.assertEqual(self.delivered(event)[2]["marker_prefix"], current)
+
+        async def test_reply_keeps_its_link_to_a_parent_that_shows_an_earlier_prefix(self):
+            parent = self.event("review_comment")
+            await self.transport.mirror_activity(parent)
+            _, _, receipt = self.delivered(parent)
+            self.show_earlier_prefix(parent)
+            reply = self.event("review_comment", key="pr:17:review_comment:43", source_id="43", reply_to_id=42)
+            await self.transport.mirror_activity(reply)
+            _, message, _ = self.delivered(reply)
+            self.assertIn(receipt["jump_url"], str(message.embeds[0].to_dict()))
+
+        async def test_stored_prefix_does_not_accept_a_message_with_another_footer(self):
+            event = self.event()
+            await self.transport.mirror_activity(event)
+            thread, message, _ = self.show_earlier_prefix(event)
+            message.embeds[0].set_footer(text="PR activity " + "0" * 64 + " version-1")
+            with self.assertRaisesRegex(WorkflowError, "different delivery marker"):
+                await self.transport.mirror_activity({**event, "source_version": "version-2"})
+            message.edit.assert_not_awaited()
+            thread.send.assert_awaited_once()
+
+        async def test_lost_edit_ack_after_a_rename_leaves_a_message_that_is_still_accepted(self):
+            event = self.event()
+            await self.transport.mirror_activity(event)
+            thread, message, _ = self.show_earlier_prefix(event)
+            original_edit = message.edit.side_effect
+
+            async def lost_ack(**kwargs):
+                await original_edit(**kwargs)
+                raise TimeoutError("Edit acknowledgement lost")
+
+            message.edit.side_effect = lost_ack
+            newer = {**event, "source_version": "version-2", "action": "edited", "body": "Latest text"}
+            with self.assertRaises(TimeoutError):
+                await self.transport.mirror_activity(newer)
+            self.assertTrue(await self.transport.mirror_activity(newer, recover_only=True))
+            self.assertTrue(await self.transport.mirror_activity(newer))
+            message.edit.assert_awaited_once()
+            thread.send.assert_awaited_once()
+            self.assertEqual(self.delivered(event)[2]["marker_prefix"], marker_prefix(receipt_key(self.config, event)))
+
+        async def test_renamed_helper_edits_its_existing_messages_and_keeps_its_case(self):
+            issues = self.forum_channel(201)
+            self.config["feedback_channel_id"] = "205"
+            issue = {"kind": "issue", "key": "issue:17", "number": 17, "title": "Settings fail", "body": "Steps.",
+                     "state": "open", "closed": False, "html_url": "https://github.com/example/project/issues/17"}
+            comment = self.event()
+            await self.transport.mirror(issue)
+            await self.transport.mirror_activity(comment)
+            case = self.store.create_case({
+                "repository": "example/project", "bot_name": "Project Helper", "guild_id": "100",
+                "feedback_channel_id": "205", "channel_id": "206", "reporter_id": "19", "state": "discussing",
+                "gate": {"kind": "conversation", "options": [{"key": "write", "label": "Write my report"}]},
+            }, source_key="discord:100:1")
+            issue_thread, pr_thread = issues.threads[0], self.forum.threads[0]
+            issue_post, pr_post = self.messages[issue_thread.id][issue_thread.id], self.messages[pr_thread.id][pr_thread.id]
+            activity = self.delivered(comment)[1]
+            messages = {thread.id: dict(self.messages[thread.id]) for thread in (issue_thread, pr_thread)}
+            # Records written before stored footers existed have none; the rename adds them.
+            for kind, key in (("mirror", mirror_key(self.config, "issue", "issue:17")),
+                              ("mirror", mirror_key(self.config, "pull", "pull:17")),
+                              ("pr_activity", receipt_key(self.config, comment))):
+                link = self.store.get_link(kind, key)
+                self.store.put_link(kind, key, {name: value for name, value in link.items()
+                                                if name not in ("marker", "marker_prefix")})
+
+            report = rename_helper(self.store, dict(self.config), "Project Helper", "Renamed Helper", apply=True)
+            self.assertEqual(report.verdict, "applied")
+            self.assertEqual(report.before.markers, {"post footers added": 2, "activity prefixes added": 1})
+            # The operator then selects the renamed bot entry, which is the same Discord account.
+            self.config["bot_name"] = "Renamed Helper"
+            self.service.bots = {"Renamed Helper": SimpleNamespace(client=self.client)}
+            writes = (issue_post.edit, pr_post.edit, activity.edit, issues.create_thread, self.forum.create_thread,
+                      issue_thread.send, pr_thread.send)
+            for write in writes:
+                write.reset_mock()
+            self.assertTrue(await self.transport.mirror(issue))
+            self.assertTrue(await self.transport.mirror_activity({**comment, "source_version": "version-2",
+                                                                  "action": "edited", "body": "Edited source text."}))
+
+            for post in (issue_post, pr_post, activity):
+                post.edit.assert_awaited_once()
+            for create in (issues.create_thread, self.forum.create_thread, issue_thread.send, pr_thread.send):
+                create.assert_not_awaited()
+            self.assertEqual({thread.id: dict(self.messages[thread.id]) for thread in (issue_thread, pr_thread)}, messages)
+            for kind, post in (("issue", issue_post), ("pull", pr_post)):
+                key = mirror_key(self.config, kind, f"{kind}:17")
+                self.assertEqual(post.embeds[0].footer.text, f"Project {key}")
+                self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+            prefix = marker_prefix(receipt_key(self.config, comment))
+            self.assertEqual(activity.embeds[0].footer.text, prefix + "version-2")
+            self.assertEqual(self.delivered(comment)[2]["marker_prefix"], prefix)
+            service = AutomationService(self.store, settings=lambda: self.config, ai=object(), transport=object())
+            self.assertTrue(service._bound(self.store.get_case(case["id"])))
 
         async def test_recovery_cannot_create_a_missing_parent(self):
             self.assertFalse(await self.transport.mirror_activity(self.event(), recover_only=True))

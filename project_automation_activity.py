@@ -27,6 +27,10 @@ def activity_receipt_key(config, event):
     return "pr:" + hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
+def marker_prefix(key):
+    return "PR activity " + hashlib.sha256(key.encode("utf-8")).hexdigest() + " "
+
+
 def mapping_key(config):
     identity = {key: config.get(key, "") for key in
                 ("repository", "guild_id", "bot_name", "reviews_channel_id")}

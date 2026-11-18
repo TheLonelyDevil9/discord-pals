@@ -7,6 +7,7 @@ then require reconciliation instead of being sent again after a restart.
 """
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -38,6 +39,31 @@ _IDENTITY_FIELDS = {"channel_id", "reporter_id", "guild_id", "bot_name", "reposi
 
 class Conflict(Exception):
     """A decision, job lease, or document revision is no longer current."""
+
+
+@dataclass(frozen=True)
+class Rows:
+    """One snapshot of the links, cases and jobs tables: links by (kind, key) as (document,
+    updated_at), cases by ID as column dicts, and jobs as column dicts in ID order."""
+
+    links: dict
+    cases: dict
+    jobs: tuple
+
+
+@dataclass(frozen=True)
+class RowChange:
+    """A planned rewrite of one links row, which may move to new_key, or of one cases row's document.
+
+    `document` is the document as read, so that the write only replaces the exact row that was planned.
+    """
+
+    table: str
+    kind: str
+    key: str
+    new_key: str
+    document: str
+    new_document: str
 
 
 def _text(value, name, maximum=512):
@@ -877,6 +903,80 @@ class AutomationStore:
             connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') AND key = ?",
                                (str(snapshot["id"]),))
             connection.execute("DELETE FROM jobs WHERE id = ?", (snapshot["id"],))
+
+    @staticmethod
+    def _read_rows(connection):
+        links = {(row["kind"], row["key"]): (row["document"], row["updated_at"]) for row in
+                 connection.execute("SELECT kind, key, document, updated_at FROM links")}
+        cases = {row["id"]: dict(row) for row in connection.execute("SELECT * FROM cases")}
+        jobs = tuple(dict(row) for row in connection.execute("SELECT * FROM jobs ORDER BY id"))
+        return Rows(links, cases, jobs)
+
+    @staticmethod
+    def _apply_changes(connection, changes):
+        # Neither statement sets updated_at, so retention ages each row exactly as before.
+        for change in changes:
+            if change.table == "links":
+                cursor = connection.execute(
+                    "UPDATE links SET key = ?, document = ? WHERE kind = ? AND key = ? AND document = ?",
+                    (change.new_key, change.new_document, change.kind, change.key, change.document))
+            else:
+                cursor = connection.execute("UPDATE cases SET document = ? WHERE id = ? AND document = ?",
+                                            (change.new_document, change.key, change.document))
+            if cursor.rowcount != 1:
+                raise RuntimeError("a planned row does not match the row that was read")
+
+    @staticmethod
+    def _expected_rows(before, changes):
+        """Return the rows `before` must turn into: the planned rows rewritten, every other row as read."""
+        moved = {(change.kind, change.key): change for change in changes if change.table == "links"}
+        links = {}
+        for (kind, key), (document, updated_at) in before.links.items():
+            change = moved.get((kind, key))
+            if change is None:
+                links[(kind, key)] = (document, updated_at)
+            else:
+                links[(kind, change.new_key)] = (change.new_document, updated_at)
+        cases = dict(before.cases)
+        for change in changes:
+            if change.table == "cases":
+                cases[change.key] = {**cases[change.key], "document": change.new_document}
+        return Rows(links, cases, before.jobs)
+
+    def rewrite_records(self, plan, *, apply):
+        """Run `plan` on one snapshot of the links, cases and jobs tables and, with apply=True, write its changes.
+
+        plan(rows) takes a Rows snapshot and returns an object with `changes`, a list of
+        RowChange, and `refusals`. Nothing is written without apply, or when the plan refuses
+        or has no change. With apply, the snapshot, the writes and these checks share one
+        BEGIN IMMEDIATE transaction: plan run again on the result finds nothing to change or
+        refuse, every row equals the snapshot with exactly the planned rewrites, and PRAGMA
+        integrity_check passes. A failed check raises RuntimeError and rolls everything back.
+        Return the plan of the snapshot and, after a write, the plan of the result.
+        """
+        with self._connection(write=apply) as connection:
+            if not apply:
+                # Without a transaction each SELECT could see a different commit.
+                connection.execute("BEGIN")
+            before_rows = self._read_rows(connection)
+            before = plan(before_rows)
+            if not apply or before.refusals or not before.changes:
+                if not apply:
+                    connection.execute("ROLLBACK")
+                return before, None
+            self._apply_changes(connection, before.changes)
+            after_rows = self._read_rows(connection)
+            after = plan(after_rows)
+            problems = []
+            if after.changes or after.refusals:
+                problems.append("records of the old identity remain")
+            if after_rows != self._expected_rows(before_rows, before.changes):
+                problems.append("the database differs from the planned result")
+            if [row[0] for row in connection.execute("PRAGMA integrity_check")] != ["ok"]:
+                problems.append("PRAGMA integrity_check failed")
+            if problems:
+                raise RuntimeError("; ".join(problems))
+            return before, after
 
     def clean_up_old_queue(self, history_days=0):
         """Clear work left by overlapping sync cycles once, and return counts or None after the first run.

@@ -6,16 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Keeps the Project helper's job queue bounded, gives operators controls that clear it, and limits reconciliation to what changed.
+Keeps the Project helper's job queue bounded, gives operators controls that clear it, limits reconciliation to what changed, and keeps a renamed helper bot's posts.
 
 ### Added
 
 - **Job history** setting under Project → Helper setup: days to keep finished jobs, from 0 to 365, default 0.
 - **Project data** controls: **Clear history and queue** deletes every job except jobs in progress and the feedback steps open reports still need; **Reset Project data** deletes all jobs, post records, receipts, and feedback cases while automation is paused, after you type the repository name. A held job can be removed with **Discard**, which does not retry its delivery.
 - `tools/project_data.py` with `status`, `clear-history`, `reset --confirm <repository>`, and `compact` for operators without dashboard access.
+- `tools/project_data.py rename-helper --from OLD --to NEW` moves the Project helper's stored records, among them its post records, PR activity receipts, checkpoints, and feedback cases, to a renamed helper bot, so choosing the new name does not post every open issue and PR again. Without `--apply` it only reports counts. It refuses while automation is enabled, a job carries the old name, or a send of the old name is unconfirmed, and it checks its result before it commits. See [Renaming the helper bot](docs/project-automation.md#renaming-the-helper-bot).
 
 ### Changed
 
+- Issue and PR post records and PR activity receipts store the footer that their Discord message shows. The helper accepts a saved message with that footer or the current one, and its next update writes the current one.
+- When the selected helper bot is missing from Config, the Project page adds that a renamed bot needs `rename-helper` before its new name is selected.
 - A retention sweep deletes finished Project jobs at most every 10 minutes, also while paused, and failed jobs after 7 days or the Job history days when longer. A failed report decision or publication stays until it is retried. Release, workflow, and commit post records follow the Job history days with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued, running, and held jobs, issue and PR posts, receipts, and feedback cases are kept. See [Job history and Project data](docs/project-automation.md#job-history-and-project-data).
 - Reconciliation runs one cycle at a time and no longer refreshes issues and PRs that closed more than 7 days ago. Discovery of recently updated PRs is unchanged.
 - A GitHub delivery received again within 4 days is answered as accepted and queues nothing, even when its payload changed; such a repeat was answered with 503 before. The guard keeps only a hash of the delivery ID.
@@ -36,6 +39,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 
 - Back up `bot_data/project_automation.sqlite3` before updating. The first start runs a one-time cleanup that deletes queued reconciliation work left by overlapping cycles, every finished job, and failed and cancelled jobs older than 7 days, then compacts the file. Queued webhook deliveries, PR activity deliveries, the feedback steps open reports need, and held jobs are kept. On a large database the cleanup can hold the database for a minute or more; webhooks that arrive meanwhile get 503, so redeliver them from GitHub's delivery history. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - An earlier version can still open the cleaned database, but deleted jobs do not come back and that version stops deleting finished jobs.
+- After `rename-helper`, an earlier version rejects every issue or PR post and PR activity message that still shows the footer of the old name, and it holds each job that tries to update one. Stay on this version or a later one after a rename.
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 
 ## [v2.9.0] - 2026-09-29

@@ -106,6 +106,61 @@ def test_clear_history_reports_a_failed_compaction_without_failing(tool, capsys,
     assert "Deleted 1 job. Compaction skipped." in capsys.readouterr().out
 
 
+def renamed_helper(tool):
+    """Configure the helper as "Old Helper" and store one issue post and the activation baseline under that name."""
+    from project_automation import mirror_key
+    from project_automation_activity import activate
+    tool.settings.update(bot_name="Old Helper", guild_id="100", repository="example/project",
+                         issues_channel_id="201", reviews_channel_id="202")
+    activate(tool.store, tool.settings)
+    key = mirror_key(tool.settings, "issue", "issue:7")
+    tool.store.put_link("mirror", key, {"channel_id": "301", "message_id": "987654321", "kind": "issue", "number": 7,
+                                        "repository": "example/project", "guild_id": "100", "bot_name": "Old Helper"})
+    return key, mirror_key({**tool.settings, "bot_name": "New Helper"}, "issue", "issue:7")
+
+
+RENAME = ["rename-helper", "--from", "Old Helper", "--to", "New Helper"]
+
+
+def test_rename_helper_dry_run_prints_counts_only_and_apply_moves_the_records(tool, capsys):
+    old_key, new_key = renamed_helper(tool)
+    assert project_data.run(RENAME, tool.service) == 0
+    output = capsys.readouterr().out
+    assert "VERDICT: DRY RUN OK. 2 records would be rewritten." in output
+    assert "mirror" in output and "987654321" not in output
+    assert tool.store.get_link("mirror", old_key) is not None
+    assert project_data.run(RENAME + ["--apply"], tool.service) == 0
+    assert "VERDICT: APPLIED. 2 records rewritten" in capsys.readouterr().out
+    assert tool.store.get_link("mirror", old_key) is None
+    assert tool.store.get_link("mirror", new_key)["marker"] == "Project " + old_key
+    assert project_data.run(RENAME + ["--apply"], tool.service) == 0
+    assert "VERDICT: NOTHING TO DO" in capsys.readouterr().out
+
+
+def test_rename_helper_refuses_while_enabled_and_needs_both_names(tool, capsys):
+    old_key, _ = renamed_helper(tool)
+    tool.settings["enabled"] = True
+    assert project_data.run(RENAME + ["--apply"], tool.service) == 1
+    output = capsys.readouterr().out
+    assert "REFUSED: The Project helper is enabled" in output and "VERDICT: REFUSED. Nothing was changed." in output
+    assert tool.store.get_link("mirror", old_key) is not None
+    with pytest.raises(SystemExit):
+        project_data.run(["rename-helper", "--from", "Old Helper"], tool.service)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("the database differs from the planned result"),
+                                   sqlite3.OperationalError("database is locked")])
+def test_rename_helper_reports_a_rolled_back_write_without_a_traceback(tool, capsys, monkeypatch, error):
+    renamed_helper(tool)
+
+    def fail(plan, *, apply):
+        raise error
+
+    monkeypatch.setattr(tool.store, "rewrite_records", fail)
+    assert project_data.run(RENAME + ["--apply"], tool.service) == 1
+    assert str(error) in capsys.readouterr().err
+
+
 def test_main_refuses_a_missing_database(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "path", list(sys.path))

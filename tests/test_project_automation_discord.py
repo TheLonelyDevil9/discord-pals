@@ -1012,6 +1012,84 @@ def _native_suite():
                 thread.edit.assert_not_awaited()
                 forum.create_thread.assert_not_awaited()
 
+        def renamed_post(self, kind="issue"):
+            """Return a post whose footer and stored marker name an earlier helper bot, as rename-helper leaves it."""
+            forum, thread, starter = self.configure_forum(kind)
+            key = f"100:Project Helper:{forum.id}:SillyBunnyTeam/SillyBunny:{kind}:17"
+            earlier = f"Project 100:Earlier Helper:{forum.id}:SillyBunnyTeam/SillyBunny:{kind}:17"
+            starter.embeds = [discord.Embed().set_footer(text=earlier)]
+            self.store.put_link("mirror", key, {"channel_id": "301", "message_id": "301", "marker": earlier})
+            return forum, thread, starter, key, earlier
+
+        async def test_post_with_a_stored_earlier_marker_is_edited_in_place_and_takes_the_current_one(self):
+            for kind in ("issue", "pull"):
+                self.store.links.clear()
+                forum, thread, starter, key, _ = self.renamed_post(kind)
+                self.assertTrue(await self.transport.mirror(event(kind)))
+                forum.create_thread.assert_not_awaited()
+                starter.edit.assert_awaited_once()
+                self.assertEqual(starter.edit.await_args.kwargs["embed"].footer.text, f"Project {key}")
+                self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+
+        async def test_unchanged_post_that_still_shows_an_earlier_marker_is_rewritten(self):
+            forum, thread, starter = self.configure_forum()
+            key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            await self.transport.mirror(event())
+            self.apply_thread_writes(forum, thread)
+            earlier = "Project 100:Earlier Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            starter.embeds = [discord.Embed().set_footer(text=earlier)]
+            # The digest still matches this rendering, so only the stored marker shows the stale footer.
+            self.store.put_link("mirror", key, {**self.store.get_link("mirror", key), "marker": earlier})
+            self.reset_writes(forum.create_thread, starter.edit, thread.edit)
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            forum.create_thread.assert_not_awaited()
+            self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+
+        async def test_stored_marker_does_not_accept_a_post_with_another_footer(self):
+            forum, _, starter, key, _ = self.renamed_post()
+            starter.embeds = [discord.Embed().set_footer(text="Project unrelated")]
+            with self.assertRaisesRegex(WorkflowError, "different delivery marker"):
+                await self.transport.mirror(event())
+            starter.edit.assert_not_awaited()
+            forum.create_thread.assert_not_awaited()
+
+        async def test_without_a_stored_marker_only_the_current_marker_is_accepted(self):
+            forum, _, starter, key, _ = self.renamed_post()
+            self.store.put_link("mirror", key, {"channel_id": "301", "message_id": "301"})
+            with self.assertRaisesRegex(WorkflowError, "different delivery marker"):
+                await self.transport.mirror(event())
+            starter.edit.assert_not_awaited()
+            starter.embeds = [discord.Embed().set_footer(text=f"Project {key}")]
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            forum.create_thread.assert_not_awaited()
+            self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+
+        async def test_post_already_showing_the_current_marker_is_accepted_after_a_lost_edit_ack(self):
+            forum, _, starter, key, _ = self.renamed_post()
+            starter.embeds = [discord.Embed().set_footer(text=f"Project {key}")]
+            await self.transport.mirror(event())
+            starter.edit.assert_awaited_once()
+            forum.create_thread.assert_not_awaited()
+            self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+
+        async def test_recovery_keeps_the_marker_the_post_shows_and_searches_only_the_current_one(self):
+            forum, thread, starter, key, earlier = self.renamed_post()
+            self.assertTrue(await self.transport.mirror(event(), recover_only=True))
+            self.assertEqual(self.store.get_link("mirror", key)["marker"], earlier)
+            starter.edit.assert_not_awaited()
+            forum.create_thread.assert_not_awaited()
+            self.store.links.clear()
+            thread.name = "Open · Settings fail to save · #17"
+            forum.threads = [thread]
+            self.assertFalse(await self.transport.mirror(event(), recover_only=True))
+            starter.embeds = [discord.Embed().set_footer(text=f"Project {key}")]
+            self.assertTrue(await self.transport.mirror(event(), recover_only=True))
+            self.assertEqual(self.store.get_link("mirror", key)["marker"], f"Project {key}")
+            starter.edit.assert_not_awaited()
+            forum.create_thread.assert_not_awaited()
+
         async def test_recovery_permission_denied_is_not_reported_as_absent(self):
             forum, _, _ = self.configure_forum()
             forum.archived_threads.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing permissions")

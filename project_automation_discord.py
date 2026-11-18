@@ -464,7 +464,13 @@ class DiscordTransport:
             raise WorkflowError("Issue tracking and Pull requests require forum channels.")
         marker = f"Project {key}"
         link = self.service.store.get_link("mirror", key)
-        thread, message = None, None
+        # A post keeps the footer it was last written with. After the rename-helper command moves
+        # its record to a new key, the footer differs from the computed marker, so the record
+        # stores it as "marker". An edit whose acknowledgement was lost can leave the post on the
+        # computed marker while the record still names the earlier one, so a post may show either.
+        stored = (link or {}).get("marker")
+        accepted = {marker, stored} if isinstance(stored, str) and stored else {marker}
+        thread, message, shown = None, None, marker
         if link:
             try:
                 thread = await self._channel(link["channel_id"])
@@ -476,7 +482,8 @@ class DiscordTransport:
                         raise WorkflowError("The saved mirror belongs to a different forum.")
                 elif str(thread.id) != str(channel.id):
                     raise WorkflowError("The saved mirror belongs to a different channel.")
-                if not any(embed.footer.text == marker for embed in message.embeds):
+                shown = next((embed.footer.text for embed in message.embeds if embed.footer.text in accepted), None)
+                if shown is None:
                     raise WorkflowError("The saved mirror has a different delivery marker.")
             except discord.NotFound:
                 thread = message = None
@@ -497,7 +504,7 @@ class DiscordTransport:
             message = await self._find_message(channel, marker)
         if recover_only:
             if message:
-                self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]})
+                self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": shown})
                 self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
             return message is not None
         state = "Merged" if event.get("merged") else ("Draft" if event.get("draft") and event.get("state") == "open" else str(event.get("state", "Update")).capitalize())
@@ -508,8 +515,9 @@ class DiscordTransport:
         closed = bool(event.get("closed"))
         digest = mirror_digest(embed, name, closed)
         # The thread's own name and flags count too, so a post renamed, archived or reopened by hand
-        # is still corrected. Lost-receipt recovery finds a post by its name.
-        if saved and link.get("digest") == digest and (
+        # is still corrected. Lost-receipt recovery finds a post by its name. A post that still
+        # shows an earlier marker is rewritten, so that its footer catches up with its record's key.
+        if saved and shown == marker and link.get("digest") == digest and (
                 not isinstance(thread, discord.Thread)
                 or (thread.name, bool(thread.archived), bool(thread.locked)) == (name, closed, closed)):
             self._record_item(key, event)
@@ -538,7 +546,7 @@ class DiscordTransport:
                     thread, message = created.thread, created.message
                 else:
                     thread, message = channel, await channel.send(embed=embed, allowed_mentions=NO_MENTIONS)
-            record = {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"]}
+            record = {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": marker}
             self.service.store.put_link("mirror", key, record)
             self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
             complete = True
