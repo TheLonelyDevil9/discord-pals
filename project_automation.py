@@ -811,8 +811,9 @@ class AutomationService:
         conversion was first recorded and shows no later pull request title, text or state, so a
         conversion seen again writes nothing to Discord. The stored conversion makes the sync root
         ask for the pull request in place of the issue, and the queued refresh gives the PR its own
-        post at once, also when it is no longer open. Reports linked to the issue get no further
-        status notice from it.
+        post at once, also when it is no longer open. Each bound report linked to the issue gets one
+        notice of the conversion, kept from repeating by its case_status checkpoint, and no status
+        notice after it.
         """
         number, url = event["number"], event["html_url"]
         closed = self._closed_key("issue", number)
@@ -824,10 +825,20 @@ class AutomationService:
             "title": title, "state": "converted", "closed": True, "html_url": url,
             "body": f"This issue became [pull request #{number}]({url}). Its updates appear in the pull request's own post.",
         }, create=False)
-        self.store.save_links_with_jobs(
-            [("item_closed", closed, {**stored, "converted": True, "title": title})],
-            [{"kind": "event", "payload": self._refresh("pull", number, event.get("_sync_cycle")),
-              "key": f"converted:{job['id']}:pull:{number}"}])
+        status, links, jobs = {"state": "converted", "url": url}, [], []
+        for case in self.store.cases_for_issue(event["repository"], number):
+            if self._bound(case) and self.store.get_link("case_status", case["id"]) != status:
+                links.append(("case_status", case["id"], status))
+                jobs.append({"kind": "notify", "payload": {"case_id": case["id"], "event": {
+                    "action": "issue_converted", "facts": {"pull_request_number": number, "github_url": url},
+                    # The next step also says what happened, because it is the whole notice while
+                    # the character's reply is unavailable.
+                    "next_step": f"The linked issue became pull request #{number}. Follow it on GitHub: {url}"}},
+                    "key": f"status-v2:{case['id']}:{job['id']}:{job['attempts']}"})
+        links.append(("item_closed", closed, {**stored, "converted": True, "title": title}))
+        jobs.append({"kind": "event", "payload": self._refresh("pull", number, event.get("_sync_cycle")),
+                     "key": f"converted:{job['id']}:pull:{number}"})
+        self.store.save_links_with_jobs(links, jobs)
 
     async def process_job(self, job):
         payload = job["payload"]
