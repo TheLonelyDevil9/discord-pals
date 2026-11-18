@@ -95,6 +95,17 @@ def test_compact_reports_whether_it_ran(tool, capsys):
     assert "Compacted" in capsys.readouterr().out
 
 
+def test_clear_history_reports_a_failed_compaction_without_failing(tool, capsys, monkeypatch):
+    tool.store.enqueue("event", {}, "queued")
+
+    def broken_compact():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(tool.store, "compact", broken_compact)
+    assert project_data.run(["clear-history"], tool.service) == 0
+    assert "Deleted 1 job. Compaction skipped." in capsys.readouterr().out
+
+
 def test_main_refuses_a_missing_database(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "path", list(sys.path))

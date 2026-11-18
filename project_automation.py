@@ -122,7 +122,7 @@ class AutomationService:
 
     def clear_history(self):
         """Clear history and queue, then compact; call from a dashboard or CLI thread, not the event loop."""
-        return {"deleted": self.store.clear_history(), "compacted": self.store.compact()}
+        return {"deleted": self.store.clear_history(), "compacted": self._compact_after_delete()}
 
     def reset_project_data(self, confirmation):
         """Delete all Project data while the helper is disabled; confirmation must be the repository name."""
@@ -131,7 +131,15 @@ class AutomationService:
             raise WorkflowError("Pause the Project helper before resetting its data.")
         if not isinstance(confirmation, str) or not cfg.get("repository") or confirmation.strip() != cfg["repository"]:
             raise ValueError("The confirmation does not match the configured repository.")
-        return {"deleted": self.store.reset_project_data(), "compacted": self.store.compact()}
+        return {"deleted": self.store.reset_project_data(), "compacted": self._compact_after_delete()}
+
+    def _compact_after_delete(self):
+        # The rows are already gone and a later sweep compacts again, so a failed
+        # compaction must not turn the completed delete into a reported failure.
+        try:
+            return self.store.compact()
+        except Exception:
+            return False
 
     def _bound(self, case: dict) -> bool:
         cfg = self.settings()

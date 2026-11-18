@@ -819,6 +819,23 @@ def test_discard_checks_the_held_snapshot_and_keeps_publications_for_recovery(da
     assert store.get_job(publication["id"]) is not None
 
 
+@pytest.mark.parametrize("route", ["clear", "reset"])
+def test_a_failed_compaction_does_not_report_completed_deletions_as_failed(data_api, monkeypatch, route):
+    import sqlite3
+    client, _, store = data_api
+    queued = store.enqueue("event", {}, "queued")
+
+    def broken_compact():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store, "compact", broken_compact)
+    path, payload = data_route(route, store)
+    response = client.post(path, json=payload, headers=csrf())
+    assert response.status_code == 200
+    assert response.get_json()["compacted"] is False
+    assert store.get_job(queued) is None
+
+
 def test_page_offers_the_data_controls(setup):
     client, _, _ = setup
     page = client.get("/project-automation").get_data(as_text=True)
