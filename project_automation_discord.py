@@ -462,7 +462,11 @@ class DiscordTransport:
         for name, description, audience in (("feedback", "Start project feedback", "user"), ("project-recover", "Inspect uncertain delivery", "maintenance"), ("project-retry", "Resume failed work", "maintenance")):
             register_command_metadata(bot, name=name, description=description, audience=audience)
 
-    async def mirror(self, event, *, recover_only=False):
+    async def mirror(self, event, *, recover_only=False, create=True):
+        """Bring the post of `event` up to date and return True, or with recover_only return whether it exists.
+
+        With create=False a missing post is not created: nothing is written and the result is False.
+        """
         cfg = self.service.settings()
         field = MIRROR_CHANNELS[event["kind"]]
         key = mirror_key(cfg, event["kind"], event["key"])
@@ -514,6 +518,8 @@ class DiscordTransport:
                 self.service.store.put_link("mirror", key, {"channel_id": str(thread.id), "message_id": str(message.id), "kind": event["kind"], "number": event.get("number"), "repository": cfg["repository"], "guild_id": cfg["guild_id"], "bot_name": cfg["bot_name"], "marker": shown})
                 self.service.store.put_link("mirror_attempt", key, {"state": "delivered"})
             return message is not None
+        if message is None and not create:
+            return False
         state = "Merged" if event.get("merged") else ("Draft" if event.get("draft") and event.get("state") == "open" else str(event.get("state", "Update")).capitalize())
         embed = discord.Embed(title=f"{state} · {event['title']}"[:250], description=event.get("body", "")[:3800],
                               url=event.get("html_url") or event.get("url"), color=COLOUR)

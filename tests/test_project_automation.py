@@ -109,7 +109,7 @@ class FakeTransport:
         if self.notify_failure:
             raise self.notify_failure
 
-    async def mirror(self, event):
+    async def mirror(self, event, **options):
         self.mirrors.append(deepcopy(event))
 
 
@@ -508,6 +508,24 @@ def test_latest_issue_status_updates_reporter_without_replacing_pending_gate(har
     assert harness.store.get_link("case_status", linked["id"])["state"] == "closed"
     assert harness.transport.mirrors[-1]["state"] == "closed"
     assert harness.transport.mirrors[-1]["state_reason"] == "not_planned"
+
+
+def test_a_report_linked_to_an_issue_that_became_a_pull_request_gets_no_status_from_it(harness):
+    preview = harness.preview()
+    linked = harness.store.update_case(preview["id"], {"linked_issue_number": 42}, expected_revision=preview["revision"])
+    harness.github.items[42] = {"kind": "pull", "number": 42, "title": "Settings fail to save", "body": "PR text",
+                                "state": "closed", "merged": True,
+                                "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/pull/42"}
+    notices = len(harness.transport.notifications)
+    harness.event({"repository": harness.cfg["repository"], "kind": "issue", "number": 42, "key": "issue:42",
+                   "state": "open"}, "event:42")
+    asyncio.run(harness.drain())
+    assert [(mirror["kind"], mirror["state"]) for mirror in harness.transport.mirrors] == [
+        ("issue", "converted"), ("pull", "closed")]
+    assert harness.transport.mirrors[1]["body"] == "PR text"
+    assert harness.store.get_case(linked["id"]) == linked
+    assert harness.store.get_link("case_status", linked["id"]) is None
+    assert len(harness.transport.notifications) == notices
 
 
 def test_maintainer_question_preserves_an_existing_draft_approval(harness):
