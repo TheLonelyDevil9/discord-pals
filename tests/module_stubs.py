@@ -89,6 +89,7 @@ if "discord" not in sys.modules:
             self.guilds = []
 
         def event(self, func):
+            setattr(self, func.__name__, func)
             return func
 
     class CommandTree:

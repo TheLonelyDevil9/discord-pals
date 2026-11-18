@@ -24,7 +24,7 @@ logging.getLogger('aiohttp').setLevel(logging.WARNING)
 from config import DISCORD_TOKEN, DEFAULT_CHARACTER
 from background_tasks import BackgroundTaskRegistry
 from bot_instance import BotInstance
-from discord_utils import save_history
+from discord_utils import load_history, save_history
 from memory import memory_manager
 from reminders import reminder_manager
 from stats import stats_manager
@@ -137,7 +137,10 @@ async def run_bots():
     
     log.startup(f"Starting {len(configs)} bot(s)...")
     log.divider()
-    
+
+    # Every bot shares one history store. Loading it again after a client
+    # connects would discard what the other bots added since.
+    load_history()
     instances = [BotInstance(**cfg) for cfg in configs]
     
     # Start web dashboard
