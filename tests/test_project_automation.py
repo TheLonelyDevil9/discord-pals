@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -580,6 +581,25 @@ def test_github_not_found_without_deletion_event_is_not_claimed_as_deleted(harne
     }, "close:42")
     asyncio.run(harness.drain())
     assert harness.transport.mirrors == []
+
+
+def test_maintainer_question_is_relayed_once_after_its_finished_notice_is_deleted(harness):
+    preview = harness.preview()
+    harness.store.update_case(preview["id"], {"linked_issue_number": 42}, expected_revision=preview["revision"])
+    question = {
+        "repository": harness.cfg["repository"], "kind": "comment", "number": 42,
+        "key": "comment:123", "body": "Which version are you running?",
+        "html_url": "https://github.com/SillyBunnyTeam/SillyBunny/issues/42#issuecomment-123",
+    }
+    harness.event(question, "question-delivery")
+    asyncio.run(harness.drain())
+    with sqlite3.connect(harness.path) as connection:
+        assert connection.execute("DELETE FROM jobs WHERE key LIKE 'question:%' AND state = 'done'").rowcount == 1
+    harness.event(question, "question-rerun")
+    asyncio.run(harness.drain())
+    relayed = [event for event in harness.ai.spoken if event.get("action") == "maintainer_question"]
+    assert len(relayed) == 1
+    assert not [job for job in harness.store.list_jobs() if job["key"].startswith("question:")]
 
 
 def test_maintainer_question_enters_assessment_and_clears_after_approved_answer(harness):

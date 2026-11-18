@@ -623,12 +623,18 @@ class AutomationService:
         if event["kind"] == "comment":
             for case in self.store.cases_for_issue(event["repository"], event["number"]):
                 if self._bound(case):
+                    notice = f"{case['id']}:{event['key']}"
+                    # Retention deletes the finished notify job, so this link is what
+                    # keeps a rerun of the same event from asking the reporter twice.
+                    if self.store.get_link("question_notice", notice) is not None:
+                        continue
                     # Preserve any current draft approval. The question is an independent status note.
                     self.store.put_link("maintainer_question", case["id"], {"key": event["key"], "body": event["body"], "url": event["html_url"]})
-                    self.store.enqueue("notify", {"case_id": case["id"], "event": {"action": "maintainer_question",
-                        "facts": {"question": event["body"], "github_url": event["html_url"]},
-                        "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
-                        key=f"question:{case['id']}:{event['key']}")
+                    self.store.save_links_with_jobs([("question_notice", notice, {})], [{
+                        "kind": "notify", "payload": {"case_id": case["id"], "event": {"action": "maintainer_question",
+                            "facts": {"question": event["body"], "github_url": event["html_url"]},
+                            "next_step": "Discuss the question in this thread. Any GitHub reply needs your own written text and approval."}},
+                        "key": f"question:{notice}"}])
         else:
             self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
