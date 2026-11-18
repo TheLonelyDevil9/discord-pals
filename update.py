@@ -574,8 +574,9 @@ class UpdateAttempt:
             except Exception as e:
                 problem = str(e)
             if problem:
-                warnings.append("The requirements of the restored version could not be installed, so the installed "
-                                f"packages may be newer than the code expects: {problem}")
+                warnings.append(f"The requirements of the restored version were not fully reinstalled ({problem}). "
+                                "A reinstall restores only versions pinned with ==, so the installed packages may be "
+                                "newer than the code expects.")
         return warnings
 
 

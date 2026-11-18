@@ -893,8 +893,11 @@ class DashboardRollbackTests(DashboardUpdateCase):
         data, installed = self.installs_during_a_failed_import("flask>=99\n", reinstall_works=False)
 
         self.assertEqual(len(installed), 2)
-        self.assertTrue(any("may be newer than the code expects" in warning for warning in data["warnings"]))
-        self.assertIn("may be newer than the code expects", " ".join(self.last_log_entry()["warnings"]))
+        warning = next(warning for warning in data["warnings"] if "reinstalled" in warning)
+        self.assertIn("pip could not reach the index", warning)
+        self.assertIn("restores only versions pinned with ==", warning)
+        self.assertIn("may be newer than the code expects", warning)
+        self.assertIn(warning, self.last_log_entry()["warnings"])
 
     def test_unchanged_requirements_are_not_reinstalled(self):
         _data, installed = self.installs_during_a_failed_import("flask\n", reinstall_works=True)
