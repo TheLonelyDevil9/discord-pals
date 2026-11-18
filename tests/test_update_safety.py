@@ -558,6 +558,18 @@ class DashboardRollbackTests(DashboardUpdateCase):
         self.assertEqual(self.snapshots(), kept)
         self.assertEqual(git(self.install, "branch", "--list", "dashboard-update-backup-*").stdout, "")
 
+    def test_a_kept_update_prunes_the_oldest_snapshots(self):
+        older = ["pre-update-20250101000000", "pre-update-20250102000000", "pre-update-20250103000000"]
+        for name in older:
+            (self.install / "bot_data" / "update_backups" / name).mkdir(parents=True)
+        self.publish({"main.py": "STARTED = 2\n"})
+
+        self.assertTrue(self.post_update().get_json()["updated"])
+
+        kept = self.snapshots()
+        self.assertEqual(len(kept), update_module.BACKUP_RETENTION)
+        self.assertEqual(kept[:2], older[1:])
+
     def fail_once(self, fail):
         """Patch update.run so that the first `git stash apply` goes through fail(result) instead."""
         real_run = update_module.run
