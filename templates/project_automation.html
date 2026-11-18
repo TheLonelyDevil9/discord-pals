@@ -302,7 +302,7 @@
                 <div class="form-group">
                     <label for="project-history-days">Keep finished jobs (days)</label>
                     <input id="project-history-days" name="history_days" value="{{ project.config.history_days }}" type="number" min="0" max="365" step="1" aria-describedby="project-history-days-hint">
-                    <p class="form-hint" id="project-history-days-hint">0 keeps none: finished jobs are deleted within about 10 minutes. Failed jobs stay at least 7 days. Queued and held jobs, posts, receipts, and feedback cases are not affected.</p>
+                    <p class="form-hint" id="project-history-days-hint">0 keeps none: finished jobs are deleted within about 10 minutes. Failed jobs stay at least 7 days. Release, workflow, and commit post records also follow this setting with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued and held jobs, issue and PR posts, receipts, and feedback cases are not affected.</p>
                 </div>
             </div>
         </fieldset>

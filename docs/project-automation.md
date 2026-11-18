@@ -102,7 +102,7 @@ The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent 
 
 ### Job history and Project data
 
-Project jobs are working data. A sweep deletes them at most every 10 minutes, also while automation is paused. **Helper setup → Job history** sets how many days finished jobs stay (0 to 365, default 0).
+Project jobs are working data. A sweep deletes them at most every 10 minutes, also while automation is paused, in short transactions of at most 500 rows. When more than 20,000 rows are due at once, it deletes them all in one transaction instead, which holds the database while it runs. **Helper setup → Job history** sets how many days finished jobs stay (0 to 365, default 0).
 
 | Data | Kept |
 | --- | --- |
@@ -133,9 +133,9 @@ python tools/project_data.py compact
 
 #### First start after upgrading
 
-The first start of a version with job history runs a one-time cleanup before the worker takes any job. It deletes the queued reconciliation work left by overlapping cycles: sync cycle starts, PR discovery, page, missing-comment, and check jobs, and issue and PR refreshes. Queued webhook deliveries, detected PR activity deliveries, feedback jobs, and held jobs stay. It then applies the table above to every remaining job and compacts the file when enough space is free. It logs one summary line with the counts.
+The first start of a version with job history runs a one-time cleanup before the worker takes any job. It deletes the queued reconciliation work left by overlapping cycles: sync cycle starts, PR discovery, page, missing-comment, and check jobs, and issue and PR refreshes. Queued webhook deliveries, detected PR activity deliveries, feedback jobs, and held jobs stay. It then applies the table above to every remaining job, including failed and cancelled jobs older than 7 days, and compacts the file when enough space is free. It logs one summary line with the counts.
 
-On a large database the cleanup holds the database for some time. Webhooks that arrive meanwhile can be answered with 503; redeliver them from GitHub's delivery history. Back up the database before updating, as described above.
+On a large database the cleanup can hold the database for a minute or more. Webhooks that arrive meanwhile are refused with 503; redeliver them from GitHub's delivery history. A bot that connects during the cleanup finishes starting, including its slash-command sync, after the cleanup ends. Back up the database before updating, as described above.
 
 ## Implementation boundaries
 

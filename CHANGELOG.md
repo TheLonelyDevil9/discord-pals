@@ -11,15 +11,15 @@ Keeps the Project helper's job queue bounded and gives operators controls that c
 ### Added
 
 - **Job history** setting under Project → Helper setup: days to keep finished jobs, from 0 to 365, default 0.
-- **Project data** controls: **Clear history and queue** deletes every job except jobs in progress; **Reset Project data** deletes all jobs, post records, receipts, and feedback cases while automation is paused, after you type the repository name. A held job can be removed with **Discard**, which does not retry its delivery.
+- **Project data** controls: **Clear history and queue** deletes every job except jobs in progress and the feedback steps open reports still need; **Reset Project data** deletes all jobs, post records, receipts, and feedback cases while automation is paused, after you type the repository name. A held job can be removed with **Discard**, which does not retry its delivery.
 - `tools/project_data.py` with `status`, `clear-history`, `reset --confirm <repository>`, and `compact` for operators without dashboard access.
 
 ### Changed
 
-- A retention sweep deletes finished Project jobs at most every 10 minutes, also while paused, and failed jobs after 7 days or the Job history days when longer. Queued, running, and held jobs, posts, receipts, and feedback cases are kept. See [Job history and Project data](docs/project-automation.md#job-history-and-project-data).
+- A retention sweep deletes finished Project jobs at most every 10 minutes, also while paused, and failed jobs after 7 days or the Job history days when longer. A failed report decision or publication stays until it is retried. Release, workflow, and commit post records follow the Job history days with a 7-day minimum; a later update to one of them then posts a new message instead of editing the old one. Queued, running, and held jobs, issue and PR posts, receipts, and feedback cases are kept. See [Job history and Project data](docs/project-automation.md#job-history-and-project-data).
 - Reconciliation runs one cycle at a time and no longer refreshes issues and PRs that closed more than 7 days ago. Discovery of recently updated PRs is unchanged.
 - A GitHub delivery received again within 4 days is answered as accepted and queues nothing, even when its payload changed; such a repeat was answered with 503 before. The guard keeps only a hash of the delivery ID.
-- The database file is compacted when at least 25% of it and 16 MB are free, and freed space is returned to the disk after sweeps.
+- The database file is compacted when at least 25% of it and 16 MB are free. The first compaction switches the file to incremental auto-vacuum; from then on, sweeps also return freed space to the disk.
 
 ### Fixed
 
@@ -29,7 +29,7 @@ Keeps the Project helper's job queue bounded and gives operators controls that c
 
 ### Upgrade notes
 
-- Back up `bot_data/project_automation.sqlite3` before updating. The first start runs a one-time cleanup that deletes queued reconciliation work left by overlapping cycles and every finished job, then compacts the file. Queued webhook deliveries, PR activity deliveries, feedback jobs, and held jobs are kept. On a large database webhooks can get 503 while it runs; redeliver them from GitHub's delivery history. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
+- Back up `bot_data/project_automation.sqlite3` before updating. The first start runs a one-time cleanup that deletes queued reconciliation work left by overlapping cycles, every finished job, and failed and cancelled jobs older than 7 days, then compacts the file. Queued webhook deliveries, PR activity deliveries, the feedback steps open reports need, and held jobs are kept. On a large database the cleanup can hold the database for a minute or more; webhooks that arrive meanwhile get 503, so redeliver them from GitHub's delivery history. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - An earlier version can still open the cleaned database, but deleted jobs do not come back and that version stops deleting finished jobs.
 
 ## [v2.9.0] - 2026-09-29
