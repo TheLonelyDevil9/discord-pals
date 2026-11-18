@@ -156,6 +156,8 @@ When split replies are enabled, the bot can send separate replies to multiple me
 
 Bot-generated user mentions are allowed by default. Bot-to-bot mentions are disabled by default because they can create loops. Mention candidates come from reply targets, recent participants, visible guild members, and configured limits.
 
+When a reply contains `@Name`, the name is looked up among at most 1,000 candidates in that order, so on a larger server a member outside them stays plain text. A reply without `@` is sent without reading the member list. Each reply writes one log line with the counts.
+
 ## Characters
 
 Character files live in `characters/`.

@@ -2139,7 +2139,7 @@ Return exactly one JSON object with this shape:
 
         # Get mentionable users and bots for @mention feature
         mentionable_users = []
-        mention_resolution_users = []
+        mention_sources = None
         mentionable_bots = []
         if runtime_config.get("allow_bot_mentions", True) and not is_dm:
             from discord_utils import get_mentionable_users, get_other_bots_mentionable
@@ -2153,15 +2153,20 @@ Return exactly one JSON object with this shape:
                 user for user in message.mentions
                 if not user.bot and getattr(user, "id", None) in visible_user_mention_ids(message.content)
             ]
-            mention_resolution_users = get_mentionable_users(
+            mention_sources = {
+                "history_id": channel_id,
+                "guild": guild,
+                "explicit_users": explicit_mentions,
+                "reply_target": reply_target,
+            }
+            mentionable_users = get_mentionable_users(
                 channel_id,
-                limit=None,
+                limit=mention_limit,
                 guild=guild,
                 explicit_users=explicit_mentions,
                 reply_target=reply_target,
             )
-            mentionable_users = mention_resolution_users[:mention_limit]
-            log.debug(f"[MENTIONS] Retrieved {len(mention_resolution_users)} mention candidates for channel {channel_id}")
+            log.debug(f"[MENTIONS] Retrieved {len(mentionable_users)} mention candidates for channel {channel_id}")
             if mentionable_users:
                 log.debug(f"[MENTIONS] Names: {[u['name'] for u in mentionable_users]}")
 
@@ -2349,7 +2354,7 @@ Return exactly one JSON object with this shape:
             "split_reply_target": split_target,
             "from_interact_command": from_interact_command,
             "mentionable_users": mentionable_users,
-            "mention_resolution_users": mention_resolution_users,
+            "mention_sources": mention_sources,
             "mentionable_bots": mentionable_bots,
             "timezone_context": timezone_context,
             "prompt_now": prompt_now,
@@ -2568,11 +2573,10 @@ Return exactly one JSON object with this shape:
 
         # Process outgoing mentions (@Name -> <@user_id>)
         if runtime_config.get("allow_bot_mentions", True):
-            from discord_utils import process_outgoing_mentions
-            mentionable_users = context.get("mention_resolution_users") or context.get("mentionable_users")
+            from discord_utils import resolve_reply_mentions
             mentionable_bots = context.get("mentionable_bots") if runtime_config.get("allow_bot_to_bot_mentions", False) else None
-            response = process_outgoing_mentions(response, mentionable_users, mentionable_bots)
-            diagnostic_events.log_mentions_processed(self.name, req_id, channel_id, mentionable_users, mentionable_bots)
+            response, mention_summary = resolve_reply_mentions(response, context.get("mention_sources"), mentionable_bots)
+            diagnostic_events.log_mentions_processed(self.name, req_id, channel_id, mention_summary, mentionable_bots)
 
         # Prepend mention for split replies
         if split_target:

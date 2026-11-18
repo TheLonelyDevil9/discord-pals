@@ -33,6 +33,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
+- `@Name` in a reply is looked up once among at most 1,000 candidates: the reply target, mentioned users, recent speakers, then server members. A reply without `@` no longer reads the member list. On a large server, each reply held up every bot for a time that grew with the member count and wrote one log line per member alias; it now writes one line with the counts. See [Split Replies And Mentions](docs/features.md#split-replies-and-mentions).
 
 ### Fixed
 
@@ -64,6 +65,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 - The first start rewrites each file under `bot_data/history_channels` once: channel files keep their names and gain their conversation key, and DM files named after their key, such as `dm:Firefly:user:123.json` on Linux, get new names. The dashboard's **Update** takes a snapshot first; when you update another way, copy `bot_data/history_channels` before you start this version. An earlier version still reads the channel files and ignores DM history, as it did before. On Linux it records DM messages in files named after the DM key again; when you update again, each such file that is newer than the DM's current file is renamed with `.superseded` added to its name and kept, and its messages are not loaded. A reminder question that this version asked in a DM makes an earlier version drop every DM from that user to that bot until the question expires, 24 hours at most.
 - Images larger than 8 MB, and images after the fourth in one message, are no longer sent to the model. To send them, raise **Max Image Size** or **Max Images Per Message** under Config → Performance → Image Attachments.
+- On a server with more than 1,000 members, `@Name` for a member outside the first 1,000 mention candidates stays plain text.
 
 ## [v2.9.0] - 2026-09-29
 

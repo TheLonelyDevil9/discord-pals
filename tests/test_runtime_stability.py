@@ -785,7 +785,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "user_name": "Invoker",
             "content": "hi",
             "split_reply_target": None,
-            "mention_resolution_users": [],
+            "mention_sources": None,
             "mentionable_users": [],
             "mentionable_bots": [],
         }
@@ -836,7 +836,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "user_name": "Invoker",
             "content": "hi",
             "split_reply_target": types.SimpleNamespace(id=555),
-            "mention_resolution_users": [],
+            "mention_sources": None,
             "mentionable_users": [],
             "mentionable_bots": [],
         }
@@ -884,7 +884,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "user_name": "Invoker",
             "content": "hi",
             "split_reply_target": None,
-            "mention_resolution_users": [],
+            "mention_sources": None,
             "mentionable_users": [],
             "mentionable_bots": [],
         }
@@ -1338,7 +1338,7 @@ class SendFinalizeStabilityTests(unittest.IsolatedAsyncioTestCase):
             "user_name": "Invoker",
             "content": "please dm me",
             "split_reply_target": None,
-            "mention_resolution_users": [],
+            "mention_sources": None,
             "mentionable_users": [],
             "mentionable_bots": [],
         }

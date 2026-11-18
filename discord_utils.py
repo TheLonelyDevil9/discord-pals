@@ -1710,6 +1710,9 @@ def get_mentionable_users(
     1. Explicitly mentioned users and reply targets from the newest message
     2. Recent human conversation participants from history
     3. Any visible human guild member
+
+    With a limit, guild members are read only until the limit is filled, so the cost
+    follows the limit instead of the guild size.
     """
     users_by_id: Dict[int, dict] = {}
     sequence = 0
@@ -1790,7 +1793,21 @@ def get_mentionable_users(
             )
 
     if guild:
+        # The scan below can stop before it reaches a candidate listed above, so that
+        # candidate gets its member aliases, such as the account name, from a lookup.
+        get_member = getattr(guild, "get_member", None)
+        for listed_id in list(users_by_id) if callable(get_member) else []:
+            listed_member = get_member(listed_id)
+            if listed_member is not None and not listed_member.bot:
+                register_candidate(
+                    user_id=listed_id,
+                    name=get_user_display_name(listed_member),
+                    aliases=_collect_member_aliases(listed_member),
+                    priority=2,
+                )
         for member in guild.members:
+            if limit is not None and len(users_by_id) >= limit:
+                break
             if member.bot:
                 continue
             register_candidate(
@@ -1806,24 +1823,18 @@ def get_mentionable_users(
     return users[:max(0, int(limit))]
 
 
-def process_outgoing_mentions(content: str, mentionable_users: list = None,
-                               mentionable_bots: list = None) -> str:
-    """Process AI response to convert name-based mentions to Discord format.
+# Bounds the members a reply's @names are looked up among, so that the cost of
+# a reply stops growing with the guild.
+MENTION_CANDIDATE_LIMIT = 1000
+_NAME_IN_MENTION_BRACKETS = re.compile(r'<@!?([^>\d][^>]*)>')
+_RAW_USER_MENTION = re.compile(r'<@!?\d+>')
+_RAW_CHANNEL_MENTION = re.compile(r'<#\d+>')
+_RAW_ROLE_MENTION = re.compile(r'<@&\d+>')
+_MENTION_ID = re.compile(r'<@!?(\d+)>')
+_WORD_CHARACTER = re.compile(r'\w')
 
-    The AI might generate "@Username" or "@username" - this converts them
-    to proper Discord mention format <@user_id>.
 
-    Args:
-        content: AI-generated response text
-        mentionable_users: List of user dicts from get_mentionable_users()
-        mentionable_bots: List of bot dicts from get_other_bots_mentionable()
-
-    Returns:
-        Content with @Name converted to <@user_id> where applicable
-    """
-    if not content:
-        return content
-
+def _mention_lookup(mentionable_users, mentionable_bots) -> dict:
     # Build lookup of full-handle alias -> mention syntax while preserving priority
     # and refusing ambiguous matches at the same priority.
     alias_lookup = {}
@@ -1851,60 +1862,83 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             existing["ambiguous"] = True
             alias_lookup[normalized] = existing
 
-    if mentionable_users:
-        for user in mentionable_users:
-            aliases = user.get("aliases") or [user.get("name", "")]
-            priority = int(user.get("priority", 1))
-            for alias in aliases:
-                register_alias(alias, user.get("mention_syntax"), user.get("user_id"), priority)
-        log.debug(f"[MENTIONS] Built lookup for {len(mentionable_users)} users")
-    else:
-        log.debug(f"[MENTIONS] mentionable_users is empty or None")
+    for user in mentionable_users or []:
+        aliases = user.get("aliases") or [user.get("name", "")]
+        priority = int(user.get("priority", 1))
+        for alias in aliases:
+            register_alias(alias, user.get("mention_syntax"), user.get("user_id"), priority)
 
-    if mentionable_bots:
-        for bot in mentionable_bots:
-            if bot.get('character_name'):
-                register_alias(bot['character_name'], bot['mention_syntax'], bot.get('user_id'), 99)
+    for bot in mentionable_bots or []:
+        if bot.get('character_name'):
+            register_alias(bot['character_name'], bot['mention_syntax'], bot.get('user_id'), 99)
 
-    mention_lookup = {
-        entry["alias"]: entry["mention_syntax"]
+    return {
+        entry["alias"].casefold(): entry["mention_syntax"]
         for entry in alias_lookup.values()
         if not entry.get("ambiguous")
     }
 
-    if not mention_lookup:
-        log.debug(f"[MENTIONS] mention_lookup is empty, returning content unchanged")
-        return content
 
-    log.debug(f"[MENTIONS] Processing content: {content[:100]}...")
+def _longest_alias_after(content: str, start: int, lookup: dict, longest: int) -> tuple:
+    """Return (end, mention) for the longest alias in lookup that starts at start, or (None, None).
+
+    Matching follows the per-alias patterns this lookup replaced: case is ignored, a
+    whitespace run in the reply stands for the single space inside an alias, and an
+    alias counts only where the reply continues with a non-word character or ends.
+    """
+    best_end = best_mention = None
+    name = []
+    position = start
+    while position < len(content) and len(name) < longest:
+        character = content[position]
+        position += 1
+        if character.isspace():
+            if not name:
+                break
+            if name[-1] != " ":
+                name.append(" ")
+            continue
+        name.append(character)
+        if position == len(content) or not _WORD_CHARACTER.match(content[position]):
+            mention = lookup.get("".join(name).casefold())
+            if mention:
+                best_end, best_mention = position, mention
+    return best_end, best_mention
+
+
+def _resolve_mentions(content: str, mentionable_users, mentionable_bots) -> tuple[str, dict]:
+    summary = {"candidates": len(mentionable_users or []), "at_names": 0, "resolved": 0}
+    if not content:
+        return content, summary
+    lookup = _mention_lookup(mentionable_users, mentionable_bots)
+    if not lookup:
+        return content, summary
 
     # Normalize AI-generated <@Name> to @Name (keep <@12345> for safety net)
-    content = re.sub(r'<@!?([^>\d][^>]*)>', r'@\1', content)
+    content = _NAME_IN_MENTION_BRACKETS.sub(r'@\1', content)
 
     # Track which mention IDs we intentionally insert (so the safety net doesn't strip them)
     inserted_mention_ids = set()
-
-    # Replace @Name patterns with Discord mention syntax
-    # Sort by longest name first to avoid partial matches (e.g. "@The Devil" before "@The")
-    sorted_names = sorted(mention_lookup.keys(), key=len, reverse=True)
-
-    for name in sorted_names:
-        mention_syntax = mention_lookup[name]
-        # Match @Name with word boundary awareness (case-insensitive)
-        # Handles both single-word and multi-word names
-        pattern_body = re.escape(name).replace(r'\ ', r'\s+')
-        pattern = re.compile(r'@' + pattern_body + r'(?=\W|$)', re.IGNORECASE)
-        if pattern.search(content):
-            log.debug(f"[MENTIONS] Matched @{name} -> {mention_syntax}")
-            content = pattern.sub(mention_syntax, content)
-            # Extract the user ID from the mention syntax to protect it from the safety net
-            id_match = re.search(r'<@!?(\d+)>', mention_syntax)
-            if id_match:
-                inserted_mention_ids.add(id_match.group(1))
-        else:
-            log.debug(f"[MENTIONS] No match for @{name}")
-
-    log.debug(f"[MENTIONS] Final content: {content[:100]}...")
+    longest = max(len(alias) for alias in lookup)
+    pieces = []
+    copied_up_to = 0
+    at = content.find("@")
+    while at != -1:
+        summary["at_names"] += 1
+        end, mention = _longest_alias_after(content, at + 1, lookup, longest)
+        if mention is None:
+            at = content.find("@", at + 1)
+            continue
+        pieces.append(content[copied_up_to:at])
+        pieces.append(mention)
+        id_match = _MENTION_ID.search(mention)
+        if id_match:
+            inserted_mention_ids.add(id_match.group(1))
+        summary["resolved"] += 1
+        copied_up_to = end
+        at = content.find("@", end)
+    pieces.append(content[copied_up_to:])
+    content = "".join(pieces)
 
     # Safety net: Strip any raw Discord syntax the AI hallucinated,
     # but preserve mentions we just intentionally inserted
@@ -1915,9 +1949,53 @@ def process_outgoing_mentions(content: str, mentionable_users: list = None,
             return match.group(0)  # Keep - we inserted this
         return ''  # Strip - AI hallucinated this
 
-    content = re.sub(r'<@!?\d+>', strip_if_not_inserted, content)
-    content = re.sub(r'<#\d+>', '', content)      # Raw channel mentions (always strip)
-    content = re.sub(r'<@&\d+>', '', content)     # Raw role mentions (always strip)
+    content = _RAW_USER_MENTION.sub(strip_if_not_inserted, content)
+    content = _RAW_CHANNEL_MENTION.sub('', content)      # Raw channel mentions (always strip)
+    content = _RAW_ROLE_MENTION.sub('', content)     # Raw role mentions (always strip)
 
-    return content
+    return content, summary
+
+
+def process_outgoing_mentions(content: str, mentionable_users: list = None,
+                               mentionable_bots: list = None) -> str:
+    """Process AI response to convert name-based mentions to Discord format.
+
+    The AI might generate "@Username" or "@username" - this converts them
+    to proper Discord mention format <@user_id>.
+
+    Args:
+        content: AI-generated response text
+        mentionable_users: List of user dicts from get_mentionable_users()
+        mentionable_bots: List of bot dicts from get_other_bots_mentionable()
+
+    Returns:
+        Content with @Name converted to <@user_id> where applicable
+    """
+    return _resolve_mentions(content, mentionable_users, mentionable_bots)[0]
+
+
+def resolve_reply_mentions(content: str, sources: dict | None,
+                           mentionable_bots: list | None = None) -> tuple[str, dict]:
+    """Resolve @Name in a reply; return the text and counts for the reply's one log line.
+
+    sources holds the history_id, guild, explicit_users and reply_target of a server
+    request, and is None in DMs, whose replies stay unchanged. Candidates are read only
+    for a reply with an '@', and at most MENTION_CANDIDATE_LIMIT of them.
+    """
+    summary = {"candidates": 0, "at_names": 0, "resolved": 0}
+    if not content or (sources is None and not mentionable_bots):
+        return content, summary
+    if "@" not in content:
+        # A reply without '@' can only hit the raw channel rule of the safety net.
+        return _RAW_CHANNEL_MENTION.sub('', content), summary
+    users = []
+    if sources is not None:
+        users = get_mentionable_users(
+            sources["history_id"],
+            limit=MENTION_CANDIDATE_LIMIT,
+            guild=sources.get("guild"),
+            explicit_users=sources.get("explicit_users"),
+            reply_target=sources.get("reply_target"),
+        )
+    return _resolve_mentions(content, users, mentionable_bots)
 

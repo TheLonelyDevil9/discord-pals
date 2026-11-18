@@ -78,10 +78,10 @@ def log_mentions_processed(
     bot_name: str,
     req_id: str | None,
     channel_id: int,
-    mentionable_users,
+    summary: dict,
     mentionable_bots,
 ) -> None:
-    """Record outgoing mention resolution inputs."""
+    """Record a reply's mention resolution as one line, with the counts from resolve_reply_mentions."""
     log.diagnostic(
         "Outgoing mentions processed",
         bot_name,
@@ -89,8 +89,10 @@ def log_mentions_processed(
         event="mentions_processed",
         req_id=req_id,
         channel_id=channel_id,
-        mentionable_users_count=len(mentionable_users or []),
+        mentionable_users_count=summary.get("candidates", 0),
         mentionable_bots_count=len(mentionable_bots or []),
+        at_names=summary.get("at_names", 0),
+        resolved=summary.get("resolved", 0),
     )
 
 
