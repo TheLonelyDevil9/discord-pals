@@ -728,6 +728,52 @@ def test_reopened_item_returns_to_scope_and_loses_its_close_time(setup):
     assert fetched == []
 
 
+def test_attach_during_the_first_start_cleanup_waits_before_writing(setup, monkeypatch):
+    import contextlib
+    import threading
+    from unittest.mock import AsyncMock
+    import project_automation
+    case = setup.store.create_case({"channel_id": "1", "reporter_id": "2", "guild_id": "100", "bot_name": "Helper",
+                                    "repository": "Owner/Project", "feedback_channel_id": "", "state": "assessing",
+                                    "transcript": []}, "source:waiting")
+    started, release = threading.Event(), threading.Event()
+    real_cleanup, real_connection = setup.store.clean_up_old_queue, setup.store._connection
+    loop_thread, loop_writes = threading.get_ident(), []
+
+    def slow_cleanup(history_days=0):
+        started.set()
+        assert release.wait(5)
+        return real_cleanup(history_days)
+
+    @contextlib.contextmanager
+    def watched(write=False, timeout=10):
+        if write and threading.get_ident() == loop_thread:
+            loop_writes.append(release.is_set())
+        with real_connection(write=write, timeout=timeout) as connection:
+            yield connection
+
+    monkeypatch.setattr(setup.store, "clean_up_old_queue", slow_cleanup)
+    monkeypatch.setattr(setup.store, "_connection", watched)
+    monkeypatch.setattr(setup.service, "_run", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(project_automation, "info", lambda *args, **kwargs: None)
+    setup.transport.attach = AsyncMock()
+
+    async def scenario():
+        first = asyncio.create_task(setup.service.attach(SimpleNamespace(name="Other")))
+        assert await asyncio.to_thread(started.wait, 5)
+        second = asyncio.create_task(setup.service.attach(SimpleNamespace(name="Helper")))
+        await asyncio.sleep(0.2)
+        assert not first.done() and not second.done()
+        assert loop_writes == []
+        release.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 10)
+
+    asyncio.run(scenario())
+    assert loop_writes and all(loop_writes)
+    assert setup.transport.attach.await_count == 2
+    assert any(job["key"] == f"initial:{case['id']}" for job in setup.store.list_jobs())
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")

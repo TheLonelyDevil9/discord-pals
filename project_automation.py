@@ -62,6 +62,7 @@ class AutomationService:
         self._last_sync = 0.0
         self._last_maintenance = 0.0
         self._queue_cleaned = False
+        self._cleanup_lock = asyncio.Lock()
         self._last_error = None
         self.pr_activity = PRActivity(self)
 
@@ -358,6 +359,12 @@ class AutomationService:
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
+        # The store writes below run on the bots' event loop. While the one-time cleanup
+        # holds the write lock they would freeze every bot and then fail, so wait here.
+        try:
+            await self.clean_up_old_queue()
+        except Exception:
+            self._last_error = "Background processing needs attention"
         if bot.name == self.settings().get("bot_name"):
             for case in self.store.list_pending_cases():
                 if not self._bound(case) or case["state"] not in {"needs_maintainer", "discussing", "awaiting_report"}:
@@ -838,19 +845,23 @@ class AutomationService:
             await asyncio.to_thread(self.store.release_free_pages)
 
     async def clean_up_old_queue(self):
-        counts = await asyncio.to_thread(self.store.clean_up_old_queue, self.settings().get("history_days", 0))
-        if counts is not None:
-            compacted = await asyncio.to_thread(self.store.compact)
-            info(f"Project queue cleanup deleted {counts['stale']} queued reconciliation jobs and "
-                 f"{counts['expired']} finished jobs; compaction {'ran' if compacted else 'skipped'}.",
-                 component="project_automation", event="queue_cleanup")
+        """Run the one-time queue cleanup once per process; later callers wait for that run to end."""
+        async with self._cleanup_lock:
+            if self._queue_cleaned:
+                return
+            counts = await asyncio.to_thread(self.store.clean_up_old_queue, self.settings().get("history_days", 0))
+            if counts is not None:
+                compacted = await asyncio.to_thread(self.store.compact)
+                info(f"Project queue cleanup deleted {counts['stale']} queued reconciliation jobs and "
+                     f"{counts['expired']} finished or expired jobs; compaction {'ran' if compacted else 'skipped'}.",
+                     component="project_automation", event="queue_cleanup")
+            self._queue_cleaned = True
 
     async def _run(self):
         while True:
             try:
                 if not self._queue_cleaned:
                     await self.clean_up_old_queue()
-                    self._queue_cleaned = True
                 if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()
