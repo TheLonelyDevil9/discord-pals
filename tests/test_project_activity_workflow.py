@@ -679,7 +679,8 @@ DAY = 86400
 
 
 def mirror_post(setup, kind, number):
-    setup.store.put_link("mirror", f"100:Helper:200:Owner/Project:{kind}:{number}", {
+    """Store the record of a post as DiscordTransport.mirror does, under the key of its current destination."""
+    setup.store.put_link("mirror", mirror_key(setup.cfg, kind, f"{kind}:{number}"), {
         "kind": kind, "number": number, "repository": "Owner/Project", "guild_id": "100",
         "bot_name": "Helper", "channel_id": "300", "message_id": "300"})
 
@@ -975,6 +976,30 @@ def test_the_root_reads_only_the_item_records_of_its_current_destinations(setup,
     monkeypatch.setattr(setup.store, "list_links", recorded)
     items[5]["updated_at"] = LATER
     assert sync_cycle(setup)[0] == [5]
+    assert sorted(read) == sorted(mirror_key(setup.cfg, kind, f"{kind}:{number}") for kind, number in (("issue", 5), ("pull", 7)))
+
+
+def test_the_root_reads_only_the_post_records_of_its_current_destinations(setup, monkeypatch):
+    setup.cfg["issues_channel_id"] = "201"
+    open_world(setup, {5: github_item("issue", 5, closed_days_ago=1), 7: github_item("pull", 7, closed_days_ago=1)})
+    for destination in ({**setup.cfg, "issues_channel_id": "250", "reviews_channel_id": "251"},
+                        {**setup.cfg, "bot_name": "Earlier helper"}, {**setup.cfg, "repository": "Owner/Other"},
+                        setup.cfg):
+        for kind, number in (("issue", 5), ("pull", 7)):
+            setup.store.put_link("mirror", mirror_key(destination, kind, f"{kind}:{number}"), {
+                "kind": kind, "number": number, "repository": destination["repository"],
+                "guild_id": destination["guild_id"], "bot_name": destination["bot_name"],
+                "channel_id": "300", "message_id": "300"})
+    read, list_links = [], setup.store.list_links
+
+    def recorded(kind, *args, **kwargs):
+        rows = list_links(kind, *args, **kwargs)
+        if kind == "mirror":
+            read.extend(row["key"] for row in rows)
+        return rows
+
+    monkeypatch.setattr(setup.store, "list_links", recorded)
+    assert run_sync_root(setup) == ([5, 7], [7])
     assert sorted(read) == sorted(mirror_key(setup.cfg, kind, f"{kind}:{number}") for kind, number in (("issue", 5), ("pull", 7)))
 
 

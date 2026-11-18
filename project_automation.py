@@ -979,14 +979,19 @@ class AutomationService:
 
     def _sync_records(self, seen):
         """Drop the close records of the `seen` items, which GitHub lists as open, and return the
-        mirror records and the remaining close records of the repository, by key.
+        post records of the current destinations' issues and PRs in key order, and the remaining
+        close records of the repository by key.
 
         While the root runs, only the root writes close records, and it handles each item once,
         so the records read here stay current for the rest of the root.
         """
+        cfg = self.settings()
         self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
-        closed = self.store.list_links("item_closed", prefix=self.settings()["repository"].lower() + ":")
-        return self.store.list_links("mirror"), {link["key"]: link["data"] for link in closed}
+        closed = self.store.list_links("item_closed", prefix=cfg["repository"].lower() + ":")
+        # Only records under the current destinations' keys can match, so the others are not read.
+        posts = [link for kind in ("issue", "pull")
+                 for link in self.store.list_links("mirror", prefix=mirror_key(cfg, kind, f"{kind}:"))]
+        return sorted(posts, key=lambda link: link["key"]), {link["key"]: link["data"] for link in closed}
 
     def _queue_cycle(self, in_scope, cycle):
         """Queue the refreshes, PR walks and discovery of sync cycle `cycle` for the in-scope items.
