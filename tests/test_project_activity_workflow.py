@@ -684,15 +684,20 @@ def closed_world(setup, items, open_items=()):
 ROOT_NUMBERS = itertools.count(1)
 
 
+def queued_by(setup, root):
+    """Return the item numbers that sync root `root` queued for a refresh and for a walk."""
+    with closing(sqlite3.connect(setup.store.path)) as connection:
+        rows = connection.execute("SELECT kind, key, json_extract(payload, '$.number') FROM jobs "
+                                  "WHERE json_extract(payload, '$._sync_cycle') = ?", (root,)).fetchall()
+    return (sorted(number for kind, key, number in rows if key.startswith(f"sync-item:{root}:")),
+            sorted({number for kind, key, number in rows if kind == "pr_sync_page"}))
+
+
 def run_sync_root(setup):
     root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
                                         "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
     asyncio.run(setup.service.process_job(setup.store.get_job(root)))
-    refreshed = sorted(job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
-                       if job["kind"] == "event" and job["key"].startswith(f"sync-item:{root}:"))
-    walked = sorted({job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
-                     if job["kind"] == "pr_sync_page" and job["payload"]["_sync_cycle"] == root})
-    return refreshed, walked
+    return queued_by(setup, root)
 
 
 def test_items_closed_past_the_cutoff_cost_no_fetch_refresh_or_walk(setup):
@@ -784,7 +789,7 @@ def test_a_moved_or_deleted_item_leaves_the_sync_without_stopping_it(setup, monk
     assert [message for message in logged if "#9" in message] == [
         "Project sync no longer refreshes issue #9: GitHub reports it moved or deleted."]
     fetched.clear()
-    assert run_sync_root(setup) == ([5, 8], [8])
+    assert run_sync_root(setup)[0] == [5, 8]
     assert fetched == [8]
     assert len(discovery_jobs(setup)) == 2
 
@@ -822,12 +827,9 @@ def sync_cycle(setup):
     root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
                                         "_binding": webhook_binding(setup.cfg)}, f"sync:test:{next(ROOT_NUMBERS)}")
     assert run(setup) and setup.store.get_job(root)["state"] == "done"
-    with closing(sqlite3.connect(setup.store.path)) as connection:
-        rows = connection.execute("SELECT kind, json_extract(payload, '$.number') FROM jobs "
-                                  "WHERE json_extract(payload, '$._sync_cycle') = ?", (root,)).fetchall()
+    queued = queued_by(setup, root)
     drain(setup)
-    return (sorted(number for kind, number in rows if kind == "event"),
-            sorted({number for kind, number in rows if kind == "pr_sync_page"}))
+    return queued
 
 
 def test_the_root_refreshes_only_items_that_changed_since_their_last_mirror(setup):
@@ -904,6 +906,64 @@ def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(set
     sync_cycle(setup)
     setup.cfg["issues_channel_id"] = "250"
     assert sync_cycle(setup)[0] == [5]
+
+
+def test_the_root_walks_only_new_and_changed_prs_until_a_daily_recheck_is_due(setup):
+    items = {7: github_item("pull", 7), 8: github_item("pull", 8), 5: github_item("issue", 5)}
+    open_world(setup, items)
+    assert sync_cycle(setup)[1] == [7, 8]
+    assert sync_cycle(setup)[1] == []
+    items[8]["updated_at"] = LATER
+    assert sync_cycle(setup)[1] == [8]
+    items[9] = github_item("pull", 9)
+    assert sync_cycle(setup)[1] == [9]
+    assert sync_cycle(setup)[1] == []
+
+
+def test_a_closed_pr_inside_the_window_is_walked_again_only_when_it_changes(setup):
+    pull = github_item("pull", 8, closed_days_ago=2)
+    closed_world(setup, {8: pull})
+    assert sync_cycle(setup)[1] == [8]
+    assert sync_cycle(setup)[1] == []
+    pull["updated_at"] = LATER
+    assert sync_cycle(setup)[1] == [8]
+
+
+@pytest.fixture
+def walk_clock(monkeypatch):
+    import project_automation_activity
+    clock = [time.time()]
+    monkeypatch.setattr(project_automation_activity, "time", SimpleNamespace(time=lambda: clock[0]))
+    return clock
+
+
+def test_thirteen_prs_get_one_daily_walk_each_and_no_cycle_walks_two(setup, walk_clock):
+    open_world(setup, {number: github_item("pull", number) for number in range(1, 14)})
+    assert sync_cycle(setup)[1] == list(range(1, 14))
+    walk_clock[0] += DAY
+    walked = []
+    for _ in range(96):
+        walked.append(run_sync_root(setup)[1])
+        walk_clock[0] += 900
+    assert all(len(numbers) <= 1 for numbers in walked)
+    assert sorted(number for numbers in walked for number in numbers) == list(range(1, 14))
+    assert run_sync_root(setup)[1] == walked[0]
+
+
+def test_the_daily_share_grows_with_the_number_of_prs(setup, walk_clock):
+    pulls = [github_item("pull", number) for number in range(1, 98)]
+    assert setup.service.pr_activity.enqueue_walks(pulls, 1) == (97, 0)
+    walk_clock[0] += DAY
+    assert setup.service.pr_activity.enqueue_walks(pulls, 2) == (0, 2)
+    assert setup.service.pr_activity.enqueue_walks(pulls[:96], 3) == (0, 1)
+
+
+def test_after_clear_the_next_cycle_walks_every_pr_again(setup):
+    open_world(setup, {7: github_item("pull", 7), 8: github_item("pull", 8)})
+    sync_cycle(setup)
+    assert sync_cycle(setup)[1] == []
+    setup.service.clear_history()
+    assert sync_cycle(setup)[1] == [7, 8]
 
 
 @pytest.mark.parametrize("status", [None, 403, 429, 500, 502])

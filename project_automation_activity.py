@@ -5,12 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 import json
+import math
 import time
 
 from project_automation_github import GitHubError
 
 
 SOURCES = ("comment", "review_comment", "review", "thread", "commits")
+# An in-scope PR whose last walk is this old is due for a full walk, even without a new updated_at.
+PR_RECHECK_SECONDS = 86400
+# Sync cycles start at least 900 seconds apart (AutomationService.queue_sync_cycle), so this many
+# cycles take at least PR_RECHECK_SECONDS. Walking ceil(N / PR_RECHECK_CYCLES) due PRs per cycle
+# gives each of N in-scope PRs its re-check within that many cycles of becoming due.
+PR_RECHECK_CYCLES = 96
 
 
 def activity_receipt_key(config, event):
@@ -106,11 +113,32 @@ class PRActivity:
         self.service = service
         self.store = service.store
 
-    def enqueue_sync(self, item, cycle):
+    def enqueue_walks(self, pulls, cycle):
+        """Queue the five-source walk for the in-scope PRs that need one; return (changed, daily) counts.
+
+        A PR without a walk record, or whose updated_at differs from it, is changed. Of the
+        other PRs whose last walk is at least PR_RECHECK_SECONDS old, the oldest
+        ceil(len(pulls) / PR_RECHECK_CYCLES) get their daily walk.
+        """
         from project_automation_webhook import webhook_binding
         cfg = self.service.settings()
-        activate(self.store, cfg)
-        self.store.save_links_with_jobs([], self._source_jobs(item["number"], cycle, webhook_binding(cfg)))
+        mapping, binding, now = mapping_key(cfg), webhook_binding(cfg), time.time()
+        changed, due = [], []
+        for item in pulls:
+            record = self.store.get_link("pr_walk", f"{mapping}:{item['number']}")
+            if record is None or record.get("updated_at") != item.get("updated_at", ""):
+                changed.append(item)
+            elif record.get("queued_at", 0) <= now - PR_RECHECK_SECONDS:
+                due.append((record.get("queued_at", 0), item["number"], item))
+        due.sort(key=lambda entry: entry[:2])
+        daily = [item for _, _, item in due[:math.ceil(len(pulls) / PR_RECHECK_CYCLES)]]
+        links, jobs = [], []
+        for item in changed + daily:
+            links.append(("pr_walk", f"{mapping}:{item['number']}",
+                          {"updated_at": item.get("updated_at", ""), "queued_at": now}))
+            jobs.extend(self._source_jobs(item["number"], cycle, binding))
+        self.store.save_links_with_jobs(links, jobs)
+        return len(changed), len(daily)
 
     def _source_jobs(self, number, cycle, binding):
         return [{"kind": "pr_sync_page", "payload": {

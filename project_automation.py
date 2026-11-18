@@ -765,12 +765,10 @@ class AutomationService:
                 self._check_event_binding(payload)
             activate(self.store, self.settings())
             client = await self.client()
-            mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
-            seen = set()
+            in_scope = []
             for kind in ("issue", "pull"):
-                for item in await client.list_open_items(kind):
-                    seen.add((kind, item["number"]))
-                    self._enqueue_sync_item(item, kind, job["id"], mirrored)
+                in_scope += [(kind, item) for item in await client.list_open_items(kind)]
+            seen = {(kind, item["number"]) for kind, item in in_scope}
             self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
                 data = link["data"]
@@ -779,7 +777,11 @@ class AutomationService:
                     seen.add((data["kind"], data["number"]))
                     item = await self._closed_item_in_scope(client, data["kind"], data["number"])
                     if item is not None:
-                        self._enqueue_sync_item(item, data["kind"], job["id"], mirrored)
+                        in_scope.append((data["kind"], item))
+            mirrored = {link["key"]: link["data"] for link in self.store.list_links("item_mirrored")}
+            for kind, item in in_scope:
+                self._enqueue_sync_item(item, kind, job["id"], mirrored)
+            self.pr_activity.enqueue_walks([item for kind, item in in_scope if kind == "pull"], job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
         else:
             raise WorkflowError("Unknown job type.")
@@ -825,8 +827,6 @@ class AutomationService:
             event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
                      "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
             self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
-        if kind == "pull":
-            self.pr_activity.enqueue_sync(item, sync_id)
 
     def _record_mirror(self, item):
         """Store what an issue or PR post now shows; call only after its mirror succeeded.

@@ -477,6 +477,13 @@ def test_clear_keeps_jobs_in_progress_and_every_record(store):
     assert sequence(store) == before
 
 
+@pytest.mark.parametrize("delete", ["clear", "reset"])
+def test_clear_and_reset_forget_which_pr_walks_were_queued(store, delete):
+    add_link(store, "pr_walk", f"{'e' * 64}:7", {"updated_at": "2026-11-01T00:00:00Z", "queued_at": NOW})
+    {"clear": store.clear_history, "reset": store.reset_project_data}[delete]()
+    assert link_keys(store, "pr_walk") == set()
+
+
 @pytest.mark.parametrize("kind", ["assess", "branch", "publish", "notify", "event"])
 @pytest.mark.parametrize("state", ["pending", "failed", "recovery", "done", "cancelled"])
 def test_clear_keeps_the_feedback_steps_open_reports_need(store, kind, state):
