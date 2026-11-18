@@ -1096,8 +1096,10 @@ class AutomationStore:
                 if connection.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
                     return 0
                 free = connection.execute("PRAGMA freelist_count").fetchone()[0]
-                # Each step of this pragma frees one page, so read every row.
-                connection.execute("PRAGMA incremental_vacuum").fetchall()
+                # Each step of this pragma frees one page. Python 3.11's sqlite3 module stops a
+                # statement without result columns after its first step, so execute() frees one
+                # page there. executescript() steps the statement until SQLite reports it done.
+                connection.executescript("PRAGMA incremental_vacuum")
                 return free
         except sqlite3.OperationalError as exc:
             if "locked" in str(exc):
