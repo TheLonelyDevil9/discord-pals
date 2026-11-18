@@ -508,6 +508,15 @@ def test_reset_refuses_while_a_job_is_in_progress(store, state):
     assert link_keys(store, "mirror") == {"mirror:record"}
 
 
+@pytest.mark.parametrize("state", ["running", "inflight"])
+def test_reset_is_not_blocked_by_the_lapsed_lease_of_a_dead_job(store, state):
+    dead = add_job(store, "dead-worker", state=state)
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET lease_until = ?, lease_token = 'gone' WHERE id = ?", (NOW - 1, dead))
+    assert store.reset_project_data()["jobs"] == 1
+    assert job_ids(store) == set()
+
+
 def held_job(store, key="held"):
     job = add_job(store, key, state="recovery")
     add_link(store, "pr_prepared", job, {"kind": "pr_activity"})

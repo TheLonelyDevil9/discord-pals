@@ -850,6 +850,7 @@ class AutomationStore:
     def reset_project_data(self):
         """Delete every job, link and case and return the counts; raise Conflict while a job is in progress."""
         with self._connection(write=True) as connection:
+            self._expire_leases(connection)
             if connection.execute("SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') LIMIT 1").fetchone():
                 raise Conflict("A job is running or sending a delivery")
             self._skip_zeroing_freed_pages(connection)
