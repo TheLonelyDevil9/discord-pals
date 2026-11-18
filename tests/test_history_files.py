@@ -146,6 +146,27 @@ class LegacyHistoryFileTests(HistorySandbox, unittest.TestCase):
         self.assertEqual(discord_utils_module.get_history(dm_key)[0]["content"], "hello")
         self.assertEqual(discord_utils_module.get_history(77)[0]["content"], "hello channel")
 
+    def test_a_file_that_fails_to_parse_is_left_as_it_is(self):
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        broken = self.history_dir / "123.json"
+        broken.write_text('{"name": "#tea-room", "messages": [{"role": "user", "content": "cut off', encoding="utf-8")
+
+        discord_utils_module.load_history()
+
+        self.assertEqual(broken.read_text(encoding="utf-8"), '{"name": "#tea-room", "messages": [{"role": "user", "content": "cut off')
+        self.assertNotIn(123, discord_utils_module.conversation_history)
+
+    def test_a_file_that_is_not_text_is_left_as_it_is(self):
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        binary = self.history_dir / "123.json"
+        binary.write_bytes(b"\xff\xfe\x00garbage")
+        self.write_file("456.json", {"name": "#fine", "messages": [{"role": "user", "content": "still here"}]})
+
+        discord_utils_module.load_history()
+
+        self.assertEqual(binary.read_bytes(), b"\xff\xfe\x00garbage")
+        self.assertEqual(discord_utils_module.get_history(456)[0]["content"], "still here")
+
     def test_a_malformed_file_does_not_stop_the_others_from_loading(self):
         self.write_file("11.json", {"name": "#broken", "messages": ["not an entry"]})
         self.write_file("22.json", {"name": "#fine", "messages": [{"role": "user", "content": "still here"}]})

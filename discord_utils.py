@@ -548,9 +548,16 @@ def load_history():
         # written later from the loaded history.
         chosen = {}
         superseded = {}
+        unreadable = object()
         for path in history_files:
-            data = safe_json_load(str(path), default={})
-            if not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+            # A file that fails to parse is skipped, so the rewrite below
+            # cannot replace it with an empty history.
+            try:
+                data = safe_json_load(str(path), default=unreadable)
+            except ValueError as e:
+                log.warn(f"Skipped history file {path.name}: {e}")
+                continue
+            if data is unreadable or not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
                 continue
             stored_id = _stored_history_id(data.get("history_id"))
             history_id = stored_id if stored_id is not None else _legacy_history_id(path.stem)
