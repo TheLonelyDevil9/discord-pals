@@ -10,6 +10,7 @@ import json
 import random
 import re
 import time
+import traceback
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
@@ -320,6 +321,7 @@ class BotInstance:
                 component="lifecycle",
                 event="ready_step_failed",
                 step=label,
+                traceback=traceback.format_exc(),
             )
 
     # === MESSAGE HANDLING HELPERS (for on_message) ===

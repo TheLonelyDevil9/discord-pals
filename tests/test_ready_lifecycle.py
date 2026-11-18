@@ -75,6 +75,16 @@ class ReadyRobustnessTests(ReadyTestCase):
         self.log["error"].assert_called_once()
         self.assertIn("character file unreadable", self.log["error"].call_args.args[0])
 
+    async def test_a_failed_step_logs_its_traceback(self):
+        bot = self.make_bot()
+        self.character_load.side_effect = RuntimeError("character file unreadable")
+
+        await bot.client.on_ready()
+
+        logged = self.log["error"].call_args.kwargs.get("traceback", "")
+        self.assertIn("Traceback (most recent call last)", logged)
+        self.assertIn("RuntimeError: character file unreadable", logged)
+
     async def test_the_request_processor_is_set_before_the_first_awaited_step(self):
         bot = self.make_bot()
         attach_started = asyncio.Event()
