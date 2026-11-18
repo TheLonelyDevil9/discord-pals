@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 
 import discord
 
 from project_automation import WorkflowError
-from project_automation_activity import activity_receipt_key
+from project_automation_activity import activity_receipt_key, marker_prefix
 
 
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -33,10 +32,6 @@ def activity_version(event):
     if not isinstance(version, str) or not _VERSION.fullmatch(version):
         raise WorkflowError("The PR activity is missing a valid source version.")
     return version
-
-
-def marker_prefix(key):
-    return "PR activity " + hashlib.sha256(key.encode("utf-8")).hexdigest() + " "
 
 
 def activity_marker(config, event):
