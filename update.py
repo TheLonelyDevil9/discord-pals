@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -369,6 +369,16 @@ def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120) -> None:
     raise RuntimeError(f"git {' '.join(args)} failed: {command_output(result) or result.returncode}")
 
 
+def stash_tip(repo: Path) -> str | None:
+    """Return the commit of the newest stash entry, or None when the stash is empty."""
+    result = run(["git", "rev-parse", "--verify", "--quiet", "refs/stash"], repo, timeout=30)
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(f"Reading refs/stash failed: {command_output(result) or result.returncode}")
+    return result.stdout.strip()
+
+
 def drop_stash(repo: Path, sha: str) -> None:
     """Drop the stash entry whose commit is sha, wherever later entries moved it in the list."""
     listed = run(["git", "stash", "list", "--format=%gd %H"], repo, timeout=30, check=True).stdout
@@ -420,6 +430,21 @@ class UpdateAttempt:
     @property
     def touched(self) -> bool:
         return bool(self.moved or self.stash or self.snapshot or self.backup_branch)
+
+    @contextmanager
+    def recording_stash(self):
+        """Record the stash entry that the enclosed `git stash push` saved, also when the push fails.
+
+        A push can save its entry and then fail to reset a file that another process holds
+        open, so the entry holds changes that are no longer all in the worktree.
+        """
+        before = stash_tip(self.repo)
+        try:
+            yield
+        finally:
+            after = stash_tip(self.repo)
+            if after and after != before:
+                self.stash = {"sha": after}
 
     def reapply(self) -> None:
         """Apply the stashed local changes on the new commit; raise LocalChangesConflict when they do not apply."""

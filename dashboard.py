@@ -3905,31 +3905,15 @@ def _write_update_log(event: dict) -> None:
         log.warn(f"Could not write update log: {e}")
 
 
-def _stash_local_changes(repo_dir: str) -> dict | None:
+def _stash_local_changes(repo_dir: str, attempt) -> None:
     """Stash local tracked changes only so runtime data is not moved into Git stash."""
     if not _tracked_worktree_status(repo_dir):
-        return None
+        return
 
     message = f"discord-pals-dashboard-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    result = _run_git(
-        ["stash", "push", "-m", message],
-        repo_dir,
-        timeout=120,
-    )
+    with attempt.recording_stash():
+        result = _run_git(["stash", "push", "-m", message], repo_dir, timeout=120)
     _require_git_success(result, "Stashing local changes before update")
-
-    output = _command_output(result)
-    if "No local changes" in output:
-        return None
-
-    list_result = _run_git(["stash", "list", "--format=%gd%x00%s", "-n", "1"], repo_dir, timeout=30)
-    stash_ref = "stash@{0}"
-    if list_result.returncode == 0 and list_result.stdout.strip():
-        ref, _, subject = list_result.stdout.strip().partition("\x00")
-        if message in subject and ref:
-            stash_ref = ref
-
-    return {"ref": stash_ref, "sha": _git_ref_sha(repo_dir, stash_ref), "message": message, "output": output}
 
 
 def _settle_update(repo_dir: str, git_result: dict) -> tuple[dict, list[str]]:
@@ -4003,7 +3987,7 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     try:
         if moves_head:
             attempt.snapshot = _create_update_state_backup(repo_dir, snapshot_warnings)
-            attempt.stash = _stash_local_changes(repo_dir)
+            _stash_local_changes(repo_dir, attempt)
         if before_head == upstream_head:
             output = output or "Already up to date"
         elif _git_is_ancestor(repo_dir, before_head, upstream_head):

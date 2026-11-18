@@ -551,6 +551,55 @@ class DashboardRollbackTests(DashboardUpdateCase):
 
         return patch.object(update_module, "run", side_effect=run)
 
+    def stash_push_that_fails_part_way(self):
+        """Patch the stash push to save its entry and then fail with prompts/other_prompts.md not reset.
+
+        Git does this when another process holds a file open that the reset after the save must replace.
+        """
+        real_run_git = dashboard_module._run_git
+
+        def run_git(args, repo_dir, timeout=dashboard_module._UPDATE_GIT_TIMEOUT):
+            result = real_run_git(args, repo_dir, timeout=timeout)
+            if args[:2] != ["stash", "push"]:
+                return result
+            self.edit("prompts/other_prompts.md", self.LOCAL_PROMPT)
+            return subprocess.CompletedProcess(["git", *args], 1, result.stdout,
+                                               "error: unable to unlink old 'prompts/other_prompts.md': Invalid argument\n"
+                                               "fatal: Could not reset index file to revision 'HEAD'.\n")
+
+        return patch.object(dashboard_module, "_run_git", side_effect=run_git)
+
+    def edit_two_files(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        self.edit("prompts/other_prompts.md", self.LOCAL_PROMPT)
+        self.publish({"main.py": "STARTED = 2\n"})
+
+    def test_a_stash_push_that_fails_after_saving_its_entry_is_rolled_back_from_that_entry(self):
+        self.edit_two_files()
+        before = self.head()
+
+        with self.stash_push_that_fails_part_way():
+            response = self.post_update()
+
+        self.assertEqual(response.status_code, 409, response.get_json())
+        self.assertTrue(response.get_json()["rolled_back"])
+        self.assertIn("with your local changes in place", response.get_json()["message"])
+        self.assert_restored(before)
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+        self.assertEqual(self.snapshots(), [])
+
+    def test_a_stash_entry_that_cannot_be_restored_is_named_and_its_snapshot_kept(self):
+        self.edit_two_files()
+
+        with self.stash_push_that_fails_part_way(), \
+                patch.object(update_module, "git_until_unlocked", side_effect=RuntimeError("unable to unlink")):
+            response = self.post_update()
+
+        stash_sha = git(self.install, "rev-parse", "stash@{0}").stdout.strip()
+        self.assertEqual(response.status_code, 500, response.get_json())
+        self.assertIn(f"git stash apply --index {stash_sha}", response.get_json()["message"])
+        self.assertEqual(len(self.snapshots()), 1)
+
     def test_a_stash_apply_that_times_out_is_rolled_back(self):
         self.stage_conflict()
         before = self.head()

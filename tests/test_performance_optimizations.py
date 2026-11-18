@@ -1183,18 +1183,15 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout=" M dashboard.py\n", stderr="")
             if args[:2] == ["stash", "push"]:
                 return types.SimpleNamespace(returncode=0, stdout="Saved working directory and index state", stderr="")
-            if args[:3] == ["stash", "list", "--format=%gd%x00%s"]:
-                return types.SimpleNamespace(returncode=0, stdout="stash@{0}\x00discord-pals-dashboard-update-123\n", stderr="")
-            if args == ["rev-parse", "--verify", "stash@{0}^{commit}"]:
-                return types.SimpleNamespace(returncode=0, stdout="5a5a5a\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
-            stash = dashboard_module._stash_local_changes("repo")
+        attempt = dashboard_module.update_engine.UpdateAttempt(Path("repo"), "aaa111", "bbb222")
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch.object(dashboard_module.update_engine, "stash_tip", side_effect=[None, "5a5a5a"]):
+            dashboard_module._stash_local_changes("repo", attempt)
 
-        self.assertEqual(stash["ref"], "stash@{0}")
-        self.assertEqual(stash["sha"], "5a5a5a")
-        self.assertNotIn(["stash", "push", "--include-untracked", "-m", "discord-pals-dashboard-update-123"], calls)
+        self.assertEqual(attempt.stash, {"sha": "5a5a5a"})
+        self.assertFalse(any("--include-untracked" in command for command in calls))
 
     def test_write_update_log_persists_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
