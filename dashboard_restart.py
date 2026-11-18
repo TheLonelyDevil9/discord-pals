@@ -94,7 +94,9 @@ def refusal(code_dir: Path) -> str | None:
     except update.UpdateRefused as e:
         return f"Restart refused: {e}"
     except (RuntimeError, OSError, subprocess.SubprocessError):
-        pass  # Not a Git checkout, so there is no Git state to refuse.
+        # Git could not read the checkout: it is not a Git checkout, Git is missing, or Git
+        # failed or timed out. The restart goes on without the Git check; the import check still runs.
+        pass
     import_error = update.check_imports(code_dir, sys.executable)
     if import_error:
         return f"Restart cancelled: the code on disk failed its import check ({import_error}). The bot keeps running."
