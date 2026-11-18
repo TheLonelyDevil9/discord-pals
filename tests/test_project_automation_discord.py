@@ -881,6 +881,42 @@ def _native_suite():
                 self.assertEqual([call.kwargs for call in thread.edit.await_args_list][-2:],
                                  [{"name": "Closed · Settings fail to save · #17"}, {"archived": True, "locked": True}])
 
+        def item_record(self, kind="issue", channel=201):
+            return self.store.get_link("item_mirrored", f"100:Project Helper:{channel}:SillyBunnyTeam/SillyBunny:{kind}:17")
+
+        async def test_a_written_or_unchanged_post_records_the_item_version_it_shows(self):
+            for kind in ("issue", "pull"):
+                forum, thread, starter = self.configure_forum(kind)
+                await self.transport.mirror(event(kind, updated_at="2026-11-01T00:00:00Z"))
+                self.assertEqual(self.item_record(kind, forum.id)["updated_at"], "2026-11-01T00:00:00Z")
+                self.apply_thread_writes(forum, thread)
+                self.reset_writes(starter.edit, thread.edit)
+                await self.transport.mirror(event(kind, updated_at="2026-11-02T00:00:00Z"))
+                starter.edit.assert_not_awaited()
+                self.assertEqual(self.item_record(kind, forum.id)["updated_at"], "2026-11-02T00:00:00Z")
+
+        async def test_a_failed_write_or_a_recovery_records_no_item_version(self):
+            forum, thread, starter = self.configure_forum()
+            thread.edit.side_effect = discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "failed")
+            with self.assertRaises(discord.HTTPException):
+                await self.transport.mirror(event(state="closed", closed=True))
+            self.assertIsNone(self.item_record())
+            thread.edit.side_effect = None
+            self.assertTrue(await self.transport.mirror(event(), recover_only=True))
+            self.assertIsNone(self.item_record())
+
+        async def test_the_item_version_is_recorded_for_the_forum_the_mirror_started_with(self):
+            forum, thread, starter = self.configure_forum()
+
+            async def created_while_the_operator_saves(**kwargs):
+                self.config["issues_channel_id"] = "205"
+                return SimpleNamespace(thread=thread, message=starter)
+
+            forum.create_thread.side_effect = created_while_the_operator_saves
+            await self.transport.mirror(event())
+            self.assertIsNotNone(self.item_record(channel=201))
+            self.assertIsNone(self.item_record(channel=205))
+
         async def test_lost_forum_create_receipt_is_recovered_from_its_owned_marker(self):
             forum, thread, starter = self.configure_forum()
             thread.name = "Open · Settings fail to save · #17"

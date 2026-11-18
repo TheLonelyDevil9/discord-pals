@@ -714,8 +714,6 @@ class AutomationService:
         else:
             self.store.mark_job_inflight(job["id"], lease_token=job["lease_token"], lease_seconds=600)
             await self.transport.mirror(event)
-            if event["kind"] in {"issue", "pull"}:
-                self._record_mirror(event)
             if event["kind"] == "issue":
                 for case in self.store.cases_for_issue(event["repository"], event["number"]):
                     if self._bound(case):
@@ -841,15 +839,6 @@ class AutomationService:
                  "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
         self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
         return True
-
-    def _record_mirror(self, item):
-        """Store what an issue or PR post now shows; call only after its mirror succeeded.
-
-        The sync root skips the item while GitHub still matches this record, so a record
-        written for a failed or held mirror would hide the change from every later cycle.
-        """
-        key = mirror_key(self.settings(), item["kind"], f"{item['kind']}:{item['number']}")
-        self.store.put_link("item_mirrored", key, mirror_record(item))
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:

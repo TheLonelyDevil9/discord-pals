@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 
 from logger import warn
-from project_automation import MIRROR_CHANNELS, WorkflowError, mirror_key
+from project_automation import MIRROR_CHANNELS, WorkflowError, mirror_key, mirror_record
 from project_automation_discord_activity import (
     activity_version, confirm_not_delivered, mirror_activity, receipt_key,
 )
@@ -511,6 +511,7 @@ class DiscordTransport:
         if saved and link.get("digest") == digest and (
                 not isinstance(thread, discord.Thread)
                 or (thread.name, bool(thread.archived), bool(thread.locked)) == (name, closed, closed)):
+            self._record_item(key, event)
             return True
         attempt = self.service.store.get_link("mirror_attempt", key)
         if not message and attempt and attempt.get("state") == "pending":
@@ -547,4 +548,15 @@ class DiscordTransport:
                 elif opened and not complete:
                     await thread.edit(archived=original[0], locked=original[1])
         self.service.store.put_link("mirror", key, {**record, "digest": digest})
+        self._record_item(key, event)
         return True
+
+    def _record_item(self, key, event):
+        """Store the issue or PR version that the post at `key` now shows, for the sync root to compare.
+
+        `key` must be the one this mirror call computed: the settings can change while it
+        waits on Discord, and a record under another destination's key would stop the sync
+        root from ever posting the item there.
+        """
+        if event["kind"] in {"issue", "pull"}:
+            self.service.store.put_link("item_mirrored", key, mirror_record(event))

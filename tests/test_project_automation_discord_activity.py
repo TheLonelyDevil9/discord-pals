@@ -406,6 +406,13 @@ def _native_suite():
                 await self.transport.mirror_activity(event)
             self.assertTrue(thread.archived and thread.locked)
 
+        async def test_activity_delivery_records_the_pr_version_its_post_shows(self):
+            event = self.event()
+            event["pull"]["updated_at"] = "2026-11-01T00:00:00Z"
+            await self.transport.mirror_activity(event)
+            record = self.store.get_link("item_mirrored", receipt_key(self.config, {"kind": "pull", "key": "pull:17"}))
+            self.assertEqual((record["updated_at"], record["state"]), ("2026-11-01T00:00:00Z", "open"))
+
         async def test_new_activity_leaves_an_unchanged_pr_post_alone(self):
             for state in ("open", "closed"):
                 event = self.event(key=f"pr:17:comment:{state}", source_id=state)

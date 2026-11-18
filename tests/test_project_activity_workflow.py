@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from project_automation import AutomationService
+from project_automation import AutomationService, mirror_key, mirror_record
 from project_automation_activity import activate, mapping_key, source_key
 from project_automation_config import PROJECT_DEFAULTS
 from project_automation_github import GitHubError
@@ -64,18 +64,23 @@ class Client:
 
 
 class Transport:
+    """Keeps DiscordTransport's contract: a successful issue or PR mirror records the item version,
+    and an activity delivery first refreshes its PR's post."""
+
     def __init__(self):
         self.attempts = []
         self.receipts = set()
         self.fail_after_send = False
         self.recoveries = []
         self.confirmations = []
+        self.service = None
 
     async def mirror_activity(self, event, *, recover_only=False):
         identity = (event.get("delivery_key", event["key"]), event["source_version"])
         if recover_only:
             self.recoveries.append(deepcopy(event))
             return identity in self.receipts
+        await self.mirror({**event["pull"], "kind": "pull", "key": f"pull:{event['number']}"})
         if identity not in self.receipts:
             self.attempts.append(deepcopy(event))
             self.receipts.add(identity)
@@ -83,7 +88,10 @@ class Transport:
             raise TimeoutError("Acknowledgment lost")
         return True
 
-    async def mirror(self, event, **kwargs):
+    async def mirror(self, event, *, recover_only=False):
+        key = mirror_key(self.service.settings(), event["kind"], event["key"])
+        if not recover_only and event["kind"] in {"issue", "pull"}:
+            self.service.store.put_link("item_mirrored", key, mirror_record(event))
         return True
 
     def confirm_not_delivered(self, event):
@@ -98,6 +106,7 @@ def setup(tmp_path, monkeypatch):
     store = AutomationStore(tmp_path / "jobs.sqlite3")
     client, transport = Client(), Transport()
     service = AutomationService(store, settings=lambda: cfg, github_factory=lambda _: client, transport=transport)
+    transport.service = service
     service.bots["Helper"] = SimpleNamespace(name="Helper")
     activate(store, cfg)
     return SimpleNamespace(cfg=cfg, store=store, client=client, transport=transport, service=service)
@@ -898,6 +907,23 @@ def test_a_pr_activity_delivery_updates_the_record_of_its_pull_request_post(setu
     drain(setup)
     assert len(setup.transport.attempts) == 1
     assert sync_cycle(setup)[0] == []
+
+
+def test_a_channel_change_during_a_mirror_still_posts_to_the_new_forum(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    setup.cfg["issues_channel_id"] = "210"
+    original = setup.transport.mirror
+
+    async def mirror_while_the_operator_saves(event, **kwargs):
+        result = await original(event, **kwargs)
+        setup.cfg["issues_channel_id"] = "250"
+        return result
+
+    setup.transport.mirror = mirror_while_the_operator_saves
+    assert sync_cycle(setup)[0] == [5]
+    setup.transport.mirror = original
+    assert sync_cycle(setup)[0] == [5]
 
 
 def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(setup):
