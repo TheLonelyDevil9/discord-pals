@@ -34,6 +34,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
 - Supported Python versions are 3.11, 3.12, 3.13, and 3.14, and CI tests all four. Python 3.10 is no longer supported, and `setup.sh` and `setup.bat` require 3.11 or newer.
+- PyYAML 6.0.3 replaces 6.0.2, which had no Python 3.14 wheels and had to be built from source there.
 
 ### Fixed
 
