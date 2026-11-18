@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import diagnostic_events
+import logger as log
 import runtime_config
 from delivery_pipeline import DeliveryOutcome
 from discord_utils import add_to_history, store_multipart_response
@@ -123,10 +124,21 @@ class PostResponseTasks:
                 task_context.user_name,
             )
         )
-        asyncio.create_task(
-            bot._maybe_handle_reminder_capture(
+        asyncio.create_task(self._capture_reminder(task_context))
+
+    async def _capture_reminder(self, task_context: PostResponseTaskContext) -> None:
+        """Run reminder capture and log a failure, because nothing awaits this task to see it."""
+        try:
+            await self.bot._maybe_handle_reminder_capture(
                 task_context.context,
                 task_context.message,
                 task_context.request,
             )
-        )
+        except Exception as e:
+            log.error(
+                f"Reminder capture failed ({type(e).__name__}): {e}",
+                self.bot.name,
+                component="reminders",
+                event="reminder_capture_failed",
+                req_id=task_context.req_id,
+            )

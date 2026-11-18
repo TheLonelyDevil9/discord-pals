@@ -63,9 +63,14 @@ class Client:
         return [await self.get_issue(7)] if kind == "pull" else []
 
 
+SHOWN = ("title", "body", "state", "closed", "merged", "draft", "html_url")
+
+
 class Transport:
-    """Keeps DiscordTransport's contract: a successful issue or PR mirror records the item version,
-    and an activity delivery first refreshes its PR's post."""
+    """Keeps DiscordTransport's contract: one post per post key, which a mirror with create=False only
+    edits; a mirror that shows the post's version again writes nothing; a successful issue or PR mirror
+    records the item version; and an activity delivery first refreshes its PR's post. `posts` holds the
+    versions each post showed, oldest first, as dicts of the SHOWN fields."""
 
     def __init__(self):
         self.attempts = []
@@ -73,6 +78,7 @@ class Transport:
         self.fail_after_send = False
         self.recoveries = []
         self.confirmations = []
+        self.posts = {}
         self.service = None
         self.clock = time.time
 
@@ -89,9 +95,16 @@ class Transport:
             raise TimeoutError("Acknowledgment lost")
         return True
 
-    async def mirror(self, event, *, recover_only=False):
+    async def mirror(self, event, *, recover_only=False, create=True):
         key = mirror_key(self.service.settings(), event["kind"], event["key"])
-        if not recover_only and event["kind"] in {"issue", "pull"}:
+        if recover_only:
+            return True
+        if key not in self.posts and not create:
+            return False
+        version, versions = {name: event.get(name) for name in SHOWN}, self.posts.setdefault(key, [])
+        if not versions or versions[-1] != version:
+            versions.append(version)
+        if event["kind"] in {"issue", "pull"}:
             self.service.store.put_link("item_mirrored", key, {**mirror_record(event), "mirrored_at": self.clock()})
         return True
 
@@ -933,6 +946,256 @@ def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(set
     sync_cycle(setup)
     setup.cfg["issues_channel_id"] = "250"
     assert sync_cycle(setup)[0] == [5]
+
+
+def test_the_root_reads_only_the_item_records_of_its_current_destinations(setup, monkeypatch):
+    setup.cfg["issues_channel_id"] = "201"
+    items = {5: github_item("issue", 5), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    sync_cycle(setup)
+    for other in ({**setup.cfg, "issues_channel_id": "250", "reviews_channel_id": "251"},
+                  {**setup.cfg, "bot_name": "Earlier helper"}, {**setup.cfg, "repository": "Owner/Other"}):
+        for kind, number in (("issue", 5), ("pull", 7)):
+            setup.store.put_link("item_mirrored", mirror_key(other, kind, f"{kind}:{number}"),
+                                 {**mirror_record(items[number]), "mirrored_at": time.time()})
+    read, list_links = [], setup.store.list_links
+
+    def recorded(kind, *args, **kwargs):
+        rows = list_links(kind, *args, **kwargs)
+        if kind == "item_mirrored":
+            read.extend(row["key"] for row in rows)
+        return rows
+
+    monkeypatch.setattr(setup.store, "list_links", recorded)
+    items[5]["updated_at"] = LATER
+    assert sync_cycle(setup)[0] == [5]
+    assert sorted(read) == sorted(mirror_key(setup.cfg, kind, f"{kind}:{number}") for kind, number in (("issue", 5), ("pull", 7)))
+
+
+def queue_root(setup, key):
+    return setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, key)
+
+
+def make_due(setup, job_id):
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET available_at = 0 WHERE id = ?", (job_id,))
+
+
+def previous_version_refresh(setup, item, root):
+    """Queue a refresh the way the previous version's sync root did, with the whole item in its payload."""
+    event = {**item, "key": f"{item['kind']}:{item['number']}", "repository": setup.cfg["repository"],
+             "_binding": webhook_binding(setup.cfg), "_sync_cycle": root}
+    return setup.store.enqueue("event", event, f"sync-item:{root}:{item['kind']}:{item['number']}")
+
+
+def test_a_root_retried_after_an_item_changed_still_queues_its_whole_cycle(setup, monkeypatch):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    discover, calls = setup.service.pr_activity.enqueue_discovery, []
+
+    def unavailable_once(cycle):
+        calls.append(cycle)
+        if len(calls) == 1:
+            raise GitHubError("GitHub could not be reached or returned an invalid response.", retryable=True)
+        return discover(cycle)
+
+    monkeypatch.setattr(setup.service.pr_activity, "enqueue_discovery", unavailable_once)
+    root = queue_root(setup, "sync:retried")
+    assert run(setup) and setup.store.get_job(root)["state"] == "pending"
+    items[6].update(title="Renamed", updated_at=LATER)
+    make_due(setup, root)
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    assert len(discovery_jobs(setup)) == 1
+    assert queued_by(setup, root) == ([5, 6, 7], [7])
+    drain(setup)
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_refresh_queued_by_the_previous_version_runs_with_the_current_item(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    root = queue_root(setup, "sync:previous")
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (root,))
+    refresh = previous_version_refresh(setup, {**items[5], "title": "Stale title"}, root)
+    items[5].update(title="Current title", updated_at=LATER)
+    drain(setup)
+    assert setup.store.get_job(refresh)["state"] == "done"
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_root_that_the_previous_version_started_finishes_its_cycle(setup):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6)}
+    open_world(setup, items)
+    root = queue_root(setup, "sync:started-before-the-update")
+    earlier = [previous_version_refresh(setup, {**items[number], "updated_at": "2026-10-01T00:00:00Z"}, root)
+               for number in (5, 6)]
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    assert len(discovery_jobs(setup)) == 1
+    drain(setup)
+    assert [setup.store.get_job(identifier)["state"] for identifier in earlier] == ["done", "done"]
+    assert sync_cycle(setup)[0] == []
+
+
+PULL_URL = "https://github.com/Owner/Project/pull/17"
+
+
+def became_pull_request(issue, **changes):
+    """Return what GitHub serves for an issue that it turned into a pull request."""
+    return {**issue, "kind": "pull", "body": "Pull request description", "updated_at": LATER,
+            "html_url": PULL_URL, **changes}
+
+
+def shown(setup, kind, number, cfg=None):
+    """Return every version that the post of item `number` in the forum of `kind` showed, oldest first."""
+    return setup.transport.posts.get(mirror_key(cfg or setup.cfg, kind, f"{kind}:{number}"), [])
+
+
+def posted_issue(setup):
+    """Post open issue 17 through a sync cycle and return the GitHub items of the world."""
+    setup.cfg["issues_channel_id"] = "201"
+    items = {17: {**github_item("issue", 17), "title": "Settings fail to save", "body": "Issue report"}}
+    open_world(setup, items)
+    sync_cycle(setup)
+    # The sync root finds items that left the open listing through their post records, which
+    # this fake transport does not write.
+    mirror_post(setup, "issue", 17)
+    return items
+
+
+def count_fetches(setup):
+    fetched, fetch = [], setup.client.get_issue
+
+    async def get_issue(number):
+        fetched.append(number)
+        return await fetch(number)
+
+    setup.client.get_issue = get_issue
+    return fetched
+
+
+def test_an_issue_turned_into_a_pull_request_keeps_its_post_and_the_pull_request_gets_its_own(setup):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    issue_post = shown(setup, "issue", 17)
+    assert [version["state"] for version in issue_post] == ["open", "converted"]
+    assert (issue_post[-1]["title"], issue_post[-1]["closed"], issue_post[-1]["html_url"]) == (
+        "Settings fail to save", True, PULL_URL)
+    assert "pull request #17" in issue_post[-1]["body"] and "Pull request description" not in issue_post[-1]["body"]
+    assert shown(setup, "pull", 17)[-1]["body"] == "Pull request description"
+    fetched = count_fetches(setup)
+    assert sync_cycle(setup)[0] == [] and fetched == []
+    items[17].update(title="Fix settings saving", updated_at="2026-11-03T00:00:00Z")
+    sync_cycle(setup)
+    assert shown(setup, "pull", 17)[-1]["title"] == "Fix settings saving"
+    items[17].update(state="closed", closed=True, merged=True, closed_at=iso(time.time()))
+    enqueue(setup, {"repository": "Owner/Project", "kind": "pull", "number": 17, "key": "pull:17",
+                    "action": "closed"}, key="github:merged-17")
+    drain(setup)
+    assert shown(setup, "pull", 17)[-1]["merged"] is True
+    assert len(shown(setup, "issue", 17)) == 2
+    assert len(setup.transport.posts) == 2
+
+
+def test_a_pull_request_closed_before_the_next_cycle_still_gets_its_own_post(setup):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17], state="closed", closed=True, merged=True,
+                                    closed_at=iso(time.time() - DAY))
+    sync_cycle(setup)
+    assert shown(setup, "issue", 17)[-1]["state"] == "converted"
+    assert shown(setup, "pull", 17)[-1]["merged"] is True
+
+
+def test_a_closed_pull_request_gets_its_post_although_its_queued_refresh_was_cleared(setup, clock):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17], state="closed", closed=True, merged=True,
+                                    closed_at=iso(time.time() - DAY))
+    queue_root(setup, "sync:finds-the-conversion")
+    assert run(setup) and run(setup)
+    assert shown(setup, "issue", 17)[-1]["state"] == "converted"
+    assert [job["state"] for job in setup.store.list_jobs() if job["key"].startswith("converted:")] == ["pending"]
+    setup.service.clear_history()
+    sync_cycle(setup)
+    assert shown(setup, "pull", 17)[-1]["merged"] is True
+    mirror_post(setup, "pull", 17)
+    items[17]["updated_at"] = "2026-11-03T00:00:00Z"
+    assert sync_cycle(setup)[0] == [17]
+    clock[0] += 8 * DAY
+    fetched = count_fetches(setup)
+    assert sync_cycle(setup)[0] == [] and fetched == []
+    assert len(setup.transport.posts) == 2
+
+
+def late_issue_event(setup, key):
+    """Queue an issues webhook for issue 17 that GitHub sent before the conversion."""
+    enqueue(setup, {"repository": "Owner/Project", "kind": "issue", "number": 17, "key": "issue:17",
+                    "title": "Settings fail to save", "state": "open", "action": "edited"}, key=key)
+
+
+def test_a_conversion_seen_again_leaves_the_converted_post_as_it_is(setup):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    items[17].update(title="Fix settings saving", body="Newer text", updated_at="2026-11-03T00:00:00Z")
+    late_issue_event(setup, "github:late-edit-17")
+    drain(setup)
+    assert [(version["state"], version["title"]) for version in shown(setup, "issue", 17)] == [
+        ("open", "Settings fail to save"), ("converted", "Settings fail to save")]
+
+
+def test_a_conversion_seen_again_under_another_forum_marks_that_post_with_the_first_title(setup):
+    setup.cfg["issues_channel_id"] = "250"
+    items = {17: {**github_item("issue", 17), "title": "Settings fail to save"}}
+    open_world(setup, items)
+    sync_cycle(setup)
+    first_forum = dict(setup.cfg)
+    setup.cfg["issues_channel_id"] = "201"
+    sync_cycle(setup)
+    mirror_post(setup, "issue", 17)
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    items[17]["title"] = "Fix settings saving"
+    setup.cfg["issues_channel_id"] = "250"
+    late_issue_event(setup, "github:late-edit-17")
+    drain(setup)
+    for forum in ({**first_forum, "issues_channel_id": "201"}, first_forum):
+        assert [(version["state"], version["title"]) for version in shown(setup, "issue", 17, forum)] == [
+            ("open", "Settings fail to save"), ("converted", "Settings fail to save")]
+
+
+def test_a_converted_issue_without_a_post_in_the_current_forum_gets_none(setup):
+    items = posted_issue(setup)
+    earlier = dict(setup.cfg)
+    setup.cfg["issues_channel_id"] = "250"
+    items[17] = became_pull_request(items[17])
+    sync_cycle(setup)
+    assert shown(setup, "issue", 17) == []
+    assert [version["state"] for version in shown(setup, "issue", 17, earlier)] == ["open"]
+    assert shown(setup, "pull", 17)
+    fetched = count_fetches(setup)
+    assert sync_cycle(setup)[0] == [] and fetched == []
+
+
+@pytest.mark.parametrize("source", ["previous version", "webhook"])
+def test_an_older_issue_event_of_a_converted_issue_marks_its_post(setup, source):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17])
+    if source == "webhook":
+        enqueue(setup, {"repository": "Owner/Project", "kind": "issue", "number": 17, "key": "issue:17",
+                        "title": "Settings fail to save", "state": "open", "action": "edited"}, key="github:edit-17")
+    else:
+        root = queue_root(setup, "sync:previous")
+        with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+            connection.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (root,))
+        previous_version_refresh(setup, {**items[17], "kind": "issue"}, root)
+    drain(setup)
+    assert [version["state"] for version in shown(setup, "issue", 17)] == ["open", "converted"]
+    assert shown(setup, "pull", 17)[-1]["body"] == "Pull request description"
+    fetched = count_fetches(setup)
+    assert sync_cycle(setup)[0] == [] and fetched == []
+    assert len(shown(setup, "issue", 17)) == 2
 
 
 def test_the_root_walks_only_new_and_changed_prs_until_a_daily_recheck_is_due(setup):

@@ -119,7 +119,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance._dm_followup_state[42]["followups_sent"], 1)
         self.assertEqual(instance._dm_followup_state[42]["last_followup"], 2_000.0)
         add_history_mock.assert_called_once_with(
-            "dm:Nahida:user:42", "assistant", "Checking in.", author_name="Nahida", timestamp=None
+            "dm:Nahida:user:42", "assistant", "Checking in.", author_name="Nahida", message_id=1, timestamp=None
         )
 
     async def test_followup_cycle_strips_reaction_tags_before_dm_send(self):
@@ -160,7 +160,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dm_channel.sent_messages, ["Good morning, sleepyhead."])
         self.assertEqual(dm_channel.sent_message_objects[0].reactions, ["😊"])
         add_history_mock.assert_called_once_with(
-            "dm:Firefly:user:42", "assistant", "Good morning, sleepyhead.", author_name="Firefly", timestamp=None
+            "dm:Firefly:user:42", "assistant", "Good morning, sleepyhead.", author_name="Firefly", message_id=1, timestamp=None
         )
 
     async def test_followup_cycle_respects_unavailable_schedule(self):
@@ -255,7 +255,42 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent, 1)
         self.assertEqual(dm_channel.sent_messages, ["Good morning.\nDid you sleep well?"])
         add_history_mock.assert_called_once_with(
-            "dm:Firefly:user:42", "assistant", "Good morning.\nDid you sleep well?", author_name="Firefly", timestamp=None
+            "dm:Firefly:user:42", "assistant", "Good morning.\nDid you sleep well?", author_name="Firefly", message_id=1, timestamp=None
+        )
+
+    async def test_followup_in_two_messages_records_each_with_its_message_id(self):
+        instance = object.__new__(bot_instance_module.BotInstance)
+        instance.name = "Firefly"
+        instance.character = types.SimpleNamespace(name="Firefly")
+        instance._split_response_for_delivery = lambda response: ["Good morning.", "Did you sleep well?"]
+        dm_channel = _FakeDMChannel(channel_id=555)
+        instance.client = _FakeClient(_FakeUser(dm_channel))
+        instance._dm_followup_state = {
+            42: {"last_user_msg": 1_000.0, "followups_sent": 0, "last_followup": 0, "channel_id": 555, "user_name": "Alice"}
+        }
+
+        with patch.object(bot_instance_module.runtime_config, "get", side_effect=lambda key, default=None: {
+            "dm_followup_enabled": True,
+            "global_paused": False,
+            "dm_followup_timeout_minutes": 15,
+            "dm_followup_max_count": 1,
+            "dm_followup_cooldown_hours": 24,
+        }.get(key, default)), \
+                patch.object(bot_instance_module, "get_history", return_value=[{"role": "user", "author": "Alice", "content": "Hi"}]), \
+                patch.object(bot_instance_module, "add_to_history") as add_history_mock, \
+                patch.object(bot_instance_module.provider_manager, "generate", new=AsyncMock(return_value="Good morning. Did you sleep well?")), \
+                patch.object(bot_instance_module.log, "info"), \
+                patch.object(bot_instance_module.log, "warn"), \
+                patch.object(bot_instance_module.log, "debug"), \
+                patch.object(bot_instance_module.asyncio, "sleep", new=AsyncMock(return_value=None)), \
+                patch("runtime_delivery.asyncio.sleep", new=AsyncMock(return_value=None)):
+            sent = await instance._run_dm_followup_cycle(now=2_000.0)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(dm_channel.sent_messages, ["Good morning.", "Did you sleep well?"])
+        self.assertEqual(
+            [(call.args[0], call.args[2], call.kwargs["message_id"]) for call in add_history_mock.call_args_list],
+            [("dm:Firefly:user:42", "Good morning.", 1), ("dm:Firefly:user:42", "Did you sleep well?", 2)],
         )
 
     async def test_followup_cycle_long_gap_uses_distinct_memory_topic_prompt(self):
@@ -366,7 +401,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(image_mock.await_args.kwargs["preferred_tier"], "primary")
         generate_mock.assert_not_awaited()
         add_history_mock.assert_called_once_with(
-            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", timestamp=None
+            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", message_id=1, timestamp=None
         )
 
     async def test_followup_cycle_does_not_advance_state_when_image_send_fails(self):
@@ -449,7 +484,7 @@ class DMFollowupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Astral Express", prompt)
         self.assertEqual(image_mock.await_args.kwargs["preferred_tier"], "primary")
         add_history_mock.assert_called_once_with(
-            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", timestamp=None
+            "dm:Firefly:user:42", "assistant", "[Sent a generated image]", author_name="Firefly", message_id=1, timestamp=None
         )
 
     async def test_bot_instance_handles_explicit_dm_image_request_before_text_generation(self):

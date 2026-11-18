@@ -623,9 +623,15 @@ class AutomationStore:
             row = connection.execute("SELECT document FROM links WHERE kind = ? AND key = ?", (kind, str(key))).fetchone()
             return json.loads(row["document"]) if row else None
 
-    def list_links(self, kind):
+    def list_links(self, kind, prefix=""):
+        query, parameters = "SELECT key, document FROM links WHERE kind = ?", [kind]
+        if prefix:
+            # SQLite compares these keys bytewise and UTF-8 keeps code point order, so this range holds
+            # exactly the keys that start with the prefix, and the primary key bounds the read to them.
+            query += " AND key >= ? AND key < ?"
+            parameters += [prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)]
         with self._connection() as connection:
-            rows = connection.execute("SELECT key, document FROM links WHERE kind = ? ORDER BY key", (kind,)).fetchall()
+            rows = connection.execute(query + " ORDER BY key", parameters).fetchall()
             return [{"key": row["key"], "data": json.loads(row["document"])} for row in rows]
 
     def list_pr_sources(self, mapping, number, source, *, after="", limit=100):
