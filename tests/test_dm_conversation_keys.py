@@ -1,5 +1,6 @@
 import types
 import unittest
+from unittest.mock import AsyncMock
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -22,6 +23,24 @@ class _FakeHistoryChannel:
             for message in self._messages[:limit]:
                 yield message
         return newest_first()
+
+
+class _FakeDMHistoryChannel(_FakeHistoryChannel, bot_instance_module.discord.DMChannel):
+    pass
+
+
+def _interaction(channel, user):
+    return types.SimpleNamespace(
+        channel=channel,
+        channel_id=channel.id,
+        user=user,
+        response=types.SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        followup=types.SimpleNamespace(send=AsyncMock()),
+    )
+
+
+def _command(bot, name):
+    return next(command for command in bot.tree._commands if command.name == name)
 
 
 def _user(user_id, name, *, bot=False):
@@ -115,6 +134,18 @@ class RecallTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
             [("assistant", "Firefly"), ("user", "Kafka")],
         )
         self.assertTrue(stored[1]["is_bot"])
+
+    async def test_recall_command_in_a_dm_fills_that_dms_history(self):
+        bot = _make_registered_bot()
+        alice = _user(42, "Alice")
+        channel = _FakeDMHistoryChannel(555, [_message(2, alice, "Are you there?"), _message(1, alice, "Hi")])
+        interaction = _interaction(channel, alice)
+
+        await _command(bot, "recall").callback(interaction, 20)
+
+        self.assertEqual([entry["content"] for entry in discord_utils_module.get_history(DM_KEY)], ["Hi", "Are you there?"])
+        self.assertEqual(discord_utils_module.get_history(555), [])
+        interaction.followup.send.assert_awaited_once()
 
 
 if __name__ == "__main__":

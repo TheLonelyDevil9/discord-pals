@@ -43,6 +43,12 @@ async def is_owner(interaction: discord.Interaction) -> bool:
     return interaction.user.id in _owner_ids_cache
 
 
+def _history_key(bot_instance, interaction: discord.Interaction):
+    if isinstance(interaction.channel, discord.DMChannel):
+        return dm_history_key(bot_instance.name, interaction.user.id)
+    return interaction.channel_id
+
+
 def setup_core_commands(bot_instance) -> None:
     """Register core bot management commands."""
     tree = bot_instance.tree
@@ -110,11 +116,7 @@ def setup_core_commands(bot_instance) -> None:
     @history_group.command(name="clear", description="Clear this chat's conversation history")
     @maintenance_visibility()
     async def history_clear(interaction: discord.Interaction) -> None:
-        if isinstance(interaction.channel, discord.DMChannel):
-            history_key = dm_history_key(bot_instance.name, interaction.user.id)
-        else:
-            history_key = interaction.channel_id
-        clear_history(history_key)
+        clear_history(_history_key(bot_instance, interaction))
         await interaction.response.send_message("✅ Conversation history cleared", ephemeral=True)
 
     tree.add_command(history_group)
@@ -133,7 +135,9 @@ def setup_core_commands(bot_instance) -> None:
     async def cmd_recall(interaction: discord.Interaction, count: int = 20) -> None:
         count = max(1, min(200, count))
         await interaction.response.defer(ephemeral=True)
-        loaded = await bot_instance._recall_channel_history(interaction.channel, count)
+        loaded = await bot_instance._recall_channel_history(
+            interaction.channel, count, history_key=_history_key(bot_instance, interaction)
+        )
         await interaction.followup.send(f"✅ Loaded {loaded} messages into context", ephemeral=True)
     register_command_metadata(bot_instance, name="recall", audience="maintenance", description="Load recent Discord messages into context")
     
