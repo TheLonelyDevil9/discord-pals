@@ -172,6 +172,15 @@ def test_sync_age_counts_from_when_automation_last_started_running(service, cfg,
     assert levels(service)["sync"] == "ok"
 
 
+def test_status_carries_the_health_signals_without_job_payloads_titles_or_user_names(service):
+    service.store.enqueue("publish", {"title": "Private report title", "reporter_name": "private-user"}, "publish:private")
+    status = service.status()
+    assert [item["key"] for item in status["health"]] == [item["key"] for item in service.health()]
+    assert signal(status["health"], "pending")["value"] == "1"
+    shown = json.dumps(status["health"])
+    assert "Private report title" not in shown and "private-user" not in shown
+
+
 def test_health_reads_leave_the_write_lock_free(service, cfg, monkeypatch):
     add_job(service, "pending", "pending", available_ago=60)
     add_job(service, "failed", "failed")

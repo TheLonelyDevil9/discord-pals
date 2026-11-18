@@ -153,7 +153,7 @@ class AutomationService:
                 "last_error": self._last_error,
                 "repository": cfg.get("repository", ""),
                 **{name: persisted.get(name) for name in ("last_webhook_at", "last_sync_at", "last_activity_at")},
-                "job_counts": self.store.job_counts()}
+                "job_counts": self.store.job_counts(), "health": self.health()}
 
     def list_cases(self, limit=100):
         return self.store.list_cases(limit=limit)
