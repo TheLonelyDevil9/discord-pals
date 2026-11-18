@@ -1,6 +1,7 @@
 """Workflow checks use real durable storage and fake external services."""
 
 import asyncio
+from contextlib import closing
 from copy import deepcopy
 import sqlite3
 import sys
@@ -593,7 +594,7 @@ def test_maintainer_question_is_relayed_once_after_its_finished_notice_is_delete
     }
     harness.event(question, "question-delivery")
     asyncio.run(harness.drain())
-    with sqlite3.connect(harness.path) as connection:
+    with closing(sqlite3.connect(harness.path)) as connection, connection:
         assert connection.execute("DELETE FROM jobs WHERE key LIKE 'question:%' AND state = 'done'").rowcount == 1
     harness.event(question, "question-rerun")
     asyncio.run(harness.drain())

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 import sqlite3
 import time
@@ -550,7 +551,7 @@ def test_job_counts_search_indexes_instead_of_scanning_jobs(store, database, mon
     store.job_counts()
     monkeypatch.undo()
     assert counted
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         for statement in counted:
             plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
             assert not any(step.startswith("SCAN") for step in plan), plan
@@ -563,7 +564,7 @@ def test_job_counts_stay_fast_on_a_large_history(store, database):
     rows += [("event", f"pending:{index}", "{}", "pending") for index in range(300)]
     rows += [("event", f"failed:{index}", "{}", "failed") for index in range(20)]
     rows += [("event", f"held:{index}", "{}", "recovery") for index in range(5)]
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.executemany(
             "INSERT INTO jobs(kind, key, payload, state, created_at, updated_at, available_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)", [row + (now, now, now) for row in rows])

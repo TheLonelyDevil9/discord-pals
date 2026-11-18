@@ -1,6 +1,7 @@
 """Real SQLite workflow checks with no external messages or GitHub writes."""
 
 import asyncio
+from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
 import sqlite3
@@ -481,7 +482,7 @@ def cycle_with_child(setup, child_state, *, root_state="done"):
     root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
                                         "_binding": webhook_binding(setup.cfg)}, "sync:earlier")
     child = setup.store.enqueue("pr_sync_page", page_job(setup, root), f"pr-page:{root}:7:comment:1")
-    with sqlite3.connect(setup.store.path) as connection:
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
         connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (root_state, root))
         connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (child_state, child))
     return root, child
@@ -529,7 +530,7 @@ def test_next_root_waits_for_the_interval_and_an_idle_queue(setup, monkeypatch):
     assert sync_roots(setup.store) == [first]
     clock[0] += 1000
     assert setup.service.queue_sync_cycle() is None
-    with sqlite3.connect(setup.store.path) as connection:
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
         connection.execute("UPDATE jobs SET state = 'done'")
     clock[0] -= 101
     assert setup.service.queue_sync_cycle() is None
@@ -604,7 +605,7 @@ def test_worker_applies_retention_while_paused(setup, monkeypatch):
     import project_automation
     finished = setup.store.enqueue("event", {}, "github:finished")
     held = setup.store.enqueue("event", {}, "github:held")
-    with sqlite3.connect(setup.store.path) as connection:
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
         connection.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (finished,))
         connection.execute("UPDATE jobs SET state = 'recovery' WHERE id = ?", (held,))
     setup.cfg["enabled"] = False
@@ -639,7 +640,7 @@ def test_first_start_cleans_up_the_old_queue_before_claiming_work(setup, monkeyp
     assert setup.store.get_job(delivery)["state"] == "done"
     assert len(sync_roots(setup.store)) == 1 and stale_root not in sync_roots(setup.store)
     assert len(logged) == 1 and "2 queued reconciliation jobs" in logged[0][0]
-    with sqlite3.connect(setup.store.path) as connection:
+    with closing(sqlite3.connect(setup.store.path)) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
 
