@@ -99,6 +99,27 @@ class AutomationService:
     def restore_job(self, job_id, updated_at):
         self.store.restore_job(job_id, updated_at)
 
+    def discard_job(self, job_id, updated_at):
+        job = self.store.get_job(job_id) if type(job_id) is int else None
+        if job and job["kind"] == "publish" and job["state"] == "recovery":
+            # The report stays in recovery until /project-retry resolves this job, so
+            # deleting the job would leave its reporter without controls.
+            raise WorkflowError("A held report publication needs /project-retry so its reporter can approve it again.")
+        self.store.discard_job(job_id, updated_at)
+
+    def clear_history(self):
+        """Clear history and queue, then compact; call from a dashboard or CLI thread, not the event loop."""
+        return {"deleted": self.store.clear_history(), "compacted": self.store.compact()}
+
+    def reset_project_data(self, confirmation):
+        """Delete all Project data while the helper is disabled; confirmation must be the repository name."""
+        cfg = self.settings()
+        if cfg.get("enabled"):
+            raise WorkflowError("Pause the Project helper before resetting its data.")
+        if not isinstance(confirmation, str) or not cfg.get("repository") or confirmation.strip() != cfg["repository"]:
+            raise ValueError("The confirmation does not match the configured repository.")
+        return {"deleted": self.store.reset_project_data(), "compacted": self.store.compact()}
+
     def _bound(self, case: dict) -> bool:
         cfg = self.settings()
         return all(str(case.get(key, "")) == str(cfg.get(key, ""))

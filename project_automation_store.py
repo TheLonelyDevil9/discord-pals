@@ -783,6 +783,51 @@ class AutomationStore:
             self._collect_expired_jobs(connection, history_days, time.time())
             return self._delete_doomed(connection, limit)
 
+    @staticmethod
+    def _delete_orphaned_job_links(connection):
+        """Delete dismissal, prepared-version and discovery links whose job or cycle root is gone."""
+        connection.execute(
+            "DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared', 'pr_discovery_cycle') "
+            "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = CAST(links.key AS INTEGER))")
+        connection.execute(
+            "DELETE FROM links WHERE kind = 'pr_discovery_page' AND NOT EXISTS (SELECT 1 FROM jobs "
+            "WHERE jobs.id = CAST(substr(links.key, instr(links.key, ':') + 1) AS INTEGER))")
+
+    def clear_history(self):
+        """Delete every job except running and inflight ones, with their job links; return the count.
+
+        Post records, receipts, feedback cases and delivery markers stay.
+        """
+        with self._connection(write=True) as connection:
+            before = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            self._replace_jobs(connection, "SELECT id FROM jobs WHERE state IN ('running', 'inflight')")
+            self._delete_orphaned_job_links(connection)
+            return before - connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+    def reset_project_data(self):
+        """Delete every job, link and case and return the counts; raise Conflict while a job is in progress."""
+        with self._connection(write=True) as connection:
+            if connection.execute("SELECT 1 FROM jobs WHERE state IN ('running', 'inflight') LIMIT 1").fetchone():
+                raise Conflict("A job is running or sending a delivery")
+            counts = {}
+            for table in ("jobs", "links", "cases"):
+                counts[table] = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                connection.execute(f"DELETE FROM {table}")
+            return counts
+
+    def discard_job(self, job_id, updated_at):
+        """Delete one held job and its job links if it still matches the snapshot the operator saw."""
+        snapshot = _job_snapshot({"id": job_id, "updated_at": updated_at})
+        with self._connection(write=True) as connection:
+            row = connection.execute("SELECT state, updated_at FROM jobs WHERE id = ?", (snapshot["id"],)).fetchone()
+            if row is None:
+                raise KeyError(snapshot["id"])
+            if row["state"] != "recovery" or row["updated_at"] != snapshot["updated_at"]:
+                raise Conflict("The held job changed. Refresh activity before trying again.")
+            connection.execute("DELETE FROM links WHERE kind IN ('job_dismissal', 'pr_prepared') AND key = ?",
+                               (str(snapshot["id"]),))
+            connection.execute("DELETE FROM jobs WHERE id = ?", (snapshot["id"],))
+
     def clean_up_old_queue(self, history_days=0):
         """Clear work left by overlapping sync cycles once, and return counts or None after the first run.
 

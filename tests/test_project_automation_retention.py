@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from project_automation_store import AutomationStore
+from project_automation_store import AutomationStore, Conflict
 
 
 DAY = 86400.0
@@ -241,12 +241,17 @@ def database_bytes(store):
     return store.path.stat().st_size
 
 
-def test_fat_history_shrinks_to_near_its_live_size_after_compaction(store):
+@pytest.mark.parametrize("delete", ["retention", "clear"])
+def test_fat_history_shrinks_to_near_its_live_size_after_compaction(store, delete):
     add_finished_rows(store, 50_000, body_bytes=1_000)
     kept = add_kept_rows(store)
     before = database_bytes(store)
     assert before > 50_000 * 1_000
-    assert store.prune_jobs(0) == 50_000
+    if delete == "clear":
+        assert store.clear_history() == 50_000 + 3
+        kept = [row for row in kept if row[4] in ("running", "inflight")]
+    else:
+        assert store.prune_jobs(0) == 50_000
     assert store.compact() is True
     after = database_bytes(store)
     assert after < 1024 * 1024
@@ -358,6 +363,98 @@ def test_first_start_cleanup_of_a_large_backlog_uses_the_bulk_path(store, monkey
     assert job_ids(store) == {row[0] for row in kept}
     assert snapshot_rows(store, [row[0] for row in kept]) == kept
     assert sequence(store) == before
+
+
+RECORD_LINKS = ("mirror", "mirror_attempt", "pr_activity", "pr_activity_delivery", "pr_source", "pr_head",
+                "pr_activation", "notification", "case_status", "question_notice", "project_status", "github_delivery")
+
+
+def add_records(store):
+    for kind in RECORD_LINKS:
+        add_link(store, kind, f"{kind}:record", {"kept": True})
+    return store.create_case({"channel_id": "1", "reporter_id": "2", "guild_id": "3", "transcript": []}, "source:1")
+
+
+def test_clear_keeps_jobs_in_progress_and_every_record(store):
+    in_progress_root = add_job(store, "sync:in-progress", kind="sync", state="running")
+    sending = add_job(store, "pr-event:sending", state="inflight", payload={"_sync_cycle": in_progress_root})
+    finished_root = add_job(store, "sync:finished", kind="sync")
+    removed = [finished_root, add_job(store, "queued", state="pending"), add_job(store, "held", state="recovery"),
+               add_job(store, "failed", state="failed"), add_job(store, "done")]
+    for job in (sending, removed[2], removed[3]):
+        add_link(store, "pr_prepared" if job != removed[3] else "job_dismissal", job, {"kept": job == sending})
+    for root in (in_progress_root, finished_root):
+        add_link(store, "pr_discovery_cycle", root, {"since": 1})
+        add_link(store, "pr_discovery_page", f"{'d' * 64}:{root}", {"complete": False})
+    case = add_records(store)
+    before = sequence(store)
+    assert store.clear_history() == len(removed)
+    assert job_ids(store) == {in_progress_root, sending}
+    assert link_keys(store, "pr_prepared") == {str(sending)}
+    assert link_keys(store, "job_dismissal") == set()
+    assert link_keys(store, "pr_discovery_cycle") == {str(in_progress_root)}
+    assert link_keys(store, "pr_discovery_page") == {f"{'d' * 64}:{in_progress_root}"}
+    for kind in RECORD_LINKS:
+        assert link_keys(store, kind) == {f"{kind}:record"}
+    assert store.get_case(case["id"]) == case
+    assert sequence(store) == before
+
+
+def test_reset_deletes_all_project_data_but_ids_keep_growing(store):
+    add_cycle(store, "finished", ["done", "pending", "failed", "recovery"])
+    add_records(store)
+    highest = add_job(store, "github:last")
+    assert store.reset_project_data() == {"jobs": 6, "links": len(RECORD_LINKS), "cases": 1}
+    with closing(sqlite3.connect(store.path)) as connection:
+        assert [connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("jobs", "links", "cases")] == [0, 0, 0]
+    assert store.enqueue("event", {}, "after-reset") > highest
+
+
+@pytest.mark.parametrize("state", ["running", "inflight"])
+def test_reset_refuses_while_a_job_is_in_progress(store, state):
+    busy = add_job(store, "busy", state=state)
+    add_records(store)
+    with pytest.raises(Conflict):
+        store.reset_project_data()
+    assert job_ids(store) == {busy}
+    assert link_keys(store, "mirror") == {"mirror:record"}
+
+
+def held_job(store, key="held"):
+    job = add_job(store, key, state="recovery")
+    add_link(store, "pr_prepared", job, {"kind": "pr_activity"})
+    return {"id": job, "updated_at": store.get_job(job)["updated_at"]}
+
+
+def test_discard_deletes_one_held_job_with_its_links(store):
+    held = held_job(store)
+    other = held_job(store, "other-held")
+    store.discard_job(held["id"], held["updated_at"])
+    assert job_ids(store) == {other["id"]}
+    assert link_keys(store, "pr_prepared") == {str(other["id"])}
+
+
+@pytest.mark.parametrize("state", ["pending", "running", "inflight", "done", "failed", "cancelled"])
+def test_discard_refuses_jobs_that_are_not_held(store, state):
+    held = held_job(store)
+    with closing(sqlite3.connect(store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = ? WHERE id = ?", (state, held["id"]))
+    with pytest.raises(Conflict):
+        store.discard_job(held["id"], held["updated_at"])
+    assert job_ids(store) == {held["id"]}
+
+
+def test_discard_refuses_a_stale_snapshot_and_a_missing_job(store):
+    held = held_job(store)
+    with pytest.raises(Conflict):
+        store.discard_job(held["id"], held["updated_at"] - 1)
+    with pytest.raises(KeyError):
+        store.discard_job(held["id"] + 1, held["updated_at"])
+    with pytest.raises(ValueError):
+        store.discard_job(True, held["updated_at"])
+    assert job_ids(store) == {held["id"]}
+    assert link_keys(store, "pr_prepared") == {str(held["id"])}
 
 
 def test_redelivery_inside_four_days_queues_nothing_after_retention(store, clock):

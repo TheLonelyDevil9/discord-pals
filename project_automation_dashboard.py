@@ -14,6 +14,7 @@ import runtime_config
 from project_automation_config import (
     CHANNEL_PURPOSES, config_errors, config_input_errors, credential_status, normalize_project_config,
 )
+from project_automation import WorkflowError
 import project_automation_setup as setup
 from project_automation_store import Conflict
 from security import requires_auth, requires_csrf
@@ -370,3 +371,56 @@ def register_project_routes(app, get_service, *, get_bot_names=None, get_charact
             return {"restored": True}
 
         return activity_mutation(restore)
+
+    @app.route("/api/project-automation/jobs/<job_id>/discard", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_discard_job(job_id):
+        payload = request.get_json(silent=True)
+        invalid = jsonify({"message": "Provide a valid job ID and updated_at snapshot."}), 400
+        if (not re.fullmatch(r"[0-9]{1,19}", job_id) or not 0 < int(job_id) <= 2**63 - 1
+                or not isinstance(payload, dict) or set(payload) != {"updated_at"}):
+            return invalid
+        try:
+            get_service().discard_job(int(job_id), payload["updated_at"])
+        except WorkflowError:
+            return jsonify({"message": "A held report publication needs /project-retry so its reporter can approve it again."}), 409
+        except ValueError:
+            return invalid
+        except KeyError:
+            return jsonify({"message": "Activity job not found."}), 404
+        except Conflict:
+            return jsonify({"message": "The held job changed. Refresh activity before trying again."}), 409
+        except Exception:
+            return jsonify({"message": "Activity could not be updated."}), 500
+        return jsonify({"discarded": True})
+
+    @app.route("/api/project-automation/history/clear", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_clear_history():
+        if request.get_json(silent=True) != {}:
+            return jsonify({"message": "Send an empty JSON object to clear history."}), 400
+        try:
+            return jsonify(get_service().clear_history())
+        except Exception:
+            return jsonify({"message": "History could not be cleared. Refresh activity to see the current queue."}), 500
+
+    @app.route("/api/project-automation/reset", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def project_automation_reset():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"repository"} or not isinstance(payload["repository"], str):
+            return jsonify({"message": "Type the repository name to confirm the reset."}), 400
+        try:
+            return jsonify(get_service().reset_project_data(payload["repository"]))
+        except WorkflowError:
+            return jsonify({"message": "Pause the Project helper before resetting its data. Nothing was deleted."}), 409
+        except ValueError:
+            return jsonify({"message": "The repository name does not match. Nothing was deleted."}), 400
+        except Conflict:
+            return jsonify({"message": "A job is running or sending a delivery. Wait for it to finish, "
+                                       "then reset. Nothing was deleted."}), 409
+        except Exception:
+            return jsonify({"message": "Project data could not be reset. Refresh the page to see its current state."}), 500

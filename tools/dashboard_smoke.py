@@ -63,7 +63,9 @@ def main() -> int:
         print(f"ok   {path} -> login required")
 
     for path in ("/api/project-automation/check", "/api/test-provider/0",
-                 "/api/project-automation/jobs/dismiss", "/api/project-automation/jobs/1/restore"):
+                 "/api/project-automation/jobs/dismiss", "/api/project-automation/jobs/1/restore",
+                 "/api/project-automation/jobs/1/discard", "/api/project-automation/history/clear",
+                 "/api/project-automation/reset"):
         request = urllib.request.Request(f"{base}{path}", data=b"{}",
                                          headers={"Content-Type": "application/json"}, method="POST")
         with opener.open(request, timeout=5) as response:
