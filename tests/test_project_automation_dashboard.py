@@ -428,6 +428,19 @@ def test_event_recovery_prefers_a_matching_recorded_mirror_thread(setup):
     assert target["discord_url"] == "https://discord.com/channels/123/456"
 
 
+@pytest.mark.parametrize("kind, path", [("issue", "issues"), ("pull", "pull")])
+def test_a_held_reconciliation_refresh_links_to_its_item_on_github(setup, kind, path):
+    client, _, service = setup
+    service.jobs = [{"id": 2, "kind": "event", "state": "recovery", "payload": {
+        "kind": kind, "key": f"{kind}:42", "number": 42, "repository": "SillyBunnyTeam/SillyBunny", "_sync_cycle": 1,
+        "_binding": {"guild_id": "123", "bot_name": "Helper", "issues_channel_id": "456", "reviews_channel_id": "457",
+                     "repository": "SillyBunnyTeam/SillyBunny"},
+    }}]
+    target = client.get("/api/project-automation/jobs").get_json()["jobs"][0]["target"]
+    assert target["github_url"] == f"https://github.com/SillyBunnyTeam/SillyBunny/{path}/42"
+    assert target["issue_number"] == 42
+
+
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "https://github.com.evil.test/SillyBunnyTeam/SillyBunny/issues/1",
                                "https://github.com/elsewhere/project/issues/1", "https://github.com/SillyBunnyTeam/SillyBunny/%2e%2e/elsewhere"])
 def test_job_target_rejects_unexpected_github_locations(setup, url):

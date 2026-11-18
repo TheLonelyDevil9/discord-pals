@@ -917,11 +917,21 @@ class AutomationService:
         return changed, oldest_due(unchanged, len(in_scope), time.time())
 
     def _enqueue_sync_item(self, item, kind, sync_id):
+        """Queue the refresh of one item's post for the sync cycle of root `sync_id`.
+
+        The job holds only the item's identity, because _event reads the item from GitHub again
+        before it writes. A root that runs again after the item changed then queues the same job.
+        """
         from project_automation_webhook import webhook_binding
         cfg = self.settings()
-        event = {**item, "kind": kind, "key": f"{kind}:{item['number']}", "repository": cfg["repository"],
-                 "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
-        self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        event = {"kind": kind, "number": item["number"], "key": f"{kind}:{item['number']}",
+                 "repository": cfg["repository"], "_binding": webhook_binding(cfg), "_sync_cycle": sync_id}
+        try:
+            self.store.enqueue("event", event, key=f"sync-item:{sync_id}:{kind}:{item['number']}")
+        except Conflict:
+            # A job that holds this key refreshes the same post in the same cycle, whatever else
+            # its payload holds, such as the whole item that earlier versions stored there.
+            pass
 
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:

@@ -42,6 +42,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The webhook for a deleted issue marks its post deleted when GitHub answers 410 for the issue; such a job failed on every attempt before.
 - Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
+- A reconciliation cycle whose start is retried after an issue or PR changed no longer ends early, which skipped the rest of its refreshes and PR discovery for that cycle.
 
 ### Upgrade notes
 

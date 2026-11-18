@@ -935,6 +935,72 @@ def test_a_new_destination_forum_gets_its_posts_although_github_is_unchanged(set
     assert sync_cycle(setup)[0] == [5]
 
 
+def queue_root(setup, key):
+    return setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, key)
+
+
+def make_due(setup, job_id):
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET available_at = 0 WHERE id = ?", (job_id,))
+
+
+def previous_version_refresh(setup, item, root):
+    """Queue a refresh the way the previous version's sync root did, with the whole item in its payload."""
+    event = {**item, "key": f"{item['kind']}:{item['number']}", "repository": setup.cfg["repository"],
+             "_binding": webhook_binding(setup.cfg), "_sync_cycle": root}
+    return setup.store.enqueue("event", event, f"sync-item:{root}:{item['kind']}:{item['number']}")
+
+
+def test_a_root_retried_after_an_item_changed_still_queues_its_whole_cycle(setup, monkeypatch):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6), 7: github_item("pull", 7)}
+    open_world(setup, items)
+    discover, calls = setup.service.pr_activity.enqueue_discovery, []
+
+    def unavailable_once(cycle):
+        calls.append(cycle)
+        if len(calls) == 1:
+            raise GitHubError("GitHub could not be reached or returned an invalid response.", retryable=True)
+        return discover(cycle)
+
+    monkeypatch.setattr(setup.service.pr_activity, "enqueue_discovery", unavailable_once)
+    root = queue_root(setup, "sync:retried")
+    assert run(setup) and setup.store.get_job(root)["state"] == "pending"
+    items[6].update(title="Renamed", updated_at=LATER)
+    make_due(setup, root)
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    assert len(discovery_jobs(setup)) == 1
+    assert queued_by(setup, root) == ([5, 6, 7], [7])
+    drain(setup)
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_refresh_queued_by_the_previous_version_runs_with_the_current_item(setup):
+    items = {5: github_item("issue", 5)}
+    open_world(setup, items)
+    root = queue_root(setup, "sync:previous")
+    with closing(sqlite3.connect(setup.store.path)) as connection, connection:
+        connection.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (root,))
+    refresh = previous_version_refresh(setup, {**items[5], "title": "Stale title"}, root)
+    items[5].update(title="Current title", updated_at=LATER)
+    drain(setup)
+    assert setup.store.get_job(refresh)["state"] == "done"
+    assert sync_cycle(setup)[0] == []
+
+
+def test_a_root_that_the_previous_version_started_finishes_its_cycle(setup):
+    items = {5: github_item("issue", 5), 6: github_item("issue", 6)}
+    open_world(setup, items)
+    root = queue_root(setup, "sync:started-before-the-update")
+    earlier = [previous_version_refresh(setup, {**items[number], "updated_at": "2026-10-01T00:00:00Z"}, root)
+               for number in (5, 6)]
+    assert run(setup) and setup.store.get_job(root)["state"] == "done"
+    assert len(discovery_jobs(setup)) == 1
+    drain(setup)
+    assert [setup.store.get_job(identifier)["state"] for identifier in earlier] == ["done", "done"]
+    assert sync_cycle(setup)[0] == []
+
+
 def test_the_root_walks_only_new_and_changed_prs_until_a_daily_recheck_is_due(setup):
     items = {7: github_item("pull", 7), 8: github_item("pull", 8), 5: github_item("issue", 5)}
     open_world(setup, items)

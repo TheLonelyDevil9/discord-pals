@@ -136,6 +136,10 @@ def _job_target(job: dict, service) -> dict:
         number = _issue_number(payload.get("number"))
         if number:
             target["issue_number"] = number
+            if repository and not target["github_url"] and payload.get("kind") in {"issue", "pull"}:
+                # A refresh that reconciliation queues names its item without the item's URL.
+                path = "pull" if payload["kind"] == "pull" else "issues"
+                target["github_url"] = f"https://github.com/{repository}/{path}/{number}"
         if field and repository and binding.get("repository") == repository:
             target["discord_url"] = _discord_url(binding.get("guild_id"), binding.get(field))
             # If a receipt exists, open its exact thread instead of the parent forum.
