@@ -152,32 +152,38 @@ The first reconciliation cycle of a version with change-driven sync has no recor
 
 The helper keys its post records, PR activity receipts, and checkpoints by the name of its bot entry in **Config**. If you rename that entry and choose the new name under **Dedicated helper bot**, the helper starts over: it posts every open issue and PR again, starts PR activity from a new baseline, and stops the open feedback cases, which belong to the old name. Move the records to the new name before you choose it:
 
-1. Pause automation on the Project page.
-2. If the queue holds jobs, choose **Clear history and queue**. The rename refuses while any job carries the old name, finished jobs kept by **Job history** included.
-3. Back up `bot_data/project_automation.sqlite3` as described in [Recovery and operations](#recovery-and-operations).
-4. From the checkout, with the service's Python environment, run a dry run. It changes nothing and prints counts per record kind and a verdict:
+1. While the bot still runs under its old name, open **Project → Delivery activity → Needs attention** and resolve each held job with `/project-recover`, or with `/project-retry` after you check its destination. The rename refuses while a send of the old name is unconfirmed, and its held job is the only way to resolve it, so do this before you clear the queue. If you already renamed the bot in **Config** and the dry run refuses for this reason, give the bot its old name again, restart Discord Pals, resolve the held jobs, and start over.
+2. Pause automation on the Project page.
+3. If the queue holds jobs, choose **Clear history and queue**. The rename refuses while any job carries the old name, finished jobs kept by **Job history** included.
+4. Back up the database. Run this command, and the commands in the next steps, as the user that runs the service, from the application folder, with the service's Python environment, so that the files they write keep the owner that the service needs:
+
+   ```bash
+   python -c "import sqlite3; s = sqlite3.connect('bot_data/project_automation.sqlite3'); d = sqlite3.connect('bot_data/project_automation.pre-rename.sqlite3'); s.backup(d); d.close(); s.close()"
+   ```
+
+5. Run a dry run. It changes nothing and prints counts per record kind and a verdict:
 
    ```bash
    python tools/project_data.py rename-helper --from "Old name" --to "New name"
    ```
 
-5. Run it again with `--apply`. It moves every record of the old name in one transaction, checks the result, and rolls everything back if a check fails. A second run reports nothing to do.
+6. Run it again with `--apply`. It moves every record of the old name in one transaction, checks the result, and rolls everything back if a check fails. A second run reports nothing to do.
 
    ```bash
    python tools/project_data.py rename-helper --from "Old name" --to "New name" --apply
    ```
 
-6. Select the new name under **Dedicated helper bot** and save, with automation still paused.
-7. Restart Discord Pals, so that the buttons of open feedback cases register for the renamed bot.
-8. Resume automation.
+7. Select the new name under **Dedicated helper bot** and save, with automation still paused.
+8. Restart Discord Pals, so that the buttons of open feedback cases register for the renamed bot.
+9. Resume automation.
 
 The rename moves the post records, PR activity receipts and sources, checkpoints, the activity baseline, notification snapshots, and feedback cases. Records of other helper names stay unchanged, and each record keeps its last-change time, so job history retention treats it as before. Each moved post record and activity receipt stores the footer that its Discord message shows. The helper accepts that footer and writes the new one the next time it updates the message, so nothing is posted again.
 
-`rename-helper` refuses and changes nothing while automation is enabled, when the settings select a different helper than `--from`, when both names are the same, while a job still carries the old name, when a record already exists under the new name, when a record of the old name differs from what the helper would have written, and when the database holds a record kind it does not know.
+`rename-helper` refuses and changes nothing while automation is enabled, when the settings select a different helper than `--from`, when both names are the same, while a job still carries the old name, while a send of the old name is unconfirmed, when a record already exists under the new name, when a record of the old name differs from what the helper would have written, and when the database holds a record kind it does not know. It leaves alone each delivered or retry-authorized PR activity send guard that no stored receipt or source attributes to a helper, because such a guard blocks no send, and it reports how many it left.
 
-To undo a rename, pause automation with the new name still selected, clear the queue if it holds jobs, and run the command with the two names swapped, first as a dry run and then with `--apply`. Then rename the bot back in **Config**, select its old name, restart Discord Pals, and resume. Each record keeps the footer that its post shows, so posts the helper updated under the new name stay valid.
+To undo a rename, first make sure that each record holds the footer that its message shows. A refresh can write the new footer on a post and then fail before it saves the post's record. Under the new name the helper still accepts that post, but after an undo the old name would reject it on every refresh. So, while the new name is still selected and automation runs, run `/project-recover` for each held job under **Delivery activity → Needs attention**. Recovery records the footer that the post shows; let the jobs that it returns to the queue finish, because they record it for activity messages. Then pause automation, clear the queue if it holds jobs, and run the command with the two names swapped, first as a dry run and then with `--apply`. Rename the bot back in **Config**, select its old name, restart Discord Pals, and resume. Each record keeps the footer that it stores, so posts and activity messages stay valid under the old name when their records hold the footer that they show.
 
-Restore the backup only when the command cannot run and the helper has not run under the new name. Stop Discord Pals, move `project_automation.sqlite3` and its `-wal` and `-shm` files aside, copy the backup in their place, and start Discord Pals. With automation still paused, rename the bot back in **Config**, select its old name, restart, and resume. Posts that the helper updated under the new name carry footers that the backup does not know, so their refreshes stop with a delivery marker error.
+Restore the backup only when the command cannot run and the helper has not run under the new name. Stop Discord Pals, move `bot_data/project_automation.sqlite3` and its `-wal` and `-shm` files aside, copy `bot_data/project_automation.pre-rename.sqlite3` to `bot_data/project_automation.sqlite3`, and start Discord Pals. With automation still paused, rename the bot back in **Config**, select its old name, restart, and resume. Posts that the helper updated under the new name carry footers that the backup does not know, so their refreshes stop with a delivery marker error.
 
 ## Implementation boundaries
 
