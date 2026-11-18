@@ -868,9 +868,18 @@ class AutomationService:
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
                     seen.add((data["kind"], data["number"]))
-                    item = await self._closed_item_in_scope(client, data["kind"], data["number"])
+                    kind = data["kind"]
+                    if kind == "issue" and (self.store.get_link("item_closed", self._closed_key(kind, data["number"])) or {}).get("converted"):
+                        # The issue's post record keeps its pull request in scope, so that a PR that closed
+                        # before it got a post still gets one when the refresh that the conversion queued
+                        # was cleared or failed.
+                        kind = "pull"
+                        if (kind, data["number"]) in seen:
+                            continue
+                        seen.add((kind, data["number"]))
+                    item = await self._closed_item_in_scope(client, kind, data["number"])
                     if item is not None:
-                        in_scope.append((data["kind"], item))
+                        in_scope.append((kind, item))
             changed, daily = self._refreshes(in_scope)
             for kind, item in changed + daily:
                 self._enqueue_sync_item(item, kind, job["id"])
@@ -898,12 +907,12 @@ class AutomationService:
         counts only when the next cycle gets one again. Both stay out of scope until the open
         listing shows the item again. Neither answer drops a stored close time. An issue that
         became a pull request is returned as that pull request until a refresh of its post
-        stores the conversion, and then costs no further fetch.
+        stores the conversion; from then on the sync root asks for the pull request instead.
         """
         key = self._closed_key(kind, number)
         cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
         stored = self.store.get_link("item_closed", key) or {}
-        if "gone" in stored or stored.get("converted") or ("closed_at" in stored and stored["closed_at"] < cutoff):
+        if "gone" in stored or ("closed_at" in stored and stored["closed_at"] < cutoff):
             return None
         try:
             item = await client.get_issue(number)

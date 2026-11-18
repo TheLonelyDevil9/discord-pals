@@ -1102,6 +1102,26 @@ def test_a_pull_request_closed_before_the_next_cycle_still_gets_its_own_post(set
     assert shown(setup, "pull", 17)[-1]["merged"] is True
 
 
+def test_a_closed_pull_request_gets_its_post_although_its_queued_refresh_was_cleared(setup, clock):
+    items = posted_issue(setup)
+    items[17] = became_pull_request(items[17], state="closed", closed=True, merged=True,
+                                    closed_at=iso(time.time() - DAY))
+    queue_root(setup, "sync:finds-the-conversion")
+    assert run(setup) and run(setup)
+    assert shown(setup, "issue", 17)[-1]["state"] == "converted"
+    assert [job["state"] for job in setup.store.list_jobs() if job["key"].startswith("converted:")] == ["pending"]
+    setup.service.clear_history()
+    sync_cycle(setup)
+    assert shown(setup, "pull", 17)[-1]["merged"] is True
+    mirror_post(setup, "pull", 17)
+    items[17]["updated_at"] = "2026-11-03T00:00:00Z"
+    assert sync_cycle(setup)[0] == [17]
+    clock[0] += 8 * DAY
+    fetched = count_fetches(setup)
+    assert sync_cycle(setup)[0] == [] and fetched == []
+    assert len(setup.transport.posts) == 2
+
+
 def test_a_converted_issue_without_a_post_in_the_current_forum_gets_none(setup):
     items = posted_issue(setup)
     earlier = dict(setup.cfg)
