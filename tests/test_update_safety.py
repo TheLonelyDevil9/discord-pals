@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+import types
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -614,20 +616,76 @@ class DashboardRollbackTests(DashboardUpdateCase):
         self.assertIn("timed out", data["message"])
         self.assert_restored(before)
 
-    def test_an_index_lock_left_after_the_conflict_is_waited_out_and_removed(self):
-        self.stage_conflict()
-        before = self.head()
-
-        def leave_lock(result, _args):
-            (self.install / ".git" / "index.lock").write_text("", encoding="utf-8")
+    def lock_after_the_conflict(self, age=0.0, time_out=False):
+        """fail_once callback that leaves index.lock, age seconds old, after the conflicting reapply."""
+        def leave_lock(result, args):
+            lock = self.install / ".git" / "index.lock"
+            lock.write_text("", encoding="utf-8")
+            old = time.time() - age
+            os.utime(lock, (old, old))
+            if time_out:
+                raise subprocess.TimeoutExpired(args, 120)
             return result
 
-        with self.fail_once(leave_lock), patch.object(update_module, "LOCK_RETRY_DELAY", 0):
+        return leave_lock
+
+    @staticmethod
+    def waits(sleep):
+        """Send the waits of update.py to sleep(delay); subprocess keeps the real time module."""
+        return patch.object(update_module, "time", types.SimpleNamespace(time=time.time, sleep=sleep))
+
+    def test_a_lock_that_a_running_git_holds_is_never_removed(self):
+        self.stage_conflict()
+        before = self.head()
+        delays = []
+
+        with self.fail_once(self.lock_after_the_conflict()), self.waits(delays.append):
+            response = self.post_update()
+
+        stash_sha = git(self.install, "rev-parse", "stash@{0}").stdout.strip()
+        self.assertEqual(response.status_code, 500, response.get_json())
+        self.assertTrue((self.install / ".git" / "index.lock").exists())
+        self.assertEqual(len(delays), update_module.LOCK_RETRIES)
+        self.assertIn("index.lock", response.get_json()["message"])
+        self.assertIn(f"git reset --hard {before}", response.get_json()["message"])
+        self.assertIn(f"git stash apply --index {stash_sha}", response.get_json()["message"])
+
+    def test_a_lock_released_during_the_wait_lets_the_rollback_finish(self):
+        self.stage_conflict()
+        before = self.head()
+        lock = self.install / ".git" / "index.lock"
+
+        with self.fail_once(self.lock_after_the_conflict()), self.waits(lambda _delay: lock.unlink()):
             data = self.post_update().get_json()
 
         self.assertTrue(data["rolled_back"])
         self.assert_restored(before)
-        self.assertFalse((self.install / ".git" / "index.lock").exists())
+
+    def test_a_lock_left_by_a_git_command_this_update_killed_is_removed_at_once(self):
+        self.stage_conflict()
+        before = self.head()
+        delays = []
+
+        with self.fail_once(self.lock_after_the_conflict(time_out=True)), self.waits(delays.append):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("timed out", data["message"])
+        self.assert_restored(before)
+        self.assertEqual(delays, [])
+
+    def test_a_stale_lock_is_removed_at_once(self):
+        self.stage_conflict()
+        before = self.head()
+        delays = []
+
+        with self.fail_once(self.lock_after_the_conflict(age=update_module.STALE_LOCK_SECONDS + 60)), \
+                self.waits(delays.append):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assert_restored(before)
+        self.assertEqual(delays, [])
 
     def test_a_rollback_that_cannot_restore_the_checkout_says_how_to_restore_it(self):
         self.stage_conflict()

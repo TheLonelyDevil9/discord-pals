@@ -46,6 +46,9 @@ UNFINISHED_OPERATIONS = (
 )
 LOCK_RETRIES = 4
 LOCK_RETRY_DELAY = 1.0
+# An index.lock older than this is taken to be left by a Git that crashed or was killed;
+# the dashboard's own Git runner uses the same age.
+STALE_LOCK_SECONDS = GIT_TIMEOUT + 60
 
 
 class UpdateRefused(RuntimeError):
@@ -350,11 +353,12 @@ def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
     raise UpdateRefused(f"{detail}, then try again.")
 
 
-def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120) -> None:
-    """Run a git command that must succeed, waiting out an index.lock that another Git holds.
+def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120, own_lock: bool = False) -> None:
+    """Run a git command that must succeed, waiting up to LOCK_RETRIES times for an index.lock to go.
 
-    A lock that outlives LOCK_RETRIES waits has no running Git behind it (a killed command
-    left it), so the last try removes it first.
+    A lock is removed only when own_lock says that this update killed the Git command that
+    left it, or when it is older than STALE_LOCK_SECONDS. A Git that is still running, such
+    as `git commit` with its editor open, keeps its lock, and the command then fails.
     """
     for attempt in range(LOCK_RETRIES + 1):
         result = run(["git", *args], repo, timeout=timeout)
@@ -362,11 +366,28 @@ def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120) -> None:
             return
         if "index.lock" not in command_output(result) or attempt == LOCK_RETRIES:
             break
-        time.sleep(LOCK_RETRY_DELAY)
-        if attempt == LOCK_RETRIES - 1:
-            lock = run(["git", "rev-parse", "--git-path", "index.lock"], repo, timeout=30).stdout.strip()
-            (repo / lock).unlink(missing_ok=True)
+        if remove_dead_lock(repo, own_lock):
+            own_lock = False
+        else:
+            time.sleep(LOCK_RETRY_DELAY)
     raise RuntimeError(f"git {' '.join(args)} failed: {command_output(result) or result.returncode}")
+
+
+def remove_dead_lock(repo: Path, own_lock: bool) -> bool:
+    """Remove index.lock when own_lock is set or the lock is older than STALE_LOCK_SECONDS.
+
+    Return True when no lock is left, so that the command can run again at once.
+    """
+    lock = repo / run(["git", "rev-parse", "--git-path", "index.lock"], repo, timeout=30).stdout.strip()
+    try:
+        if not own_lock and time.time() - lock.stat().st_mtime <= STALE_LOCK_SECONDS:
+            return False
+        lock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
 
 
 def stash_tip(repo: Path) -> str | None:
@@ -475,9 +496,13 @@ class UpdateAttempt:
         stash entry, the backup branch and the snapshot for a restore by hand.
         """
         kind, cause, advice = failure_report(error)
+        # A Git command that timed out was killed by this update and can leave its index.lock
+        # behind. The reset is the first command to meet that lock, so only the reset may remove it.
+        own_lock = (isinstance(error, subprocess.TimeoutExpired) and isinstance(error.cmd, list)
+                    and error.cmd[:1] == ["git"])
         try:
             if self.moved or self.stash:
-                git_until_unlocked(self.repo, ["reset", "--hard", self.before_head])
+                git_until_unlocked(self.repo, ["reset", "--hard", self.before_head], own_lock=own_lock)
             if self.stash:
                 git_until_unlocked(self.repo, ["stash", "apply", "--index", self.stash["sha"]])
         except Exception as rollback_error:
