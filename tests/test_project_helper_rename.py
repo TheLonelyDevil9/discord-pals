@@ -497,26 +497,176 @@ def test_the_report_holds_counts_and_a_verdict_but_no_record_contents(seeded):
         assert private not in text
 
 
-def _literal_kind(node):
+CANNOT_READ = "writes a link whose kind the scan cannot read"
+# These store functions take the kind from their callers, so the scan reads it at each call instead.
+GENERIC_WRITERS = {"put_link", "ensure_link", "save_links_with_jobs"}
+SQL_WRITE = re.compile(r"\bINTO\s+links\b|\bUPDATE\s+links\s+SET\b", re.I)
+INSERT = re.compile(r"\bINTO\s+links\s*(?:\(([^)]*)\))?\s*(VALUES|SELECT)\b", re.I)
+UPDATE = re.compile(r"\bUPDATE\s+links\s+SET\s+(.*?)(?:\bWHERE\b|$)", re.I | re.S)
+
+
+def _literal(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def _argument(call, position, name):
+    if len(call.args) > position:
+        return call.args[position]
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
+
+
+def _split(text):
+    """Split a SQL list at the commas outside parentheses."""
+    parts, depth, current = [], 0, ""
+    for char in text:
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+            continue
+        depth += (char == "(") - (char == ")")
+        current += char
+    return parts + [current.strip()]
+
+
+def _sql_kinds(sql, parameters, generic, where):
+    """Return the kinds one SQL text writes to links, with a finding for each kind it cannot read."""
+    kinds, values, index = set(), None, None
+    insert, update = INSERT.search(sql), UPDATE.search(sql)
+    if insert:
+        columns = [column.strip().lower() for column in (insert.group(1) or "kind, key, document, updated_at").split(",")]
+        rest = sql[insert.end():]
+        if insert.group(2).upper() == "VALUES":
+            start = rest.index("(") + 1
+            depth, end = 1, start
+            while depth:
+                depth += (rest[end] == "(") - (rest[end] == ")")
+                end += 1
+            values = _split(rest[start:end - 1])
+        else:
+            values = _split(re.split(r"\bFROM\b", rest, maxsplit=1, flags=re.I)[0])
+        index = columns.index("kind") if "kind" in columns else len(values)
+    elif update:
+        assignments = [part.split("=", 1) for part in _split(update.group(1))]
+        values = [value.strip() for _, value in assignments]
+        names = [name.strip().lower() for name, _ in assignments]
+        if "kind" not in names:
+            return kinds
+        index = names.index("kind")
+    if values is None or index >= len(values):
+        return {f"{where} {CANNOT_READ}"}
+    value = values[index]
+    if re.fullmatch(r"'[a-z_]+'", value):
+        return {value.strip("'")}
+    if value == "?":
+        position = sum(part.count("?") for part in values[:index])
+        row = parameters.elt if isinstance(parameters, (ast.ListComp, ast.GeneratorExp)) else parameters
+        if isinstance(row, (ast.Tuple, ast.List)) and position < len(row.elts) and _literal(row.elts[position]):
+            return {_literal(row.elts[position])}
+        if generic:
+            return kinds
+    return {f"{where} {CANNOT_READ}"}
+
+
+def _function_kinds(function, where):
+    """Return the kinds of the link lists a function passes to save_links_with_jobs, followed through the function."""
+    kinds, names, followed = set(), [], set()
+
+    def take(node, entry=False):
+        if entry or (isinstance(node, ast.Tuple) and not all(isinstance(item, ast.Tuple) for item in node.elts)):
+            first = node.elts[0] if isinstance(node, ast.Tuple) and node.elts else None
+            kinds.add(_literal(first) or f"{where(node)} {CANNOT_READ}")
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for item in node.elts:
+                take(item)
+        elif isinstance(node, (ast.ListComp, ast.GeneratorExp)):
+            take(node.elt, entry=True)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            take(node.left)
+            take(node.right)
+        elif isinstance(node, ast.Name):
+            names.append(node.id)
+        else:
+            kinds.add(f"{where(node)} {CANNOT_READ}")
+
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "save_links_with_jobs":
+            take(_argument(node, 0, "links"))
+    while names:
+        name = names.pop()
+        if name in followed:
+            continue
+        followed.add(name)
+        bound = False
+        for node in ast.walk(function):
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node.value is not None:
+                for target in getattr(node, "targets", [getattr(node, "target", None)]):
+                    if isinstance(target, ast.Name) and target.id == name:
+                        bound = True
+                        take(node.value)
+                    elif isinstance(target, ast.Tuple) and any(getattr(item, "id", None) == name for item in target.elts):
+                        bound = True
+                        if isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(target.elts):
+                            take(node.value.elts[[getattr(item, "id", None) for item in target.elts].index(name)])
+                        else:
+                            kinds.add(f"{where(node)} {CANNOT_READ}")
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and getattr(node.func.value, "id", None) == name and node.args):
+                if node.func.attr in ("append", "insert"):
+                    bound = True
+                    take(node.args[-1], entry=True)
+                elif node.func.attr == "extend":
+                    bound = True
+                    take(node.args[0])
+        if not bound:
+            kinds.add(f"{where(function)} {CANNOT_READ}: it saves {name}, which it does not build")
+    return kinds
+
+
+def link_kinds_in(source, name):
+    """Return the link kinds that one module's source writes, with a finding for each write whose kind it cannot read.
+
+    It reads the kind of every put_link and ensure_link call, positional or as kind=; the
+    first element of each entry of a list that a function passes to save_links_with_jobs,
+    followed through that function's assignments, appends, inserts, extends and
+    concatenations; and the kind of SQL that inserts into links or sets its kind, including
+    a ? whose value is a literal in the call's parameters. A kind held in a variable, a list
+    built in another function, and SQL assembled at run time are findings, so a scan of them
+    fails. It cannot see a writer called under another name, such as a variable holding
+    store.put_link, a list changed through an alias, or a write in a module it does not scan.
+    """
+    tree, kinds, read = ast.parse(source), set(), set()
+
+    def where(node):
+        return f"{name}:{node.lineno}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("put_link", "ensure_link"):
+            kinds.add(_literal(_argument(node, 0, "kind")) or f"{where(node)} {CANNOT_READ}")
+    for function in (node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        kinds |= _function_kinds(function, where)
+        generic = name == "project_automation_store.py" and function.name in GENERIC_WRITERS
+        for node in ast.walk(function):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("execute", "executemany") and node.args):
+                continue
+            sql = node.args[0]
+            parts = [part for part in ast.walk(sql) if _literal(part)]
+            read.update(id(part) for part in parts)
+            if isinstance(sql, ast.Constant) and SQL_WRITE.search(sql.value):
+                kinds |= _sql_kinds(sql.value, _argument(node, 1, "parameters"), generic, where(node))
+            elif any(SQL_WRITE.search(part.value) for part in parts):
+                kinds.add(f"{where(node)} {CANNOT_READ}")
+    for node in ast.walk(tree):
+        if _literal(node) and id(node) not in read and SQL_WRITE.search(node.value):
+            kinds |= _sql_kinds(node.value, None, False, where(node))
+    return kinds
+
+
 def written_link_kinds():
-    """Return every link kind the helper's modules write, read from their source."""
+    """Return the link kinds that the helper's modules write, with findings for writes the scan cannot read."""
     kinds = set()
     for path in sorted(ROOT.glob("project_automation*.py")):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.args:
-                first = node.args[0]
-                if node.func.attr in ("put_link", "ensure_link"):
-                    kinds.add(_literal_kind(first) or f"{path.name}:{node.lineno} writes a kind that is not a literal")
-                elif node.func.attr == "save_links_with_jobs" or (
-                        node.func.attr == "append" and getattr(node.func.value, "id", None) == "links"):
-                    entries = first.elts if isinstance(first, ast.List) else [first]
-                    kinds.update(_literal_kind(entry.elts[0]) for entry in entries
-                                 if isinstance(entry, ast.Tuple) and _literal_kind(entry.elts[0]))
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                kinds.update(re.findall(r"INTO links\b[^;]*?(?:VALUES\s*\(|SELECT\s+)'([a-z_]+)'", node.value))
+        kinds |= link_kinds_in(path.read_text(encoding="utf-8"), path.name)
     return kinds
 
 
@@ -524,3 +674,29 @@ def test_the_planner_knows_every_link_kind_the_helper_writes():
     # A kind the planner does not know makes every rename refuse, and a kind it knows but
     # classifies wrongly could leave records of the old name behind.
     assert written_link_kinds() == rename.KNOWN_KINDS
+
+
+@pytest.mark.parametrize("source", [
+    "def f(self, jobs):\n    links, extra = [], []\n    extra.append(('walk_note', 'k', {}))\n"
+    "    self.store.save_links_with_jobs(links + extra, jobs)\n",
+    "def f(self):\n    self.store.put_link(kind='walk_note', key='k', data={})\n",
+    "def f(self):\n    notes = [('walk_note', 'k', {})]\n    self.store.save_links_with_jobs(notes, [])\n",
+    "def f(self):\n    notes = []\n    notes.extend([('walk_note', 'k', {})])\n    self.store.save_links_with_jobs(links=notes)\n",
+    "def f(c):\n    c.execute('INSERT INTO links(kind, key, document, updated_at) VALUES (?, ?, ?, ?)', ('walk_note', 'k', '{}', 1))\n",
+    "def f(c):\n    c.execute(\"INSERT INTO links(key, kind, document, updated_at) VALUES (?, 'walk_note', '{}', 1)\", ('k',))\n",
+    "def f(c):\n    c.execute(\"UPDATE links SET kind = 'walk_note' WHERE kind = 'pr_walk'\")\n",
+])
+def test_the_kind_scan_reads_each_way_of_writing_a_link(source):
+    assert "walk_note" in link_kinds_in(source, "example.py")
+
+
+@pytest.mark.parametrize("source", [
+    "def f(self, kind):\n    self.store.put_link(kind, 'k', {})\n",
+    "def f(self, built):\n    self.store.save_links_with_jobs(built, [])\n",
+    "def f(self, kind):\n    notes = []\n    notes.append((kind, 'k', {}))\n    self.store.save_links_with_jobs(notes, [])\n",
+    "def f(c, kind):\n    c.execute(f\"INSERT INTO links(kind, key, document, updated_at) VALUES ('{kind}', ?, ?, ?)\", ())\n",
+    "def f(c, row):\n    c.execute('INSERT INTO links(kind, key, document, updated_at) VALUES (?, ?, ?, ?)', row)\n",
+    "def f(c):\n    c.execute('INSERT INTO links(kind, key, document, updated_at) ' + 'VALUES (?, ?, ?, ?)', ())\n",
+])
+def test_the_kind_scan_reports_a_link_write_whose_kind_it_cannot_read(source):
+    assert any("cannot read" in kind for kind in link_kinds_in(source, "example.py"))
