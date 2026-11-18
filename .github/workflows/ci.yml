@@ -134,5 +134,7 @@ jobs:
       - name: Static analysis
         run: bandit -q -r . -x ./venv,./tests,./bot_data -lll -iii
 
+      # The lock pins every package, so pip-audit reads it without installing
+      # it into a temporary environment first.
       - name: Dependency advisories
-        run: pip-audit -r requirements.txt --progress-spinner off
+        run: pip-audit -r requirements.lock --no-deps --disable-pip --progress-spinner off

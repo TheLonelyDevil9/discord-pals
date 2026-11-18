@@ -76,22 +76,13 @@ echo Activating virtual environment...
 call venv\Scripts\activate
 
 echo Installing dependencies...
-pip install -r requirements.txt -q
+pip install -r requirements.lock -q
 if errorlevel 1 (
-    echo WARNING: Some dependencies failed to install.
-    echo Trying again without orjson ^(optional performance package^)...
-    findstr /v "^orjson" requirements.txt > requirements_minimal.txt
-    pip install -r requirements_minimal.txt -q
-    del requirements_minimal.txt
-    if errorlevel 1 (
-        echo ERROR: Failed to install dependencies!
-        pause
-        exit /b 1
-    )
-    echo [OK] Dependencies installed ^(without orjson^)
-) else (
-    echo [OK] Dependencies installed
+    echo ERROR: Failed to install dependencies!
+    pause
+    exit /b 1
 )
+echo [OK] Dependencies installed
 
 echo.
 echo ========================================

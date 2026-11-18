@@ -62,21 +62,11 @@ echo "Activating virtual environment..."
 source venv/bin/activate
 
 echo "Installing dependencies..."
-pip install -r requirements.txt -q
-if [ $? -ne 0 ]; then
-    echo "WARNING: Some dependencies failed to install."
-    echo "Trying again without orjson (optional performance package)..."
-    grep -v "^orjson" requirements.txt > requirements_minimal.txt
-    pip install -r requirements_minimal.txt -q
-    rm requirements_minimal.txt
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to install dependencies!"
-        exit 1
-    fi
-    echo "[OK] Dependencies installed (without orjson)"
-else
-    echo "[OK] Dependencies installed"
+if ! pip install -r requirements.lock -q; then
+    echo "ERROR: Failed to install dependencies!"
+    exit 1
 fi
+echo "[OK] Dependencies installed"
 
 echo
 echo "========================================"

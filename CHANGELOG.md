@@ -36,6 +36,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
 - Supported Python versions are 3.11, 3.12, 3.13, and 3.14, and CI tests all four. Python 3.10 is no longer supported, and `setup.sh` and `setup.bat` require 3.11 or newer.
 - PyYAML 6.0.3 replaces 6.0.2, which had no Python 3.14 wheels and had to be built from source there.
+- `setup.sh`, `setup.bat`, `requirements-dev.txt`, and CI install from `requirements.lock`, and the dependency audit in CI checks the versions pinned there. A failed install now stops setup; it used to retry once and then report success.
 
 ### Fixed
 
@@ -56,7 +57,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
-- An install on Python 3.10 keeps starting after this update and shows a warning. To move to a supported version, install Python 3.11, 3.12, 3.13, or 3.14 and build a new virtual environment beside the old one, for example `python3.13 -m venv venv-new` and `venv-new/bin/pip install -r requirements.txt` (on Windows, `py -3.13 -m venv venv-new` and `venv-new\Scripts\pip install -r requirements.txt`). Stop the bot, rename `venv` to `venv-old` and `venv-new` to `venv`, and start it again. Delete `venv-old` once the bot runs.
+- An install on Python 3.10 keeps starting after this update and shows a warning. To move to a supported version, install Python 3.11, 3.12, 3.13, or 3.14 and build a new virtual environment beside the old one, for example `python3.13 -m venv venv-new` and `venv-new/bin/pip install -r requirements.lock` (on Windows, `py -3.13 -m venv venv-new` and `venv-new\Scripts\pip install -r requirements.lock`). Stop the bot, rename `venv` to `venv-old` and `venv-new` to `venv`, and start it again. Delete `venv-old` once the bot runs. `requirements.lock` needs Python 3.11 or newer; on 3.10, `pip install -r requirements.txt` still works.
 
 ## [v2.9.0] - 2026-09-29
 

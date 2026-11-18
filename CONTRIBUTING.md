@@ -77,11 +77,11 @@ Thank you for your interest in contributing to Discord Pals! This document provi
    - Test edge cases
    - Ensure existing functionality still works
 
-   Run the checks in [Quality Guardrails](docs/quality.md), including the real-server dashboard smoke test. `requirements-dev.txt` includes runtime dependencies and pytest.
+   Run the checks in [Quality Guardrails](docs/quality.md), including the real-server dashboard smoke test. `requirements-dev.txt` installs the locked runtime dependencies and pytest.
 
 ### Dependencies
 
-`requirements.txt` lists the direct dependencies and is the file to edit. `requirements.lock` is generated from it and pins every package, including indirect ones, for Python 3.11 to 3.14 on Linux, Windows, and macOS. After you edit `requirements.txt`, regenerate the lock with [uv](https://docs.astral.sh/uv/) 0.13.5, the version CI uses, and commit both files:
+`requirements.txt` lists the direct dependencies and is the file to edit. `requirements.lock` is generated from it and pins every package, including indirect ones, for Python 3.11 to 3.14 on Linux, Windows, and macOS. The lock needs Python 3.11 or newer. The `# via` lines under each pin trace it to the line of `requirements.txt` that pulls it in. The setup scripts, `requirements-dev.txt`, and CI install from the lock. After you edit `requirements.txt`, regenerate the lock with [uv](https://docs.astral.sh/uv/) 0.13.5, the version CI uses, and commit both files:
 
 ```bash
 uv pip compile requirements.txt --universal --python-version 3.11 -o requirements.lock

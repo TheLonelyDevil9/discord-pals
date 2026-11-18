@@ -44,8 +44,10 @@ It is heavily inspired by SpicyMarinara's [Discord Buddy](https://github.com/Spi
 Install dependencies with:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock
 ```
+
+`requirements.lock` pins the versions CI tests; `requirements.txt` lists the direct dependencies it is generated from.
 
 ## Latest Release
 

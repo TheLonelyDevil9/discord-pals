@@ -1,5 +1,5 @@
-# Development and CI dependencies.
-# Install alongside requirements.txt:  pip install -r requirements.txt -r requirements-dev.txt
--r requirements.txt
+# Development and CI dependencies: the locked runtime dependencies plus pytest.
+# Install with:  pip install -r requirements-dev.txt
+-r requirements.lock
 
 pytest>=8.0
