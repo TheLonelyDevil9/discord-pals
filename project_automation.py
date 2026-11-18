@@ -15,6 +15,7 @@ from pathlib import Path
 from logger import info
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
+from project_automation_health import HealthFacts, health_signals
 from project_automation_store import AutomationStore, Conflict
 from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
@@ -92,6 +93,8 @@ class AutomationService:
         self._queue_cleaned = False
         self._cleanup_lock = asyncio.Lock()
         self._last_error = None
+        self._heartbeat = None
+        self._active_since = None
         self.pr_activity = PRActivity(self)
 
     def settings(self) -> dict:
@@ -100,16 +103,40 @@ class AutomationService:
         import runtime_config
         return runtime_config.get("project_automation")
 
-    def paused(self) -> bool:
+    def pause_reason(self) -> str | None:
+        """Return why automation does not run, "disabled", "setup" or "global_pause", or None while it runs."""
         cfg = self.settings()
         if not cfg.get("enabled"):
-            return True
+            return "disabled"
         if self._settings is None:
             from project_automation_config import config_errors, credential_status
             if config_errors(cfg) or not all(credential_status(cfg).values()):
-                return True
+                return "setup"
         import runtime_config
-        return bool(runtime_config.get("global_paused", False))
+        return "global_pause" if runtime_config.get("global_paused", False) else None
+
+    def paused(self) -> bool:
+        return self.pause_reason() is not None
+
+    def health(self) -> list[dict]:
+        """Return the helper's health signals from in-memory state, indexed reads and the database file size.
+
+        It takes no write lock and reads no finished job, so callers can poll it. The sync age
+        counts from the later of the last completed sync and the time automation last started
+        running, so a restart or a resumed pause does not report the paused time.
+        """
+        cfg = self.settings()
+        queue = self.store.queue_health()
+        synced = max((self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at") or 0,
+                     self._active_since or 0)
+        now = time.time()
+        return health_signals(HealthFacts(
+            pause_reason=self.pause_reason(), bot_online=cfg.get("bot_name") in self.bots,
+            worker_running=bool(self._worker and not self._worker.done()),
+            heartbeat_age=None if self._heartbeat is None else time.monotonic() - self._heartbeat,
+            pending=queue["pending"], held=queue["recovery"], failed=queue["failed"],
+            queue_lag=None if queue["oldest_due_at"] is None else max(0.0, now - queue["oldest_due_at"]),
+            sync_age=max(0.0, now - synced) if synced else None, database_bytes=queue["database_bytes"]))
 
     def status(self) -> dict:
         cfg = self.settings()
@@ -946,8 +973,11 @@ class AutomationService:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()
                 if not self.paused() and self.settings().get("bot_name") in self.bots:
+                    self._active_since = self._active_since or time.time()
                     self.queue_sync_cycle()
                     await self.run_once()
+                else:
+                    self._active_since = None
             except asyncio.CancelledError:
                 raise
             except Exception:
