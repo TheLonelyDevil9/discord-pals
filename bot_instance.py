@@ -534,8 +534,9 @@ class BotInstance:
     def _history_key_for_own_message(self, message):
         """Return the history key of a message this bot sent, or None for an unknown DM.
 
-        A DM channel that arrives through the gateway often has no recipient,
-        so the user is looked up in the DM state that each incoming DM updates.
+        A cached message from the gateway has a DM channel without a recipient,
+        so the user is looked up in the DM state, which each incoming DM that
+        passes the access check updates.
         """
         channel = message.channel
         if not isinstance(channel, discord.DMChannel):

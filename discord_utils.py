@@ -1021,10 +1021,11 @@ def update_history_on_edit(channel_id: int, old_content: str, new_content: str, 
 def remove_deleted_bot_message(channel_id, message_id: int, *, author_name: str | None, created_at) -> bool:
     """Remove the history entry of a bot message that was deleted on Discord.
 
-    An entry with a message ID matches only that ID. An entry without one
-    matches when this bot recorded it in the second the deleted message was
-    created. Nothing else is removed, because the bot also deletes its own
-    notices, which were never recorded.
+    An entry with a message ID matches only that ID. An assistant entry
+    without one matches when it is under this bot's character name and was
+    recorded in the second the deleted message was created. Nothing else is
+    removed, because the bot also deletes its own notices, which were never
+    recorded.
     """
     if remove_message_from_history(channel_id, message_id):
         return True
