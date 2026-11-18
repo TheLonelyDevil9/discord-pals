@@ -702,21 +702,41 @@ class AutomationStore:
                 (key, _json_object(data, MAX_LINK_BYTES), time.time()),
             )
 
-    def job_counts(self):
-        self._expire_due_leases()
-        with self._connection() as connection:
-            # Listing the unfinished states lets jobs_ready skip every done row,
-            # and only failed rows probe links for a dismissal.
-            rows = connection.execute(
-                "SELECT j.state, COUNT(*), COUNT(d.key) FROM jobs j "
-                "LEFT JOIN links d ON j.state = 'failed' AND d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
-                "WHERE j.state IN ('pending', 'running', 'inflight', 'failed', 'recovery') GROUP BY j.state"
-            ).fetchall()
+    @staticmethod
+    def _job_counts(connection):
+        # Listing the unfinished states lets jobs_ready skip every done row,
+        # and only failed rows probe links for a dismissal.
+        rows = connection.execute(
+            "SELECT j.state, COUNT(*), COUNT(d.key) FROM jobs j "
+            "LEFT JOIN links d ON j.state = 'failed' AND d.kind = 'job_dismissal' AND d.key = CAST(j.id AS TEXT) "
+            "WHERE j.state IN ('pending', 'running', 'inflight', 'failed', 'recovery') GROUP BY j.state"
+        ).fetchall()
         counts = {row[0]: row[1] for row in rows}
         dismissed = sum(row[2] for row in rows)
         return {"pending": sum(counts.get(state, 0) for state in ("pending", "running", "inflight")),
                 "failed": counts.get("failed", 0) - dismissed, "recovery": counts.get("recovery", 0),
                 "dismissed": dismissed}
+
+    def job_counts(self):
+        self._expire_due_leases()
+        with self._connection() as connection:
+            return self._job_counts(connection)
+
+    def queue_health(self, *, expire_leases=False):
+        """Return job_counts plus oldest_due_at and database_bytes, without taking the write lock.
+
+        oldest_due_at is the available_at of the oldest pending job that is due, or None.
+        database_bytes is the size of the main database file. Lapsed leases stay for claim_job
+        to release, so a job whose lease lapsed still counts as pending here, unless
+        expire_leases releases them first in a short write, as job_counts does.
+        """
+        if expire_leases:
+            self._expire_due_leases()
+        with self._connection() as connection:
+            counts = self._job_counts(connection)
+            oldest = connection.execute("SELECT MIN(available_at) FROM jobs WHERE state = 'pending' AND available_at <= ?",
+                                        (time.time(),)).fetchone()[0]
+        return {**counts, "oldest_due_at": oldest, "database_bytes": self.path.stat().st_size}
 
     def reconciliation_live(self):
         """Report whether a sync root or any job of a sync cycle is pending, running, or inflight."""

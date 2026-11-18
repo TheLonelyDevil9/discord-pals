@@ -106,7 +106,31 @@ A PR's activity is scanned when the PR is new to reconciliation or its last-upda
 
 Unchanged issue status does not enqueue another reporter notification. Status checkpoints and notifications are saved together, including when older completed notification jobs use the previous payload format. A permission error can happen after a Discord post was created or edited; restore access and verify the destination before retrying those jobs.
 
-The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
+The SQLite file is `bot_data/project_automation.sqlite3`. Keep it on persistent local disk. Both built-in update backup paths take a consistent SQLite snapshot, including committed WAL data, instead of copying live journal files. They leave out a database larger than 256 MB and say so in the update log; see [Updates and recovery](operations.md#updates-and-recovery). Other backups should use SQLite’s backup API or stop the service before copying its data directory. Retain backups outside the VM for recovery from host loss.
+
+### Health and alerts
+
+The **Health** card on the Project page lists the helper's checks. Each shows its level as a text label and an icon shape as well as a color: OK, Warning, or Alert. A check that is not OK says what to do in one sentence. The card refreshes with the page status every 30 seconds and shows counts and times only, never job contents or user names.
+
+| Check | Warning | Alert |
+| --- | --- | --- |
+| Worker, while the helper bot is online | | Its task is not running |
+| Worker heartbeat | Older than 2 minutes | Older than 10 minutes |
+| Helper bot | | Not online |
+| Queue lag: how long the oldest due job has waited | Over 15 minutes | Over 60 minutes |
+| Time since a sync completed | Over 1 hour | Over 3 hours |
+| Pending jobs: queued, running, and sending | Over 2,000 | Over 10,000 |
+| Held jobs | Any | |
+| Failed jobs that are not dismissed | Any | |
+| Database size | Over 512 MB | |
+
+The first five checks measure a running helper. While automation is paused, globally paused, or waiting for setup, the card shows that state in their place. Queue lag and the time since a sync completed count from when automation last started or resumed if that is later, so a restart or the end of a pause does not report the time it was stopped.
+
+The worker records a heartbeat on every pass of its loop. A watchdog checks it every minute and starts the worker again when its task has stopped. The Worker check then shows how many times that happened since the process started and the exception type of the last stop. An old heartbeat on a running worker is only reported: its current job can hold a lease or an unconfirmed remote write, so the watchdog never stops it.
+
+When a check reaches Alert, or the watchdog restarts the worker, each user under **Config → Operators** gets one Discord DM. The DM names the check, its value, and the advice, and points to Dashboard → Project. A check that stays in Alert sends no further DM. It sends one resolved DM when it recovers after an alert DM arrived: the sync check once a sync completed after the alert, and queue lag once the oldest due job's whole wait is short again, so a restart alone resolves neither. A check sends at most one alert DM a day, and the restart DMs share that limit, so the watchdog sends at most one a day. The limit survives restarts. The watchdog evaluates alerts every minute, so they arrive without a browser open.
+
+The helper bot sends each DM. While it is offline, or when its send times out or fails on Discord's side, the other online bots try in turn. Discord's refusal, for an unknown user or one who does not accept DMs from the bot, is logged and counts as that day's DM. A DM that reached no operator, and that Discord refused for none of them, stays due, and the next pass tries again. Turn alerts off under **Helper setup → Operator alerts**. With no operators configured, no DM is sent and the card says so. While alerts are off or no operator is set, alerts that are still open are forgotten, so a check that reaches Alert again alerts once DMs can go out.
 
 ### Job history and Project data
 
@@ -194,6 +218,7 @@ Restore the backup only when the command cannot run and the helper has not run u
 - `project_automation_github.py`: repository-scoped GitHub App access, event parsing, and marker reconciliation.
 - `project_automation_github_activity.py`: PR activity normalization, source reads, and GitHub setup diagnostics.
 - `project_automation_store.py`: SQLite cases, decision audit, mappings, and jobs.
+- `project_automation_health.py`: health checks, their thresholds, and when an operator alert is due.
 - `project_automation_rename.py`: the plan that moves a renamed helper bot's records, applied by the store in one transaction.
 - `project_automation_webhook.py`: signed webhook ingress.
 - `project_automation_config.py`, `project_automation_setup.py`, and `project_automation_dashboard.py`: normalized settings, read-only setup checks, and operator UI.

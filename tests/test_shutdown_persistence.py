@@ -85,6 +85,31 @@ class BotLoginIsolationTests(unittest.IsolatedAsyncioTestCase):
                     await task
             healthy.close.assert_awaited_once()
 
+    async def test_log_cleanup_starts_with_the_process_and_stops_at_shutdown(self):
+        started, stopped = asyncio.Event(), asyncio.Event()
+
+        async def cleanup():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        bot = SimpleNamespace(name="Healthy", start=lambda: asyncio.Event().wait(), close=AsyncMock())
+        with patch.object(main_module, "load_bot_configs", return_value=[{}]), \
+                patch.object(main_module, "BotInstance", return_value=bot), \
+                patch.dict("sys.modules", {"dashboard": SimpleNamespace(start_dashboard=lambda **kwargs: None)}), \
+                patch.object(main_module, "_install_shutdown_handlers"), \
+                patch.object(main_module, "_persist_runtime_state"), \
+                patch.object(main_module.log, "run_log_retention", cleanup):
+            task = asyncio.create_task(main_module.run_bots())
+            await asyncio.wait_for(started.wait(), timeout=1)
+            self.assertFalse(stopped.is_set())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+
     async def test_all_rejected_logins_leave_process_available_for_recovery(self):
         closed = asyncio.Event()
         bot = SimpleNamespace(

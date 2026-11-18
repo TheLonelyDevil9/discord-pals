@@ -24,6 +24,7 @@ PROJECT_DEFAULTS = {
     "provider_tier": "",
     "max_questions": 3,
     "history_days": 0,
+    "alerts_enabled": True,
     "github_app_id": "",
     "github_installation_id": "",
     "github_private_key_env": "PROJECT_GITHUB_PRIVATE_KEY",
@@ -87,6 +88,8 @@ def normalize_project_config(value) -> dict:
     result = {key: list(default) if isinstance(default, list) else default
               for key, default in PROJECT_DEFAULTS.items()}
     result["enabled"] = _bool(source.get("enabled", False))
+    alerts = source.get("alerts_enabled")
+    result["alerts_enabled"] = _bool(alerts) if isinstance(alerts, (bool, str)) else True
     for key in ID_FIELDS:
         result[key] = _identifier(source.get(key, result[key]))
     for key in ID_LIST_FIELDS:
@@ -143,8 +146,9 @@ def config_input_errors(value) -> list[str]:
     for key in ("bot_name", "character_name", "provider_tier"):
         if key in value and (not isinstance(value[key], str) or value[key].strip() != normalized[key]):
             errors.append(f"{key}: enter a name of up to 128 printable characters.")
-    if "enabled" in value and not isinstance(value["enabled"], bool):
-        errors.append("enabled: use true or false.")
+    for key in ("enabled", "alerts_enabled"):
+        if key in value and not isinstance(value[key], bool):
+            errors.append(f"{key}: use true or false.")
     if "max_questions" in value:
         raw = value["max_questions"]
         if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 10:

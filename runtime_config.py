@@ -51,6 +51,7 @@ DEFAULTS = {
     "diagnostic_logging": False,  # Print high-volume structured diagnostics to terminal
     "file_logging_enabled": True,  # Persist local JSONL logs in bot_data/logs
     "log_file_max_mb": 10,  # Max size of one JSONL log file before rotation
+    "log_retention_days": 14,  # Delete local log files older than this many days; 0 keeps size-only rotation
     "update_branch": "",  # Dashboard updater branch override: "" preserves current checkout/upstream behavior
     "bot_timezones": {},  # Per-bot IANA timezone overrides
     "bot_schedules": {},  # Per-bot availability schedules
@@ -120,6 +121,7 @@ CONFIG_FIELDS = {
     "diagnostic_logging": ConfigField(bool, DEFAULTS["diagnostic_logging"]),
     "file_logging_enabled": ConfigField(bool, DEFAULTS["file_logging_enabled"]),
     "log_file_max_mb": ConfigField(int, DEFAULTS["log_file_max_mb"], 1, 100),
+    "log_retention_days": ConfigField(int, DEFAULTS["log_retention_days"], 0, 365),
     "update_branch": ConfigField(str, DEFAULTS["update_branch"], choices=("", "main", "staging")),
     "bot_timezones": ConfigField(dict, DEFAULTS["bot_timezones"]),
     "bot_schedules": ConfigField(dict, DEFAULTS["bot_schedules"]),
@@ -452,6 +454,7 @@ def _apply_logging_config(config: dict | None = None) -> None:
         logger.configure_file_logging(
             enabled=config.get("file_logging_enabled", DEFAULTS["file_logging_enabled"]),
             max_bytes=int(config.get("log_file_max_mb", DEFAULTS["log_file_max_mb"])) * 1024 * 1024,
+            retention_days=int(config.get("log_retention_days", DEFAULTS["log_retention_days"])),
         )
         logger.LOG_LEVEL = logger.DIAGNOSTIC if config.get("diagnostic_logging", False) else logger.NORMAL
     except Exception:

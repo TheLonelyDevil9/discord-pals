@@ -5,12 +5,14 @@ Local diagnostic logging with dashboard buffering, JSONL file persistence, and r
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import secrets
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,13 @@ LOG_DIR = os.path.join("bot_data", "logs")
 LOG_FILE = os.path.join(LOG_DIR, "discord-pals.log")
 LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
 LOG_FILE_BACKUPS = 5
+# 0 keeps rotation by size only. Above 0 the active file also rotates daily, and files
+# older than this many days are deleted.
+LOG_RETENTION_DAYS = 0
+# Just under a day, so a file deleted once its oldest line passes LOG_RETENTION_DAYS days
+# leaves no line older than one day more.
+LOG_CLEANUP_SECONDS = 23 * 60 * 60
+DAY_SECONDS = 86400
 FILE_LOGGING_ENABLED = True
 
 _LEVEL_NAMES = {
@@ -83,9 +92,10 @@ def configure_file_logging(
     log_dir: str | None = None,
     max_bytes: int | None = None,
     backups: int | None = None,
+    retention_days: int | None = None,
 ) -> None:
     """Configure local JSONL file logging."""
-    global FILE_LOGGING_ENABLED, LOG_DIR, LOG_FILE, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUPS
+    global FILE_LOGGING_ENABLED, LOG_DIR, LOG_FILE, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUPS, LOG_RETENTION_DAYS
     if enabled is not None:
         FILE_LOGGING_ENABLED = bool(enabled)
     if log_dir:
@@ -95,6 +105,8 @@ def configure_file_logging(
         LOG_FILE_MAX_BYTES = max(1024, int(max_bytes))
     if backups is not None:
         LOG_FILE_BACKUPS = max(1, int(backups))
+    if retention_days is not None:
+        LOG_RETENTION_DAYS = max(0, int(retention_days))
 
 
 def new_request_id() -> str:
@@ -266,8 +278,13 @@ def _write_file_log(entry: dict) -> None:
         line = json.dumps(entry, ensure_ascii=True, default=str, sort_keys=True) + "\n"
         with _log_lock:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size >= LOG_FILE_MAX_BYTES:
-                _rotate_logs(path)
+            if path.exists():
+                stat = path.stat()
+                # With retention on, each file holds lines of one UTC day, so its age is
+                # known from its modification time alone.
+                if stat.st_size >= LOG_FILE_MAX_BYTES or (
+                        LOG_RETENTION_DAYS > 0 and stat.st_mtime // DAY_SECONDS < time.time() // DAY_SECONDS):
+                    _rotate_logs(path)
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
     except Exception:
@@ -275,24 +292,98 @@ def _write_file_log(entry: dict) -> None:
         return
 
 
-def _rotate_logs(path: Path) -> None:
-    for index in range(LOG_FILE_BACKUPS - 1, 0, -1):
-        source = path.with_name(f"{path.name}.{index}")
-        target = path.with_name(f"{path.name}.{index + 1}")
-        if source.exists():
-            try:
-                if target.exists():
-                    target.unlink()
-                source.rename(target)
-            except OSError:
-                pass
+def _rotated_logs(path: Path) -> list[tuple[int, Path]]:
+    """Return the logger's rotated files of path as (number, path) pairs, newest first."""
+    pattern = re.compile(re.escape(path.name) + r"\.([1-9][0-9]*)")
     try:
-        first = path.with_name(f"{path.name}.1")
-        if first.exists():
-            first.unlink()
-        path.rename(first)
+        found = [(int(match.group(1)), entry) for entry in path.parent.iterdir()
+                 if (match := pattern.fullmatch(entry.name)) and entry.is_file()]
+    except OSError:
+        return []
+    return sorted(found)
+
+
+def _replace(source: Path, target: Path) -> None:
+    try:
+        if target.exists():
+            target.unlink()
+        source.rename(target)
     except OSError:
         pass
+
+
+def _rotate_logs(path: Path) -> None:
+    for number, rotated in reversed(_rotated_logs(path)):
+        _replace(rotated, path.with_name(f"{path.name}.{number + 1}"))
+    _replace(path, path.with_name(f"{path.name}.1"))
+    # Past the newest LOG_FILE_BACKUPS files, a file stays only while it and the newer ones
+    # fit in the size of LOG_FILE_BACKUPS full files. Small daily files then do not shorten
+    # retention, and the rotated files still take no more room than full ones would.
+    total = 0
+    for number, rotated in _rotated_logs(path):
+        try:
+            total += rotated.stat().st_size
+            if number > LOG_FILE_BACKUPS and total > LOG_FILE_BACKUPS * LOG_FILE_MAX_BYTES:
+                rotated.unlink()
+        except OSError:
+            pass
+
+
+def _oldest_line_time(path: Path) -> float:
+    """Return a time no later than the oldest line of a log file.
+
+    A file rotated daily holds lines of one UTC day, which the day of its last write bounds.
+    A file rotated by size alone can span many days, so its first line counts when earlier.
+    """
+    oldest = path.stat().st_mtime // DAY_SECONDS * DAY_SECONDS
+    try:
+        with path.open("rb") as handle:
+            first = json.loads(handle.readline(65536))
+        oldest = min(oldest, datetime.fromisoformat(first["ts"]).timestamp())
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return oldest
+
+
+def delete_expired_logs(now: float | None = None) -> int:
+    """Delete the rotated log files whose oldest line is over LOG_RETENTION_DAYS days old.
+
+    An active file that holds lines of an earlier UTC day is rotated first, as its next
+    write would do, so it is judged like the other files and never deleted in place. Only
+    files named like the logger's rotated files are deleted. Return how many were deleted.
+    """
+    if LOG_RETENTION_DAYS <= 0:
+        return 0
+    now = time.time() if now is None else now
+    path = Path(LOG_FILE)
+    deleted = 0
+    with _log_lock:
+        try:
+            if _oldest_line_time(path) < now // DAY_SECONDS * DAY_SECONDS:
+                _rotate_logs(path)
+        except OSError:
+            pass
+        for _, rotated in _rotated_logs(path):
+            try:
+                if _oldest_line_time(rotated) < now - LOG_RETENTION_DAYS * DAY_SECONDS:
+                    rotated.unlink()
+                    deleted += 1
+            except OSError:
+                pass
+    return deleted
+
+
+async def run_log_retention() -> None:
+    """Delete expired log files at start and then every LOG_CLEANUP_SECONDS, in a worker thread.
+
+    A failed pass is logged, and the next pass still runs.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(delete_expired_logs)
+        except Exception as exc:
+            warn(f"Log cleanup failed with {type(exc).__name__}.", component="logging", event="log_cleanup_failed")
+        await asyncio.sleep(LOG_CLEANUP_SECONDS)
 
 
 def _normalize_fields(fields: dict[str, Any]) -> dict[str, Any]:

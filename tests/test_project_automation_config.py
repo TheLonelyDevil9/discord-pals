@@ -98,6 +98,21 @@ def test_history_days_input_must_be_whole_days_in_range(value, valid):
     assert all("history_days" in error for error in errors)
 
 
+@pytest.mark.parametrize("source,expected", [({}, True), ({"alerts_enabled": True}, True),
+                                             ({"alerts_enabled": False}, False), ({"alerts_enabled": "false"}, False),
+                                             ({"alerts_enabled": None}, True), ({"alerts_enabled": 0}, True)])
+def test_alerts_are_on_by_default_and_parse_as_a_boolean(source, expected):
+    assert PROJECT_DEFAULTS["alerts_enabled"] is True
+    assert normalize_project_config(source)["alerts_enabled"] is expected
+
+
+@pytest.mark.parametrize("value,valid", [(True, True), (False, True), ("false", False), (1, False), (None, False)])
+def test_alerts_input_must_be_true_or_false(value, valid):
+    errors = config_input_errors({"alerts_enabled": value})
+    assert (errors == []) is valid
+    assert all("alerts_enabled" in error for error in errors)
+
+
 def test_enabled_is_not_python_truthiness():
     assert not normalize_project_config({"enabled": "false"})["enabled"]
     assert not normalize_project_config({"enabled": {"true": 1}})["enabled"]

@@ -24,6 +24,8 @@ BOOTSTRAP_VERSION = "1.0.0"
 GIT_TIMEOUT = 180
 PIP_TIMEOUT = 300
 BACKUP_RETENTION = 3
+# Each of the BACKUP_RETENTION snapshots would hold a full copy, so a larger database stays out.
+PROJECT_DATABASE_SNAPSHOT_MAX_BYTES = 256 * 1024 * 1024
 BACKUP_FILES = (".env", "bots.json", "providers.json")
 BACKUP_DIRS = ("bot_data", "characters", "prompts")
 # Rotated logs live under bot_data/logs and are already size-capped; copying them
@@ -197,17 +199,30 @@ def prune_backups(root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def backup_project_database(source: Path, destination: Path) -> None:
-    """Snapshot committed SQLite/WAL state without copying live journal files."""
+def backup_project_database(source: Path, destination: Path) -> str | None:
+    """Snapshot committed SQLite/WAL state without copying live journal files.
+
+    Return a note for the update log when the database is over PROJECT_DATABASE_SNAPSHOT_MAX_BYTES
+    and stays out of the snapshot, otherwise None.
+    """
     if not source.is_file():
-        return
-    destination.parent.mkdir(parents=True, exist_ok=True)
+        return None
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as original:
+        size = original.execute("PRAGMA page_count").fetchone()[0] * original.execute("PRAGMA page_size").fetchone()[0]
+        if size > PROJECT_DATABASE_SNAPSHOT_MAX_BYTES:
+            return (f"The update snapshot left out bot_data/project_automation.sqlite3 because it is larger than "
+                    f"{PROJECT_DATABASE_SNAPSHOT_MAX_BYTES // (1024 * 1024)} MB. Back it up separately.")
+        destination.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(str(destination))) as snapshot:
-            original.backup(snapshot, pages=128)
+            # One step: SQLite restarts a step-wise copy after every write through another
+            # connection, so with the worker writing a copy in steps might never finish:
+            # https://www.sqlite.org/c3ref/backup_finish.html
+            original.backup(snapshot)
+    return None
 
 
-def create_state_backup(repo: Path) -> Path | None:
+def create_state_backup(repo: Path, warnings: list | None = None) -> Path | None:
+    """Snapshot local state before an update; a note about a left-out database goes into warnings."""
     backup_root = repo / "bot_data" / "update_backups"
     backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     copied = False
@@ -227,7 +242,9 @@ def create_state_backup(repo: Path) -> Path | None:
     if not copied:
         return None
 
-    backup_project_database(repo / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    note = backup_project_database(repo / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    if note and warnings is not None:
+        warnings.append(note)
     prune_backups(backup_root)
     return backup_dir
 
@@ -325,9 +342,11 @@ def perform_update(repo: Path, target_version: str) -> int:
     target_ref = version_tag_ref(repo, target_version)
     before_head = ref_sha(repo, "HEAD")
     target_head = ref_sha(repo, target_ref)
-    backup_path = create_state_backup(repo)
-    stash_ref = stash_tracked_changes(repo)
     warnings = []
+    # A run that leaves HEAD in place takes no snapshot, so it cannot rotate the last real
+    # one out of the BACKUP_RETENTION kept.
+    backup_path = create_state_backup(repo, warnings) if before_head != target_head else None
+    stash_ref = stash_tracked_changes(repo)
 
     try:
         if before_head == target_head:

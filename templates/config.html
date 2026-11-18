@@ -1257,7 +1257,12 @@
                             <input type="range" id="log_file_max_mb" min="1" max="100" step="1" value="{{ config.log_file_max_mb or 10 }}" oninput="document.getElementById('log_file_max_mb_val').textContent=this.value + ' MB'">
                             <span class="slider-val" id="log_file_max_mb_val">{{ config.log_file_max_mb or 10 }} MB</span>
                         </div>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveLoggingSettings()">Save Log Size</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="log_retention_days">Keep Log Files (days)</label>
+                        <input type="number" id="log_retention_days" min="0" max="365" step="1" value="{{ config.log_retention_days if config.log_retention_days is not none else 14 }}" aria-describedby="log_retention_days_hint">
+                        <p class="form-hint" id="log_retention_days_hint">Deletes local log files whose oldest line is older than this, checked at start and about once a day, so no line stays longer than one day more. The file size limit can still delete files sooner. 0 keeps files until the size limit rotates them out.</p>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="saveLoggingSettings()">Save Log Settings</button>
                     </div>
                 </div>
             </div>
@@ -2203,7 +2208,10 @@ async function toggleFileLogging(enabled) {
 }
 
 async function saveLoggingSettings() {
-    await postConfig({ log_file_max_mb: parseInt(document.getElementById('log_file_max_mb').value) }, 'Logging settings saved');
+    await postConfig({
+        log_file_max_mb: parseInt(document.getElementById('log_file_max_mb').value),
+        log_retention_days: parseInt(document.getElementById('log_retention_days').value)
+    }, 'Logging settings saved');
 }
 
 async function saveCharacterProvider(charName) {

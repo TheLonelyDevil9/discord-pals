@@ -100,9 +100,26 @@
     .project-data-action input { width: 100%; margin: 6px 0 14px; }
     .project-data-action input:focus-visible, .project-data-action .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     #project-data-status { margin-top: 12px; }
+    .project-signals { list-style: none; margin-top: 12px; border-top: 1px solid var(--border-subtle); }
+    .project-signal { display: grid; grid-template-columns: 7rem minmax(0, 15rem) minmax(0, 1fr); gap: 4px 16px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+    .project-signal-state { display: inline-flex; align-items: center; gap: 6px; justify-self: start; padding: 2px 8px 2px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .project-signal[data-level="ok"] .project-signal-state { background: var(--accent-muted); color: var(--text-primary); }
+    .project-signal[data-level="warn"] .project-signal-state { background: var(--warning-muted); border-color: var(--warning); }
+    .project-signal[data-level="alert"] .project-signal-state { background: var(--danger-muted); border-color: var(--danger); }
+    .project-signal-icon { width: 14px; height: 14px; flex: none; }
+    .project-signal[data-level="ok"] .project-signal-icon { color: var(--accent); }
+    .project-signal[data-level="warn"] .project-signal-icon { color: var(--warning); }
+    .project-signal[data-level="alert"] .project-signal-icon { color: var(--danger); }
+    .project-signal-icon .project-signal-shape { fill: currentColor; }
+    .project-signal-icon .project-signal-mark { fill: none; stroke: var(--bg-primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .project-signal-name { font-weight: 600; overflow-wrap: anywhere; }
+    .project-signal-value { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .project-signal-sentence { grid-column: 2 / -1; color: var(--text-secondary); font-size: 0.8125rem; overflow-wrap: anywhere; }
     @media (max-width: 950px) { .project-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 650px) {
         .project-feedback-grid, .project-form-grid, .project-data-actions { grid-template-columns: minmax(0, 1fr); }
+        .project-signal { grid-template-columns: minmax(0, 1fr); }
+        .project-signal-sentence { grid-column: auto; }
         .project-form .project-span { grid-column: auto; }
         .project-header h1 { font-size: 1.75rem; }
         .project-case-detail { padding: 16px; }
@@ -139,6 +156,31 @@
 </dl>
 <p class="project-hint project-notice">Status refreshes every 30 seconds while this page is visible. A quiet repository may have no recent activity.</p>
 <div id="project-destinations" class="project-destinations" role="navigation" aria-label="Saved Discord destinations"></div>
+
+{% set signal_labels = {"ok": "OK", "warn": "Warning", "alert": "Alert"} %}
+{% macro signal_icon(level) -%}
+<svg class="project-signal-icon" data-icon="{{ level }}" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+{%- if level == "alert" -%}
+<path class="project-signal-shape" d="M5 .5h6L15.5 5v6L11 15.5H5L.5 11V5z"/><path class="project-signal-mark" d="M5.6 5.6l4.8 4.8m0-4.8l-4.8 4.8"/>
+{%- elif level == "warn" -%}
+<path class="project-signal-shape" d="M8 .8l7.4 13.4H.6z"/><path class="project-signal-mark" d="M8 5.6v4.2M8 12.2v.1"/>
+{%- else -%}
+<circle class="project-signal-shape" cx="8" cy="8" r="7.5"/><path class="project-signal-mark" d="M4.6 8.3l2.3 2.3 4.5-4.8"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}
+<section class="project-section" aria-labelledby="health-heading">
+    <h2 id="health-heading">Health</h2>
+    <p class="project-hint">Operators get a Discord DM when a check reaches Alert. Turn this off under Helper setup → Operator alerts.</p>
+    <ul id="project-signals" class="project-signals" aria-label="Health checks">
+        {% for item in project.service.health or [] %}
+        <li class="project-signal" data-level="{{ item.level }}"><span class="project-signal-state">{{ signal_icon(item.level) }}{{ signal_labels[item.level] }}</span><span class="project-signal-name">{{ item.name }}</span><span class="project-signal-value">{{ item.value }}</span><p class="project-signal-sentence">{{ item.sentence }}</p></li>
+        {% else %}
+        <li class="project-empty">Health checks are not available.</li>
+        {% endfor %}
+    </ul>
+    {% for level in signal_labels %}<template id="project-signal-icon-{{ level }}">{{ signal_icon(level) }}</template>{% endfor %}
+</section>
 
 <section class="project-section" aria-labelledby="feedback-heading">
     <div class="project-toolbar">
@@ -306,6 +348,14 @@
                 </div>
             </div>
         </fieldset>
+        <fieldset>
+            <legend>Operator alerts</legend>
+            <label class="project-enabled" for="project-alerts-enabled">
+                <input id="project-alerts-enabled" name="alerts_enabled" type="checkbox" {% if project.config.alerts_enabled %}checked{% endif %} aria-describedby="project-alerts-hint">
+                <span>Send alert DMs to operators</span>
+            </label>
+            <p class="form-hint" id="project-alerts-hint">When a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, at most once a day per check, and one more when the check is OK again. The helper bot sends them, or another online bot while it is offline.</p>
+        </fieldset>
         <div class="project-form-actions">
             <button type="submit" class="btn btn-primary" id="project-save">Save project settings</button>
             <p id="project-save-status" role="status" aria-live="polite"></p>
@@ -386,6 +436,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let statusWrites = 0;
     let dataAction = false;
     const jobViewLabels = {recent: 'Recent', attention: 'Needs attention', dismissed: 'Dismissed'};
+    const signalLabels = {{ signal_labels | tojson }};
     const form = document.getElementById('project-form');
     const purposes = initial.channel_purposes;
     const labels = {
@@ -501,7 +552,26 @@ document.addEventListener('DOMContentLoaded', function () {
             const link = url && safeLink(url, label);
             if (link) destinations.append(link);
         });
+        renderHealth(data.service.health);
         updateDataControls();
+    }
+    function renderHealth(signals) {
+        const list = document.getElementById('project-signals');
+        if (!Array.isArray(signals) || !signals.length) {
+            list.replaceChildren(element('li', 'Health checks are not available.', 'project-empty'));
+            return;
+        }
+        list.replaceChildren(...signals.map(item => {
+            const row = element('li', undefined, 'project-signal');
+            row.dataset.level = item.level;
+            const state = element('span', undefined, 'project-signal-state');
+            const icon = document.getElementById('project-signal-icon-' + item.level);
+            if (icon) state.append(icon.content.firstElementChild.cloneNode(true));
+            state.append(signalLabels[item.level] || String(item.level));
+            row.append(state, element('span', item.name, 'project-signal-name'),
+                element('span', item.value, 'project-signal-value'), element('p', item.sentence, 'project-signal-sentence'));
+            return row;
+        }));
     }
     function dataMessage(text, state) {
         const message = document.getElementById('project-data-status');
@@ -522,6 +592,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function draftConfig() {
         const config = Object.fromEntries(new FormData(form).entries());
         config.enabled = form.elements.enabled.checked;
+        config.alerts_enabled = form.elements.alerts_enabled.checked;
         config.max_questions = Number(config.max_questions);
         config.history_days = Number(config.history_days);
         ['maintainer_role_ids', 'maintainer_user_ids'].forEach(key => { config[key] = config[key].split(/[\s,]+/).filter(Boolean); });

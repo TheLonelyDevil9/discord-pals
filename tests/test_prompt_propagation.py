@@ -12,6 +12,7 @@ import bot_instance as bot_instance_module
 import character as character_module
 import dashboard as dashboard_module
 import discord_utils as discord_utils_module
+import logger as logger_module
 import providers as providers_module
 import response_access as response_access_module
 import runtime_config as runtime_config_module
@@ -926,6 +927,35 @@ class ConfigPropagationTests(MemorySandboxMixin, unittest.TestCase):
         self.assertIn('id="dm_image_generation_enabled"', page)
         self.assertIn('id="dm_image_generation_prompt"', page)
         self.assertIn('id="dm_image_generation_preferred_tier"', page)
+
+    def test_log_retention_is_edited_beside_the_log_size_and_reaches_the_cleanup(self):
+        dashboard_module.bot_instances = [types.SimpleNamespace(
+            name="Firefly", character=types.SimpleNamespace(name="Firefly"), character_name="firefly",
+            nicknames="", client=types.SimpleNamespace(is_ready=lambda: False))]
+        page = self.client.get("/config").get_data(as_text=True)
+        debug_card = page[page.index('id="log_file_max_mb"'):page.index("Configuration Files")]
+        self.assertIn('id="log_retention_days"', debug_card)
+        self.assertIn("log_retention_days: parseInt(document.getElementById('log_retention_days').value)", page)
+        names = ("LOG_RETENTION_DAYS", "LOG_DIR", "LOG_FILE", "FILE_LOGGING_ENABLED", "LOG_FILE_MAX_BYTES", "LOG_LEVEL")
+        originals = {name: getattr(logger_module, name) for name in names}
+        try:
+            for raw, expected in (("5000", 365), ("-3", 0), ("not a number", 14), ("3", 3)):
+                response = self.client.post("/api/config", json={"log_retention_days": raw}, headers=self.csrf_headers())
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.client.get("/api/config").get_json()["log_retention_days"], expected)
+                self.assertEqual(logger_module.LOG_RETENTION_DAYS, expected)
+            logs = self.data_dir / "logs"
+            logs.mkdir()
+            logger_module.configure_file_logging(log_dir=str(logs))
+            now = datetime.now(timezone.utc).timestamp()
+            for name, days in (("discord-pals.log.1", 1), ("discord-pals.log.2", 5)):
+                (logs / name).write_text("x\n", encoding="utf-8")
+                os.utime(logs / name, (now - days * 86400, now - days * 86400))
+            self.assertEqual(logger_module.delete_expired_logs(), 1)
+            self.assertEqual(sorted(path.name for path in logs.iterdir()), ["discord-pals.log.1"])
+        finally:
+            for name, value in originals.items():
+                setattr(logger_module, name, value)
 
     def test_runtime_config_boundary_coerces_and_clamps_known_values(self):
         response = self.client.post(

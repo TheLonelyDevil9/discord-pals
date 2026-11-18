@@ -12,14 +12,18 @@ import threading
 import time
 from pathlib import Path
 
-from logger import info
+from background_tasks import BackgroundTaskRegistry
+from logger import info, warn
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
+from project_automation_health import HealthFacts, due_alerts, health_signals
 from project_automation_store import AutomationStore, Conflict
 from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
 
 
 CLOSED_SYNC_DAYS = 7
+WATCHDOG_SECONDS = 60
+ALERT_DM_TIMEOUT_SECONDS = 30
 # GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
 # and 404 for either when the App cannot read the repository involved:
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
@@ -76,6 +80,10 @@ class WorkflowError(ValueError):
     """An action is not currently available to this actor."""
 
 
+class RecipientRefused(Exception):
+    """Discord refused a DM for good: the user is unknown or does not accept DMs from the bot."""
+
+
 class AutomationService:
     def __init__(self, store, *, settings=None, ai=None, github_factory=None, transport=None):
         self.store = store
@@ -92,6 +100,12 @@ class AutomationService:
         self._queue_cleaned = False
         self._cleanup_lock = asyncio.Lock()
         self._last_error = None
+        self._heartbeat = None
+        self._active_since = None
+        self._restarts = 0
+        self._restart_reason = None
+        self._reported_restarts = 0
+        self._tasks = BackgroundTaskRegistry("project-automation")
         self.pr_activity = PRActivity(self)
 
     def settings(self) -> dict:
@@ -100,27 +114,67 @@ class AutomationService:
         import runtime_config
         return runtime_config.get("project_automation")
 
-    def paused(self) -> bool:
+    def pause_reason(self) -> str | None:
+        """Return why automation does not run, "disabled", "setup" or "global_pause", or None while it runs."""
         cfg = self.settings()
         if not cfg.get("enabled"):
-            return True
+            return "disabled"
         if self._settings is None:
             from project_automation_config import config_errors, credential_status
             if config_errors(cfg) or not all(credential_status(cfg).values()):
-                return True
+                return "setup"
         import runtime_config
-        return bool(runtime_config.get("global_paused", False))
+        return "global_pause" if runtime_config.get("global_paused", False) else None
+
+    def paused(self) -> bool:
+        return self.pause_reason() is not None
+
+    def health(self) -> list[dict]:
+        """Return the helper's health signals from in-memory state, indexed reads and the database file size.
+
+        It takes no write lock and reads no finished job, so callers can poll it.
+        """
+        return health_signals(self._health_facts())
+
+    def _health_facts(self, queue=None) -> HealthFacts:
+        """Read the facts of the health signals, or use queue when the caller read it already.
+
+        Queue lag and sync age count from the later of their own start and the time automation
+        last started running, so a restart or a resumed pause does not raise them for the time
+        automation was stopped.
+        """
+        import runtime_config
+        cfg = self.settings()
+        queue = self.store.queue_health() if queue is None else queue
+        last_sync = (self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at")
+        started = self._active_since or 0
+        now = time.time()
+        due = queue["oldest_due_at"]
+        synced = max(last_sync or 0, started)
+        return HealthFacts(
+            pause_reason=self.pause_reason(), bot_online=cfg.get("bot_name") in self.bots,
+            worker_running=bool(self._worker and not self._worker.done()),
+            restarts=self._restarts, restart_reason=self._restart_reason,
+            heartbeat_age=None if self._heartbeat is None else time.monotonic() - self._heartbeat,
+            pending=queue["pending"], held=queue["recovery"], failed=queue["failed"],
+            queue_lag=None if due is None else max(0.0, now - max(due, started)),
+            queue_wait=None if due is None else max(0.0, now - due),
+            sync_age=max(0.0, now - synced) if synced else None, last_sync_at=last_sync,
+            database_bytes=queue["database_bytes"], alerts_enabled=cfg.get("alerts_enabled", True),
+            operators=len(runtime_config.get("operator_user_ids", []) or []))
 
     def status(self) -> dict:
         cfg = self.settings()
         persisted = self.store.get_link("project_status", mapping_key(cfg)) or {}
+        queue = self.store.queue_health(expire_leases=True)
         return {"enabled": cfg.get("enabled", False), "paused": self.paused(),
                 "bot_online": cfg.get("bot_name") in self.bots,
                 "worker_running": bool(self._worker and not self._worker.done()),
                 "last_error": self._last_error,
                 "repository": cfg.get("repository", ""),
                 **{name: persisted.get(name) for name in ("last_webhook_at", "last_sync_at", "last_activity_at")},
-                "job_counts": self.store.job_counts()}
+                "job_counts": {name: queue[name] for name in ("pending", "failed", "recovery", "dismissed")},
+                "health": health_signals(self._health_facts(queue))}
 
     def list_cases(self, limit=100):
         return self.store.list_cases(limit=limit)
@@ -392,6 +446,9 @@ class AutomationService:
 
     async def attach(self, bot):
         self.bots[bot.name] = bot
+        # Started before the steps below, so that a step that raises still leaves a watchdog to
+        # start the worker for this attached bot.
+        self._tasks.start_once(self._watchdog(), name="watchdog")
         if self.transport is None:
             from project_automation_discord import DiscordTransport
             self.transport = DiscordTransport(self)
@@ -420,11 +477,16 @@ class AutomationService:
             if case["revision"] == 1 and case["state"] == "assessing":
                 self.store.enqueue("assess", {"case_id": case["id"], "revision": 1}, key=f"initial:{case['id']}")
         if self._worker is None or self._worker.done():
-            self._worker = asyncio.create_task(self._run(), name="project-automation")
+            self._start_worker()
+
+    def _start_worker(self):
+        self._worker = asyncio.create_task(self._run(), name="project-automation")
 
     async def detach(self, bot):
         self.bots.pop(bot.name, None)
         if not self.bots:
+            # Stop the watchdog first, so it cannot start the worker that is being cancelled.
+            await self._tasks.cancel_all()
             if self._worker:
                 self._worker.cancel()
                 await asyncio.gather(self._worker, return_exceptions=True)
@@ -937,15 +999,22 @@ class AutomationService:
                      component="project_automation", event="queue_cleanup")
             self._queue_cleaned = True
 
+    def _automation_runs(self) -> bool:
+        return not self.paused() and self.settings().get("bot_name") in self.bots
+
     async def _run(self):
         while True:
+            self._heartbeat = time.monotonic()
             try:
+                # Recorded before the cleanup and the sweep, which can run long after downtime,
+                # so that the downtime does not raise the sync age while they run.
+                self._active_since = (self._active_since or time.time()) if self._automation_runs() else None
                 if not self._queue_cleaned:
                     await self.clean_up_old_queue()
                 if not self._last_maintenance or time.monotonic() - self._last_maintenance >= 600:
                     self._last_maintenance = time.monotonic()
                     await self.maintain()
-                if not self.paused() and self.settings().get("bot_name") in self.bots:
+                if self._automation_runs():
                     self.queue_sync_cycle()
                     await self.run_once()
             except asyncio.CancelledError:
@@ -953,6 +1022,149 @@ class AutomationService:
             except Exception:
                 self._last_error = "Background processing needs attention"
             await asyncio.sleep(1)
+
+    async def _revive_worker(self):
+        """Start the worker while the service is attached and its task is missing or finished.
+
+        A live task is never replaced, however old its heartbeat, because its current job may
+        hold a lease or an unconfirmed remote write. Only the end of a started task counts as a
+        restart: a missing task belongs to an attach that raised or that still waits for the
+        first-start cleanup, and the worker has not run yet.
+        """
+        if not self.bots or (self._worker is not None and not self._worker.done()):
+            return
+        if self._worker is None:
+            self._start_worker()
+            info("The watchdog started the Project worker, which no attach had started.",
+                 component="project_automation", event="worker_started")
+            return
+        if self._worker.cancelled():
+            reason = "CancelledError"
+        else:
+            error = self._worker.exception()
+            reason = type(error).__name__ if error is not None else "a normal return"
+        self._start_worker()
+        self._restarts += 1
+        self._restart_reason = reason
+        warn(f"The watchdog restarted the Project worker after {reason}.",
+             component="project_automation", event="worker_restarted")
+
+    async def send_alerts(self):
+        """DM the operators about signals that entered alert or recovered, and about watchdog restarts.
+
+        The records of sent DMs live in the store, so the daily limit per signal holds across
+        restarts. A message that no online bot could deliver, and that Discord did not refuse,
+        stays due for the next pass.
+        """
+        import runtime_config
+        restarts = self._restarts
+        if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
+            self._reported_restarts = restarts
+            # With nobody to tell, an open alert could never be resolved, and it would keep
+            # the next episode of its signal from alerting once DMs can go out again.
+            rows = await asyncio.to_thread(self.store.list_links, "health_alert")
+            if open_keys := [row["key"] for row in rows if row["data"].get("open")]:
+                await asyncio.to_thread(self.store.delete_links, "health_alert", open_keys)
+            return
+        if not self.bots or self.transport is None:
+            return
+        facts = await asyncio.to_thread(self._health_facts)
+        records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
+        now = time.time()
+        reason = self._restart_reason if restarts > self._reported_restarts else None
+        restart_due = False
+        for key, kind, text in due_alerts(facts, records, now, new_restart_reason=reason):
+            # The record is written before the DM, so a record that cannot be written stops
+            # the DM instead of letting every pass send it again.
+            sent_at = records[key]["sent_at"] if kind == "resolved" else now
+            outcome = None
+            if await self._save_alert_record(key, {"sent_at": sent_at, "open": False}):
+                outcome = await self._message_operators(text)
+            if outcome == "retry":
+                await self._save_alert_record(key, records.get(key))
+            elif outcome == "delivered" and kind == "alert":
+                await self._save_alert_record(key, {"sent_at": now, "open": True})
+            restart_due = restart_due or (kind == "restart" and outcome in (None, "retry"))
+        if not restart_due:
+            self._reported_restarts = restarts
+
+    async def _save_alert_record(self, key, record) -> bool:
+        try:
+            await asyncio.to_thread(self._record_alert, key, record)
+        except Exception as exc:
+            warn(f"A Project alert record could not be saved: {type(exc).__name__}.",
+                 component="project_automation", event="alert_record_failed")
+            return False
+        return True
+
+    def _record_alert(self, key, record):
+        if record is None:
+            self.store.delete_links("health_alert", [key])
+        else:
+            self.store.put_link("health_alert", key, record)
+
+    async def _message_operators(self, text):
+        """DM text to every operator and return "delivered", "refused" or "retry".
+
+        Each DM tries the helper bot first and then the other online bots. Discord's refusal
+        is final for that operator, while a timeout, a server error or a reconnecting bot moves
+        on to the next bot. "delivered" means at least one operator got the DM; "retry" means
+        an operator got neither the DM nor a refusal, so the message stays due.
+        """
+        import runtime_config
+        helper = self.bots.get(self.settings().get("bot_name"))
+        bots = ([helper] if helper else []) + [bot for bot in list(self.bots.values()) if bot is not helper]
+        outcomes = set()
+        for user_id in runtime_config.get("operator_user_ids", []) or []:
+            outcome = "retry"
+            for bot in bots:
+                outcome = await self._direct_message(bot, user_id, text)
+                if outcome != "retry":
+                    break
+            outcomes.add(outcome)
+        return next((outcome for outcome in ("delivered", "retry") if outcome in outcomes), "refused")
+
+    async def _direct_message(self, bot, user_id, text) -> str:
+        """Send one alert DM and return "delivered", "refused" or "retry"; a failure is logged, never raised.
+
+        The send runs as its own task, so a CancelledError that the send raises counts as a
+        failed DM, and only a cancellation of the calling task ends the watchdog.
+        """
+        async def send():
+            await self.transport.direct_message(bot, user_id, text)
+
+        task = asyncio.ensure_future(send())
+        try:
+            done, _ = await asyncio.wait({task}, timeout=ALERT_DM_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            error = asyncio.TimeoutError()
+        else:
+            error = asyncio.CancelledError() if task.cancelled() else task.exception()
+        if error is None:
+            return "delivered"
+        warn(f"A Project alert DM to an operator failed with {type(error).__name__}.",
+             component="project_automation", event="alert_dm_failed", user_id=str(user_id))
+        return "refused" if isinstance(error, RecipientRefused) else "retry"
+
+    async def supervise_once(self):
+        """Run each watchdog check once; a check that raises is logged and the checks after it still run."""
+        for check in (self._revive_worker, self.send_alerts):
+            try:
+                await check()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                warn(f"A Project watchdog check failed with {type(exc).__name__}.",
+                     component="project_automation", event="watchdog_check_failed")
+
+    async def _watchdog(self):
+        while True:
+            await asyncio.sleep(WATCHDOG_SECONDS)
+            await self.supervise_once()
 
 
 _service = None

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Keeps the Project helper's job queue bounded, gives operators controls that clear it, limits reconciliation to what changed, and keeps a renamed helper bot's posts.
+Keeps the Project helper's job queue bounded, gives operators controls that clear it, limits reconciliation to what changed, keeps a renamed helper bot's posts, and tells operators when the helper stops keeping up.
 
 ### Added
 
@@ -14,6 +14,10 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - **Project data** controls: **Clear history and queue** deletes every job except jobs in progress and the feedback steps open reports still need; **Reset Project data** deletes all jobs, post records, receipts, and feedback cases while automation is paused, after you type the repository name. A held job can be removed with **Discard**, which does not retry its delivery.
 - `tools/project_data.py` with `status`, `clear-history`, `reset --confirm <repository>`, and `compact` for operators without dashboard access.
 - `tools/project_data.py rename-helper --from OLD --to NEW` moves the Project helper's stored records, among them its post records, PR activity receipts, checkpoints, and feedback cases, to a renamed helper bot, so choosing the new name does not post every open issue and PR again. Without `--apply` it only reports counts. It refuses while automation is enabled, a job carries the old name, or a send of the old name is unconfirmed, and it checks its result before it commits. See [Renaming the helper bot](docs/project-automation.md#renaming-the-helper-bot).
+- **Health** card on the Project page: the worker, its heartbeat, the helper bot, queue lag, time since a sync completed, pending, held, and failed jobs, and the database size, each at OK, Warning, or Alert with one sentence of advice. Levels show as a text label and an icon as well as a color. See [Health and alerts](docs/project-automation.md#health-and-alerts).
+- A watchdog starts the Project worker again within a minute when its task stops, and the Worker check shows the restarts and the exception type of the last stop.
+- Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
+- **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
 
 ### Changed
 
@@ -26,6 +30,8 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Reconciliation refreshes an issue or PR post when the item's last-update time, its state, or anything the post shows has changed since the post was last written, instead of every 15 minutes. A refresh that would write the same post makes no Discord change. Each post also gets a daily check, about once a day once the queue has settled, which writes only when the post drifted, for example when Discord archived an open item's post or someone renamed, reopened, unlocked, or deleted it. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
 - A PR's activity is scanned when the PR is new or its last-update time changed, and each PR in scope gets one full scan about once a day once the queue has settled, spread over the day's cycles, instead of every PR being scanned from its first page every 15 minutes. Discovery of recently updated PRs is unchanged.
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
+- While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
+- Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
 
 ### Fixed
 
@@ -34,6 +40,8 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - A maintainer question is not relayed to the reporter twice when its finished notice has been deleted.
 - An issue that was transferred or deleted on GitHub no longer fails every reconciliation cycle before PR discovery runs. It leaves reconciliation with one log line, after a second 404 in a row when GitHub answers 404, and returns if it appears among the open items again.
 - The webhook for a deleted issue marks its post deleted when GitHub answers 410 for the issue; such a job failed on every attempt before.
+- Update snapshots copy the Project database in one step. A copy in 128-page steps started over after every write from the running helper, so it could run without end.
+- An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
 
 ### Upgrade notes
 
@@ -41,6 +49,8 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - An earlier version can still open the cleaned database, but deleted jobs do not come back and that version stops deleting finished jobs.
 - After `rename-helper`, an earlier version rejects every issue or PR post and PR activity message that still shows the footer of the old name, and it holds each job that tries to update one. Stay on this version or a later one after a rename.
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
+- The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
+- Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 
 ## [v2.9.0] - 2026-09-29
 

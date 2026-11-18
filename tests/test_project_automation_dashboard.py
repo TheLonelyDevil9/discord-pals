@@ -36,9 +36,10 @@ class FakeService:
         )
         self.jobs = [{"id": 1, "kind": "publish", "status": "recovery", "attempts": 1,
                       "error": "Write result unknown.", "payload": {"provider_context": "private-internal-context"}}]
+        self.signals = []
 
     def status(self):
-        return {"worker_running": False, "enabled": False}
+        return {"worker_running": False, "enabled": False, "health": self.signals}
 
     def list_cases(self, limit=100):
         self.limit = limit
@@ -136,6 +137,63 @@ def test_history_days_are_saved_validated_and_shown(setup):
     assert response.status_code == 400
     assert any("history_days" in error for error in response.get_json()["errors"])
     assert saved["config"]["history_days"] == 14
+
+
+def alerts_checkbox(page):
+    return page.split('id="project-alerts-enabled"')[1].split(">")[0]
+
+
+def test_alerts_setting_is_saved_validated_and_shown(setup):
+    client, saved, _ = setup
+    page = client.get("/project-automation").get_data(as_text=True)
+    assert 'name="alerts_enabled"' in alerts_checkbox(page) and "checked" in alerts_checkbox(page)
+    assert "config.alerts_enabled = form.elements.alerts_enabled.checked;" in page
+    assert client.post("/api/project-automation", json={"alerts_enabled": False}, headers=csrf()).status_code == 200
+    assert saved["config"]["alerts_enabled"] is False
+    assert "checked" not in alerts_checkbox(client.get("/project-automation").get_data(as_text=True))
+    response = client.post("/api/project-automation", json={"alerts_enabled": "no"}, headers=csrf())
+    assert response.status_code == 400
+    assert any("alerts_enabled" in error for error in response.get_json()["errors"])
+    assert saved["config"]["alerts_enabled"] is False
+
+
+def health_card(page):
+    start = page.index('id="project-signals"')
+    return page[start:page.index("</ul>", start)]
+
+
+def test_health_card_shows_a_text_label_and_an_icon_for_each_level(setup):
+    client, _, service = setup
+    service.signals = [
+        {"key": "pending", "name": "Pending jobs", "value": "3", "level": "ok", "sentence": "The queue is short."},
+        {"key": "held", "name": "Held jobs", "value": "1", "level": "warn", "sentence": "Check the held job."},
+        {"key": "helper_bot", "name": "Helper bot", "value": "Offline", "level": "alert", "sentence": "Start the bot."},
+    ]
+    card = health_card(client.get("/project-automation").get_data(as_text=True))
+    for level, label, name in (("ok", "OK", "Pending jobs"), ("warn", "Warning", "Held jobs"), ("alert", "Alert", "Helper bot")):
+        row = card.split(f'data-level="{level}"')[1].split("</li>")[0]
+        assert label in row and name in row
+        assert "<svg" in row and 'aria-hidden="true"' in row and f'data-icon="{level}"' in row
+    for item in service.signals:
+        assert item["sentence"] in card and item["value"] in card
+    response = client.get("/api/project-automation")
+    assert response.get_json()["service"]["health"] == service.signals
+
+
+def test_health_card_says_when_no_health_checks_are_available(setup):
+    client, _, _ = setup
+    card = health_card(client.get("/project-automation").get_data(as_text=True))
+    assert "Health checks are not available." in card
+
+
+def test_status_poll_renders_the_health_card_with_the_same_labels_and_icons(setup):
+    client, _, _ = setup
+    page = client.get("/project-automation").get_data(as_text=True)
+    script = page[page.index("<script>"):]
+    assert "renderHealth(data.service.health)" in script
+    assert '"alert": "Alert"' in script and '"warn": "Warning"' in script and '"ok": "OK"' in script
+    for level in ("ok", "warn", "alert"):
+        assert f'<template id="project-signal-icon-{level}">' in page
 
 
 def test_enable_rejects_missing_configuration_and_credentials(setup):
