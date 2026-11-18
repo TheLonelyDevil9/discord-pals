@@ -68,6 +68,7 @@ RE_ASSISTANT_RESPONSE_WRAPPER = re.compile(
 )
 
 SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0
+STALE_REQUEST_REACTION = "⌛"
 
 
 def _is_same_character(bot_author_name: str, character_name: str) -> bool:
@@ -2675,6 +2676,44 @@ Return exactly one JSON object with this shape:
 
         return True
 
+    async def _drop_if_stale(self, request: dict, message) -> bool:
+        """Drop a request that waited in the queue longer than request_max_age_seconds.
+
+        The queue calls the processor as it takes each request, so this runs at dequeue.
+        A person who addressed the bot gets a reaction on their message instead of a reply,
+        so that the dropped request does not look ignored. Autonomous and bot requests
+        were not asked of this bot and get none.
+        """
+        max_age = runtime_config.get("request_max_age_seconds", 180)
+        queued_at = request.get("timestamp")
+        if not max_age or queued_at is None:
+            return False
+        waited = time.time() - queued_at
+        if waited <= max_age:
+            return False
+
+        reaction = "not_added"
+        author_is_bot = getattr(getattr(message, "author", None), "bot", False)
+        if not request.get("is_autonomous") and not author_is_bot and hasattr(message, "add_reaction"):
+            try:
+                await message.add_reaction(STALE_REQUEST_REACTION)
+                reaction = "added"
+            except Exception:
+                reaction = "failed"
+        log.info(
+            f"Dropped a request that waited {waited:.0f}s in the queue, over the {max_age}s limit",
+            self.name,
+            component="request",
+            event="request_stale_dropped",
+            req_id=request.get("req_id"),
+            channel_id=request.get("channel_id"),
+            user_id=request.get("user_id"),
+            waited_s=round(waited),
+            max_age_s=max_age,
+            reaction=reaction,
+        )
+        return True
+
     async def _process_request(self, request: dict):
         """Process a single queued request."""
         from coordinator import coordinator
@@ -2702,6 +2741,9 @@ Return exactly one JSON object with this shape:
 
         if request.get('is_autonomous') and not runtime_config.is_bot_available(self.name):
             log.debug("Autonomous request skipped - bot is in an unavailable schedule window", self.name, component="request", event="request_skipped", req_id=req_id, reason="schedule_unavailable")
+            return
+
+        if await self._drop_if_stale(request, message):
             return
 
         message_id = message.id

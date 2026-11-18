@@ -49,6 +49,7 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `concurrency_limit` | 4 | Max concurrent AI requests across all bots. |
 | `image_attachment_max_mb` | 8 | Largest image attachment sent to the model, 1 to 20 MB. A larger image is skipped with a log line, and the reply goes ahead with the images that fit. The size Discord reports is checked before the download, and a download stops once it passes the limit. |
 | `image_attachment_max_count` | 4 | Images per message sent to the model, 0 to 10. Later images are skipped with a log line each. 0 sends no images. |
+| `request_max_age_seconds` | 180 | A request that waited in the queue longer than this, 0 to 3600 seconds, is dropped when its turn comes, with one log line. A person who addressed the bot sees a ⌛ reaction on their message instead of a reply; autonomous and bot-to-bot requests get no reaction. 0 answers every request however long it waited. |
 | `allow_bot_mentions` | true | Lets bots mention users in replies. |
 | `allow_bot_to_bot_mentions` | false | Lets bots mention other bots. Use carefully. |
 | `mention_context_limit` | 10 | Max mention candidates shown to the model. |

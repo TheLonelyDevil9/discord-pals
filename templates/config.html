@@ -1082,6 +1082,20 @@
             </div>
             <div class="card">
                 <div class="card-header">
+                    <span class="card-title">Queued Requests</span>
+                    <span class="impact-pill">Skips stale messages</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="request_max_age_seconds">Max Wait In Queue (seconds)</label>
+                        <input type="number" id="request_max_age_seconds" min="0" max="3600" step="1" value="{{ config.request_max_age_seconds if config.request_max_age_seconds is not none else 180 }}" aria-describedby="request_max_age_seconds_hint">
+                        <p class="form-hint" id="request_max_age_seconds_hint">A message that waited longer than this behind earlier replies, for example during a provider outage, is skipped, and the bot reacts to it with &#x231B; instead of replying. 0 answers every message however long it waited.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveRequestQueueSettings()">Save Queue Settings</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <span class="card-title">Dashboard Footprint</span>
                 </div>
                 <div class="card-body">
@@ -2219,6 +2233,12 @@ async function saveImageAttachmentSettings() {
         image_attachment_max_mb: parseInt(document.getElementById('image_attachment_max_mb').value),
         image_attachment_max_count: parseInt(document.getElementById('image_attachment_max_count').value)
     }, 'Image limits saved');
+}
+
+async function saveRequestQueueSettings() {
+    await postConfig({
+        request_max_age_seconds: parseInt(document.getElementById('request_max_age_seconds').value)
+    }, 'Queue settings saved');
 }
 
 async function toggleRawLogging(enabled) {

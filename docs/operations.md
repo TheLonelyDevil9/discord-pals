@@ -288,6 +288,7 @@ Check:
 - Channel whitelist/blacklist and DM user blacklist.
 - Whether the user has ignored that bot.
 - Whether global pause or bot interaction pause is active.
+- A ⌛ reaction on the message: it waited in the queue longer than **Max Wait In Queue** (`request_max_age_seconds`, default 180 seconds), usually behind a slow or failing provider, and was skipped. The log has a `request_stale_dropped` line for it.
 
 ### Slash commands missing
 
