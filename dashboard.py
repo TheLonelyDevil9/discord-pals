@@ -4017,12 +4017,12 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
                 f"before resetting to {upstream}."
             )
         attempt.reapply()
+        after_head = _git_ref_sha(repo_dir, "HEAD")
     except Exception as error:
         if not attempt.touched:
             raise
         attempt.roll_back(error)
 
-    after_head = _git_ref_sha(repo_dir, "HEAD")
     return {
         "updated": before_head != after_head,
         "output": output,

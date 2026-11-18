@@ -805,6 +805,29 @@ class DashboardRollbackTests(DashboardUpdateCase):
         self.assertEqual(self.head(), before)
         self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
 
+    def test_an_error_reading_head_after_the_move_is_rolled_back(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+        real_ref_sha = dashboard_module._git_ref_sha
+        head_reads = []
+
+        def ref_sha(repo_dir, ref):
+            if ref == "HEAD":
+                head_reads.append(ref)
+                if len(head_reads) == 2:
+                    raise RuntimeError("Resolving Git ref HEAD failed: simulated")
+            return real_ref_sha(repo_dir, ref)
+
+        with patch.object(dashboard_module, "_git_ref_sha", side_effect=ref_sha):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data.get("rolled_back"), data)
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+        self.assertEqual(git(self.install, "stash", "list").stdout, "")
+        self.assertEqual(self.snapshots(), [])
+
     def test_an_import_check_that_cannot_run_rolls_back_and_says_so(self):
         self.publish({"main.py": "STARTED = 2\n"})
         before = self.head()
