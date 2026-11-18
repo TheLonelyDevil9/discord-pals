@@ -168,6 +168,30 @@ class LegacyHistoryFileTests(HistorySandbox, unittest.TestCase):
         self.assertEqual(binary.read_bytes(), b"\xff\xfe\x00garbage")
         self.assertEqual(discord_utils_module.get_history(456)[0]["content"], "still here")
 
+    def test_a_file_without_a_message_list_is_skipped_with_one_warning(self):
+        listing = self.write_file("123.json", [{"role": "user", "content": "not wrapped"}])
+        wrong_messages = self.write_file("124.json", {"name": "#odd", "messages": "not a list"})
+
+        with patch.object(discord_utils_module.log, "warn") as warn:
+            discord_utils_module.load_history()
+
+        self.assertEqual(json.loads(listing.read_text(encoding="utf-8")), [{"role": "user", "content": "not wrapped"}])
+        self.assertEqual(json.loads(wrong_messages.read_text(encoding="utf-8"))["messages"], "not a list")
+        warned = [call.args[0] for call in warn.call_args_list]
+        self.assertEqual(sum("123.json" in line for line in warned), 1)
+        self.assertEqual(sum("124.json" in line for line in warned), 1)
+
+    def test_a_file_that_breaks_the_parser_does_not_stop_the_load(self):
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        nested = self.history_dir / "123.json"
+        nested.write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
+        self.write_file("456.json", {"name": "#fine", "messages": [{"role": "user", "content": "still here"}]})
+
+        discord_utils_module.load_history()
+
+        self.assertEqual(discord_utils_module.get_history(456)[0]["content"], "still here")
+        self.assertTrue(nested.exists())
+
     def test_a_malformed_file_does_not_stop_the_others_from_loading(self):
         self.write_file("11.json", {"name": "#broken", "messages": ["not an entry"]})
         self.write_file("22.json", {"name": "#fine", "messages": [{"role": "user", "content": "still here"}]})

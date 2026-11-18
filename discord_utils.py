@@ -554,10 +554,13 @@ def load_history():
             # cannot replace it with an empty history.
             try:
                 data = safe_json_load(str(path), default=unreadable)
-            except ValueError as e:
+            except Exception as e:
                 log.warn(f"Skipped history file {path.name}: {e}")
                 continue
-            if data is unreadable or not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+            if data is unreadable:
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("messages", []), list):
+                log.warn(f"Skipped history file {path.name}: it holds no message list")
                 continue
             stored_id = _stored_history_id(data.get("history_id"))
             history_id = stored_id if stored_id is not None else _legacy_history_id(path.stem)
