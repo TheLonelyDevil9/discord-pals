@@ -40,6 +40,8 @@ class HealthFacts:
     queue_lag: float | None
     sync_age: float | None
     database_bytes: int
+    restarts: int = 0
+    restart_reason: str | None = None
 
 
 PAUSED = {
@@ -86,10 +88,13 @@ def health_signals(facts: HealthFacts) -> list[dict]:
         signals.append({"key": "automation", "name": "Automation", "value": value, "level": "ok", "sentence": sentence})
     else:
         if facts.bot_online:
-            signals.append(_signal("worker", "Worker", "Running" if facts.worker_running else "Stopped",
-                                   "ok" if facts.worker_running else "alert", {
-                                       "ok": "The worker is processing jobs.",
-                                       "alert": "Check the logs for the error, then restart Discord Pals."}))
+            value = "Running" if facts.worker_running else "Stopped"
+            if facts.restarts:
+                value += f", restarted {_count(facts.restarts, 'time')}"
+            signals.append(_signal("worker", "Worker", value, "ok" if facts.worker_running else "alert", {
+                "ok": (f"The watchdog restarted it after {facts.restart_reason}, so check the logs for the cause."
+                       if facts.restarts else "The worker is processing jobs."),
+                "alert": "Check the logs for the error, and the watchdog starts the worker again within a minute."}))
         if facts.worker_running and facts.heartbeat_age is not None:
             signals.append(_signal("heartbeat", "Worker heartbeat", _duration(facts.heartbeat_age) + " ago",
                                    _level(facts.heartbeat_age, HEARTBEAT_WARN_SECONDS, HEARTBEAT_ALERT_SECONDS), {

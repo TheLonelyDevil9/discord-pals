@@ -12,7 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from logger import info
+from background_tasks import BackgroundTaskRegistry
+from logger import info, warn
 from project_automation_ai import FeedbackAI, search_terms
 from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
 from project_automation_health import HealthFacts, health_signals
@@ -21,6 +22,7 @@ from project_automation_activity import PRActivity, activate, mapping_key, oldes
 
 
 CLOSED_SYNC_DAYS = 7
+WATCHDOG_SECONDS = 60
 # GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
 # and 404 for either when the App cannot read the repository involved:
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
@@ -95,6 +97,9 @@ class AutomationService:
         self._last_error = None
         self._heartbeat = None
         self._active_since = None
+        self._restarts = 0
+        self._restart_reason = None
+        self._tasks = BackgroundTaskRegistry("project-automation")
         self.pr_activity = PRActivity(self)
 
     def settings(self) -> dict:
@@ -133,6 +138,7 @@ class AutomationService:
         return health_signals(HealthFacts(
             pause_reason=self.pause_reason(), bot_online=cfg.get("bot_name") in self.bots,
             worker_running=bool(self._worker and not self._worker.done()),
+            restarts=self._restarts, restart_reason=self._restart_reason,
             heartbeat_age=None if self._heartbeat is None else time.monotonic() - self._heartbeat,
             pending=queue["pending"], held=queue["recovery"], failed=queue["failed"],
             queue_lag=None if queue["oldest_due_at"] is None else max(0.0, now - queue["oldest_due_at"]),
@@ -447,11 +453,17 @@ class AutomationService:
             if case["revision"] == 1 and case["state"] == "assessing":
                 self.store.enqueue("assess", {"case_id": case["id"], "revision": 1}, key=f"initial:{case['id']}")
         if self._worker is None or self._worker.done():
-            self._worker = asyncio.create_task(self._run(), name="project-automation")
+            self._start_worker()
+        self._tasks.start_once(self._watchdog(), name="watchdog")
+
+    def _start_worker(self):
+        self._worker = asyncio.create_task(self._run(), name="project-automation")
 
     async def detach(self, bot):
         self.bots.pop(bot.name, None)
         if not self.bots:
+            # Stop the watchdog first, so it cannot start the worker that is being cancelled.
+            await self._tasks.cancel_all()
             if self._worker:
                 self._worker.cancel()
                 await asyncio.gather(self._worker, return_exceptions=True)
@@ -966,6 +978,7 @@ class AutomationService:
 
     async def _run(self):
         while True:
+            self._heartbeat = time.monotonic()
             try:
                 if not self._queue_cleaned:
                     await self.clean_up_old_queue()
@@ -983,6 +996,43 @@ class AutomationService:
             except Exception:
                 self._last_error = "Background processing needs attention"
             await asyncio.sleep(1)
+
+    async def _revive_worker(self):
+        """Start the worker again while the service is attached and its task is missing or finished.
+
+        A live task is never replaced, however old its heartbeat, because its current job may
+        hold a lease or an unconfirmed remote write.
+        """
+        if not self.bots or (self._worker is not None and not self._worker.done()):
+            return
+        if self._worker is None:
+            reason = "no task"
+        elif self._worker.cancelled():
+            reason = "CancelledError"
+        else:
+            error = self._worker.exception()
+            reason = type(error).__name__ if error is not None else "a normal return"
+        self._start_worker()
+        self._restarts += 1
+        self._restart_reason = reason
+        warn(f"The watchdog restarted the Project worker after {reason}.",
+             component="project_automation", event="worker_restarted")
+
+    async def supervise_once(self):
+        """Run each watchdog check once; a check that raises is logged and the checks after it still run."""
+        for check in (self._revive_worker,):
+            try:
+                await check()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                warn(f"A Project watchdog check failed with {type(exc).__name__}.",
+                     component="project_automation", event="watchdog_check_failed")
+
+    async def _watchdog(self):
+        while True:
+            await asyncio.sleep(WATCHDOG_SECONDS)
+            await self.supervise_once()
 
 
 _service = None
