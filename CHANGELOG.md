@@ -20,6 +20,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
 - **Image Attachments** under Config → Performance: **Max Image Size**, from 1 to 20 MB, default 8, and **Max Images Per Message**, from 0 to 10, default 4. A larger image, or one after the count, is skipped with a log line that names the reason, and the reply goes ahead with the images that fit. A download stops once it passes the size limit, also when Discord reports no size or a wrong one. See [Vision Support](docs/provider-config.md#vision-support).
 - **Max Wait In Queue** (`request_max_age_seconds`) under Config → Performance → Queued Requests, from 0 to 3600 seconds, default 180: a request that waited longer in the queue, for example behind a provider outage, is dropped when its turn comes, with one log line, instead of answering a message minutes later. A person who addressed the bot sees a ⌛ reaction on their message. 0 answers every request however long it waited.
+- **Request Time Limit** (`request_time_budget_seconds`) under Config → Performance → Queued Requests, from 60 to 7200 seconds, default 900: one request, from leaving the queue to its last message, stops after this long with the timeout notice, so a provider call that never ends cannot hold a channel's queue. See [All providers failed](docs/operations.md#all-providers-failed).
 
 ### Changed
 
@@ -68,6 +69,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Images larger than 8 MB, and images after the fourth in one message, are no longer sent to the model. To send them, raise **Max Image Size** or **Max Images Per Message** under Config → Performance → Image Attachments.
 - On a server with more than 1,000 members, `@Name` for a member outside the first 1,000 mention candidates stays plain text.
 - A message that waited in the queue for more than 3 minutes gets a ⌛ reaction instead of a late reply. To answer every message however late, set **Max Wait In Queue** to 0.
+- A reply that takes longer than 15 minutes, counting every provider attempt and silent retry, stops with the timeout notice. For a local model that takes longer, raise **Request Time Limit**.
 
 ## [v2.9.0] - 2026-09-29
 

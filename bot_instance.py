@@ -2715,6 +2715,32 @@ Return exactly one JSON object with this shape:
         return True
 
     async def _process_request(self, request: dict):
+        """Process one dequeued request, stopping it after request_time_budget_seconds.
+
+        The limit covers context building, every provider attempt and silent retry, and
+        delivery. Provider limits alone do not bound a request: the total provider deadline
+        is checked only between attempts, and each silent retry starts it again. A stopped
+        request releases its scope lock and coordinator slot as it unwinds, so the channel's
+        queue moves on.
+        """
+        budget = runtime_config.get("request_time_budget_seconds", 900)
+        try:
+            await asyncio.wait_for(self._run_request(request), timeout=budget)
+        except asyncio.TimeoutError:
+            log.warn(
+                f"Stopped a request after the {budget}s request time limit",
+                self.name,
+                component="request",
+                event="request_time_budget_exceeded",
+                req_id=request.get("req_id"),
+                channel_id=request.get("channel_id"),
+                budget_s=budget,
+            )
+            channel = getattr(request.get("message"), "channel", None)
+            if channel is not None:
+                await self._send_user_error(channel, "timeout")
+
+    async def _run_request(self, request: dict):
         """Process a single queued request."""
         from coordinator import coordinator
 

@@ -1091,6 +1091,11 @@
                         <input type="number" id="request_max_age_seconds" min="0" max="3600" step="1" value="{{ config.request_max_age_seconds if config.request_max_age_seconds is not none else 180 }}" aria-describedby="request_max_age_seconds_hint">
                         <p class="form-hint" id="request_max_age_seconds_hint">A message that waited longer than this behind earlier replies, for example during a provider outage, is skipped, and the bot reacts to it with &#x231B; instead of replying. 0 answers every message however long it waited.</p>
                     </div>
+                    <div class="form-group">
+                        <label for="request_time_budget_seconds">Request Time Limit (seconds)</label>
+                        <input type="number" id="request_time_budget_seconds" min="60" max="7200" step="1" value="{{ config.request_time_budget_seconds or 900 }}" aria-describedby="request_time_budget_seconds_hint">
+                        <p class="form-hint" id="request_time_budget_seconds_hint">Longest time one reply may take from leaving the queue to its last message, across every provider attempt and retry; then it stops with a timeout notice and the next message gets its turn. Keep it above Total Time Limit plus your longest provider timeout, because the Total Time Limit is checked only between attempts.</p>
+                    </div>
                     <button type="button" class="btn btn-primary" onclick="saveRequestQueueSettings()">Save Queue Settings</button>
                 </div>
             </div>
@@ -2237,7 +2242,8 @@ async function saveImageAttachmentSettings() {
 
 async function saveRequestQueueSettings() {
     await postConfig({
-        request_max_age_seconds: parseInt(document.getElementById('request_max_age_seconds').value)
+        request_max_age_seconds: parseInt(document.getElementById('request_max_age_seconds').value),
+        request_time_budget_seconds: parseInt(document.getElementById('request_time_budget_seconds').value)
     }, 'Queue settings saved');
 }
 

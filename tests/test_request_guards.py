@@ -1,7 +1,8 @@
+import asyncio
 import time
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import module_stubs  # noqa: F401
 import bot_instance as bot_instance_module
@@ -174,6 +175,54 @@ class StaleRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instance._build_request_context.await_args.args[0]["content"], "new")
 
 
+async def never_finishes(*args, **kwargs):
+    await asyncio.Event().wait()
+
+
+class RequestTimeBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_request_past_the_time_limit_is_stopped_with_a_notice_and_frees_its_scope(self):
+        instance, request = make_bot(), make_request(waited=1)
+        instance._build_request_context = AsyncMock(side_effect=never_finishes)
+
+        with RequestPatches({"request_time_budget_seconds": 0.05}) as patches:
+            await asyncio.wait_for(instance._process_request(request), timeout=5)
+
+        lines = patches.lines("request_time_budget_exceeded")
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].kwargs["budget_s"], 0.05)
+        request["message"].channel.send.assert_awaited_once()
+        self.assertIn("taking too long", request["message"].channel.send.await_args.args[0])
+
+        follower = make_bot("Nilou")
+        next_request = make_request(waited=1, user_id=43, channel=request["message"].channel)
+        with RequestPatches():
+            await asyncio.wait_for(follower._process_request(next_request), timeout=5)
+        follower._build_request_context.assert_awaited_once()
+
+    async def test_the_coordinator_slot_is_released_when_the_time_limit_stops_generation(self):
+        instance, request = make_bot(), make_request(waited=1)
+        instance._build_request_context = AsyncMock(return_value={"channel_id": 77})
+        instance._generate_ai_response = never_finishes
+        slot = object()
+
+        with RequestPatches({"request_time_budget_seconds": 0.05, "provider_retry_window_seconds": 0}), \
+                patch("coordinator.coordinator.acquire_slot", new=AsyncMock(return_value=slot)), \
+                patch("coordinator.coordinator.release_slot", new=Mock()) as release_slot:
+            await asyncio.wait_for(instance._process_request(request), timeout=5)
+
+        release_slot.assert_called_once_with(slot)
+
+    async def test_a_request_answered_within_the_time_limit_posts_no_notice(self):
+        instance, request = make_bot(), make_request(waited=1)
+
+        with RequestPatches({"request_time_budget_seconds": 900}) as patches:
+            await instance._process_request(request)
+
+        instance._build_request_context.assert_awaited_once()
+        request["message"].channel.send.assert_not_awaited()
+        self.assertEqual(patches.lines("request_time_budget_exceeded"), [])
+
+
 class RequestGuardSettingTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.setUpMemorySandbox()
@@ -226,6 +275,32 @@ class RequestGuardSettingTests(MemorySandboxMixin, unittest.IsolatedAsyncioTestC
 
         dropped._build_request_context.assert_not_awaited()
         stale_request["message"].add_reaction.assert_awaited_once_with(STALE_REACTION)
+
+    async def test_the_request_time_limit_is_edited_on_the_config_page_within_bounds(self):
+        self.assertOnConfigPage(
+            'id="request_time_budget_seconds"',
+            "request_time_budget_seconds: parseInt(document.getElementById('request_time_budget_seconds').value)",
+        )
+        self.assertEqual(self.client.get("/api/config").get_json()["request_time_budget_seconds"], 900)
+        for raw, expected in ((0, 60), (-5, 60), (99_999, 7200), ("not a number", 900), (120, 120)):
+            self.assertEqual(self._saved_value("request_time_budget_seconds", raw), expected)
+
+    async def test_the_saved_time_limit_bounds_the_next_request(self):
+        self._saved_value("request_time_budget_seconds", 75)
+        timeouts = []
+        real_wait_for = asyncio.wait_for
+
+        async def recording_wait_for(awaitable, timeout):
+            timeouts.append(timeout)
+            return await real_wait_for(awaitable, timeout)
+
+        bot_asyncio = types.ModuleType("asyncio")
+        bot_asyncio.__dict__.update(asyncio.__dict__)
+        bot_asyncio.wait_for = recording_wait_for
+        with patch.object(bot_instance_module, "asyncio", bot_asyncio):
+            await self._process_with_saved_settings(make_request(waited=1))
+
+        self.assertEqual(timeouts, [75])
 
 
 if __name__ == "__main__":

@@ -302,7 +302,7 @@ Run:
 python diagnose.py
 ```
 
-Then check API keys, provider URLs, model names, and network access. For slow local models, raise provider `timeout`.
+Then check API keys, provider URLs, model names, and network access. For slow local models, raise provider `timeout`, and keep **Request Time Limit** (`request_time_budget_seconds`, default 900 seconds) under Config → Performance → Queued Requests above **Total Time Limit** plus that timeout. A request that runs past the Request Time Limit stops with the timeout notice, so a provider that never answers cannot hold a channel's queue.
 
 ### Character edits not active
 

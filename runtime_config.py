@@ -73,6 +73,7 @@ DEFAULTS = {
     "image_attachment_max_mb": 8,  # Larger image attachments are skipped before they are downloaded in full
     "image_attachment_max_count": 4,  # Images per message sent to the model; 0 sends none
     "request_max_age_seconds": 180,  # A request that waited longer in the queue is dropped; 0 keeps every request
+    "request_time_budget_seconds": 900,  # One request is stopped after this long, from dequeue to its last Discord message
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
@@ -143,6 +144,7 @@ CONFIG_FIELDS = {
     "image_attachment_max_mb": ConfigField(int, DEFAULTS["image_attachment_max_mb"], 1, 20),
     "image_attachment_max_count": ConfigField(int, DEFAULTS["image_attachment_max_count"], 0, 10),
     "request_max_age_seconds": ConfigField(int, DEFAULTS["request_max_age_seconds"], 0, 3600),
+    "request_time_budget_seconds": ConfigField(int, DEFAULTS["request_time_budget_seconds"], 60, 7200),
     "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
     "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),
