@@ -10,6 +10,7 @@ import pytest
 
 import project_automation
 from project_automation import AutomationService
+from project_automation_activity import mapping_key
 from test_project_automation_health import cfg as cfg_fixture, runtime as runtime_fixture, service as service_fixture
 from test_project_automation_health import add_job, signal
 
@@ -66,6 +67,70 @@ def restarted(service, cfg):
     reopened.bots.update(service.bots)
     reopened._worker = LIVE_WORKER
     return reopened
+
+
+def run_pass(service, monkeypatch):
+    """Run one pass of the worker loop, which records when automation started running."""
+    async def stop(_):
+        raise asyncio.CancelledError
+
+    async def nothing():
+        return None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(project_automation.asyncio, "sleep", stop)
+        patch.setattr(service, "maintain", nothing)
+        patch.setattr(service, "run_once", nothing)
+        patch.setattr(service, "queue_sync_cycle", lambda: None)
+        service._queue_cleaned = True
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(service._run())
+
+
+def about(sent, name):
+    return [text for _, _, text in sent if f". {name}: " in text]
+
+
+def test_a_sync_alert_is_resolved_only_by_a_sync_that_completes_after_it(alerts, cfg, clock, monkeypatch):
+    t0 = clock[0]
+    alerts.store.record_status(mapping_key(cfg), "last_sync_at", t0 - 4 * 3600)
+    clock[0] = t0 - 6 * 3600
+    run_pass(alerts, monkeypatch)
+    clock[0] = t0
+    first = about(send(alerts), "Time since a sync completed")
+    assert first == ["Project helper alert. Time since a sync completed: 4 hours. Check Delivery activity and the "
+                     "logs for the sync jobs that keep a cycle open. Dashboard → Project"] * 2
+    reopened = restarted(alerts, cfg)
+    run_pass(reopened, monkeypatch)
+    clock[0] = t0 + 60
+    assert send(reopened) == []
+    clock[0] = t0 + 4 * 3600
+    assert signal(reopened.health(), "sync")["level"] == "alert"
+    assert send(reopened) == []
+    reopened.store.record_status(mapping_key(cfg), "last_sync_at", clock[0])
+    resolved = about(send(reopened), "Time since a sync completed")
+    assert len(resolved) == 2 and all(text.startswith("Project helper resolved.") for text in resolved)
+
+
+def test_queue_lag_counts_from_when_automation_runs_and_resolves_on_the_whole_wait(alerts, cfg, runtime, clock,
+                                                                                   monkeypatch):
+    runtime["global_paused"] = True
+    add_job(alerts, "queued during the pause", "pending", available_ago=5 * 3600)
+    assert send(alerts) == []
+    runtime["global_paused"] = False
+    run_pass(alerts, monkeypatch)
+    assert signal(alerts.health(), "queue_lag")["level"] == "ok"
+    assert send(alerts) == []
+    clock[0] += 2 * 3600
+    assert about(send(alerts), "Queue lag") == ["Project helper alert. Queue lag: 2 hours. Check the helper bot and "
+                                                 "the worker, then Delivery activity for the oldest waiting work. "
+                                                 "Dashboard → Project"] * 2
+    reopened = restarted(alerts, cfg)
+    run_pass(reopened, monkeypatch)
+    assert signal(reopened.health(), "queue_lag")["level"] == "ok"
+    assert send(reopened) == []
+    finish_jobs(reopened)
+    assert [text.split(". ")[0] for text in about(send(reopened), "Queue lag")] == ["Project helper resolved"] * 2
 
 
 def test_an_alert_reaches_each_operator_once_through_the_helper_bot(alerts):

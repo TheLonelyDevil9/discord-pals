@@ -128,26 +128,36 @@ class AutomationService:
     def health(self) -> list[dict]:
         """Return the helper's health signals from in-memory state, indexed reads and the database file size.
 
-        It takes no write lock and reads no finished job, so callers can poll it. The sync age
-        counts from the later of the last completed sync and the time automation last started
-        running, so a restart or a resumed pause does not report the paused time.
+        It takes no write lock and reads no finished job, so callers can poll it.
+        """
+        return health_signals(self._health_facts())
+
+    def _health_facts(self) -> HealthFacts:
+        """Read the facts of the health signals.
+
+        Queue lag and sync age count from the later of their own start and the time automation
+        last started running, so a restart or a resumed pause does not raise them for the time
+        automation was stopped.
         """
         import runtime_config
         cfg = self.settings()
         queue = self.store.queue_health()
-        synced = max((self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at") or 0,
-                     self._active_since or 0)
+        last_sync = (self.store.get_link("project_status", mapping_key(cfg)) or {}).get("last_sync_at")
+        started = self._active_since or 0
         now = time.time()
-        return health_signals(HealthFacts(
+        due = queue["oldest_due_at"]
+        synced = max(last_sync or 0, started)
+        return HealthFacts(
             pause_reason=self.pause_reason(), bot_online=cfg.get("bot_name") in self.bots,
             worker_running=bool(self._worker and not self._worker.done()),
             restarts=self._restarts, restart_reason=self._restart_reason,
             heartbeat_age=None if self._heartbeat is None else time.monotonic() - self._heartbeat,
             pending=queue["pending"], held=queue["recovery"], failed=queue["failed"],
-            queue_lag=None if queue["oldest_due_at"] is None else max(0.0, now - queue["oldest_due_at"]),
-            sync_age=max(0.0, now - synced) if synced else None, database_bytes=queue["database_bytes"],
-            alerts_enabled=cfg.get("alerts_enabled", True),
-            operators=len(runtime_config.get("operator_user_ids", []) or [])))
+            queue_lag=None if due is None else max(0.0, now - max(due, started)),
+            queue_wait=None if due is None else max(0.0, now - due),
+            sync_age=max(0.0, now - synced) if synced else None, last_sync_at=last_sync,
+            database_bytes=queue["database_bytes"], alerts_enabled=cfg.get("alerts_enabled", True),
+            operators=len(runtime_config.get("operator_user_ids", []) or []))
 
     def status(self) -> dict:
         cfg = self.settings()
@@ -1033,11 +1043,11 @@ class AutomationService:
         restarts, self._reported_restarts = self._reported_restarts, self._restarts
         if not self.settings().get("alerts_enabled", True) or not runtime_config.get("operator_user_ids", []):
             return
-        signals = await asyncio.to_thread(self.health)
+        facts = await asyncio.to_thread(self._health_facts)
         records = {row["key"]: row["data"] for row in await asyncio.to_thread(self.store.list_links, "health_alert")}
         now = time.time()
         reason = self._restart_reason if self._restarts > restarts else None
-        for key, kind, text in due_alerts(signals, records, now, new_restart_reason=reason):
+        for key, kind, text in due_alerts(facts, records, now, new_restart_reason=reason):
             delivered = await self._message_operators(text)
             if delivered is None:
                 continue
