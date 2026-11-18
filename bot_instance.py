@@ -1715,7 +1715,8 @@ Return exactly one JSON object with this shape:
             
             # Update history with the edited content (for context), but don't trigger a response
             user_name = get_user_display_name(after.author)
-            update_history_on_edit(after.channel.id, before.content, after.content, user_name)
+            history_key = self._conversation_key(after, after.author.id)
+            update_history_on_edit(history_key, before.content, after.content, user_name)
             # Note: Removed _maybe_respond_to_edit - edits no longer trigger bot responses
         
         @self.client.event

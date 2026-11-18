@@ -28,8 +28,15 @@ def _user(user_id, name, *, bot=False):
     return types.SimpleNamespace(id=user_id, bot=bot, display_name=name, name=name.lower())
 
 
-def _message(message_id, author, content):
-    return types.SimpleNamespace(id=message_id, author=author, content=content, created_at=None)
+def _message(message_id, author, content, channel=None, created_at=None):
+    return types.SimpleNamespace(id=message_id, author=author, content=content, channel=channel, created_at=created_at)
+
+
+def _dm_channel(channel_id, recipient=None):
+    channel = bot_instance_module.discord.DMChannel()
+    channel.id = channel_id
+    channel.recipient = recipient
+    return channel
 
 
 def _make_bot(name="Firefly"):
@@ -38,6 +45,30 @@ def _make_bot(name="Firefly"):
     instance.character = types.SimpleNamespace(name=name)
     instance.client = types.SimpleNamespace(user=_user(BOT_USER_ID, f"{name} Bot", bot=True))
     return instance
+
+
+def _make_registered_bot(name="Firefly"):
+    """Build a bot through its constructor so its Discord event handlers are registered."""
+    bot = bot_instance_module.BotInstance(name, "token", name.lower())
+    bot.character = types.SimpleNamespace(name=name)
+    bot.client.user = _user(BOT_USER_ID, f"{name} Bot", bot=True)
+    return bot
+
+
+class EditTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
+    async def test_an_edit_in_a_dm_updates_that_dms_history(self):
+        bot = _make_registered_bot()
+        alice = _user(42, "Alice")
+        channel = _dm_channel(555)
+        discord_utils_module.add_to_history(DM_KEY, "user", "I love tea", author_name="Alice", user_id=42, message_id=10)
+
+        await bot.client.on_message_edit(
+            _message(10, alice, "I love tea", channel),
+            _message(10, alice, "I love coffee", channel),
+        )
+
+        self.assertEqual(discord_utils_module.get_history(DM_KEY)[0]["content"], "I love coffee")
+        self.assertEqual(discord_utils_module.get_history(555), [])
 
 
 class RecallTests(HistorySandbox, unittest.IsolatedAsyncioTestCase):
