@@ -214,6 +214,16 @@ class UpdatePageTests(VersionApiCase):
                         page.index("if (data.restart_required && version)"))
         self.assertIn("window.restartLabel(data.latest_version, data.running_version)", page)
 
+    def test_the_line_under_the_controls_follows_the_badge(self):
+        page = self.page()
+
+        self.assertNotIn("desc.textContent = 'Restart to apply v' + version", page)
+        self.assertRegex(page, r"if \(restartOnly\) \{\s*desc\.textContent = badge\.textContent;\s*\} else \{\s*updateUpdateDesc\(\);")
+
+    def test_the_navigation_after_an_update_names_the_running_version(self):
+        self.assertRegex(self.page(), r"latest_version: data\.new_version \|\| data\.file_version,[^}]*"
+                                      r"running_version: data\.running_version")
+
     def test_a_generic_error_title_says_the_update_failed(self):
         self.assertIn("title.textContent = failed && !/^(Update|Restart) /.test(message) ? 'Update failed: ' + message",
                       self.page())

@@ -687,7 +687,11 @@ function showNewVersionBadge(version, restartOnly = false, label = null) {
         }
         badge.classList.remove('hidden');
         if (desc) {
-            desc.textContent = 'Restart to apply v' + version;
+            if (restartOnly) {
+                desc.textContent = badge.textContent;
+            } else {
+                updateUpdateDesc();
+            }
         }
     }
 }
@@ -848,6 +852,7 @@ async function updateBot() {
                     status: 'ok',
                     latest_version: data.new_version || data.file_version,
                     file_version: data.file_version,
+                    running_version: data.running_version,
                     update_available: false,
                     restart_required: Boolean(data.restart_required)
                 });
