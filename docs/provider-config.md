@@ -168,6 +168,8 @@ Providers are assumed to support image input unless configured otherwise. For te
 
 When a user sends an image, vision providers receive multimodal content. Text-only providers receive the text plus an omission note. If a provider is marked vision-capable but rejects image input, the bot retries that request as text-only and treats that provider tier as text-only for the rest of the process.
 
+**Max Image Size** (`image_attachment_max_mb`, default 8 MB) and **Max Images Per Message** (`image_attachment_max_count`, default 4) under Config → Performance → Image Attachments limit what a message sends. An image over the size, or after the count, is skipped with a log line that names the reason, and the reply goes ahead with the images that fit.
+
 Emoji and shortcode context remains text-only.
 
 ## Endpoint Types

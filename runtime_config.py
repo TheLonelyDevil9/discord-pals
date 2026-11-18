@@ -69,6 +69,9 @@ DEFAULTS = {
     "provider_retry_attempts": 4,  # Total silent generation attempts before the public failure notice
     "provider_retry_window_seconds": 30,  # Seconds the silent retries are spread across
     "provider_total_deadline_seconds": 300,  # Wall-clock cap on one reply across every tier, cycle and retry (0 disables)
+    # Resource guards
+    "image_attachment_max_mb": 8,  # Larger image attachments are skipped before they are downloaded in full
+    "image_attachment_max_count": 4,  # Images per message sent to the model; 0 sends none
     # Mention features
     "allow_bot_mentions": True,  # Allow bots to generate @mentions for users in responses
     "allow_bot_to_bot_mentions": False,  # Allow bots to @mention other bots (can cause loops!)
@@ -136,6 +139,8 @@ CONFIG_FIELDS = {
     "provider_retry_attempts": ConfigField(int, DEFAULTS["provider_retry_attempts"], 1, 10),
     "provider_retry_window_seconds": ConfigField(int, DEFAULTS["provider_retry_window_seconds"], 0, 300),
     "provider_total_deadline_seconds": ConfigField(int, DEFAULTS["provider_total_deadline_seconds"], 0, 3600),
+    "image_attachment_max_mb": ConfigField(int, DEFAULTS["image_attachment_max_mb"], 1, 20),
+    "image_attachment_max_count": ConfigField(int, DEFAULTS["image_attachment_max_count"], 0, 10),
     "allow_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_mentions"]),
     "allow_bot_to_bot_mentions": ConfigField(bool, DEFAULTS["allow_bot_to_bot_mentions"]),
     "mention_context_limit": ConfigField(int, DEFAULTS["mention_context_limit"], 1, 100),

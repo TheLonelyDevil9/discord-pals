@@ -5,7 +5,6 @@ Helper functions for Discord interactions.
 
 import discord
 import re
-import base64
 import hashlib
 import json
 import os
@@ -1394,47 +1393,6 @@ async def close_http_session():
         await _http_session.close()
         _http_session = None
         log.debug("HTTP session closed")
-
-
-async def download_image_as_base64(url: str) -> Optional[str]:
-    """Download an image and convert to base64."""
-    try:
-        session = await get_http_session()
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.read()
-                return base64.b64encode(data).decode('utf-8')
-    except Exception as e:
-        log.warn(f"Failed to download image: {e}")
-    return None
-
-
-async def process_attachments(message: discord.Message) -> List[dict]:
-    """Process message attachments into AI-consumable format."""
-    content_parts = []
-
-    # Add text content if present
-    visible_content = strip_discord_ooc_comments(message.content or "")
-    if visible_content and visible_content.strip():
-        content_parts.append({"type": "text", "text": visible_content.strip()})
-
-    for attachment in message.attachments:
-        if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
-            base64_data = await download_image_as_base64(attachment.url)
-            if base64_data:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/{attachment.filename.split('.')[-1]};base64,{base64_data}"}
-                })
-
-    # Return multimodal content if we have any images
-    has_images = any(p.get("type") == "image_url" for p in content_parts)
-    if has_images:
-        # Ensure there's always a text part (required by some APIs)
-        if not any(p.get("type") == "text" for p in content_parts):
-            content_parts.insert(0, {"type": "text", "text": "(user sent an image)"})
-        return content_parts
-    return None
 
 
 # --- Message Splitting ---

@@ -30,7 +30,7 @@ from memory import memory_manager, ensure_data_dir, deduplicate_memory_strings
 from discord_utils import (
     get_history, add_to_history, clear_history, format_history_split, dm_history_key,
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
-    process_attachments, autonomous_manager, get_active_users,
+    autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
     update_history_on_edit, remove_deleted_bot_message,
     resolve_discord_formatting, sanitize_discord_syntax_fallback, set_channel_name, get_other_bot_names,
@@ -42,6 +42,7 @@ from response_delivery import format_response_for_delivery
 from runtime_delivery import RuntimeDeliveryBatch, deliver_channel_multipart, deliver_reply_multipart
 from reply_context import build_current_bot_reply_anchor, neutral_bot_event, neutral_reply_reference, summarize_reply_content
 from request_queue import RequestQueue
+from image_attachments import process_attachments
 from stats import stats_manager
 import dm_images, runtime_config
 import response_access
@@ -2087,7 +2088,9 @@ Return exactly one JSON object with this shape:
 
         # Process attachments and gather mentioned context in parallel
         char_name = self.character.name if self.character else None
-        attachment_task = process_attachments(message) if attachments else None
+        attachment_task = (
+            process_attachments(message, bot_name=self.name, req_id=req_id) if attachments else None
+        )
         mentioned_task = self._gather_mentioned_user_context(message, char_name)
 
         if attachment_task:

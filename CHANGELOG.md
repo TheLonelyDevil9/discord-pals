@@ -18,6 +18,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - A watchdog starts the Project worker again within a minute when its task stops, and the Worker check shows the restarts and the exception type of the last stop.
 - Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
+- **Image Attachments** under Config → Performance: **Max Image Size**, from 1 to 20 MB, default 8, and **Max Images Per Message**, from 0 to 10, default 4. A larger image, or one after the count, is skipped with a log line that names the reason, and the reply goes ahead with the images that fit. A download stops once it passes the size limit, also when Discord reports no size or a wrong one. See [Vision Support](docs/provider-config.md#vision-support).
 
 ### Changed
 
@@ -61,6 +62,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 - The first start rewrites each file under `bot_data/history_channels` once: channel files keep their names and gain their conversation key, and DM files named after their key, such as `dm:Firefly:user:123.json` on Linux, get new names. The dashboard's **Update** takes a snapshot first; when you update another way, copy `bot_data/history_channels` before you start this version. An earlier version still reads the channel files and ignores DM history, as it did before. On Linux it records DM messages in files named after the DM key again; when you update again, each such file that is newer than the DM's current file is renamed with `.superseded` added to its name and kept, and its messages are not loaded. A reminder question that this version asked in a DM makes an earlier version drop every DM from that user to that bot until the question expires, 24 hours at most.
+- Images larger than 8 MB, and images after the fourth in one message, are no longer sent to the model. To send them, raise **Max Image Size** or **Max Images Per Message** under Config → Performance → Image Attachments.
 
 ## [v2.9.0] - 2026-09-29
 

@@ -47,6 +47,8 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `split_replies_enabled` | false | Enables separate replies to multiple mentioned users. |
 | `split_replies_max_targets` | 5 | Max split-reply targets. |
 | `concurrency_limit` | 4 | Max concurrent AI requests across all bots. |
+| `image_attachment_max_mb` | 8 | Largest image attachment sent to the model, 1 to 20 MB. A larger image is skipped with a log line, and the reply goes ahead with the images that fit. The size Discord reports is checked before the download, and a download stops once it passes the limit. |
+| `image_attachment_max_count` | 4 | Images per message sent to the model, 0 to 10. Later images are skipped with a log line each. 0 sends no images. |
 | `allow_bot_mentions` | true | Lets bots mention users in replies. |
 | `allow_bot_to_bot_mentions` | false | Lets bots mention other bots. Use carefully. |
 | `mention_context_limit` | 10 | Max mention candidates shown to the model. |

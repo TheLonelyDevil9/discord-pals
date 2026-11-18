@@ -1063,6 +1063,25 @@
             </div>
             <div class="card">
                 <div class="card-header">
+                    <span class="card-title">Image Attachments</span>
+                    <span class="impact-pill">Limits memory use</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="image_attachment_max_mb">Max Image Size (MB)</label>
+                        <input type="number" id="image_attachment_max_mb" min="1" max="20" step="1" value="{{ config.image_attachment_max_mb or 8 }}" aria-describedby="image_attachment_max_mb_hint">
+                        <p class="form-hint" id="image_attachment_max_mb_hint">A larger image is skipped, and the reply goes ahead with the images that fit. Until the reply is sent, each image stays in memory as text a third larger than the file, so high limits need free memory.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="image_attachment_max_count">Max Images Per Message</label>
+                        <input type="number" id="image_attachment_max_count" min="0" max="10" step="1" value="{{ config.image_attachment_max_count if config.image_attachment_max_count is not none else 4 }}" aria-describedby="image_attachment_max_count_hint">
+                        <p class="form-hint" id="image_attachment_max_count_hint">Images after this many in one message are skipped. 0 sends no images to the model.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="saveImageAttachmentSettings()">Save Image Limits</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <span class="card-title">Dashboard Footprint</span>
                 </div>
                 <div class="card-body">
@@ -2193,6 +2212,13 @@ async function saveProviderRetrySettings() {
         provider_retry_window_seconds: parseInt(document.getElementById('provider_retry_window_seconds').value),
         provider_total_deadline_seconds: parseInt(document.getElementById('provider_total_deadline_seconds').value)
     }, 'Provider retry settings saved');
+}
+
+async function saveImageAttachmentSettings() {
+    await postConfig({
+        image_attachment_max_mb: parseInt(document.getElementById('image_attachment_max_mb').value),
+        image_attachment_max_count: parseInt(document.getElementById('image_attachment_max_count').value)
+    }, 'Image limits saved');
 }
 
 async function toggleRawLogging(enabled) {
