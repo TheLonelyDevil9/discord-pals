@@ -42,9 +42,6 @@ IDENTITY_PATHS = {
     "mirror": {("bot_name",)}, "pr_activity": {("bot_name",)}, "pr_activity_delivery": {("bot_name",)},
     "notification": {("bot_name",)}, "cases": {("bot_name",)},
 }
-# A commit receipt hashes its PR's head revision, which never exceeds the highest head_revision
-# stored in a pr_source or pr_head record. The search for it stops this far past that value.
-REVISION_MARGIN = 64
 
 
 class Refused(Exception):
@@ -311,12 +308,17 @@ class Plan:
 
 
 def _revision_bound(rows):
+    """Return the highest head_revision stored in a pr_source or pr_head record.
+
+    The helper stores each head occurrence in pr_head before it sends that occurrence and
+    never lowers a stored revision, so no commit receipt has a higher revision than this.
+    """
     highest = 0
     for (kind, _), (document, _) in rows.links.items():
         if kind in ("pr_source", "pr_head"):
             revision = json.loads(document).get("event", {}).get("head_revision", 0)
             highest = max(highest, revision if isinstance(revision, int) else 0)
-    return highest + REVISION_MARGIN
+    return highest
 
 
 def _rewrite(kind, key, document, data, ctx):

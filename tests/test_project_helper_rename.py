@@ -373,6 +373,14 @@ def set_guard(connection, kind, key, state):
                        (_json_object({"state": state, "source_version": "v2"}, MAX_LINK_BYTES), kind, key))
 
 
+def receipt_above_the_stored_heads(connection):
+    event = {"kind": "pr_activity", "key": "pr:17:commits", "delivery_key": "pr:17:commits:head:4"}
+    put(connection, "pr_activity", activity_receipt_key(settings(), event), {
+        "channel_id": "302", "message_id": "403", "source_version": "v4", "source_key": "pr:17:commits",
+        "number": 17, "activity_type": "commits", "forum_id": "202", "repository": "example/project",
+        "guild_id": "100", "bot_name": OLD, "jump_url": "https://discord.com/channels/100/302/403"}, 1)
+
+
 COMMENT = {"kind": "pr_activity", "key": "pr:17:comment:42"}
 NEW_CFG = settings(bot_name=NEW)
 REFUSALS = {
@@ -391,6 +399,8 @@ REFUSALS = {
     "failed job keyed by the old mapping": (
         {}, lambda c: plant_job(c, f"sync:{mapping_key(settings())}:1", {}, "failed"), OLD, NEW, "Clear history and queue"),
     "source with a stale binding": ({}, stale_source_binding, OLD, NEW, "stored binding differs"),
+    "commit receipt above every stored head revision": (
+        {}, receipt_above_the_stored_heads, OLD, NEW, "differs from every receipt key"),
     "post on a channel the settings do not use": (
         {}, lambda c: put(c, "mirror", f"100:{OLD}:999:example/project:issue:9",
                           {"kind": "issue", "number": 9, "bot_name": OLD, "guild_id": "100",
