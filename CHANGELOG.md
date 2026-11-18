@@ -52,6 +52,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Deleting a bot message removes only that message from history. It could remove the newest reply of any bot instead, also each time the bot deleted one of its own error notices.
 - A reconnect no longer discards history that was not saved yet: history loads once at start, before the bots connect.
 - A startup step that fails after a bot connects is logged and no longer leaves a bot that ignores every message. Slash commands sync once per start, and again only when the command list changed or a sync failed, instead of on every reconnect.
+- The last model context kept for the dashboard holds a short placeholder such as `[image/png, 293 KB]` for each image instead of the image itself, so a reply to a message with images no longer keeps those images in memory until the bot's next reply.
 
 ### Upgrade notes
 

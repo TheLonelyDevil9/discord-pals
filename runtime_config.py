@@ -597,13 +597,44 @@ _last_context_revision = 0
 _last_activity = {}
 
 
+def _image_placeholder(data_uri: str) -> str:
+    header, _, payload = data_uri.partition(",")
+    media_type = header[len("data:"):].split(";", 1)[0] or "image"
+    size = len(payload) * 3 // 4 - payload[-2:].count("=")
+    shown = f"{size / (1024 * 1024):.1f} MB" if size >= 1024 * 1024 else f"{round(size / 1024)} KB"
+    return f"[{media_type}, {shown}]"
+
+
+def _without_image_payloads(messages: list) -> list:
+    """Copy messages with each inline image replaced by a short placeholder.
+
+    The stored context stays in memory until the bot's next reply, so a base64 image
+    kept there would hold megabytes per bot. The request itself keeps its images.
+    """
+    copied = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            copied.append(message)
+            continue
+        parts = []
+        for part in content:
+            image_url = part.get("image_url") if isinstance(part, dict) else None
+            url = image_url.get("url") if isinstance(image_url, dict) else None
+            if isinstance(url, str) and url.startswith("data:"):
+                part = {**part, "image_url": {**image_url, "url": _image_placeholder(url)}}
+            parts.append(part)
+        copied.append({**message, "content": parts})
+    return copied
+
+
 def store_last_context(bot_name: str, system_prompt: str, messages: list,
                        token_estimate: int = 0):
     """Store the last context sent to LLM for visualization."""
     global _last_context_revision
     _last_context[bot_name] = {
         "system_prompt": system_prompt,
-        "messages": messages,
+        "messages": _without_image_payloads(messages),
         "token_estimate": token_estimate,
         "message_count": len(messages)
     }
