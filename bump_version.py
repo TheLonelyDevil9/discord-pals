@@ -13,7 +13,7 @@ Options:
     --no-tag      Skip git tag creation (default)
     --commit      Commit version/changelog changes before publishing
     --allow-non-main-release
-                  Allow tagging from a branch other than main/release/*
+                  Allow --commit or --tag from a branch other than main/release/*
     --message "X" Custom message for changelog entry
 
 Examples:
@@ -357,6 +357,12 @@ def main(args=None):
     bump_type, create_tag, commit, message, allow_non_main_release = parse_args(args)
 
     try:
+        if commit or create_tag:
+            # Both modes push HEAD to origin/main, so refuse a wrong branch or unrelated
+            # changes before anything is written.
+            ensure_release_branch_allowed(allow_non_main_release)
+            ensure_clean_release_worktree()
+
         current = read_version()
         new_version = bump_version(current, bump_type)
 
