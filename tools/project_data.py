@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, clear, reset, or compact the Project helper's database without the dashboard.
+"""Inspect, clear, reset, or compact the Project helper's database, or move it to a renamed helper bot.
 
 Run it from any directory; it reads bot_data in this checkout, the same files the
 bot uses. Each command calls the store functions behind the dashboard's Project
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -29,6 +30,11 @@ def _parser() -> argparse.ArgumentParser:
     reset.add_argument("--confirm", required=True, metavar="REPOSITORY",
                        help="The configured owner/repository, typed exactly.")
     commands.add_parser("compact", help="Return free space to the file system when at least 25%% and 16 MB is free.")
+    rename = commands.add_parser("rename-helper", help="Move the stored records of helper bot OLD to NEW while the "
+                                                       "helper is disabled. Without --apply it only reports.")
+    rename.add_argument("--from", dest="old", required=True, metavar="OLD", help="The helper bot name the records use now.")
+    rename.add_argument("--to", dest="new", required=True, metavar="NEW", help="The helper bot name to move them to.")
+    rename.add_argument("--apply", action="store_true", help="Write the changes. Without it nothing is written.")
     return parser
 
 
@@ -71,6 +77,15 @@ def run(argv, service) -> int:
         print(f"Deleted jobs: {deleted['jobs']}, records: {deleted['links']}, feedback cases: {deleted['cases']}. "
               f"Compaction {'ran' if result['compacted'] else 'skipped'}.")
         return 0
+    if args.command == "rename-helper":
+        from project_automation_rename import format_report, rename_helper
+        try:
+            report = rename_helper(store, service.settings(), args.old, args.new, apply=args.apply)
+        except (RuntimeError, sqlite3.Error) as exc:
+            print(f"Rolled back: {exc}. Nothing was changed.", file=sys.stderr)
+            return 1
+        print("\n".join(format_report(report, args.old, args.new, args.apply)))
+        return 1 if report.verdict == "refused" else 0
     if store.compact():
         print("Compacted the database.")
     else:
