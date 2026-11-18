@@ -66,7 +66,6 @@ _git_fetch_lock = threading.Lock()
 _UPDATE_GIT_TIMEOUT = 180
 _UPDATE_PIP_TIMEOUT = 300
 _STALE_GIT_LOCK_SECONDS = _UPDATE_GIT_TIMEOUT + 60
-_UPDATE_BACKUP_RETENTION = 3
 _UPDATE_BACKUP_ROOT = DATA_DIR / "update_backups"
 _UPDATE_LOG_FILE = DATA_DIR / "update_log.json"
 _UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
@@ -3839,25 +3838,16 @@ def _copy_update_backup_item(source: Path, destination: Path, extra_ignores: tup
         shutil.copy2(source, destination)
 
 
-def _prune_update_backups(backup_root: Path, retention: int = _UPDATE_BACKUP_RETENTION) -> None:
-    if not backup_root.exists():
-        return
-    backups = sorted(
-        [path for path in backup_root.iterdir() if path.is_dir() and path.name.startswith("pre-update-")],
-        key=lambda path: path.name,
-        reverse=True,
-    )
-    for old_backup in backups[retention:]:
-        try:
-            shutil.rmtree(old_backup)
-        except OSError as e:
-            log.warn(f"Could not prune update backup {old_backup}: {e}")
-
-
 def _create_update_state_backup(repo_dir: str, warnings: list | None = None) -> str | None:
-    """Snapshot local state before an update; a note about a left-out database goes into warnings."""
+    """Snapshot local state before an update; a note about a left-out database goes into warnings.
+
+    The caller prunes older snapshots once the update is kept, and deletes this one when
+    the update is rolled back.
+    """
     backup_root = Path(repo_dir) / _UPDATE_BACKUP_ROOT
-    backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    # Microseconds keep two attempts in one second from writing into the same snapshot,
+    # which a rollback would then delete.
+    backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
     copied = False
 
     for name in _UPDATE_BACKUP_FILES:
@@ -3879,7 +3869,6 @@ def _create_update_state_backup(repo_dir: str, warnings: list | None = None) -> 
     note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
     if note and warnings is not None:
         warnings.append(note)
-    _prune_update_backups(backup_root)
     return str(backup_dir)
 
 
@@ -3942,46 +3931,27 @@ def _stash_local_changes(repo_dir: str) -> dict | None:
     return {"ref": stash_ref, "sha": _git_ref_sha(repo_dir, stash_ref), "message": message, "output": output}
 
 
-def _reapply_local_changes(repo_dir: str, before_head: str, stash: dict | None) -> list[str] | None:
-    """Reapply stashed local changes; when they do not apply, roll back to before_head.
+def _settle_update(repo_dir: str, git_result: dict) -> tuple[dict, list[str]]:
+    """Install the dependencies, then keep a moved checkout only when its code imports.
 
-    Returns None when the changes applied, otherwise the conflicted files (possibly none).
+    Returns the dependency result and the warnings of keeping the update. A failed import
+    check or any exception after the move rolls the checkout back and raises
+    update_engine.UpdateRolledBack, or RollbackFailed when it cannot be restored.
     """
-    if not stash:
-        return None
-
-    applied = _run_git(["stash", "apply", "--index", stash["sha"]], repo_dir, timeout=120)
-    if applied.returncode == 0:
-        log.info("Reapplied local changes after update")
-        return None
-
-    unmerged = _run_git(["diff", "--name-only", "--diff-filter=U", "-z"], repo_dir, timeout=30).stdout
-    conflicts = sorted(path for path in unmerged.split("\0") if path)
-    update_engine.restore_checkout(Path(repo_dir), before_head, stash["sha"])
-    log.warn(
-        f"Local changes did not apply on the update ({_command_output(applied)}); "
-        f"rolled back to {before_head[:7]} and kept them in {stash['ref']}"
-    )
-    return conflicts
-
-
-def _settle_update(repo_dir: str, git_result: dict) -> str | None:
-    """Keep a moved checkout only when its code imports; otherwise roll back to before_head.
-
-    Returns the import error after a rollback, or None. The stash entry of the local
-    changes is dropped only once the new code is kept.
-    """
-    if not git_result.get("updated"):
-        return None
-    stash = git_result.get("stash")
-    error = update_engine.check_imports(Path(repo_dir), sys.executable)
-    if error:
-        update_engine.restore_checkout(Path(repo_dir), git_result["before_head"], stash and stash["sha"])
-        git_result.update(updated=False, rolled_back=True, after_head=git_result["before_head"])
-        return error
-    if stash:
-        _run_git(["stash", "drop", stash["ref"]], repo_dir, timeout=30)
-    return None
+    attempt = git_result.get("attempt")
+    moved = bool(attempt and attempt.moved)
+    try:
+        if moved:
+            attempt.dependencies_installed = True
+        dependency_result = _install_update_dependencies(repo_dir)
+        import_error = update_engine.check_imports(Path(repo_dir), sys.executable) if moved else None
+        if import_error:
+            raise update_engine.ImportCheckFailed(import_error)
+    except Exception as error:
+        if not (attempt and attempt.touched):
+            raise
+        attempt.roll_back(error, reinstall=lambda: _install_update_dependencies(repo_dir))
+    return dependency_result, attempt.keep() if attempt else []
 
 
 def _create_update_backup_branch(repo_dir: str) -> str:
@@ -3998,7 +3968,11 @@ def _create_update_backup_branch(repo_dir: str) -> str:
 
 
 def _perform_git_update(repo_dir: str, expected_version: str | None = None, update_branch: str = "") -> dict:
-    """Fetch and update the checkout while preserving user changes where possible."""
+    """Fetch and update the checkout while preserving user changes where possible.
+
+    A failure after the snapshot rolls the checkout back and raises
+    update_engine.UpdateRolledBack, or RollbackFailed when it cannot be restored.
+    """
     update_engine.preflight(Path(repo_dir))
     warnings = []
     snapshot_warnings = []
@@ -4017,54 +3991,55 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     upstream = tag_ref or branch_upstream
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
-    # Only an update that moves HEAD takes a snapshot, so idle Update clicks cannot rotate
-    # the last real one out of the _UPDATE_BACKUP_RETENTION kept.
+    # Only an update that moves HEAD takes a snapshot, and only a kept update prunes older
+    # ones, so idle or failed Update clicks cannot rotate the last real snapshot out.
     moves_head = before_head != upstream_head and not _git_is_ancestor(repo_dir, upstream_head, before_head)
     if moves_head:
         update_engine.refuse_overwriting_untracked(Path(repo_dir), before_head, upstream_head)
-    backup_path = _create_update_state_backup(repo_dir, snapshot_warnings) if moves_head else None
-    stash = _stash_local_changes(repo_dir) if moves_head else None
+    attempt = update_engine.UpdateAttempt(Path(repo_dir), before_head, upstream_head)
     output = fetch_output
-    updated = False
 
     try:
+        if moves_head:
+            attempt.snapshot = _create_update_state_backup(repo_dir, snapshot_warnings)
+            attempt.stash = _stash_local_changes(repo_dir)
         if before_head == upstream_head:
             output = output or "Already up to date"
         elif _git_is_ancestor(repo_dir, before_head, upstream_head):
+            attempt.moved = True
             merge = _run_git(["merge", "--ff-only", upstream], repo_dir, timeout=120)
             if merge.returncode == 0:
                 output = _command_output(merge) or f"Fast-forwarded to {upstream}"
-                updated = True
             else:
-                backup_branch = _create_update_backup_branch(repo_dir)
+                attempt.backup_branch = _create_update_backup_branch(repo_dir)
                 reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
                 _require_git_success(reset, "Resetting checkout after fast-forward failure")
                 output = _command_output(reset) or f"Reset to {upstream}"
                 warnings.append(
-                    f"Fast-forward failed, so the previous checkout was saved as {backup_branch} "
+                    f"Fast-forward failed, so the previous checkout was saved as {attempt.backup_branch} "
                     f"and reset to {upstream}."
                 )
-                updated = True
         elif _git_is_ancestor(repo_dir, upstream_head, before_head):
             output = output or f"Local branch is ahead of {upstream}; no remote update required"
         else:
-            backup_branch = _create_update_backup_branch(repo_dir)
+            attempt.moved = True
+            attempt.backup_branch = _create_update_backup_branch(repo_dir)
             reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
             _require_git_success(reset, "Resetting diverged checkout to upstream")
             output = _command_output(reset) or f"Reset to {upstream}"
             warnings.append(
-                f"Local branch had diverged; the previous HEAD was saved as {backup_branch} "
+                f"Local branch had diverged; the previous HEAD was saved as {attempt.backup_branch} "
                 f"before resetting to {upstream}."
             )
-            updated = True
-    except Exception:
-        update_engine.restore_checkout(Path(repo_dir), before_head, stash and stash["sha"])
-        raise
+        attempt.reapply()
+    except Exception as error:
+        if not attempt.touched:
+            raise
+        attempt.roll_back(error)
 
-    conflicts = _reapply_local_changes(repo_dir, before_head, stash)
     after_head = _git_ref_sha(repo_dir, "HEAD")
     return {
-        "updated": conflicts is None and (updated or before_head != after_head),
+        "updated": before_head != after_head,
         "output": output,
         "warnings": warnings,
         "snapshot_warnings": snapshot_warnings,
@@ -4075,10 +4050,8 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
         "update_branch": selected_branch,
         "target_version": expected_version,
         "target_ref": upstream,
-        "backup_path": backup_path,
-        "stash": stash,
-        "rolled_back": conflicts is not None,
-        "conflicts": conflicts or [],
+        "backup_path": attempt.snapshot,
+        "attempt": attempt,
     }
 
 
@@ -4149,46 +4122,23 @@ def _install_update_dependencies(repo_dir: str) -> dict:
     }
 
 
-def _rolled_back_update_response(git_result: dict, reason: str, advice: str, *,
-                                 expected_version: str | None, update_branch: str,
-                                 dependency_result: dict | None = None, **log_fields):
+def _rolled_back_update_response(rollback, *, repo_dir: str, before_head: str | None, update_branch: str):
     """Build the 409 answer for a rolled-back update and record it in the update log."""
-    stash = git_result.get("stash")
-    restored = f" with your local changes in place, and a copy is kept in {stash['ref']}" if stash else ""
-    message = (
-        f"Update rolled back: {reason}. The checkout is back at {git_result['before_head'][:7]}{restored}. {advice}"
-    )
-    warnings = list(git_result.get("warnings", [])) + list(git_result.get("snapshot_warnings", []))
-    if dependency_result and dependency_result.get("warning"):
-        warnings.append(dependency_result["warning"])
-    payload = _update_payload_base(
-        expected_version=expected_version,
-        file_version=_get_file_version(),
-        git_result=git_result,
-        dependency_result=dependency_result,
-        update_branch=update_branch,
-        warnings=warnings,
-    )
-    payload.update({
-        'status': 'error',
-        'message': message,
-        'updated': False,
-        'rolled_back': True,
-        'conflicts': git_result.get("conflicts", []),
-        'restart_required': False,
-    })
+    message = f"Update rolled back: {rollback}"
+    heads = _update_log_heads(repo_dir, before_head)
+    payload = _update_payload_base(expected_version=None, file_version=_get_file_version(),
+                                   update_branch=update_branch, warnings=rollback.warnings)
+    payload.update({'status': 'error', 'message': message, 'updated': False, 'rolled_back': True,
+                    'conflicts': rollback.conflicts, 'restart_required': False, **heads})
     _write_update_log({
         "status": "rolled_back",
+        "cause": rollback.kind,
         "from_version": VERSION,
-        "expected_version": expected_version,
         "update_branch": update_branch,
-        "target_ref": git_result.get("target_ref"),
-        "before_head": git_result.get("before_head"),
-        "after_head": git_result.get("after_head"),
-        "stash": stash["ref"] if stash else None,
-        "dependency_status": (dependency_result or {}).get("status"),
-        "warnings": warnings,
-        **log_fields,
+        "conflicts": rollback.conflicts,
+        "error": None if rollback.conflicts else str(rollback.__cause__),
+        "warnings": rollback.warnings,
+        **heads,
     })
     log.warn(message)
     return jsonify(payload), 409
@@ -4264,30 +4214,11 @@ def api_update():
             expected_version=expected_version,
             update_branch=update_branch,
         )
-        if git_result.get("rolled_back"):
-            conflicts = git_result.get("conflicts") or []
-            reason = (
-                f"your local changes to {', '.join(conflicts)} conflict with the new version"
-                if conflicts else "your local changes could not be reapplied on the new version"
-            )
-            return _rolled_back_update_response(
-                git_result, reason, "Discard or move those changes, then update again.",
-                expected_version=expected_version, update_branch=update_branch,
-                cause="local_changes_conflict", conflicts=conflicts,
-            )
-        dependency_result = _install_update_dependencies(repo_dir)
-        import_error = _settle_update(repo_dir, git_result)
-        if import_error:
-            return _rolled_back_update_response(
-                git_result, f"the new version does not start ({import_error})",
-                "The bot keeps running the current version.",
-                expected_version=expected_version, update_branch=update_branch,
-                dependency_result=dependency_result, cause="import_failed", error=import_error,
-            )
+        dependency_result, keep_warnings = _settle_update(repo_dir, git_result)
 
         new_version = _get_file_version()
         version_changed = new_version != VERSION and _compare_versions(new_version, VERSION) > 0
-        warnings = list(git_result["warnings"])
+        warnings = list(git_result["warnings"]) + keep_warnings
         if dependency_result.get("warning"):
             warnings.append(dependency_result["warning"])
         # A database left out of the snapshot goes into the log and the response, but it is
@@ -4388,6 +4319,15 @@ def api_update():
             **_update_log_heads(repo_dir, before_head),
         })
         return jsonify({'status': 'error', 'message': message}), 409
+    except update_engine.UpdateRolledBack as rollback:
+        return _rolled_back_update_response(rollback, repo_dir=repo_dir, before_head=before_head,
+                                            update_branch=update_branch)
+    except update_engine.RollbackFailed as failure:
+        message = f"Update failed: {failure}"
+        log.error(message)
+        _write_update_log({"status": "rollback_failed", "from_version": VERSION, "message": str(failure),
+                           **_update_log_heads(repo_dir, before_head)})
+        return jsonify({'status': 'error', 'message': message, 'auto_restart': False}), 500
     except subprocess.TimeoutExpired:
         log.error("Update command timed out")
         _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION,

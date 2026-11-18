@@ -837,8 +837,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
-                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
-                patch.object(dashboard_module, "_settle_update", return_value=None), \
+                patch.object(dashboard_module, "_settle_update", return_value=(dependencies, [])), \
                 patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
                 patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]):
             response = self.client.post("/api/update", headers=self.csrf_headers())
@@ -862,8 +861,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
-                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
-                patch.object(dashboard_module, "_settle_update", return_value=None), \
+                patch.object(dashboard_module, "_settle_update", return_value=(dependencies, [])), \
                 patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
                 patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]), \
                 patch.object(dashboard_module, "_write_update_log", side_effect=logged.append):

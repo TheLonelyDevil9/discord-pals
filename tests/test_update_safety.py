@@ -184,12 +184,12 @@ class DashboardLocalChangesTests(DashboardUpdateCase):
         self.assertIn("rolled back", data["message"])
         self.assertIn("prompts/other_prompts.md", data["message"])
         self.assertIn("characters/firefly.md", data["message"])
-        self.assertIn("stash@{0}", data["message"])
+        self.assertIn("with your local changes in place", data["message"])
         self.assertEqual(self.head(), before)
         self.assertEqual(self.unmerged_paths(), "")
         self.assertEqual(self.read("prompts/other_prompts.md"), "local first line\nsecond line\n")
         self.assertFalse((self.install / "characters" / "firefly.md").exists())
-        self.assertEqual(len(self.stash_entries()), 1)
+        self.assertEqual(self.stash_entries(), [])
         entry = self.last_log_entry()
         self.assertEqual(entry["status"], "rolled_back")
         self.assertEqual((entry["before_head"], entry["after_head"]), (before, before))
@@ -336,13 +336,172 @@ class DashboardImportGateTests(DashboardUpdateCase):
         self.assertEqual(response.status_code, 409)
         self.assertTrue(data["rolled_back"])
         self.assertIn("ImportError: broken on purpose", data["message"])
+        self.assertIn("failed its import check", data["message"])
         self.assertEqual(self.head(), before)
         self.assertEqual(self.read("dashboard.py"), "PAGES = ()\n")
         self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
-        self.assertEqual(len(git(self.install, "stash", "list").stdout.splitlines()), 1)
+        self.assertEqual(git(self.install, "stash", "list").stdout, "")
         entry = self.last_log_entry()
         self.assertEqual((entry["status"], entry["cause"]), ("rolled_back", "import_failed"))
         self.assertEqual((entry["before_head"], entry["after_head"]), (before, before))
+
+
+class DashboardRollbackTests(DashboardUpdateCase):
+    LOCAL_PROMPT = "local first line\nsecond line\n"
+
+    def stage_conflict(self):
+        self.edit("prompts/other_prompts.md", self.LOCAL_PROMPT)
+        self.publish({"prompts/other_prompts.md": "upstream first line\nsecond line\n"})
+
+    def snapshots(self):
+        root = self.install / "bot_data" / "update_backups"
+        return sorted(path.name for path in root.iterdir()) if root.exists() else []
+
+    def assert_restored(self, before):
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.unmerged_paths(), "")
+        self.assertEqual(self.read("prompts/other_prompts.md"), self.LOCAL_PROMPT)
+        self.assertEqual(git(self.install, "stash", "list").stdout, "")
+
+    def test_rolled_back_presses_keep_the_last_real_snapshot_and_leave_nothing_behind(self):
+        self.publish({"main.py": "STARTED = 2\n"})
+        self.assertTrue(self.post_update().get_json()["updated"])
+        kept = self.snapshots()
+        self.assertEqual(len(kept), 1)
+        git(self.install, "commit", "-q", "--allow-empty", "-m", "local commit")
+        self.stage_conflict()
+        before = self.head()
+
+        for _ in range(5):
+            data = self.post_update().get_json()
+            self.assertTrue(data["rolled_back"])
+            self.assertFalse(any("diverged" in warning for warning in data["warnings"]))
+
+        self.assert_restored(before)
+        self.assertEqual(self.snapshots(), kept)
+        self.assertEqual(git(self.install, "branch", "--list", "dashboard-update-backup-*").stdout, "")
+
+    def fail_once(self, fail):
+        """Patch update.run so that the first `git stash apply` goes through fail(result) instead."""
+        real_run = update_module.run
+        calls = []
+
+        def run(args, cwd, timeout=update_module.GIT_TIMEOUT, check=False):
+            if args[:3] == ["git", "stash", "apply"] and not calls:
+                calls.append(args)
+                return fail(real_run(args, cwd, timeout=timeout, check=False), args)
+            return real_run(args, cwd, timeout=timeout, check=check)
+
+        return patch.object(update_module, "run", side_effect=run)
+
+    def test_a_stash_apply_that_times_out_is_rolled_back(self):
+        self.stage_conflict()
+        before = self.head()
+
+        def time_out(_result, args):
+            raise subprocess.TimeoutExpired(args, 120)
+
+        with self.fail_once(time_out):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("timed out", data["message"])
+        self.assert_restored(before)
+
+    def test_an_index_lock_left_after_the_conflict_is_waited_out_and_removed(self):
+        self.stage_conflict()
+        before = self.head()
+
+        def leave_lock(result, _args):
+            (self.install / ".git" / "index.lock").write_text("", encoding="utf-8")
+            return result
+
+        with self.fail_once(leave_lock), patch.object(update_module, "LOCK_RETRY_DELAY", 0):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assert_restored(before)
+        self.assertFalse((self.install / ".git" / "index.lock").exists())
+
+    def test_a_rollback_that_cannot_restore_the_checkout_says_how_to_restore_it(self):
+        self.stage_conflict()
+        before = self.head()
+
+        with patch.object(update_module, "git_until_unlocked", side_effect=RuntimeError("disk is full")):
+            response = self.post_update()
+
+        data = response.get_json()
+        stash_sha = git(self.install, "rev-parse", "stash@{0}").stdout.strip()
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(data["status"], "error")
+        self.assertFalse(data.get("auto_restart"))
+        self.assertIn("conflict with the new version", data["message"])
+        self.assertIn("disk is full", data["message"])
+        self.assertIn(f"git reset --hard {before}", data["message"])
+        self.assertIn(f"git stash apply --index {stash_sha}", data["message"])
+        self.assertEqual(self.last_log_entry()["status"], "rollback_failed")
+
+    def test_an_error_after_the_checkout_moved_is_rolled_back(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        with patch.object(dashboard_module, "_install_update_dependencies",
+                          side_effect=PermissionError("pip is not executable")):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("pip is not executable", data["message"])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+
+    def test_an_import_check_that_cannot_run_rolls_back_and_says_so(self):
+        self.publish({"main.py": "STARTED = 2\n"})
+        before = self.head()
+
+        with patch.object(update_module.tempfile, "TemporaryDirectory",
+                          side_effect=FileNotFoundError("No usable temporary directory found")):
+            data = self.post_update().get_json()
+
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("import check could not run", data["message"])
+        self.assertNotIn("Git is not installed", data["message"])
+        self.assertEqual(self.head(), before)
+
+    def installs_during_a_failed_import(self, new_requirements, reinstall_works):
+        self.publish({"requirements.txt": "flask\n"})
+        git(self.install, "pull", "-q", "--ff-only")
+        self.publish({"requirements.txt": new_requirements, "dashboard.py": "raise ImportError('broken')\n"})
+        installed = []
+
+        def install(repo_dir):
+            installed.append((Path(repo_dir) / "requirements.txt").read_text(encoding="utf-8"))
+            if len(installed) > 1 and not reinstall_works:
+                return {"status": "warning", "message": "", "warning": "pip could not reach the index"}
+            return {"status": "ok", "message": "", "warning": None}
+
+        with patch.object(dashboard_module, "_install_update_dependencies", side_effect=install):
+            data = self.post_update().get_json()
+        return data, installed
+
+    def test_the_rollback_reinstalls_the_old_requirements_when_they_changed(self):
+        data, installed = self.installs_during_a_failed_import("flask>=99\n", reinstall_works=True)
+
+        self.assertTrue(data["rolled_back"])
+        self.assertEqual(installed, ["flask>=99\n", "flask\n"])
+        self.assertEqual(data["warnings"], [])
+
+    def test_a_failed_reinstall_says_the_packages_may_be_newer(self):
+        data, installed = self.installs_during_a_failed_import("flask>=99\n", reinstall_works=False)
+
+        self.assertEqual(len(installed), 2)
+        self.assertTrue(any("may be newer than the code expects" in warning for warning in data["warnings"]))
+        self.assertIn("may be newer than the code expects", " ".join(self.last_log_entry()["warnings"]))
+
+    def test_unchanged_requirements_are_not_reinstalled(self):
+        _data, installed = self.installs_during_a_failed_import("flask\n", reinstall_works=True)
+
+        self.assertEqual(installed, ["flask\n"])
 
 
 if __name__ == "__main__":
