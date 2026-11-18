@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import datetime
 import re
 import threading
 import time
@@ -16,6 +17,8 @@ from project_automation_store import AutomationStore, Conflict
 from project_automation_activity import PRActivity, activate, mapping_key
 
 
+CLOSED_SYNC_DAYS = 7
+
 CHOICES = {
     "write": "Write my report", "check": "Check my report",
     "link": "Add to existing issue", "submit": "Approve and post", "edit": "Edit my report",
@@ -25,6 +28,15 @@ CHOICES = {
 
 def gate(kind: str, actions: list[str]) -> dict:
     return {"kind": kind, "options": [{"key": action, "label": CHOICES[action]} for action in actions]}
+
+
+def closed_time(item):
+    """Return the item's closed_at as a Unix time, or None when GitHub sent no usable value."""
+    try:
+        value = datetime.fromisoformat(item.get("closed_at", "").replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value.timestamp() if value.tzinfo is not None else None
 
 
 def reporter_actions(case):
@@ -717,14 +729,41 @@ class AutomationService:
                 for item in await client.list_open_items(kind):
                     seen.add((kind, item["number"]))
                     self._enqueue_sync_item(item, kind, job["id"])
+            self.store.delete_links("item_closed", [self._closed_key(kind, number) for kind, number in seen])
             for link in self.store.list_links("mirror"):
                 data = link["data"]
                 cfg = self.settings()
                 if data.get("kind") in {"issue", "pull"} and all(data.get(key) == cfg[key] for key in ("repository", "guild_id", "bot_name")) and (data["kind"], data["number"]) not in seen:
-                    self._enqueue_sync_item(await client.get_issue(data["number"]), data["kind"], job["id"])
+                    seen.add((data["kind"], data["number"]))
+                    item = await self._closed_item_in_scope(client, data["kind"], data["number"])
+                    if item is not None:
+                        self._enqueue_sync_item(item, data["kind"], job["id"])
             self.pr_activity.enqueue_discovery(job["id"])
         else:
             raise WorkflowError("Unknown job type.")
+
+    def _closed_key(self, kind, number):
+        return f"{self.settings()['repository'].lower()}:{kind}:{number}"
+
+    async def _closed_item_in_scope(self, client, kind, number):
+        """Return a mirrored item missing from the open listing while it still needs refreshing, else None.
+
+        An item closed more than CLOSED_SYNC_DAYS ago costs no GitHub call once its close
+        time is stored. An unknown close time costs one fetch, which stores it.
+        """
+        key = self._closed_key(kind, number)
+        cutoff = time.time() - CLOSED_SYNC_DAYS * 86400
+        stored = self.store.get_link("item_closed", key)
+        if stored and stored.get("closed_at", 0) < cutoff:
+            return None
+        item = await client.get_issue(number)
+        if item.get("state") != "closed":
+            self.store.delete_links("item_closed", [key])
+            return item
+        closed_at = closed_time(item) or time.time()
+        if not stored or stored.get("closed_at") != closed_at:
+            self.store.put_link("item_closed", key, {"closed_at": closed_at})
+        return item if closed_at >= cutoff else None
 
     def _enqueue_sync_item(self, item, kind, sync_id):
         from project_automation_webhook import webhook_binding

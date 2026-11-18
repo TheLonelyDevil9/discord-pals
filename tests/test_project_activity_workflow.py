@@ -643,6 +643,90 @@ def test_first_start_cleans_up_the_old_queue_before_claiming_work(setup, monkeyp
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
 
+DAY = 86400
+
+
+def mirror_post(setup, kind, number):
+    setup.store.put_link("mirror", f"100:Helper:200:Owner/Project:{kind}:{number}", {
+        "kind": kind, "number": number, "repository": "Owner/Project", "guild_id": "100",
+        "bot_name": "Helper", "channel_id": "300", "message_id": "300"})
+
+
+def github_item(kind, number, *, closed_days_ago=None):
+    item = {"kind": kind, "number": number, "title": "Old item", "body": "", "state": "open", "closed": False,
+            "html_url": f"https://github.com/Owner/Project/{'pull' if kind == 'pull' else 'issues'}/{number}"}
+    if closed_days_ago is not None:
+        item.update(state="closed", closed=True, closed_at=iso(time.time() - closed_days_ago * DAY))
+    return item
+
+
+def closed_world(setup, items, open_items=()):
+    fetched = []
+
+    async def get_issue(number):
+        fetched.append(number)
+        return deepcopy(items[number])
+
+    async def list_open_items(kind):
+        return [deepcopy(item) for item in open_items if item["kind"] == kind]
+
+    setup.client.get_issue = get_issue
+    setup.client.list_open_items = list_open_items
+    for item in items.values():
+        mirror_post(setup, item["kind"], item["number"])
+    return fetched
+
+
+def run_sync_root(setup):
+    root = setup.store.enqueue("sync", {"repository": setup.cfg["repository"],
+                                        "_binding": webhook_binding(setup.cfg)}, f"sync:test:{time.time()}")
+    asyncio.run(setup.service.process_job(setup.store.get_job(root)))
+    refreshed = sorted(job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
+                       if job["kind"] == "event" and job["key"].startswith(f"sync-item:{root}:"))
+    walked = sorted({job["payload"]["number"] for job in setup.store.list_jobs(limit=500)
+                     if job["kind"] == "pr_sync_page" and job["payload"]["_sync_cycle"] == root})
+    return refreshed, walked
+
+
+def test_items_closed_past_the_cutoff_cost_no_fetch_refresh_or_walk(setup):
+    fetched = closed_world(setup, {8: github_item("pull", 8, closed_days_ago=8),
+                                   9: github_item("issue", 9, closed_days_ago=8)})
+    for kind, number in (("pull", 8), ("issue", 9)):
+        setup.store.put_link("item_closed", f"owner/project:{kind}:{number}", {"closed_at": time.time() - 8 * DAY})
+    assert run_sync_root(setup) == ([], [])
+    assert fetched == []
+
+
+def test_recently_closed_items_are_still_refreshed_and_walked(setup):
+    fetched = closed_world(setup, {8: github_item("pull", 8, closed_days_ago=2),
+                                   9: github_item("issue", 9, closed_days_ago=2)})
+    for kind, number in (("pull", 8), ("issue", 9)):
+        setup.store.put_link("item_closed", f"owner/project:{kind}:{number}", {"closed_at": time.time() - 2 * DAY})
+    assert run_sync_root(setup) == ([8, 9], [8])
+    assert sorted(fetched) == [8, 9]
+
+
+def test_unknown_close_time_costs_one_fetch_and_is_then_stored(setup):
+    fetched = closed_world(setup, {8: github_item("pull", 8, closed_days_ago=8),
+                                   9: github_item("issue", 9, closed_days_ago=2)})
+    assert run_sync_root(setup) == ([9], [])
+    assert sorted(fetched) == [8, 9]
+    stored = setup.store.get_link("item_closed", "owner/project:pull:8")["closed_at"]
+    assert abs(stored - (time.time() - 8 * DAY)) < 60
+    fetched.clear()
+    assert run_sync_root(setup) == ([9], [])
+    assert fetched == [9]
+
+
+def test_reopened_item_returns_to_scope_and_loses_its_close_time(setup):
+    old = github_item("pull", 8, closed_days_ago=30)
+    fetched = closed_world(setup, {8: old}, open_items=[github_item("pull", 8)])
+    setup.store.put_link("item_closed", "owner/project:pull:8", {"closed_at": time.time() - 30 * DAY})
+    assert run_sync_root(setup) == ([8], [8])
+    assert setup.store.get_link("item_closed", "owner/project:pull:8") is None
+    assert fetched == []
+
+
 def test_discovery_window_survives_restart_and_failed_scan(setup):
     baseline = activate(setup.store, setup.cfg)
     cycle = setup.store.enqueue("sync", {"_binding": webhook_binding(setup.cfg)}, "discovery-window")

@@ -625,6 +625,12 @@ class AutomationStore:
             )
         return json.loads(document)
 
+    def delete_links(self, kind, keys):
+        keys = [str(key) for key in keys]
+        if keys:
+            with self._connection(write=True) as connection:
+                connection.executemany("DELETE FROM links WHERE kind = ? AND key = ?", [(kind, key) for key in keys])
+
     def ensure_link(self, kind, key, data):
         """Create a durable baseline once, including concurrent webhook arrivals."""
         _text(kind, "Link kind", 80)
