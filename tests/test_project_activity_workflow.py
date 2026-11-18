@@ -958,6 +958,19 @@ def test_the_daily_share_grows_with_the_number_of_prs(setup, walk_clock):
     assert setup.service.pr_activity.enqueue_walks(pulls[:96], 3) == (0, 1)
 
 
+def test_the_first_cycle_after_upgrade_does_all_work_once_and_the_next_only_the_daily_share(setup):
+    items = {1: github_item("issue", 1), 2: github_item("issue", 2), 3: github_item("pull", 3),
+             4: github_item("pull", 4), 5: github_item("pull", 5, closed_days_ago=2),
+             6: github_item("issue", 6, closed_days_ago=2), 7: github_item("issue", 7, closed_days_ago=30)}
+    closed_world(setup, items, open_items=[items[number] for number in (1, 2, 3, 4)])
+    setup.store.put_link("item_closed", "owner/project:issue:7", {"closed_at": time.time() - 30 * DAY})
+    assert sync_cycle(setup) == ([1, 2, 3, 4, 5, 6], [3, 4, 5])
+    assert len(setup.store.list_links("item_mirrored")) == 6
+    assert len(setup.store.list_links("pr_walk")) == 3
+    assert sync_cycle(setup) == ([], [])
+    assert len(discovery_jobs(setup)) == 2
+
+
 def test_after_clear_the_next_cycle_walks_every_pr_again(setup):
     open_world(setup, {7: github_item("pull", 7), 8: github_item("pull", 8)})
     sync_cycle(setup)
