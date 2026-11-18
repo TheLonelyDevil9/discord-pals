@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 
@@ -233,6 +235,12 @@ class BumpVersionTests(unittest.TestCase):
                 self.assertEqual(writes, 0)
                 self.assertFalse(any(call[0] in ("push", "commit", "tag") for call in git_calls))
 
+    def test_the_refusal_names_what_was_refused(self):
+        for args, refused in ((["patch", "--commit"], "push the release commit"), (["patch", "--tag"], "create release tag")):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.run_main_recording(args, "staging")
+            self.assertIn(f"Refusing to {refused} from non-release branch staging", stderr.getvalue())
+
     def test_unrelated_changes_stop_the_release_before_any_write(self):
         result, writes, git_calls = self.run_main_recording(["patch", "--tag"], "main", status=" M dashboard.py\n")
 
@@ -254,7 +262,7 @@ class BumpVersionTests(unittest.TestCase):
                 patch.object(bump_version, "write_version") as write_version, \
                 patch.object(bump_version, "update_changelog") as update_changelog, \
                 patch.object(bump_version, "ensure_release_branch_allowed",
-                             side_effect=lambda allow_non_main=False: calls.append(("branch-check", allow_non_main))), \
+                             side_effect=lambda allow_non_main=False, action="": calls.append(("branch-check", allow_non_main))), \
                 patch.object(bump_version, "ensure_clean_release_worktree",
                              side_effect=lambda: calls.append(("worktree-check",))), \
                 patch.object(bump_version, "commit_release", side_effect=lambda version: calls.append(("commit", version))), \

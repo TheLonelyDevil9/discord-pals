@@ -181,8 +181,8 @@ def current_branch():
     return branch if branch and branch != 'HEAD' else None
 
 
-def ensure_release_branch_allowed(allow_non_main=False):
-    """Reject accidental release tags from feature branches."""
+def ensure_release_branch_allowed(allow_non_main=False, action="create release tag"):
+    """Reject accidental release commits and tags from feature branches."""
     if allow_non_main:
         return
 
@@ -190,7 +190,7 @@ def ensure_release_branch_allowed(allow_non_main=False):
     if branch == 'main' or (branch and branch.startswith('release/')):
         return
     raise RuntimeError(
-        "Refusing to create release tag from non-release branch "
+        f"Refusing to {action} from non-release branch "
         f"{branch or 'detached HEAD'}. Merge to main first or pass --allow-non-main-release."
     )
 
@@ -360,7 +360,8 @@ def main(args=None):
         if commit or create_tag:
             # Both modes push HEAD to origin/main, so refuse a wrong branch or unrelated
             # changes before anything is written.
-            ensure_release_branch_allowed(allow_non_main_release)
+            ensure_release_branch_allowed(
+                allow_non_main_release, "create release tag" if create_tag else "push the release commit")
             ensure_clean_release_worktree()
 
         current = read_version()
