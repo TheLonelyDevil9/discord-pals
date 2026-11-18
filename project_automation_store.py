@@ -555,9 +555,15 @@ class AutomationStore:
         connection.execute("UPDATE jobs SET recovery_notes = ? WHERE id = ?",
                            (json.dumps(notes[-MAX_DECISIONS:], ensure_ascii=False), row["id"]))
 
-    def claim_job(self, kinds=None, lease_seconds=120):
+    def claim_job(self, kinds=None, lease_seconds=120, *, reconciliation=True):
+        """Lease the oldest due job, of `kinds` when given, and return it, or None.
+
+        With reconciliation=False, sync roots and the jobs of sync cycles are left in the queue.
+        """
         lease_seconds = _duration(lease_seconds, minimum=1)
         query = "SELECT id FROM jobs WHERE state = 'pending' AND available_at <= ?"
+        if not reconciliation:
+            query += " AND kind != 'sync' AND json_extract(payload, '$._sync_cycle') IS NULL"
         parameters = [time.time()]
         if kinds is not None:
             if isinstance(kinds, str):

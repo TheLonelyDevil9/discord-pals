@@ -8,13 +8,16 @@ POST. This module never retries a potentially successful write.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+from dataclasses import dataclass
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -29,6 +32,16 @@ MARKER_PREFIX = "<!-- discord-pals-project:"
 MAX_BODY = 12000
 MAX_PAGES = 20
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+# GitHub's guidance for a rate limit response that names no wait is to wait at least one minute:
+# https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately
+MIN_RATE_LIMIT_WAIT = 60
+# A primary window lasts one hour, so a longer wait comes from a malformed header or a wrong clock.
+MAX_RATE_LIMIT_WAIT = 2 * 3600
+# Reconciliation stops while at most this share of a quota is left, so that webhook deliveries
+# and report publications keep the rest.
+RECONCILIATION_RESERVE = 0.2
+RECONCILIATION_RESOURCES = ("core", "graphql")
+MAX_ERROR_BODY = 64 * 1024
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\Z")
 _MARKER = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}\Z")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
@@ -51,6 +64,121 @@ class GitHubAmbiguousWrite(GitHubError):
         super().__init__("GitHub publication could not be confirmed; recovery is required.")
         self.operation = operation
         self.marker = marker
+
+
+class GitHubRateLimited(GitHubError):
+    """GitHub refused a request for a rate limit, or the client held it back; the request wrote nothing.
+
+    retry_at is the Unix time from which the request may be sent again.
+    """
+
+    def __init__(self, retry_at: float, *, status: int | None = None):
+        until = datetime.fromtimestamp(retry_at, timezone.utc).strftime("%H:%M")
+        super().__init__(f"GitHub's rate limit holds this request until {until} UTC.", status=status, retryable=True)
+        self.retry_at = retry_at
+
+
+# True while the worker runs reconciliation work, whose calls leave the quota reserve alone.
+reconciliation_calls = contextvars.ContextVar("project_github_reconciliation_calls", default=False)
+
+
+def _header(headers: dict, name: str) -> str | None:
+    return next((value for key, value in headers.items() if key.lower() == name), None)
+
+
+def _whole(value: Any) -> int | None:
+    return int(value) if isinstance(value, str) and re.fullmatch(r"\s*[0-9]{1,12}\s*", value) else None
+
+
+@dataclass(frozen=True)
+class Quota:
+    limit: int
+    remaining: int
+    reset_at: float
+
+
+class RateLimit:
+    """The installation's quotas as GitHub's latest responses reported them, per resource, and any pause it asked for.
+
+    The state lives in memory. After a restart the next response reports the quotas again, and a
+    request that GitHub refuses meanwhile raises GitHubRateLimited, so no job fails for it.
+    """
+
+    def __init__(self):
+        self.quotas: dict[str, Quota] = {}
+        self.paused_until = 0.0
+
+    def observe(self, headers: dict, now: float) -> None:
+        """Record the quota that the x-ratelimit headers of an installation-authenticated response report."""
+        limit, remaining, reset = (_whole(_header(headers, f"x-ratelimit-{name}"))
+                                   for name in ("limit", "remaining", "reset"))
+        resource = _header(headers, "x-ratelimit-resource") or "core"
+        if limit and remaining is not None and reset is not None and re.fullmatch(r"[a-z_]{1,40}", resource):
+            # A new dict instead of an update, so that a thread reading the quotas never sees one half-written.
+            self.quotas = {**self.quotas, resource: Quota(limit, min(remaining, limit),
+                                                          min(reset, now + MAX_RATE_LIMIT_WAIT))}
+
+    def pause(self, until: float) -> None:
+        self.paused_until = max(self.paused_until, until)
+
+    def waits_until(self, resource: str, now: float, *, reconciliation: bool = False) -> float | None:
+        """Return when a call against resource may be sent, or None when it may be sent now.
+
+        A reconciliation call waits while at most RECONCILIATION_RESERVE of the quota is left;
+        any other call waits only while nothing is left.
+        """
+        if self.paused_until > now:
+            return self.paused_until
+        quota = self.quotas.get(resource)
+        if quota is None or quota.reset_at <= now:
+            return None
+        reserve = math.ceil(quota.limit * RECONCILIATION_RESERVE) if reconciliation else 0
+        return quota.reset_at if quota.remaining <= reserve else None
+
+    def reconciliation_waits_until(self, now: float) -> float | None:
+        """Return when reconciliation may run again, or None when it may run now."""
+        waits = [until for resource in RECONCILIATION_RESOURCES
+                 if (until := self.waits_until(resource, now, reconciliation=True)) is not None]
+        return max(waits, default=None)
+
+
+def rate_limit_refusal(status: int, headers: dict, message: str, now: float) -> tuple[float, bool] | None:
+    """Return (retry_at, pause_all) when a response is one of GitHub's rate limits, else None.
+
+    GitHub answers a rate limit with 403 or 429. A Retry-After header gives the wait, a quota with
+    nothing left waits for its reset, and any other rate limit waits MIN_RATE_LIMIT_WAIT. Each
+    limit but a used-up quota is a secondary limit, which holds every call. A 403 without these
+    signs is a permission error.
+    """
+    if status not in (403, 429):
+        return None
+    retry_after = _whole(_header(headers, "retry-after"))
+    remaining, reset = (_whole(_header(headers, f"x-ratelimit-{name}")) for name in ("remaining", "reset"))
+    used_up = remaining == 0 and reset is not None
+    if status == 403 and retry_after is None and not used_up and "rate limit" not in message.lower():
+        return None
+    if retry_after is not None:
+        return now + min(max(retry_after, 1), MAX_RATE_LIMIT_WAIT), True
+    if used_up:
+        return (min(reset, now + MAX_RATE_LIMIT_WAIT) if reset > now else now + MIN_RATE_LIMIT_WAIT), False
+    return now + MIN_RATE_LIMIT_WAIT, True
+
+
+async def _error_message(response) -> str:
+    """Return the message field of a JSON error body read up to MAX_ERROR_BODY bytes, or an empty string."""
+    chunks, size = [], 0
+    try:
+        async for chunk in response.content.iter_chunked(MAX_ERROR_BODY):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size >= MAX_ERROR_BODY:
+                break
+        message = json.loads(b"".join(chunks)).get("message")
+    except Exception:
+        # The message only tells a secondary rate limit without headers from a permission error,
+        # so a body that cannot be read leaves the response an ordinary error.
+        return ""
+    return message if isinstance(message, str) else ""
 
 
 def validate_repository(repository: Any) -> str:
@@ -299,6 +427,7 @@ class GitHubClient:
         self._auth_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._ambiguous: set[tuple[str, str]] = set()
+        self.rate_limit = RateLimit()
 
     async def close(self) -> None:
         if self._owns_session and self._session is not None:
@@ -335,7 +464,12 @@ class GitHubClient:
             raise GitHubError("The GitHub App private key could not sign an authentication token.") from None
 
     async def _http(self, method: str, path: str, token: str, *, params=None, data=None,
-                    mutation: bool = False) -> tuple[Any, dict[str, str]]:
+                    mutation: bool = False, installation: bool = False) -> tuple[Any, dict[str, str]]:
+        """Send one request and return the decoded body and the response headers.
+
+        Set installation when token is the installation's token, so that the response's quota
+        headers describe the installation's quota; the App's own requests have another quota.
+        """
         # No caller-controlled hosts, redirects, or URLs from pagination headers.
         if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path:
             raise GitHubError("Invalid GitHub API path.")
@@ -346,8 +480,18 @@ class GitHubClient:
         try:
             async with self._session.request(method, API_ROOT + path, headers=headers,
                                              params=params, json=data, allow_redirects=False) as response:
-                status = response.status
+                status, received, now = response.status, dict(response.headers), time.time()
+                if installation:
+                    self.rate_limit.observe(received, now)
                 if not 200 <= status < 300:
+                    message = await _error_message(response) if status == 403 else ""
+                    refusal = rate_limit_refusal(status, received, message, now)
+                    if refusal is not None:
+                        retry_at, pause_all = refusal
+                        if pause_all:
+                            self.rate_limit.pause(retry_at)
+                        # GitHub refused the request, so even a POST wrote nothing.
+                        raise GitHubRateLimited(retry_at, status=status)
                     if mutation and (status >= 500 or status == 408):
                         raise GitHubAmbiguousWrite("request", "")
                     raise GitHubError(f"GitHub returned HTTP {status}.", status=status,
@@ -395,12 +539,19 @@ class GitHubClient:
             self._token, self._token_expiry = token, expiry.timestamp()
             return token
 
+    def hold_for_rate_limit(self, resource: str) -> None:
+        """Raise GitHubRateLimited, without sending anything, while a call against resource must wait."""
+        until = self.rate_limit.waits_until(resource, time.time(), reconciliation=reconciliation_calls.get())
+        if until is not None:
+            raise GitHubRateLimited(until)
+
     async def _call(self, path: str, *, method="GET", params=None, data=None):
+        self.hold_for_rate_limit("search" if path.startswith("/search/") else "core")
         for attempt in range(2):
             token = await self._installation_token()
             try:
                 return await self._http(method, path, token, params=params, data=data,
-                                        mutation=method == "POST")
+                                        mutation=method == "POST", installation=True)
             except GitHubError as exc:
                 if exc.status != 401 or attempt:
                     raise

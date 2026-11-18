@@ -15,7 +15,10 @@ from pathlib import Path
 from background_tasks import BackgroundTaskRegistry
 from logger import info, warn
 from project_automation_ai import FeedbackAI, search_terms
-from project_automation_github import GitHubClient, GitHubAmbiguousWrite, GitHubError, prepare_public_text
+from project_automation_github import (
+    GitHubClient, GitHubAmbiguousWrite, GitHubError, GitHubRateLimited, RateLimit, prepare_public_text,
+    reconciliation_calls,
+)
 from project_automation_health import HealthFacts, due_alerts, health_signals
 from project_automation_store import AutomationStore, Conflict, run_store, store_future, store_thread_idle
 from project_automation_activity import PRActivity, activate, mapping_key, oldest_due
@@ -24,6 +27,7 @@ from project_automation_activity import PRActivity, activate, mapping_key, oldes
 CLOSED_SYNC_DAYS = 7
 WATCHDOG_SECONDS = 60
 ALERT_DM_TIMEOUT_SECONDS = 30
+RATE_LIMIT_NOTE = "Waiting for GitHub's rate limit to reset."
 # GitHub answers 301 for an issue transferred to another repository, 410 for a deleted issue,
 # and 404 for either when the App cannot read the repository involved:
 # https://docs.github.com/en/rest/issues/issues#get-an-issue
@@ -105,6 +109,7 @@ class AutomationService:
         self._restarts = 0
         self._restart_reason = None
         self._reported_restarts = 0
+        self._logged_wait = None
         self._tasks = BackgroundTaskRegistry("project-automation")
         self.pr_activity = PRActivity(self)
 
@@ -1065,15 +1070,31 @@ class AutomationService:
     async def run_once(self) -> bool:
         if self.paused() or self.settings().get("bot_name") not in self.bots:
             return False
-        job = await self._claim()
+        waits = self.reconciliation_waits_until()
+        if waits is not None:
+            self._log_rate_limit_wait(waits, "Project reconciliation waits {} for GitHub's rate limit to reset; "
+                                             "webhook deliveries and report publications continue.")
+        job = await self._claim(reconciliation=waits is None)
         if not job:
             return False
         try:
-            await asyncio.wait_for(self.process_job(job), timeout=480)
+            token = reconciliation_calls.set(job["kind"] == "sync" or job["payload"].get("_sync_cycle") is not None)
+            try:
+                await asyncio.wait_for(self.process_job(job), timeout=480)
+            finally:
+                reconciliation_calls.reset(token)
             await run_store(self._complete, job)
             self._last_error = None
         except asyncio.CancelledError:
             raise
+        except GitHubRateLimited as exc:
+            # GitHub refused the request, or the client held it back, so the attempt wrote nothing
+            # to GitHub, and no job writes to Discord before its GitHub calls. The job therefore
+            # waits without counting the attempt, and an inflight report publication returns to
+            # the queue instead of recovery.
+            await run_store(self.store.defer_job, job["id"], exc.retry_at, lease_token=job["lease_token"],
+                            note=RATE_LIMIT_NOTE)
+            self._log_rate_limit_wait(exc.retry_at, f"A Project {job['kind']} job waits {{}} for GitHub's rate limit.")
         except Conflict:
             await run_store(self._settle_conflict, job)
         except Exception as exc:
@@ -1084,13 +1105,27 @@ class AutomationService:
             await run_store(self._fail, job, error, permanent)
         return True
 
-    async def _claim(self):
+    def reconciliation_waits_until(self):
+        """Return when GitHub's rate limit lets reconciliation run again, or None while it may run."""
+        limits = getattr(self._github, "rate_limit", None)
+        return limits.reconciliation_waits_until(time.time()) if isinstance(limits, RateLimit) else None
+
+    def _log_rate_limit_wait(self, until, text):
+        """Log text, with the wait in minutes in place of {}, once for each reset time."""
+        if until != self._logged_wait:
+            self._logged_wait = until
+            minutes = max(1, round((until - time.time()) / 60))
+            info(text.format(f"{minutes} minute{'' if minutes == 1 else 's'}"),
+                 component="project_automation", event="rate_limit_wait")
+
+    async def _claim(self, *, reconciliation=True):
         """Claim the next due job on the store thread and return it, or None.
 
-        When the worker is cancelled during the claim, the claim still finishes, and its job
-        goes back to the queue with the attempt uncounted, so it does not wait for its lease.
+        With reconciliation=False, sync roots and the jobs of sync cycles stay in the queue. When
+        the worker is cancelled during the claim, the claim still finishes, and its job goes back
+        to the queue with the attempt uncounted, so it does not wait for its lease.
         """
-        claim = store_future(self._claim_next)
+        claim = store_future(self._claim_next, reconciliation)
         try:
             return await asyncio.shield(claim)
         except asyncio.CancelledError:
@@ -1103,9 +1138,9 @@ class AutomationService:
                 pass
             raise
 
-    def _claim_next(self):
+    def _claim_next(self, reconciliation):
         activate(self.store, self.settings())
-        return self.store.claim_job(lease_seconds=600)
+        return self.store.claim_job(lease_seconds=600, reconciliation=reconciliation)
 
     def _complete(self, job):
         self.store.complete_job(job["id"], lease_token=job["lease_token"])

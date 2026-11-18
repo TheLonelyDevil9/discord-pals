@@ -553,6 +553,16 @@ class SetupChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_key["github_repository"]["status"], "attention")
         self.assertNotIn("private-secret", json.dumps(checks))
 
+    async def test_a_rate_limited_check_is_unverified_rather_than_a_setup_problem(self):
+        limited = {"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 600)}
+        api, _ = client(Response({"message": "API rate limit exceeded"}, 403, headers=limited),
+                        Response({"message": "API rate limit exceeded"}, 403, headers=limited))
+        with patch.object(api, "_app_jwt", return_value="private-app-token"):
+            checks = await api.setup_checks()
+        by_key = {item["key"]: item for item in checks}
+        self.assertEqual(by_key["github_installation"]["status"], "unverified")
+        self.assertEqual(by_key["github_repository"]["status"], "unverified")
+
     async def test_malformed_permission_values_are_attention_without_type_errors(self):
         permissions = copy.deepcopy(self.installation()["permissions"])
         permissions["issues"] = []

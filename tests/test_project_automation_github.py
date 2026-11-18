@@ -458,6 +458,104 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await client.close()
         self.assertFalse(session.closed)
 
+    async def test_a_used_up_quota_is_a_rate_limit_that_holds_its_resource_until_the_reset(self):
+        reset = int(time.time()) + 600
+        for status in (403, 429):
+            client, session = authenticated_client(FakeResponse({"message": "API rate limit exceeded"}, status, headers={
+                "X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset),
+                "X-RateLimit-Resource": "core"}))
+            with self.assertRaises(github.GitHubRateLimited) as caught:
+                await client.get_issue(17)
+            self.assertEqual((caught.exception.retry_at, caught.exception.status), (reset, status))
+            with self.assertRaises(github.GitHubRateLimited):
+                await client.get_issue(17)
+            self.assertEqual(len(session.calls), 1)
+
+    async def test_retry_after_pauses_every_call_for_that_time(self):
+        client, session = authenticated_client(FakeResponse(
+            {"message": "You have exceeded a secondary rate limit."}, 403,
+            headers={"Retry-After": "30", "X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "4000",
+                     "X-RateLimit-Reset": str(int(time.time()) + 900)}))
+        before = time.time()
+        with self.assertRaises(github.GitHubRateLimited) as caught:
+            await client.get_issue(17)
+        self.assertTrue(before + 30 <= caught.exception.retry_at <= time.time() + 30)
+        with self.assertRaises(github.GitHubRateLimited):
+            await client.get_issue(18)
+        with self.assertRaises(github.GitHubRateLimited):
+            await client.search_issues("crash")
+        self.assertEqual(len(session.calls), 1)
+
+    async def test_a_secondary_limit_without_retry_after_waits_one_minute(self):
+        message = {"message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}
+        for status, body in ((429, {}), (403, message)):
+            client, session = authenticated_client(FakeResponse(body, status))
+            before = time.time()
+            with self.assertRaises(github.GitHubRateLimited) as caught:
+                await client.get_issue(17)
+            self.assertTrue(before + 60 <= caught.exception.retry_at <= time.time() + 60)
+            with self.assertRaises(github.GitHubRateLimited):
+                await client.get_issue(17)
+            self.assertEqual(len(session.calls), 1)
+
+    async def test_a_403_without_a_rate_limit_sign_stays_an_ordinary_failure(self):
+        client, _ = authenticated_client(FakeResponse({"message": "Resource not accessible by integration"}, 403, headers={
+            "X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "4999", "X-RateLimit-Reset": str(int(time.time()) + 900)}))
+        with self.assertRaises(github.GitHubError) as caught:
+            await client.get_issue(17)
+        self.assertNotIsInstance(caught.exception, github.GitHubRateLimited)
+        self.assertEqual(caught.exception.status, 403)
+
+    async def test_reconciliation_keeps_a_reserve_that_other_calls_may_use(self):
+        reset = int(time.time()) + 900
+        near = {"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "1000", "X-RateLimit-Reset": str(reset)}
+        client, session = authenticated_client(FakeResponse(issue(), headers=near), FakeResponse(issue(), headers=near))
+        await client.get_issue(17)
+        token = github.reconciliation_calls.set(True)
+        try:
+            with self.assertRaises(github.GitHubRateLimited) as caught:
+                await client.get_issue(17)
+        finally:
+            github.reconciliation_calls.reset(token)
+        self.assertEqual(caught.exception.retry_at, reset)
+        self.assertEqual(len(session.calls), 1)
+        await client.get_issue(17)
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(client.rate_limit.reconciliation_waits_until(time.time()), reset)
+        client.rate_limit.observe({**near, "X-RateLimit-Remaining": "1001"}, time.time())
+        self.assertIsNone(client.rate_limit.reconciliation_waits_until(time.time()))
+
+    async def test_each_resource_keeps_its_own_quota(self):
+        now = time.time()
+        limits = github.RateLimit()
+        limits.observe({"x-ratelimit-limit": "5000", "x-ratelimit-remaining": "0",
+                        "x-ratelimit-reset": str(int(now) + 900), "x-ratelimit-resource": "graphql"}, now)
+        limits.observe({"x-ratelimit-limit": "30", "x-ratelimit-remaining": "0",
+                        "x-ratelimit-reset": str(int(now) + 60), "x-ratelimit-resource": "search"}, now)
+        self.assertIsNone(limits.waits_until("core", now))
+        self.assertEqual(limits.waits_until("graphql", now), int(now) + 900)
+        # Duplicate searches have their own quota, which reconciliation never uses.
+        self.assertEqual(limits.reconciliation_waits_until(now), int(now) + 900)
+        self.assertIsNone(limits.reconciliation_waits_until(now + 901))
+
+    async def test_a_rate_limited_publication_is_refused_rather_than_ambiguous(self):
+        client, session = authenticated_client(FakeResponse([]), FakeResponse(
+            {"message": "You have exceeded a secondary rate limit"}, 403, headers={"Retry-After": "60"}))
+        with self.assertRaises(github.GitHubRateLimited):
+            await client.create_issue("Title", "Body", MARKER)
+        self.assertEqual([call[0] for call in session.calls], ["GET", "POST"])
+        self.assertNotIn(("create_issue", MARKER), client._ambiguous)
+
+    async def test_the_app_token_request_does_not_report_the_installation_quota(self):
+        app_quota = {"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 900)}
+        expires = datetime.fromtimestamp(time.time() + 3600, timezone.utc).isoformat()
+        session = FakeSession(FakeResponse({"token": "fake-installation-secret", "expires_at": expires}, 201, headers=app_quota),
+                              FakeResponse(issue()))
+        client = github.GitHubClient(CONFIG, session)
+        with patch.object(client, "_app_jwt", return_value="fake-app-secret"):
+            await client.get_issue(17)
+        self.assertEqual(client.rate_limit.quotas, {})
+
 
 if __name__ == "__main__":
     unittest.main()

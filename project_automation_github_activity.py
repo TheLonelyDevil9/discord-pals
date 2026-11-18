@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from project_automation_github import (
-    GitHubError, _ENV_NAME, _item, _number, _repo_url, _text,
+    GitHubError, GitHubRateLimited, _ENV_NAME, _item, _number, _repo_url, _text,
     validate_repository,
 )
 
@@ -277,11 +277,12 @@ def normalize_pr_activity(event: str, payload: dict, repository: str, base: dict
 async def _graphql(client, query: str, variables: dict) -> dict:
     # POST here is a fixed read-only query, not a publication. Do not classify a
     # network failure as an ambiguous public write or retry mutations.
+    client.hold_for_rate_limit("graphql")
     for attempt in range(2):
         token = await client._installation_token()
         try:
-            result, _ = await client._http("POST", "/graphql", token,
-                                          data={"query": query, "variables": variables}, mutation=False)
+            result, _ = await client._http("POST", "/graphql", token, data={"query": query, "variables": variables},
+                                          mutation=False, installation=True)
             break
         except GitHubError as exc:
             if exc.status != 401 or attempt:
@@ -607,7 +608,7 @@ async def setup_checks(client) -> list[dict[str, str]]:
             raise GitHubError("Invalid App installation.")
     except GitHubError as exc:
         installed = None
-        status = "attention" if exc.status in {401, 403, 404} else "unverified"
+        status = "attention" if exc.status in {401, 403, 404} and not isinstance(exc, GitHubRateLimited) else "unverified"
         add("installation", "App installation", status,
             "Check the installation ID and App credentials, then retry." if status == "attention" else
             "GitHub could not verify the installation. Retry when API access is available.")
@@ -620,6 +621,9 @@ async def setup_checks(client) -> list[dict[str, str]]:
         if (not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str)
                 or repository["full_name"].lower() != client.repository.lower()):
             raise GitHubError("Invalid repository access response.")
+    except GitHubRateLimited:
+        add("repository", "Repository access", "unverified",
+            "GitHub's rate limit held this check. Retry when the limit resets.")
     except GitHubError as exc:
         add("repository", "Repository access", "attention" if exc.status in {401, 403, 404, 422} else "unverified",
             "The installation could not read this repository. Check repository selection and access, then retry.")
