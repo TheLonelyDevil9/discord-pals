@@ -903,25 +903,33 @@ def add_to_history(channel_id: int, role: str, content: str, author_name: str = 
 
 
 def cleanup_stale_conversation_history():
-    """Remove stale channels from conversation_history to prevent memory leaks."""
+    """Remove stale channels from conversation_history to prevent memory leaks.
+
+    Only channel histories count toward the limit and only they are removed.
+    Removal deletes the history file, and every DM file loads at start, so
+    counting DMs would delete idle conversations because of DM volume alone.
+    """
     now = time.time()
+    channel_ids = [history_id for history_id in conversation_history if isinstance(history_id, int)]
+    if len(channel_ids) <= _MAX_CHANNELS_IN_HISTORY:
+        return
     channels_to_remove = []
 
     # Find channels with no recent activity
-    for channel_id in list(conversation_history.keys()):
+    for channel_id in channel_ids:
         last_activity = _channel_last_activity.get(channel_id, 0)
         if now - last_activity > _STALE_CHANNEL_THRESHOLD:
             channels_to_remove.append(channel_id)
 
     # If still over limit, remove oldest channels
-    if len(conversation_history) - len(channels_to_remove) > _MAX_CHANNELS_IN_HISTORY:
+    if len(channel_ids) - len(channels_to_remove) > _MAX_CHANNELS_IN_HISTORY:
         # Sort by last activity, oldest first
         sorted_channels = sorted(
-            conversation_history.keys(),
+            channel_ids,
             key=lambda cid: _channel_last_activity.get(cid, 0)
         )
         # Remove oldest until under limit
-        excess = len(conversation_history) - _MAX_CHANNELS_IN_HISTORY
+        excess = len(channel_ids) - _MAX_CHANNELS_IN_HISTORY
         channels_to_remove.extend(sorted_channels[:excess])
 
     # Remove duplicates and clean up

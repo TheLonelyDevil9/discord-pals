@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -176,6 +177,37 @@ class LegacyHistoryFileTests(HistorySandbox, unittest.TestCase):
         self.assertEqual(discord_utils_module.get_history(22)[0]["content"], "still here")
         self.assertEqual(discord_utils_module.get_history(11), [])
         self.assertIn("11.json", self.file_names())
+
+
+class HistoryLimitTests(HistorySandbox, unittest.TestCase):
+    """The 500-conversation limit deletes the files of what it evicts."""
+
+    def _start_with(self, *, channels, idle_channels, dms, idle_dms):
+        now = time.time()
+        keys = [1000 + index for index in range(channels)]
+        keys += [discord_utils_module.dm_history_key("Firefly", 5000 + index) for index in range(dms)]
+        for position, key in enumerate(keys):
+            idle = position < idle_channels if isinstance(key, int) else position - channels < idle_dms
+            discord_utils_module.conversation_history[key] = [{"role": "user", "content": f"line for {key}", "author": "Alice"}]
+            discord_utils_module._channel_last_activity[key] = now - (3 * 86400 if idle else 60)
+            discord_utils_module._dirty_history_channels.add(key)
+        discord_utils_module.save_history(force=True)
+        self.restart()
+        return set(self.file_names())
+
+    def test_dm_histories_do_not_count_toward_the_limit(self):
+        before = self._start_with(channels=400, idle_channels=200, dms=150, idle_dms=75)
+
+        discord_utils_module.add_to_history(1399, "user", "a new message", author_name="Alice", message_id=1)
+
+        self.assertEqual(set(self.file_names()), before)
+
+    def test_over_the_limit_only_idle_channel_files_are_deleted(self):
+        before = self._start_with(channels=520, idle_channels=300, dms=150, idle_dms=75)
+
+        discord_utils_module.add_to_history(1519, "user", "a new message", author_name="Alice", message_id=1)
+
+        self.assertEqual(before - set(self.file_names()), {f"{1000 + index}.json" for index in range(300)})
 
 
 if __name__ == "__main__":
