@@ -1163,6 +1163,11 @@
             indicator.removeAttribute('title');
         }
 
+        function updateCommitsLabel(data) {
+            if (!data || !data.update_branch || !(data.commits_behind > 0)) return null;
+            return data.commits_behind + (data.commits_behind === 1 ? ' new commit on ' : ' new commits on ') + data.update_branch;
+        }
+
         function renderGlobalUpdateIndicator(data) {
             var indicator = document.getElementById('nav-update-status');
             var label = document.getElementById('nav-update-label');
@@ -1172,7 +1177,7 @@
             indicator.classList.remove('update-available', 'restart-required');
 
             if (data.restart_required && version) {
-                label.textContent = 'Restart for v' + version;
+                label.textContent = version === data.running_version ? 'Restart to apply update' : 'Restart for v' + version;
                 indicator.href = '/#restart-bot-control';
                 indicator.title = 'Restart Discord Pals to run v' + version;
                 indicator.classList.add('restart-required');
@@ -1181,7 +1186,7 @@
             }
 
             if (data.update_available && version) {
-                label.textContent = 'Update to v' + version;
+                label.textContent = updateCommitsLabel(data) || ('Update to v' + version);
                 indicator.href = '/#update-bot-control';
                 indicator.title = 'A Discord Pals update is available on GitHub';
                 indicator.classList.add('update-available');
@@ -1212,6 +1217,7 @@
             }
         }
 
+        window.updateCommitsLabel = updateCommitsLabel;
         window.renderGlobalUpdateIndicator = renderGlobalUpdateIndicator;
         window.hideGlobalUpdateIndicator = hideGlobalUpdateIndicator;
         window.checkGlobalUpdateStatus = checkGlobalUpdateStatus;

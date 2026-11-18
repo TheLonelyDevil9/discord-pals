@@ -52,9 +52,16 @@ _TOPOLOGY_CACHE_TTL = 10.0
 _topology_cache_lock = threading.Lock()
 _topology_cache = {"built_at": 0.0, "value": None}
 _VERSION_CACHE_TTL = 30 * 60.0
+_VERSION_FAILURE_TTL = 5 * 60.0
 _github_version_cache_lock = threading.Lock()
-_github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value": False}
+_github_version_cache = {
+    "fetched_at": 0.0, "github_version": None, "has_value": False, "failed": False,
+    "tracked_ref": None, "update_branch": None, "refreshing": False,
+}
 _update_lock = threading.Lock()
+# Held by every git fetch, so the background version check never fetches the same
+# refs as an update at the same time.
+_git_fetch_lock = threading.Lock()
 _UPDATE_GIT_TIMEOUT = 180
 _UPDATE_PIP_TIMEOUT = 300
 _STALE_GIT_LOCK_SECONDS = _UPDATE_GIT_TIMEOUT + 60
@@ -3335,35 +3342,103 @@ def _fetch_latest_available_version():
 def _invalidate_github_version_cache():
     """Clear the cached GitHub version result."""
     with _github_version_cache_lock:
-        _github_version_cache["fetched_at"] = 0.0
-        _github_version_cache["github_version"] = None
-        _github_version_cache["has_value"] = False
+        _github_version_cache.update(
+            fetched_at=0.0, github_version=None, has_value=False, failed=False,
+            tracked_ref=None, update_branch=None, refreshing=False,
+        )
+
+
+def _version_cache_is_fresh(now: float) -> bool:
+    """Call with _github_version_cache_lock held."""
+    ttl = _VERSION_FAILURE_TTL if _github_version_cache["failed"] else _VERSION_CACHE_TTL
+    return now - _github_version_cache["fetched_at"] < ttl
+
+
+def _store_latest_version(github_version: str | None, failed: bool) -> None:
+    """Call with _github_version_cache_lock held. A failed check keeps the last good version."""
+    _github_version_cache["fetched_at"] = time.time()
+    _github_version_cache["failed"] = failed
+    if github_version is not None:
+        _github_version_cache["github_version"] = github_version
+        _github_version_cache["has_value"] = True
 
 
 def _check_github_latest_version(force_refresh: bool = False):
     """Return the latest GitHub version, using a TTL cache to avoid repeated fetches."""
-    now = time.time()
     with _github_version_cache_lock:
-        has_fresh_cache = (
-            _github_version_cache["has_value"] and
-            not force_refresh and
-            (now - _github_version_cache["fetched_at"]) < _VERSION_CACHE_TTL
+        if not force_refresh and _github_version_cache["has_value"] and _version_cache_is_fresh(time.time()):
+            return _github_version_cache["github_version"]
+    github_version = _fetch_latest_available_version()
+    with _github_version_cache_lock:
+        _store_latest_version(github_version, failed=github_version is None)
+        return _github_version_cache["github_version"]
+
+
+def _fetch_tracked_branch(repo_dir: str, update_branch: str) -> tuple[str | None, bool]:
+    """Fetch the branch that updates follow; return it and whether its ref is now current."""
+    try:
+        tracked_ref = _update_upstream_ref(repo_dir, _current_git_branch(repo_dir), update_branch)
+    except RuntimeError:
+        return None, True
+    remote, _, branch = tracked_ref.partition("/")
+    if not _git_fetch_lock.acquire(blocking=False):
+        # An update is fetching right now and brings the ref up to date itself.
+        return tracked_ref, True
+    try:
+        fetch = _run_git(
+            ["fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{tracked_ref}"], repo_dir, timeout=30
         )
-        if has_fresh_cache:
-            return _github_version_cache["github_version"]
+    finally:
+        _git_fetch_lock.release()
+    return tracked_ref, fetch.returncode == 0
 
-        github_version = _fetch_latest_available_version()
-        if github_version is not None:
-            _github_version_cache["fetched_at"] = now
-            _github_version_cache["github_version"] = github_version
-            _github_version_cache["has_value"] = True
-            return github_version
 
-        if _github_version_cache["has_value"]:
-            return _github_version_cache["github_version"]
-
-        _github_version_cache["fetched_at"] = now
+def _commits_behind(repo_dir: str, tracked_ref: str) -> int | None:
+    """Count the commits on tracked_ref that HEAD lacks, from local refs only."""
+    try:
+        result = _run_command(["git", "rev-list", "--count", f"HEAD..{tracked_ref}"], cwd=repo_dir, timeout=30)
+        return int(result.stdout.strip()) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+def _refresh_version_state(update_branch: str) -> None:
+    """Run the network checks behind /api/version and store their results in the cache."""
+    github_version, tracked_ref, fetched = None, None, False
+    try:
+        github_version = _fetch_latest_available_version()
+        tracked_ref, fetched = _fetch_tracked_branch(
+            _repo_root(os.path.dirname(os.path.abspath(__file__))), update_branch
+        )
+    except Exception as e:
+        log.debug(f"Version check failed: {e}")
+    finally:
+        with _github_version_cache_lock:
+            _store_latest_version(github_version, failed=github_version is None or not fetched)
+            _github_version_cache.update(tracked_ref=tracked_ref, update_branch=update_branch, refreshing=False)
+
+
+def _start_version_refresh(update_branch: str) -> None:
+    threading.Thread(target=_refresh_version_state, args=(update_branch,), daemon=True, name="version-check").start()
+
+
+def _version_state(update_branch: str) -> dict:
+    """Copy the cached remote checks, and start a background refresh when they are stale.
+
+    A page load never waits for GitHub or a git fetch, and never holds the cache lock while
+    one runs. Results are kept for _VERSION_CACHE_TTL, or _VERSION_FAILURE_TTL after a failure.
+    """
+    with _github_version_cache_lock:
+        state = dict(_github_version_cache)
+        stale = state["update_branch"] != update_branch or not _version_cache_is_fresh(time.time())
+        start = stale and not state["refreshing"]
+        if start:
+            _github_version_cache["refreshing"] = True
+    if start:
+        _start_version_refresh(update_branch)
+    if state["update_branch"] != update_branch:
+        state["tracked_ref"] = None
+    return state
 
 
 def _update_verification_failure(expected_version: str | None, file_version: str, git_result: dict) -> dict | None:
@@ -3432,7 +3507,12 @@ def api_version():
     import runtime_config
 
     file_version = _get_file_version()
-    github_version = _check_github_latest_version()
+    update_branch = _normalize_update_branch(runtime_config.get("update_branch", ""))
+    state = _version_state(update_branch)
+    github_version = state["github_version"]
+    code_dir = os.path.dirname(os.path.abspath(__file__))
+    disk_commit = _git_head(code_dir)
+    commits_behind = _commits_behind(code_dir, state["tracked_ref"]) if state["tracked_ref"] else None
 
     # Determine update status
     update_available = False  # New version on GitHub to pull
@@ -3447,6 +3527,11 @@ def api_version():
     elif file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
         restart_required = True
         latest_version = file_version
+    # A selected branch moves between releases, so its new commits are an update too.
+    if update_branch and commits_behind:
+        update_available = True
+    if _RUNNING_COMMIT and disk_commit and disk_commit != _RUNNING_COMMIT:
+        restart_required = True
 
     return jsonify({
         'status': 'ok',
@@ -3456,7 +3541,11 @@ def api_version():
         'latest_version': latest_version,
         'update_branch': runtime_config.get("update_branch", ""),
         'update_available': update_available,
-        'restart_required': restart_required
+        'restart_required': restart_required,
+        'running_commit': _RUNNING_COMMIT,
+        'disk_commit': disk_commit,
+        'tracked_ref': state["tracked_ref"],
+        'commits_behind': commits_behind,
     })
 
 
@@ -3535,6 +3624,10 @@ def _git_head(repo_dir: str) -> str | None:
 
 def _update_log_heads(repo_dir: str | None, before_head: str | None) -> dict:
     return {"before_head": before_head, "after_head": _git_head(repo_dir) if repo_dir else None}
+
+
+# Read once at import, so it stays the commit of the running code after an update moves HEAD.
+_RUNNING_COMMIT = _git_head(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _run_git(args: list[str], cwd: str, timeout: int = _UPDATE_GIT_TIMEOUT):
@@ -3910,7 +4003,8 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     snapshot_warnings = []
     selected_branch = _normalize_update_branch(update_branch)
 
-    fetch = _fetch_all_with_tag_recovery(repo_dir)
+    with _git_fetch_lock:
+        fetch = _fetch_all_with_tag_recovery(repo_dir)
     _require_git_success(fetch, "Fetching updates")
     fetch_output = _command_output(fetch)
     if "Recovered from stale local release tags" in fetch_output:

@@ -1,5 +1,8 @@
 import json
+import shutil
+import subprocess
 import tempfile
+import unittest
 from pathlib import Path
 
 import module_stubs  # noqa: F401
@@ -7,6 +10,94 @@ import dashboard as dashboard_module
 import memory as memory_module
 import reminders as reminders_module
 import time_utils as time_utils_module
+
+
+def git(cwd, *args, check=True):
+    result = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=60)
+    if check and result.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed: {result.stderr or result.stdout}")
+    return result
+
+
+BASE_FILES = {
+    "version.py": '__version__ = "1.0.0"\nVERSION = __version__\n',
+    "main.py": "STARTED = True\n",
+    "dashboard.py": "PAGES = ()\n",
+    "prompts/other_prompts.md": "first line\nsecond line\n",
+    "characters/firefly.md": "# Firefly\n",
+}
+
+
+@unittest.skipUnless(shutil.which("git"), "the updater tests need git")
+class GitCheckoutCase(unittest.TestCase):
+    """A bare remote, a seed clone that publishes upstream commits, and an install clone.
+
+    The install clone stands in for a live checkout that the updater moves.
+    """
+
+    def setUp(self):
+        self._git_temp = tempfile.TemporaryDirectory()
+        self.root = Path(self._git_temp.name)
+        self.remote, self.seed, self.install = self.root / "remote.git", self.root / "seed", self.root / "install"
+        git(self.root, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        git(self.root, "clone", "-q", "-c", "core.autocrlf=false", str(self.remote), str(self.seed))
+        self.set_identity(self.seed)
+        self.publish(BASE_FILES, "initial")
+        git(self.root, "clone", "-q", "-c", "core.autocrlf=false", str(self.remote), str(self.install))
+        self.set_identity(self.install)
+
+    def tearDown(self):
+        self._git_temp.cleanup()
+
+    @staticmethod
+    def set_identity(repo):
+        git(repo, "config", "user.email", "test@example.invalid")
+        git(repo, "config", "user.name", "Test")
+
+    def publish(self, files, message="upstream change"):
+        for relative, text in files.items():
+            path = self.seed / relative
+            if text is None:
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8", newline="\n")
+        git(self.seed, "add", "-A")
+        git(self.seed, "commit", "-q", "-m", message)
+        git(self.seed, "push", "-q", "origin", "HEAD:main")
+        return git(self.seed, "rev-parse", "HEAD").stdout.strip()
+
+    def edit(self, relative, text):
+        path = self.install / relative
+        if text is None:
+            path.unlink()
+        else:
+            path.write_text(text, encoding="utf-8", newline="\n")
+
+    def read(self, relative):
+        return (self.install / relative).read_text(encoding="utf-8")
+
+    def head(self):
+        return git(self.install, "rev-parse", "HEAD").stdout.strip()
+
+    def unmerged_paths(self):
+        return git(self.install, "ls-files", "--unmerged").stdout.strip()
+
+    def leave_stash_pop_conflict(self):
+        """Wedge the install the way a stash pop that conflicted used to leave it."""
+        self.edit("prompts/other_prompts.md", "local first line\nsecond line\n")
+        self.publish({"prompts/other_prompts.md": "upstream first line\nsecond line\n"})
+        git(self.install, "fetch", "-q")
+        git(self.install, "stash", "push", "-q", "-m", "earlier update")
+        git(self.install, "merge", "--ff-only", "-q", "origin/main")
+        git(self.install, "stash", "pop", "--index", check=False)
+
+    def leave_merge_in_progress(self):
+        git(self.install, "checkout", "-q", "-b", "side")
+        self.edit("characters/firefly.md", "# Firefly, edited on a side branch\n")
+        git(self.install, "commit", "-q", "-am", "side change")
+        git(self.install, "checkout", "-q", "main")
+        git(self.install, "merge", "-q", "--no-ff", "--no-commit", "side")
 
 
 class MemorySandboxMixin:

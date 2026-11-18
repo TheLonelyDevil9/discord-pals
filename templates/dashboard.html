@@ -672,7 +672,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Show new version badge
-function showNewVersionBadge(version, restartOnly = false) {
+function showNewVersionBadge(version, restartOnly = false, label = null) {
     const badge = document.getElementById('new-version-badge');
     const desc = document.getElementById('update-desc');
     const updateBtn = document.getElementById('update-btn');
@@ -682,7 +682,7 @@ function showNewVersionBadge(version, restartOnly = false) {
             badge.textContent = 'Restart for v' + version;
             if (updateBtn) updateBtn.classList.add('hidden');
         } else {
-            badge.textContent = 'v' + version + ' available';
+            badge.textContent = label || ('v' + version + ' available');
             if (updateBtn) updateBtn.classList.remove('hidden');
         }
         badge.classList.remove('hidden');
@@ -746,7 +746,7 @@ function applyPendingUpdateState(data) {
     if (!data || data.status !== 'ok') return;
     setSelectedUpdateBranch(data.update_branch);
     if (data.update_available) {
-        showNewVersionBadge(data.latest_version, false);
+        showNewVersionBadge(data.latest_version, false, window.updateCommitsLabel ? window.updateCommitsLabel(data) : null);
     } else if (data.restart_required) {
         showNewVersionBadge(data.latest_version, true);
     } else {

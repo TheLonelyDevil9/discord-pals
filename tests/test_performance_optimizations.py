@@ -693,8 +693,11 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         }
         dependencies = {"status": "skipped", "message": "", "warning": None}
 
+        # The page load that finds the cache empty answers at once and fills it for the next one.
         with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0", "1.2.0"]), \
                 patch.object(dashboard_module, "_fetch_latest_available_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
+                patch.object(dashboard_module, "_fetch_tracked_branch", return_value=(None, True)), \
+                patch.object(dashboard_module, "_start_version_refresh", side_effect=dashboard_module._refresh_version_state), \
                 patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
                 patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies):
@@ -703,7 +706,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             update = self.client.post("/api/update", headers=self.csrf_headers()).get_json()
             third = self.client.get("/api/version").get_json()
 
-        self.assertEqual(first["github_version"], "1.1.0")
+        self.assertIsNone(first["github_version"])
         self.assertEqual(second["github_version"], "1.1.0")
         self.assertEqual(third["github_version"], "1.2.0")
         self.assertEqual(fetch_mock.call_count, 2)
@@ -713,7 +716,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module.set("update_branch", "staging")
 
         with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
-                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+                patch.object(dashboard_module, "_start_version_refresh"):
             data = self.client.get("/api/version").get_json()
 
         self.assertEqual(data["status"], "ok")
@@ -721,7 +724,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
     def test_version_api_includes_status_for_dashboard_update_state(self):
         with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
-                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+                patch.object(dashboard_module, "_start_version_refresh"):
             data = self.client.get("/api/version").get_json()
 
         self.assertEqual(data["status"], "ok")
