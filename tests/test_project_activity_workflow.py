@@ -976,6 +976,23 @@ def test_thirteen_prs_get_one_daily_walk_each_and_no_cycle_walks_two(setup, walk
     assert run_sync_root(setup)[1] == walked[0]
 
 
+def test_the_daily_share_walks_the_prs_whose_last_walk_is_oldest(setup, walk_clock):
+    first, second = github_item("pull", 1), github_item("pull", 2)
+    assert setup.service.pr_activity.enqueue_walks([second], 1) == (1, 0)
+    walk_clock[0] += 5 * 3600
+    assert setup.service.pr_activity.enqueue_walks([first, second], 2) == (1, 0)
+    walk_clock[0] += DAY
+    assert setup.service.pr_activity.enqueue_walks([first, second], 3) == (0, 1)
+    assert queued_by(setup, 3)[1] == [2]
+
+
+def test_a_clock_set_back_does_not_pause_the_daily_share(setup, walk_clock):
+    pulls = [github_item("pull", 1), github_item("pull", 2)]
+    setup.service.pr_activity.enqueue_walks(pulls, 1)
+    walk_clock[0] -= 2 * DAY
+    assert [setup.service.pr_activity.enqueue_walks(pulls, cycle) for cycle in (2, 3, 4)] == [(0, 1), (0, 1), (0, 0)]
+
+
 def test_the_daily_share_grows_with_the_number_of_prs(setup, walk_clock):
     pulls = [github_item("pull", number) for number in range(1, 98)]
     assert setup.service.pr_activity.enqueue_walks(pulls, 1) == (97, 0)
