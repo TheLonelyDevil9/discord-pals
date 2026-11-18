@@ -7,6 +7,7 @@ install clone that stands in for a live checkout.
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -235,6 +236,85 @@ class DashboardLocalChangesTests(DashboardUpdateCase):
         self.assertEqual(self.read("main.py"), "STARTED = 2\n")
         self.assertFalse((self.install / "characters" / "firefly.md").exists())
         self.assertEqual(self.stash_entries(), [])
+
+
+class ImportCheckTests(unittest.TestCase):
+    def check(self, files):
+        with tempfile.TemporaryDirectory() as temp:
+            for name, text in files.items():
+                Path(temp, name).write_text(text, encoding="utf-8")
+            return update_module.check_imports(Path(temp), sys.executable)
+
+    def test_code_that_imports_passes(self):
+        self.assertIsNone(self.check({"main.py": "import dashboard\n", "dashboard.py": "PAGES = ()\n"}))
+
+    def test_an_import_error_is_reported_by_its_last_line(self):
+        error = self.check({"main.py": "STARTED = True\n", "dashboard.py": "raise ImportError('broken on purpose')\n"})
+        self.assertEqual(error, "ImportError: broken on purpose")
+
+    def test_a_syntax_error_is_reported(self):
+        error = self.check({"main.py": "def broken(:\n", "dashboard.py": "PAGES = ()\n"})
+        self.assertIn("SyntaxError", error)
+
+    def test_the_check_does_not_write_into_the_checkout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            Path(temp, "main.py").write_text("open('bot_data.json', 'w').close()\n", encoding="utf-8")
+            Path(temp, "dashboard.py").write_text("PAGES = ()\n", encoding="utf-8")
+            self.assertIsNone(update_module.check_imports(Path(temp), sys.executable))
+            self.assertFalse(Path(temp, "bot_data.json").exists())
+
+
+class DashboardImportGateTests(DashboardUpdateCase):
+    def test_a_new_commit_that_does_not_import_is_rolled_back(self):
+        self.edit("characters/firefly.md", "# Firefly, edited locally\n")
+        self.publish({"dashboard.py": "raise ImportError('broken on purpose')\n"})
+        before = self.head()
+
+        response = self.post_update()
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(data["rolled_back"])
+        self.assertIn("ImportError: broken on purpose", data["message"])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.read("dashboard.py"), "PAGES = ()\n")
+        self.assertEqual(self.read("characters/firefly.md"), "# Firefly, edited locally\n")
+        self.assertEqual(len(git(self.install, "stash", "list").stdout.splitlines()), 1)
+        entry = self.last_log_entry()
+        self.assertEqual((entry["status"], entry["cause"]), ("rolled_back", "import_failed"))
+        self.assertEqual((entry["before_head"], entry["after_head"]), (before, before))
+
+
+class RestartGateTests(MemorySandboxMixin, unittest.TestCase):
+    def setUp(self):
+        self.setUpMemorySandbox()
+        self.client = self.make_client()
+        with self.client.session_transaction() as session:
+            session["logged_in"] = True
+
+    def tearDown(self):
+        self.tearDownMemorySandbox()
+
+    def post_restart(self, import_error):
+        with patch.object(update_module, "check_imports", return_value=import_error) as check, \
+                patch("discord_utils.save_history"), \
+                patch.object(dashboard_module.threading, "Thread") as thread:
+            response = self.client.post("/api/restart", headers=self.csrf_headers())
+        return response, check, thread
+
+    def test_restart_is_refused_when_the_code_on_disk_does_not_import(self):
+        response, check, thread = self.post_restart("ImportError: broken on purpose")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("ImportError: broken on purpose", response.get_json()["message"])
+        thread.assert_not_called()
+        self.assertEqual(check.call_args.args[0], Path(dashboard_module.__file__).resolve().parent)
+
+    def test_restart_goes_ahead_when_the_code_imports(self):
+        response, _check, thread = self.post_restart(None)
+
+        self.assertEqual(response.status_code, 200)
+        thread.assert_called_once()
 
 
 if __name__ == "__main__":

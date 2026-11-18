@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,9 @@ from pathlib import Path
 BOOTSTRAP_VERSION = "1.0.0"
 GIT_TIMEOUT = 180
 PIP_TIMEOUT = 300
+IMPORT_CHECK_TIMEOUT = 120
+# main imports dashboard only when the bots start, so the check imports both.
+IMPORT_CHECK_MODULES = ("main", "dashboard")
 BACKUP_RETENTION = 3
 # Each of the BACKUP_RETENTION snapshots would hold a full copy, so a larger database stays out.
 PROJECT_DATABASE_SNAPSHOT_MAX_BYTES = 256 * 1024 * 1024
@@ -291,6 +295,35 @@ def restore_checkout(repo: Path, commit: str, stash_sha: str | None) -> None:
     run(["git", "reset", "--hard", commit], repo, timeout=120, check=True)
     if stash_sha:
         run(["git", "stash", "apply", "--index", stash_sha], repo, timeout=120, check=True)
+
+
+def check_imports(repo: Path, python: str, timeout: int = IMPORT_CHECK_TIMEOUT) -> str | None:
+    """Import the app from repo in a new interpreter; return the last error line, or None.
+
+    The interpreter runs in an empty temporary directory. Importing the app creates and
+    rewrites state files under relative paths such as bot_data/, and in the checkout that
+    would race with the running process over those files.
+    """
+    imports = "; ".join(f"import {name}" for name in IMPORT_CHECK_MODULES)
+    with tempfile.TemporaryDirectory(prefix="discord-pals-import-check-") as scratch:
+        try:
+            result = subprocess.run(
+                [python, "-c", f"import sys; sys.path.insert(0, sys.argv[1]); {imports}", str(repo)],
+                cwd=scratch,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return f"importing the code took longer than {timeout} seconds"
+        except OSError as e:
+            return f"could not run {python}: {e}"
+    if result.returncode == 0:
+        return None
+    lines = [line.strip() for line in command_output(result).splitlines() if line.strip()]
+    return lines[-1] if lines else f"{python} exited with code {result.returncode}"
 
 
 def tracked_status(repo: Path) -> str:

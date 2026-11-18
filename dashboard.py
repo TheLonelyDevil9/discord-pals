@@ -14,6 +14,7 @@ import io
 import hashlib
 import re
 import subprocess
+import sys
 import time
 import shutil
 import zipfile
@@ -3856,7 +3857,6 @@ def _reapply_local_changes(repo_dir: str, before_head: str, stash: dict | None) 
 
     applied = _run_git(["stash", "apply", "--index", stash["sha"]], repo_dir, timeout=120)
     if applied.returncode == 0:
-        _run_git(["stash", "drop", stash["ref"]], repo_dir, timeout=30)
         log.info("Reapplied local changes after update")
         return None
 
@@ -3868,6 +3868,25 @@ def _reapply_local_changes(repo_dir: str, before_head: str, stash: dict | None) 
         f"rolled back to {before_head[:7]} and kept them in {stash['ref']}"
     )
     return conflicts
+
+
+def _settle_update(repo_dir: str, git_result: dict) -> str | None:
+    """Keep a moved checkout only when its code imports; otherwise roll back to before_head.
+
+    Returns the import error after a rollback, or None. The stash entry of the local
+    changes is dropped only once the new code is kept.
+    """
+    if not git_result.get("updated"):
+        return None
+    stash = git_result.get("stash")
+    error = update_engine.check_imports(Path(repo_dir), sys.executable)
+    if error:
+        update_engine.restore_checkout(Path(repo_dir), git_result["before_head"], stash and stash["sha"])
+        git_result.update(updated=False, rolled_back=True, after_head=git_result["before_head"])
+        return error
+    if stash:
+        _run_git(["stash", "drop", stash["ref"]], repo_dir, timeout=30)
+    return None
 
 
 def _create_update_backup_branch(repo_dir: str) -> str:
@@ -4028,7 +4047,8 @@ def _install_update_dependencies(repo_dir: str) -> dict:
 
 
 def _rolled_back_update_response(git_result: dict, reason: str, advice: str, *,
-                                 expected_version: str | None, update_branch: str, **log_fields):
+                                 expected_version: str | None, update_branch: str,
+                                 dependency_result: dict | None = None, **log_fields):
     """Build the 409 answer for a rolled-back update and record it in the update log."""
     stash = git_result.get("stash")
     restored = f" with your local changes in place, and a copy is kept in {stash['ref']}" if stash else ""
@@ -4036,10 +4056,13 @@ def _rolled_back_update_response(git_result: dict, reason: str, advice: str, *,
         f"Update rolled back: {reason}. The checkout is back at {git_result['before_head'][:7]}{restored}. {advice}"
     )
     warnings = list(git_result.get("warnings", [])) + list(git_result.get("snapshot_warnings", []))
+    if dependency_result and dependency_result.get("warning"):
+        warnings.append(dependency_result["warning"])
     payload = _update_payload_base(
         expected_version=expected_version,
         file_version=_get_file_version(),
         git_result=git_result,
+        dependency_result=dependency_result,
         update_branch=update_branch,
         warnings=warnings,
     )
@@ -4060,6 +4083,7 @@ def _rolled_back_update_response(git_result: dict, reason: str, advice: str, *,
         "before_head": git_result.get("before_head"),
         "after_head": git_result.get("after_head"),
         "stash": stash["ref"] if stash else None,
+        "dependency_status": (dependency_result or {}).get("status"),
         "warnings": warnings,
         **log_fields,
     })
@@ -4147,6 +4171,14 @@ def api_update():
                 cause="local_changes_conflict", conflicts=conflicts,
             )
         dependency_result = _install_update_dependencies(repo_dir)
+        import_error = _settle_update(repo_dir, git_result)
+        if import_error:
+            return _rolled_back_update_response(
+                git_result, f"the new version does not start ({import_error})",
+                "The bot keeps running the current version.",
+                expected_version=expected_version, update_branch=update_branch,
+                dependency_result=dependency_result, cause="import_failed", error=import_error,
+            )
 
         new_version = _get_file_version()
         version_changed = new_version != VERSION and _compare_versions(new_version, VERSION) > 0
@@ -4282,6 +4314,12 @@ def api_restart():
     import subprocess
 
     log.warn("Application restart requested via dashboard")
+
+    import_error = update_engine.check_imports(Path(__file__).resolve().parent, sys.executable)
+    if import_error:
+        message = f"Restart cancelled: the code on disk does not start ({import_error}). The bot keeps running."
+        log.error(message)
+        return jsonify({'status': 'error', 'message': message}), 409
 
     # Save current state before restart
     try:
