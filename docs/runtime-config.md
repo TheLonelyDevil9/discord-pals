@@ -36,7 +36,7 @@ The dashboard is the preferred editor because it validates common shapes and kee
 | `file_logging_enabled` | true | Writes local JSONL logs under `bot_data/logs`. |
 | `log_file_max_mb` | 10 | Max JSONL log size before rotation. |
 | `log_retention_days` | 14 | Deletes local log files older than this many days, at start and about once a day; see [Log Files](operations.md#log-files). 0 keeps rotation by size only. |
-| `update_branch` | "" | Dashboard updater branch override. Empty preserves the current checkout/upstream/release-tag behavior; explicit values are `main` or `staging`. |
+| `update_branch` | "" | Dashboard updater branch override. Empty preserves the current checkout/upstream/release-tag behavior; explicit values are `main` or `staging`, and with either the version check counts that branch's new commits as an update. |
 | `bot_timezones` | {} | Per-bot timezone fallback map. |
 | `bot_schedules` | {} | Per-bot unavailable-window schedules. |
 | `bot_falloff_enabled` | true | Enables bot-to-bot probability decay. |

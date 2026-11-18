@@ -13,6 +13,8 @@ import os
 import io
 import hashlib
 import re
+import subprocess
+import sys
 import time
 import shutil
 import zipfile
@@ -20,6 +22,8 @@ from pathlib import Path
 from datetime import timedelta, datetime
 import logger as log
 import env_config
+import dashboard_restart
+import update as update_engine
 from security import (
     safe_path, safe_filename, validate_zip_entry,
     get_or_create_secret_key, requires_auth, requires_csrf,
@@ -49,13 +53,21 @@ _TOPOLOGY_CACHE_TTL = 10.0
 _topology_cache_lock = threading.Lock()
 _topology_cache = {"built_at": 0.0, "value": None}
 _VERSION_CACHE_TTL = 30 * 60.0
+_VERSION_FAILURE_TTL = 5 * 60.0
 _github_version_cache_lock = threading.Lock()
-_github_version_cache = {"fetched_at": 0.0, "github_version": None, "has_value": False}
+_github_version_cache = {
+    "fetched_at": 0.0, "github_version": None, "has_value": False, "failed": False,
+    "tracked_ref": None, "update_branch": None, "refreshing": False,
+}
 _update_lock = threading.Lock()
+# Set while an accepted restart holds _update_lock, so that a refused request names the restart.
+_restart_accepted = threading.Event()
+# Held by every git fetch, so the background version check never fetches the same
+# refs as an update at the same time.
+_git_fetch_lock = threading.Lock()
 _UPDATE_GIT_TIMEOUT = 180
 _UPDATE_PIP_TIMEOUT = 300
-_STALE_GIT_LOCK_SECONDS = _UPDATE_GIT_TIMEOUT + 60
-_UPDATE_BACKUP_RETENTION = 3
+_STALE_GIT_LOCK_SECONDS = update_engine.STALE_LOCK_SECONDS
 _UPDATE_BACKUP_ROOT = DATA_DIR / "update_backups"
 _UPDATE_LOG_FILE = DATA_DIR / "update_log.json"
 _UPDATE_BACKUP_FILES = (".env", "bots.json", "providers.json")
@@ -3332,35 +3344,111 @@ def _fetch_latest_available_version():
 def _invalidate_github_version_cache():
     """Clear the cached GitHub version result."""
     with _github_version_cache_lock:
-        _github_version_cache["fetched_at"] = 0.0
-        _github_version_cache["github_version"] = None
-        _github_version_cache["has_value"] = False
+        _github_version_cache.update(
+            fetched_at=0.0, github_version=None, has_value=False, failed=False,
+            tracked_ref=None, update_branch=None, refreshing=False,
+        )
+
+
+def _version_cache_is_fresh(now: float) -> bool:
+    """Call with _github_version_cache_lock held."""
+    ttl = _VERSION_FAILURE_TTL if _github_version_cache["failed"] else _VERSION_CACHE_TTL
+    return now - _github_version_cache["fetched_at"] < ttl
+
+
+def _store_latest_version(github_version: str | None, failed: bool) -> None:
+    """Call with _github_version_cache_lock held. A failed check keeps the last good version."""
+    _github_version_cache["fetched_at"] = time.time()
+    _github_version_cache["failed"] = failed
+    if github_version is not None:
+        _github_version_cache["github_version"] = github_version
+        _github_version_cache["has_value"] = True
 
 
 def _check_github_latest_version(force_refresh: bool = False):
     """Return the latest GitHub version, using a TTL cache to avoid repeated fetches."""
-    now = time.time()
     with _github_version_cache_lock:
-        has_fresh_cache = (
-            _github_version_cache["has_value"] and
-            not force_refresh and
-            (now - _github_version_cache["fetched_at"]) < _VERSION_CACHE_TTL
+        if not force_refresh and _github_version_cache["has_value"] and _version_cache_is_fresh(time.time()):
+            return _github_version_cache["github_version"]
+    github_version = _fetch_latest_available_version()
+    with _github_version_cache_lock:
+        _store_latest_version(github_version, failed=github_version is None)
+        return _github_version_cache["github_version"]
+
+
+def _fetch_tracked_branch(repo_dir: str, update_branch: str) -> tuple[str | None, bool]:
+    """Fetch the branch that updates follow; return it and whether its ref is now current."""
+    try:
+        tracked_ref = _update_upstream_ref(repo_dir, _current_git_branch(repo_dir), update_branch)
+    except RuntimeError:
+        return None, True
+    remote, _, branch = tracked_ref.partition("/")
+    # A running update fetches the ref itself, and a fetch beside its merge or reset could
+    # move the ref it is applying.
+    if _update_lock.locked() or not _git_fetch_lock.acquire(blocking=False):
+        return tracked_ref, True
+    try:
+        # A moved release tag fails a fetch that follows tags; the update's own fetch recovers from that.
+        fetch = _run_git(
+            ["fetch", "--quiet", "--no-tags", remote, f"+refs/heads/{branch}:refs/remotes/{tracked_ref}"],
+            repo_dir, timeout=30,
         )
-        if has_fresh_cache:
-            return _github_version_cache["github_version"]
+    finally:
+        _git_fetch_lock.release()
+    return tracked_ref, fetch.returncode == 0
 
-        github_version = _fetch_latest_available_version()
-        if github_version is not None:
-            _github_version_cache["fetched_at"] = now
-            _github_version_cache["github_version"] = github_version
-            _github_version_cache["has_value"] = True
-            return github_version
 
-        if _github_version_cache["has_value"]:
-            return _github_version_cache["github_version"]
-
-        _github_version_cache["fetched_at"] = now
+def _commits_behind(repo_dir: str, tracked_ref: str) -> int | None:
+    """Count the commits on tracked_ref that HEAD lacks, from local refs only."""
+    try:
+        result = _run_command(["git", "rev-list", "--count", f"HEAD..{tracked_ref}"], cwd=repo_dir, timeout=30)
+        return int(result.stdout.strip()) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+def _refresh_version_state(update_branch: str) -> None:
+    """Run the network checks behind /api/version and store their results in the cache."""
+    github_version, tracked_ref, fetched = None, None, False
+    try:
+        github_version = _fetch_latest_available_version()
+        tracked_ref, fetched = _fetch_tracked_branch(
+            _repo_root(os.path.dirname(os.path.abspath(__file__))), update_branch
+        )
+    except Exception as e:
+        log.debug(f"Version check failed: {e}")
+    finally:
+        with _github_version_cache_lock:
+            _store_latest_version(github_version, failed=github_version is None or not fetched)
+            _github_version_cache.update(tracked_ref=tracked_ref, update_branch=update_branch, refreshing=False)
+
+
+def _start_version_refresh(update_branch: str) -> None:
+    try:
+        threading.Thread(target=_refresh_version_state, args=(update_branch,), daemon=True, name="version-check").start()
+    except RuntimeError as e:
+        log.warn(f"Could not start the version check: {e}")
+        with _github_version_cache_lock:
+            _github_version_cache["refreshing"] = False
+
+
+def _version_state(update_branch: str) -> dict:
+    """Copy the cached remote checks, and start a background refresh when they are stale.
+
+    A page load never waits for GitHub or a git fetch, and never holds the cache lock while
+    one runs. Results are kept for _VERSION_CACHE_TTL, or _VERSION_FAILURE_TTL after a failure.
+    """
+    with _github_version_cache_lock:
+        state = dict(_github_version_cache)
+        stale = state["update_branch"] != update_branch or not _version_cache_is_fresh(time.time())
+        start = stale and not state["refreshing"] and not _update_lock.locked()
+        if start:
+            _github_version_cache["refreshing"] = True
+    if start:
+        _start_version_refresh(update_branch)
+    if state["update_branch"] != update_branch:
+        state["tracked_ref"] = None
+    return state
 
 
 def _update_verification_failure(expected_version: str | None, file_version: str, git_result: dict) -> dict | None:
@@ -3418,6 +3506,7 @@ def _update_payload_base(
         'backup_path': git_result.get("backup_path"),
         'dependency_status': dependency_result.get("status"),
         'warnings': warnings or [],
+        'auto_restart': False,
     }
 
 
@@ -3428,21 +3517,32 @@ def api_version():
     import runtime_config
 
     file_version = _get_file_version()
-    github_version = _check_github_latest_version()
+    update_branch = _normalize_update_branch(runtime_config.get("update_branch", ""))
+    state = _version_state(update_branch)
+    github_version = state["github_version"]
+    code_dir = os.path.dirname(os.path.abspath(__file__))
+    disk_commit = _git_head(code_dir)
+    commits_behind = _commits_behind(code_dir, state["tracked_ref"]) if state["tracked_ref"] else None
 
     # Determine update status
     update_available = False  # New version on GitHub to pull
     restart_required = False  # Already updated locally, just need restart
     latest_version = VERSION
 
+    # A selected branch moves between releases, and a newer tag elsewhere is not an update it
+    # can reach, so only the branch's own new commits count there.
+    if update_branch:
+        update_available = bool(commits_behind)
     # Check if GitHub has a newer version than what's on disk
-    if github_version and _compare_versions(github_version, file_version) > 0:
+    elif github_version and _compare_versions(github_version, file_version) > 0:
         update_available = True
         latest_version = github_version
     # Check if disk version is newer than running version (restart needed)
-    elif file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
+    if latest_version == VERSION and file_version != VERSION and _compare_versions(file_version, VERSION) > 0:
         restart_required = True
         latest_version = file_version
+    if _RUNNING_COMMIT and disk_commit and disk_commit != _RUNNING_COMMIT:
+        restart_required = True
 
     return jsonify({
         'status': 'ok',
@@ -3452,7 +3552,11 @@ def api_version():
         'latest_version': latest_version,
         'update_branch': runtime_config.get("update_branch", ""),
         'update_available': update_available,
-        'restart_required': restart_required
+        'restart_required': restart_required,
+        'running_commit': _RUNNING_COMMIT,
+        'disk_commit': disk_commit,
+        'tracked_ref': state["tracked_ref"],
+        'commits_behind': commits_behind,
     })
 
 
@@ -3468,15 +3572,7 @@ def _command_output(result) -> str:
 
 
 def _run_command(args: list[str], cwd: str, timeout: int):
-    import subprocess
-
-    return subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    return update_engine.run(args, Path(cwd), timeout=timeout)
 
 
 def _git_index_lock_path(repo_dir: str) -> Path | None:
@@ -3518,6 +3614,23 @@ def _remove_stale_git_lock(repo_dir: str) -> str | None:
     except OSError as e:
         log.warn(f"Could not remove stale Git index lock {lock_path}: {e}")
         return None
+
+
+def _git_head(repo_dir: str) -> str | None:
+    """Return the commit checked out in repo_dir, or None when Git cannot tell."""
+    try:
+        result = _run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _update_log_heads(repo_dir: str | None, before_head: str | None) -> dict:
+    return {"before_head": before_head, "after_head": _git_head(repo_dir) if repo_dir else None}
+
+
+# Read once at import, so it stays the commit of the running code after an update moves HEAD.
+_RUNNING_COMMIT = _git_head(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _run_git(args: list[str], cwd: str, timeout: int = _UPDATE_GIT_TIMEOUT):
@@ -3728,47 +3841,40 @@ def _copy_update_backup_item(source: Path, destination: Path, extra_ignores: tup
         shutil.copy2(source, destination)
 
 
-def _prune_update_backups(backup_root: Path, retention: int = _UPDATE_BACKUP_RETENTION) -> None:
-    if not backup_root.exists():
-        return
-    backups = sorted(
-        [path for path in backup_root.iterdir() if path.is_dir() and path.name.startswith("pre-update-")],
-        key=lambda path: path.name,
-        reverse=True,
-    )
-    for old_backup in backups[retention:]:
-        try:
-            shutil.rmtree(old_backup)
-        except OSError as e:
-            log.warn(f"Could not prune update backup {old_backup}: {e}")
-
-
 def _create_update_state_backup(repo_dir: str, warnings: list | None = None) -> str | None:
-    """Snapshot local state before an update; a note about a left-out database goes into warnings."""
+    """Snapshot local state before an update; a note about a left-out database goes into warnings.
+
+    The caller prunes older snapshots once the update is kept, and deletes this one when
+    the update is rolled back. A copy that fails part-way deletes its folder, then raises.
+    """
     backup_root = Path(repo_dir) / _UPDATE_BACKUP_ROOT
-    backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    # Microseconds keep two attempts in one second from writing into one snapshot folder,
+    # which the cleanup of a failed copy would then delete.
+    backup_dir = backup_root / f"pre-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
     copied = False
+    try:
+        for name in _UPDATE_BACKUP_FILES:
+            source = Path(repo_dir) / name
+            if source.exists():
+                _copy_update_backup_item(source, backup_dir / name)
+                copied = True
 
-    for name in _UPDATE_BACKUP_FILES:
-        source = Path(repo_dir) / name
-        if source.exists():
-            _copy_update_backup_item(source, backup_dir / name)
-            copied = True
+        for name in _UPDATE_BACKUP_DIRS:
+            source = Path(repo_dir) / name
+            if source.exists():
+                _copy_update_backup_item(source, backup_dir / name, _UPDATE_BACKUP_DIR_IGNORES.get(name, ()))
+                copied = True
 
-    for name in _UPDATE_BACKUP_DIRS:
-        source = Path(repo_dir) / name
-        if source.exists():
-            _copy_update_backup_item(source, backup_dir / name, _UPDATE_BACKUP_DIR_IGNORES.get(name, ()))
-            copied = True
+        if not copied:
+            return None
 
-    if not copied:
-        return None
-
-    from update import backup_project_database
-    note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+        from update import backup_project_database
+        note = backup_project_database(Path(repo_dir) / "bot_data" / "project_automation.sqlite3", backup_dir / "bot_data" / "project_automation.sqlite3")
+    except Exception:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
     if note and warnings is not None:
         warnings.append(note)
-    _prune_update_backups(backup_root)
     return str(backup_dir)
 
 
@@ -3804,50 +3910,38 @@ def _write_update_log(event: dict) -> None:
         log.warn(f"Could not write update log: {e}")
 
 
-def _stash_local_changes(repo_dir: str) -> dict | None:
+def _stash_local_changes(repo_dir: str, attempt) -> None:
     """Stash local tracked changes only so runtime data is not moved into Git stash."""
     if not _tracked_worktree_status(repo_dir):
-        return None
+        return
 
     message = f"discord-pals-dashboard-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    result = _run_git(
-        ["stash", "push", "-m", message],
-        repo_dir,
-        timeout=120,
-    )
+    with attempt.recording_stash():
+        result = _run_git(["stash", "push", "-m", message], repo_dir, timeout=120)
     _require_git_success(result, "Stashing local changes before update")
 
-    output = _command_output(result)
-    if "No local changes" in output:
-        return None
 
-    list_result = _run_git(["stash", "list", "--format=%gd%x00%s", "-n", "1"], repo_dir, timeout=30)
-    stash_ref = "stash@{0}"
-    if list_result.returncode == 0 and list_result.stdout.strip():
-        ref, _, subject = list_result.stdout.strip().partition("\x00")
-        if message in subject and ref:
-            stash_ref = ref
+def _settle_update(repo_dir: str, git_result: dict) -> tuple[dict, list[str]]:
+    """Install the dependencies, then keep a moved checkout only when its code imports.
 
-    return {"ref": stash_ref, "message": message, "output": output}
-
-
-def _restore_local_changes(repo_dir: str, stash: dict | None) -> str | None:
-    if not stash:
-        return None
-
-    stash_ref = stash.get("ref") or "stash@{0}"
-    result = _run_git(["stash", "pop", "--index", stash_ref], repo_dir, timeout=120)
-    if result.returncode == 0:
-        log.info("Reapplied local changes after update")
-        return None
-
-    details = _command_output(result) or "Git could not reapply the stash automatically"
-    warning = (
-        f"Local changes were preserved in {stash_ref} ({stash.get('message')}) "
-        f"but need manual reapply: {details}"
-    )
-    log.warn(warning)
-    return warning
+    Returns the dependency result and the warnings of keeping the update. A failed import
+    check or any exception after the move rolls the checkout back and raises
+    update_engine.UpdateRolledBack, or RollbackFailed when it cannot be restored.
+    """
+    attempt = git_result.get("attempt")
+    moved = bool(attempt and attempt.moved)
+    try:
+        if moved:
+            attempt.dependencies_installed = True
+        dependency_result = _install_update_dependencies(repo_dir)
+        import_error = update_engine.check_imports(Path(repo_dir), sys.executable) if moved else None
+        if import_error:
+            raise update_engine.ImportCheckFailed(import_error)
+    except Exception as error:
+        if not (attempt and attempt.touched):
+            raise
+        attempt.roll_back(error, reinstall=lambda: _install_update_dependencies(repo_dir))
+    return dependency_result, attempt.keep() if attempt else []
 
 
 def _create_update_backup_branch(repo_dir: str) -> str:
@@ -3864,12 +3958,18 @@ def _create_update_backup_branch(repo_dir: str) -> str:
 
 
 def _perform_git_update(repo_dir: str, expected_version: str | None = None, update_branch: str = "") -> dict:
-    """Fetch and update the checkout while preserving user changes where possible."""
+    """Fetch and update the checkout while preserving user changes where possible.
+
+    A failure after the snapshot rolls the checkout back and raises
+    update_engine.UpdateRolledBack, or RollbackFailed when it cannot be restored.
+    """
+    update_engine.preflight(Path(repo_dir))
     warnings = []
     snapshot_warnings = []
     selected_branch = _normalize_update_branch(update_branch)
 
-    fetch = _fetch_all_with_tag_recovery(repo_dir)
+    with _git_fetch_lock:
+        fetch = _fetch_all_with_tag_recovery(repo_dir)
     _require_git_success(fetch, "Fetching updates")
     fetch_output = _command_output(fetch)
     if "Recovered from stale local release tags" in fetch_output:
@@ -3881,52 +3981,55 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
     upstream = tag_ref or branch_upstream
     before_head = _git_ref_sha(repo_dir, "HEAD")
     upstream_head = _git_ref_sha(repo_dir, upstream)
-    # Only an update that moves HEAD takes a snapshot, so idle Update clicks cannot rotate
-    # the last real one out of the _UPDATE_BACKUP_RETENTION kept.
+    # Only an update that moves HEAD takes a snapshot, and only a kept update prunes older
+    # ones, so idle or failed Update clicks cannot rotate the last real snapshot out.
     moves_head = before_head != upstream_head and not _git_is_ancestor(repo_dir, upstream_head, before_head)
-    backup_path = _create_update_state_backup(repo_dir, snapshot_warnings) if moves_head else None
-    stash = _stash_local_changes(repo_dir)
+    if moves_head:
+        update_engine.refuse_overwriting_untracked(Path(repo_dir), before_head, upstream_head)
+    attempt = update_engine.UpdateAttempt(Path(repo_dir), before_head, upstream_head)
     output = fetch_output
-    updated = False
 
     try:
+        if moves_head:
+            attempt.snapshot = _create_update_state_backup(repo_dir, snapshot_warnings)
+            _stash_local_changes(repo_dir, attempt)
         if before_head == upstream_head:
             output = output or "Already up to date"
         elif _git_is_ancestor(repo_dir, before_head, upstream_head):
+            attempt.moved = True
             merge = _run_git(["merge", "--ff-only", upstream], repo_dir, timeout=120)
             if merge.returncode == 0:
                 output = _command_output(merge) or f"Fast-forwarded to {upstream}"
-                updated = True
             else:
-                backup_branch = _create_update_backup_branch(repo_dir)
+                attempt.backup_branch = _create_update_backup_branch(repo_dir)
                 reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
                 _require_git_success(reset, "Resetting checkout after fast-forward failure")
                 output = _command_output(reset) or f"Reset to {upstream}"
                 warnings.append(
-                    f"Fast-forward failed, so the previous checkout was saved as {backup_branch} "
+                    f"Fast-forward failed, so the previous checkout was saved as {attempt.backup_branch} "
                     f"and reset to {upstream}."
                 )
-                updated = True
         elif _git_is_ancestor(repo_dir, upstream_head, before_head):
             output = output or f"Local branch is ahead of {upstream}; no remote update required"
         else:
-            backup_branch = _create_update_backup_branch(repo_dir)
+            attempt.moved = True
+            attempt.backup_branch = _create_update_backup_branch(repo_dir)
             reset = _run_git(["reset", "--hard", upstream], repo_dir, timeout=120)
             _require_git_success(reset, "Resetting diverged checkout to upstream")
             output = _command_output(reset) or f"Reset to {upstream}"
             warnings.append(
-                f"Local branch had diverged; the previous HEAD was saved as {backup_branch} "
+                f"Local branch had diverged; the previous HEAD was saved as {attempt.backup_branch} "
                 f"before resetting to {upstream}."
             )
-            updated = True
-    finally:
-        restore_warning = _restore_local_changes(repo_dir, stash)
-        if restore_warning:
-            warnings.append(restore_warning)
+        attempt.reapply()
+        after_head = _git_ref_sha(repo_dir, "HEAD")
+    except Exception as error:
+        if not attempt.touched:
+            raise
+        attempt.roll_back(error)
 
-    after_head = _git_ref_sha(repo_dir, "HEAD")
     return {
-        "updated": updated or before_head != after_head,
+        "updated": before_head != after_head,
         "output": output,
         "warnings": warnings,
         "snapshot_warnings": snapshot_warnings,
@@ -3937,7 +4040,8 @@ def _perform_git_update(repo_dir: str, expected_version: str | None = None, upda
         "update_branch": selected_branch,
         "target_version": expected_version,
         "target_ref": upstream,
-        "backup_path": backup_path,
+        "backup_path": attempt.snapshot,
+        "attempt": attempt,
     }
 
 
@@ -3987,6 +4091,11 @@ def _install_update_dependencies(repo_dir: str) -> dict:
         except FileNotFoundError:
             errors.append(f"{' '.join(pip_base)} was not found")
             continue
+        except subprocess.TimeoutExpired:
+            # Every candidate installs the same requirements, so stop at the first timeout
+            # rather than wait out one timeout per candidate.
+            errors.append(f"{' '.join(pip_base)} timed out after {_UPDATE_PIP_TIMEOUT} seconds")
+            break
 
         if result.returncode == 0:
             log.info(f"Dependencies installed with {' '.join(pip_base)}")
@@ -4003,6 +4112,28 @@ def _install_update_dependencies(repo_dir: str) -> dict:
     }
 
 
+def _rolled_back_update_response(rollback, *, repo_dir: str, before_head: str | None, update_branch: str):
+    """Build the 409 answer for a rolled-back update and record it in the update log."""
+    message = f"Update rolled back: {rollback}"
+    heads = _update_log_heads(repo_dir, before_head)
+    payload = _update_payload_base(expected_version=None, file_version=_get_file_version(),
+                                   update_branch=update_branch, warnings=rollback.warnings)
+    payload.update({'status': 'error', 'message': message, 'updated': False, 'rolled_back': True,
+                    'conflicts': rollback.conflicts, 'restart_required': False, **heads})
+    _write_update_log({
+        "status": "rolled_back",
+        "cause": rollback.kind,
+        "from_version": VERSION,
+        "update_branch": update_branch,
+        "conflicts": rollback.conflicts,
+        "error": None if rollback.conflicts else str(rollback.__cause__),
+        "warnings": rollback.warnings,
+        **heads,
+    })
+    log.warn(message)
+    return jsonify(payload), 409
+
+
 @app.route('/api/update', methods=['POST'])
 @requires_csrf
 @requires_auth
@@ -4014,11 +4145,11 @@ def api_update():
     log.info("Git update requested via dashboard")
 
     if not _update_lock.acquire(blocking=False):
-        return jsonify({
-            'status': 'error',
-            'message': 'An update is already running'
-        }), 409
+        running = 'Update refused: Discord Pals is restarting.' if _restart_accepted.is_set() else 'An update is already running'
+        return jsonify({'status': 'error', 'message': running}), 409
 
+    repo_dir = None
+    before_head = None
     try:
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
@@ -4034,6 +4165,7 @@ def api_update():
         # Get the directory where the bot is running
         bot_dir = os.path.dirname(os.path.abspath(__file__))
         repo_dir = _repo_root(bot_dir)
+        before_head = _git_head(repo_dir)
         expected_version = _check_github_latest_version(force_refresh=True)
 
         file_version_before = _get_file_version()
@@ -4060,6 +4192,8 @@ def api_update():
                 "file_version": file_version_before,
                 "expected_version": expected_version,
                 "update_branch": update_branch,
+                "before_head": before_head,
+                "after_head": before_head,
             })
             return jsonify(payload)
 
@@ -4068,18 +4202,20 @@ def api_update():
             expected_version=expected_version,
             update_branch=update_branch,
         )
-        dependency_result = _install_update_dependencies(repo_dir)
+        dependency_result, keep_warnings = _settle_update(repo_dir, git_result)
 
         new_version = _get_file_version()
         version_changed = new_version != VERSION and _compare_versions(new_version, VERSION) > 0
-        warnings = list(git_result["warnings"])
+        warnings = list(git_result["warnings"]) + keep_warnings
         if dependency_result.get("warning"):
             warnings.append(dependency_result["warning"])
         # A database left out of the snapshot goes into the log and the response, but it is
         # no local recovery step, so it does not change the message.
         snapshot_warnings = list(git_result.get("snapshot_warnings", []))
 
-        verification_error = _update_verification_failure(expected_version, new_version, git_result)
+        # A branch update is complete at the branch tip; the newest tag may live on another branch.
+        verification_error = None if update_branch else _update_verification_failure(
+            expected_version, new_version, git_result)
         if verification_error:
             if dependency_result.get("warning"):
                 verification_error["warnings"] = list(verification_error["warnings"]) + [dependency_result["warning"]]
@@ -4118,6 +4254,8 @@ def api_update():
             )
         elif version_changed:
             message = f"Restart to apply v{new_version}.{dependency_result['message']}"
+        elif update_branch:
+            message = f"Already up to date with {git_result.get('upstream')}.{dependency_result['message']}"
         elif expected_version and _compare_versions(expected_version, new_version) == 0:
             message = f"Already up to date at v{new_version}.{dependency_result['message']}"
         else:
@@ -4153,28 +4291,55 @@ def api_update():
             'message': message,
             'output': git_result["output"],
             'updated': git_result["updated"],
-            'restart_required': version_changed,
+            'restart_required': version_changed or git_result["updated"],
             'new_version': new_version if version_changed else None,
+            'auto_restart': (
+                git_result["updated"]
+                and not payload["warnings"]
+                and dependency_result.get("status") != "warning"
+            ),
         })
         return jsonify(payload)
 
+    except update_engine.UpdateRefused as e:
+        message = f"Update refused: {e}"
+        log.warn(message)
+        _write_update_log({
+            "status": "refused",
+            "from_version": VERSION,
+            "message": str(e),
+            **_update_log_heads(repo_dir, before_head),
+        })
+        return jsonify({'status': 'error', 'message': message}), 409
+    except update_engine.UpdateRolledBack as rollback:
+        return _rolled_back_update_response(rollback, repo_dir=repo_dir, before_head=before_head,
+                                            update_branch=update_branch)
+    except update_engine.RollbackFailed as failure:
+        message = f"Update failed: {failure}"
+        log.error(message)
+        _write_update_log({"status": "rollback_failed", "from_version": VERSION, "message": str(failure),
+                           **_update_log_heads(repo_dir, before_head)})
+        return jsonify({'status': 'error', 'message': message, 'auto_restart': False}), 500
     except subprocess.TimeoutExpired:
         log.error("Update command timed out")
-        _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION})
+        _write_update_log({"status": "error", "error": "timeout", "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': 'Update timed out while fetching, applying, or installing dependencies'
         }), 500
     except FileNotFoundError:
         log.error("Git not found")
-        _write_update_log({"status": "error", "error": "git_not_found", "from_version": VERSION})
+        _write_update_log({"status": "error", "error": "git_not_found", "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': 'Git is not installed or not in PATH'
         }), 500
     except Exception as e:
         log.error(f"Update error: {e}")
-        _write_update_log({"status": "error", "error": type(e).__name__, "from_version": VERSION})
+        _write_update_log({"status": "error", "error": type(e).__name__, "from_version": VERSION,
+                           **_update_log_heads(repo_dir, before_head)})
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -4190,79 +4355,25 @@ def api_update():
 @requires_auth
 def api_restart():
     """Restart the bot application without terminal restart."""
-    import sys
-    import subprocess
-
     log.warn("Application restart requested via dashboard")
 
-    # Save current state before restart
+    if not _update_lock.acquire(blocking=False):
+        running = 'a restart is already running' if _restart_accepted.is_set() else 'an update is running. Restart when it has finished'
+        return jsonify({'status': 'error', 'message': f'Restart refused: {running}.'}), 409
+    started = False
     try:
-        from discord_utils import save_history
-        from memory import memory_manager
-        save_history(force=True)
-        memory_manager.save_all()
-        log.info("State saved before restart")
-    except Exception as e:
-        log.error(f"Failed to save state before restart: {e}")
-
-    def do_restart():
-        """Perform the actual restart in a separate thread."""
-        import time
-        import signal
-        time.sleep(1)  # Give time for response to be sent
-
-        # Check if running under systemd (simplified detection - don't require INVOCATION_ID)
-        is_systemd = os.path.exists('/run/systemd/system')
-        service_name = 'discord-pals'
-
-        if is_systemd:
-            log.info("Detected systemd environment, attempting restart")
-
-            # Try multiple approaches in order of preference
-            restart_commands = [
-                ['systemctl', '--user', 'restart', service_name],      # User service
-                ['systemctl', 'restart', service_name],                 # System service (if running as root)
-                ['sudo', '-n', 'systemctl', 'restart', service_name],  # With passwordless sudo
-            ]
-
-            for cmd in restart_commands:
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0:
-                        log.info(f"Restart successful with: {' '.join(cmd)}")
-                        return
-                    log.debug(f"Command {cmd} failed: {result.stderr}")
-                except Exception as e:
-                    log.debug(f"Command {cmd} error: {e}")
-                    continue
-
-            log.warn("All systemctl restart attempts failed, falling back to SIGTERM")
-
-            # Fallback: Send SIGTERM - systemd will restart us (if Restart=always)
-            log.info("Sending SIGTERM for systemd to restart us")
-            os.kill(os.getpid(), signal.SIGTERM)
-            return
-
-        # Non-systemd fallback: Direct process restart
-        # Get the current Python executable and script
-        python = sys.executable
-        script = os.path.abspath(sys.argv[0])
-
-        # Close all bot connections gracefully
-        import asyncio
-        for bot in bot_instances:
-            try:
-                asyncio.run_coroutine_threadsafe(bot.close(), bot.client.loop)
-            except Exception:
-                pass
-
-        time.sleep(2)  # Wait for connections to close
-        # Restart the process
-        os.execv(python, [python, script] + sys.argv[1:])
-
-    # Start restart in background thread
-    restart_thread = threading.Thread(target=do_restart, daemon=True)
-    restart_thread.start()
+        refusal = dashboard_restart.refusal(Path(__file__).resolve().parent)
+        if refusal:
+            log.error(refusal)
+            return jsonify({'status': 'error', 'message': refusal}), 409
+        # The update lock stays held, so no update can start while the process restarts.
+        _restart_accepted.set()
+        dashboard_restart.start_restart(bot_instances)
+        started = True
+    finally:
+        if not started:
+            _restart_accepted.clear()
+            _update_lock.release()
 
     return jsonify({
         'status': 'ok',

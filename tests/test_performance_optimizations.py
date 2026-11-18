@@ -693,8 +693,11 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         }
         dependencies = {"status": "skipped", "message": "", "warning": None}
 
+        # The page load that finds the cache empty answers at once and fills it for the next one.
         with patch.object(dashboard_module, "_get_file_version", side_effect=["1.0.0", "1.0.0", "1.2.0", "1.2.0", "1.2.0"]), \
                 patch.object(dashboard_module, "_fetch_latest_available_version", side_effect=["1.1.0", "1.2.0"]) as fetch_mock, \
+                patch.object(dashboard_module, "_fetch_tracked_branch", return_value=(None, True)), \
+                patch.object(dashboard_module, "_start_version_refresh", side_effect=dashboard_module._refresh_version_state), \
                 patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
                 patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies):
@@ -703,7 +706,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
             update = self.client.post("/api/update", headers=self.csrf_headers()).get_json()
             third = self.client.get("/api/version").get_json()
 
-        self.assertEqual(first["github_version"], "1.1.0")
+        self.assertIsNone(first["github_version"])
         self.assertEqual(second["github_version"], "1.1.0")
         self.assertEqual(third["github_version"], "1.2.0")
         self.assertEqual(fetch_mock.call_count, 2)
@@ -713,7 +716,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
         runtime_config_module.set("update_branch", "staging")
 
         with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
-                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+                patch.object(dashboard_module, "_start_version_refresh"):
             data = self.client.get("/api/version").get_json()
 
         self.assertEqual(data["status"], "ok")
@@ -721,7 +724,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
     def test_version_api_includes_status_for_dashboard_update_state(self):
         with patch.object(dashboard_module, "_get_file_version", return_value="1.0.0"), \
-                patch.object(dashboard_module, "_check_github_latest_version", return_value="1.0.0"):
+                patch.object(dashboard_module, "_start_version_refresh"):
             data = self.client.get("/api/version").get_json()
 
         self.assertEqual(data["status"], "ok")
@@ -834,7 +837,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
-                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_settle_update", return_value=(dependencies, [])), \
                 patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
                 patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]):
             response = self.client.post("/api/update", headers=self.csrf_headers())
@@ -858,7 +861,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
 
         with patch.object(dashboard_module, "_repo_root", return_value="repo"), \
                 patch.object(dashboard_module, "_perform_git_update", return_value=git_update), \
-                patch.object(dashboard_module, "_install_update_dependencies", return_value=dependencies), \
+                patch.object(dashboard_module, "_settle_update", return_value=(dependencies, [])), \
                 patch.object(dashboard_module, "_check_github_latest_version", return_value="9.9.9"), \
                 patch.object(dashboard_module, "_get_file_version", side_effect=["2.2.10", "9.9.9"]), \
                 patch.object(dashboard_module, "_write_update_log", side_effect=logged.append):
@@ -1010,7 +1013,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch("update.preflight"), patch("update.refuse_overwriting_untracked"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertTrue(result["updated"])
@@ -1068,7 +1072,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch("update.preflight"), patch("update.refuse_overwriting_untracked"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertTrue(result["updated"])
@@ -1115,7 +1120,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch("update.preflight"), patch("update.refuse_overwriting_untracked"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertEqual(result["target_ref"], "origin/main")
@@ -1153,7 +1159,8 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch("update.preflight"), patch("update.refuse_overwriting_untracked"):
             result = dashboard_module._perform_git_update(
                 "repo",
                 expected_version="1.2.0",
@@ -1176,15 +1183,15 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout=" M dashboard.py\n", stderr="")
             if args[:2] == ["stash", "push"]:
                 return types.SimpleNamespace(returncode=0, stdout="Saved working directory and index state", stderr="")
-            if args[:3] == ["stash", "list", "--format=%gd%x00%s"]:
-                return types.SimpleNamespace(returncode=0, stdout="stash@{0}\x00discord-pals-dashboard-update-123\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
-            stash = dashboard_module._stash_local_changes("repo")
+        attempt = dashboard_module.update_engine.UpdateAttempt(Path("repo"), "aaa111", "bbb222")
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), \
+                patch.object(dashboard_module.update_engine, "stash_tip", side_effect=[None, "5a5a5a"]):
+            dashboard_module._stash_local_changes("repo", attempt)
 
-        self.assertEqual(stash["ref"], "stash@{0}")
-        self.assertNotIn(["stash", "push", "--include-untracked", "-m", "discord-pals-dashboard-update-123"], calls)
+        self.assertEqual(attempt.stash, {"sha": "5a5a5a"})
+        self.assertFalse(any("--include-untracked" in command for command in calls))
 
     def test_write_update_log_persists_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir:

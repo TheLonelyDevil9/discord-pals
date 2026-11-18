@@ -15,7 +15,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from contextlib import closing
+import tempfile
+import time
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,9 @@ from pathlib import Path
 BOOTSTRAP_VERSION = "1.0.0"
 GIT_TIMEOUT = 180
 PIP_TIMEOUT = 300
+IMPORT_CHECK_TIMEOUT = 120
+# main imports dashboard only when the bots start, so the check imports both.
+IMPORT_CHECK_MODULES = ("main", "dashboard")
 BACKUP_RETENTION = 3
 # Each of the BACKUP_RETENTION snapshots would hold a full copy, so a larger database stays out.
 PROJECT_DATABASE_SNAPSHOT_MAX_BYTES = 256 * 1024 * 1024
@@ -31,6 +36,53 @@ BACKUP_DIRS = ("bot_data", "characters", "prompts")
 # Rotated logs live under bot_data/logs and are already size-capped; copying them
 # into every snapshot multiplied retained backups by the whole log budget.
 BACKUP_DIR_IGNORES = {"bot_data": ("logs", "project_automation.sqlite3*")}
+# (file in the Git directory, operation, command that abandons it)
+UNFINISHED_OPERATIONS = (
+    ("MERGE_HEAD", "merge", "git merge --abort"),
+    ("rebase-merge", "rebase", "git rebase --abort"),
+    ("rebase-apply", "rebase", "git rebase --abort"),
+    ("CHERRY_PICK_HEAD", "cherry-pick", "git cherry-pick --abort"),
+    ("REVERT_HEAD", "revert", "git revert --abort"),
+)
+LOCK_RETRIES = 4
+LOCK_RETRY_DELAY = 1.0
+# An index.lock older than this is taken to be left by a Git that crashed or was killed;
+# the dashboard's own Git runner uses the same age.
+STALE_LOCK_SECONDS = GIT_TIMEOUT + 60
+
+
+class UpdateRefused(RuntimeError):
+    """The checkout is in a state that an update must not touch. Nothing was changed."""
+
+
+class LocalChangesConflict(Exception):
+    """The stashed local changes did not apply on the new commit."""
+
+    def __init__(self, paths: list[str], details: str):
+        super().__init__(details)
+        self.paths = paths
+
+
+class LocalChangesNotReapplied(Exception):
+    """Git could not reapply the stashed local changes for a reason other than a conflict."""
+
+
+class ImportCheckFailed(Exception):
+    """The new code failed its import check; the message is the error line."""
+
+
+class UpdateRolledBack(Exception):
+    """The update failed, and the checkout is back on the commit it started from."""
+
+    def __init__(self, message: str, kind: str, warnings: list[str], conflicts: list[str]):
+        super().__init__(message)
+        self.kind = kind
+        self.warnings = warnings
+        self.conflicts = conflicts
+
+
+class RollbackFailed(Exception):
+    """The update failed, and the checkout could not be put back; the message says how to do it by hand."""
 
 
 def info(message: str) -> None:
@@ -43,12 +95,16 @@ def fail(message: str) -> int:
 
 
 def run(args: list[str], cwd: Path, timeout: int = GIT_TIMEOUT, check: bool = False) -> subprocess.CompletedProcess:
+    # Git writes file names in UTF-8 on Windows and as their own bytes elsewhere, but text=True
+    # decodes output with the locale's code page. surrogateescape keeps a name that is not
+    # UTF-8 as the same bytes for the file system calls that use it.
+    decoding = {"encoding": "utf-8", "errors": "surrogateescape"} if args[0] == "git" else {"text": True}
     result = subprocess.run(
         args,
         cwd=str(cwd),
         capture_output=True,
-        text=True,
         timeout=timeout,
+        **decoding,
     )
     if check and result.returncode != 0:
         details = (result.stderr or result.stdout or str(result.returncode)).strip()
@@ -247,6 +303,311 @@ def create_state_backup(repo: Path, warnings: list | None = None) -> Path | None
         warnings.append(note)
     prune_backups(backup_root)
     return backup_dir
+
+
+def preflight(repo: Path) -> None:
+    """Raise UpdateRefused when the checkout holds unresolved conflicts or an unfinished operation.
+
+    A stash fails on unmerged paths, and the reset fallback would discard a half-finished
+    merge or rebase, so the update stops before it changes anything.
+    """
+    unmerged = run(["git", "ls-files", "--unmerged", "-z"], repo, timeout=30, check=True).stdout
+    paths = sorted({entry.split("\t", 1)[1] for entry in unmerged.split("\0") if "\t" in entry})
+    if paths:
+        raise UpdateRefused(
+            f"the checkout has unresolved conflicts in {', '.join(paths)}. Resolve them with Git, "
+            "or discard the conflicted version of a file with `git checkout HEAD -- <file>`, then try again."
+        )
+    git_dir = Path(run(["git", "rev-parse", "--absolute-git-dir"], repo, timeout=30, check=True).stdout.strip())
+    for name, operation, abort in UNFINISHED_OPERATIONS:
+        if (git_dir / name).exists():
+            raise UpdateRefused(
+                f"a Git {operation} is in progress in the checkout. Finish it or run `{abort}`, then try again."
+            )
+
+
+def refuse_overwriting_untracked(repo: Path, head: str, target: str) -> None:
+    """Raise UpdateRefused when target adds a path that exists in the worktree but not in the index.
+
+    Such a file is untracked or ignored (the repository ignores characters/*.md). A
+    fast-forward and a reset overwrite an ignored file without asking, and a rollback then
+    deletes it, because the old commit does not track it.
+    """
+    added = run(["git", "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", head, target],
+                repo, timeout=60, check=True).stdout
+    indexed = set(run(["git", "ls-files", "-z"], repo, timeout=60, check=True).stdout.split("\0"))
+    # On a case-insensitive file system a path that differs from a tracked path only in case,
+    # such as the target of an upstream rename from Luna.md to luna.md, is the tracked file.
+    folded = {path.casefold(): path for path in indexed if path}
+    in_the_way = set()
+    for path in filter(None, added.split("\0")):
+        parts = path.split("/")
+        for depth in range(1, len(parts) + 1):
+            candidate = "/".join(parts[:depth])
+            local = repo / candidate
+            is_leaf = depth == len(parts)
+            tracked = folded.get(candidate.casefold())
+            if (candidate not in indexed and os.path.lexists(local) and (is_leaf or not local.is_dir())
+                    and not (tracked and same_file(local, repo / tracked))):
+                in_the_way.add(candidate)
+                break
+    if not in_the_way:
+        return
+    paths = sorted(in_the_way)
+    if len(paths) == 1:
+        detail = f"{paths[0]} exists in the checkout but is not tracked by Git, and the update would overwrite it. Move or rename it"
+    else:
+        detail = (f"{', '.join(paths)} exist in the checkout but are not tracked by Git, and the update would "
+                  "overwrite them. Move or rename them")
+    raise UpdateRefused(f"{detail}, then try again.")
+
+
+def same_file(first: Path, second: Path) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def git_until_unlocked(repo: Path, args: list[str], timeout: int = 120, own_lock: bool = False) -> None:
+    """Run a git command that must succeed, waiting up to LOCK_RETRIES times for an index.lock to go.
+
+    A lock is removed only when own_lock says that this update killed the Git command that
+    left it, or when it is older than STALE_LOCK_SECONDS. A Git that is still running, such
+    as `git commit` with its editor open, keeps its lock, and the command then fails.
+    """
+    for attempt in range(LOCK_RETRIES + 1):
+        result = run(["git", *args], repo, timeout=timeout)
+        if result.returncode == 0:
+            return
+        if "index.lock" not in command_output(result) or attempt == LOCK_RETRIES:
+            break
+        if remove_dead_lock(repo, own_lock):
+            own_lock = False
+        else:
+            time.sleep(LOCK_RETRY_DELAY)
+    raise RuntimeError(f"git {' '.join(args)} failed: {command_output(result) or result.returncode}")
+
+
+def remove_dead_lock(repo: Path, own_lock: bool) -> bool:
+    """Remove index.lock when own_lock is set or the lock is older than STALE_LOCK_SECONDS.
+
+    Return True when no lock is left, so that the command can run again at once.
+    """
+    lock = repo / run(["git", "rev-parse", "--git-path", "index.lock"], repo, timeout=30).stdout.strip()
+    try:
+        if not own_lock and time.time() - lock.stat().st_mtime <= STALE_LOCK_SECONDS:
+            return False
+        lock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def stash_tip(repo: Path) -> str | None:
+    """Return the commit of the newest stash entry, or None when the stash is empty."""
+    result = run(["git", "rev-parse", "--verify", "--quiet", "refs/stash"], repo, timeout=30)
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(f"Reading refs/stash failed: {command_output(result) or result.returncode}")
+    return result.stdout.strip()
+
+
+def drop_stash(repo: Path, sha: str) -> None:
+    """Drop the stash entry whose commit is sha, wherever later entries moved it in the list."""
+    listed = run(["git", "stash", "list", "--format=%gd %H"], repo, timeout=30, check=True).stdout
+    for line in listed.splitlines():
+        ref, _, entry_sha = line.partition(" ")
+        if entry_sha.strip() == sha:
+            run(["git", "stash", "drop", ref], repo, timeout=30, check=True)
+            return
+
+
+def requirements_changed(repo: Path, before: str, after: str) -> bool:
+    """True when requirements.txt differs between the two commits, or when Git cannot tell."""
+    return run(["git", "diff", "--quiet", before, after, "--", "requirements.txt"], repo, timeout=30).returncode != 0
+
+
+def failure_report(error: BaseException) -> tuple[str, str, str]:
+    """Return the log kind, the cause and the advice for an error that ended an update attempt."""
+    if isinstance(error, LocalChangesConflict):
+        changes = f"your local changes to {', '.join(error.paths)}" if error.paths else "your local changes"
+        return ("local_changes_conflict", f"{changes} conflict with the new version",
+                "Discard or move those changes, then update again.")
+    if isinstance(error, LocalChangesNotReapplied):
+        return ("reapply_failed", f"your local changes could not be reapplied on the new version ({error})",
+                "Try the update again.")
+    if isinstance(error, ImportCheckFailed):
+        return ("import_failed", f"the new version failed its import check ({error})",
+                "The bot keeps running the current version.")
+    if isinstance(error, subprocess.TimeoutExpired):
+        command = error.cmd if isinstance(error.cmd, str) else " ".join(map(str, error.cmd))
+        return ("timeout", f"a step timed out ({command})", "Try the update again later.")
+    return ("error", f"the update stopped with an error ({str(error) or type(error).__name__})",
+            "Check the log, then try again.")
+
+
+class UpdateAttempt:
+    """What one update did to a checkout, so that it can be kept or undone as a whole.
+
+    The caller records the snapshot, the stash and the backup branch as it creates them,
+    sets moved before it moves HEAD, and ends the attempt with keep() or roll_back().
+    """
+
+    def __init__(self, repo: Path, before_head: str, target_head: str):
+        self.repo = repo
+        self.before_head = before_head
+        self.target_head = target_head
+        self.snapshot: str | None = None
+        self.stash: dict | None = None
+        self.backup_branch: str | None = None
+        self.moved = False
+        self.dependencies_installed = False
+
+    @property
+    def touched(self) -> bool:
+        return bool(self.moved or self.stash or self.snapshot or self.backup_branch)
+
+    @contextmanager
+    def recording_stash(self):
+        """Record the stash entry that the enclosed `git stash push` saved, also when the push fails.
+
+        A push can save its entry and then fail to reset a file that another process holds
+        open, so the entry holds changes that are no longer all in the worktree.
+        """
+        before = stash_tip(self.repo)
+        try:
+            yield
+        finally:
+            after = stash_tip(self.repo)
+            if after and after != before:
+                self.stash = {"sha": after}
+
+    def reapply(self) -> None:
+        """Apply the stashed local changes on the new commit.
+
+        Raise LocalChangesConflict when they conflict with it, and LocalChangesNotReapplied
+        when Git fails for another reason, such as a file that another process holds open.
+        """
+        if not self.stash:
+            return
+        try:
+            git_until_unlocked(self.repo, ["stash", "apply", "--index", self.stash["sha"]])
+        except RuntimeError as error:
+            unmerged = run(["git", "diff", "--name-only", "--diff-filter=U", "-z"], self.repo, timeout=30).stdout
+            paths = sorted(path for path in unmerged.split("\0") if path)
+            # Staged changes that do not apply leave no unmerged path; Git reports "conflicts in index".
+            if paths or "conflict" in str(error).lower():
+                raise LocalChangesConflict(paths, str(error)) from error
+            raise LocalChangesNotReapplied(str(error)) from error
+
+    def keep(self) -> list[str]:
+        """Drop the stash entry of the reapplied changes and prune older snapshots; return warnings."""
+        warnings = []
+        if self.stash:
+            try:
+                drop_stash(self.repo, self.stash["sha"])
+            except Exception as e:
+                warnings.append(f"The stash entry {self.stash['sha']} of your local changes could not be dropped: {e}")
+        if self.snapshot:
+            prune_backups(Path(self.snapshot).parent)
+        return warnings
+
+    def roll_back(self, error: BaseException, reinstall=None):
+        """Put the checkout back on before_head with the local changes, then raise UpdateRolledBack.
+
+        The stash was taken on before_head, so reapplying it there cannot conflict. When HEAD
+        or the worktree cannot be restored, this raises RollbackFailed instead and keeps the
+        stash entry, the backup branch and the snapshot for a restore by hand.
+        """
+        kind, cause, advice = failure_report(error)
+        # A Git command that timed out was killed by this update and can leave its index.lock
+        # behind. The reset is the first command to meet that lock, so only the reset may remove it.
+        own_lock = (isinstance(error, subprocess.TimeoutExpired) and isinstance(error.cmd, list)
+                    and error.cmd[:1] == ["git"])
+        try:
+            if self.moved or self.stash:
+                git_until_unlocked(self.repo, ["reset", "--hard", self.before_head], own_lock=own_lock)
+            if self.stash:
+                git_until_unlocked(self.repo, ["stash", "apply", "--index", self.stash["sha"]])
+        except Exception as rollback_error:
+            raise RollbackFailed(
+                f"{cause}, and the checkout could not be restored ({rollback_error}). {self.recovery_steps()}"
+            ) from error
+        warnings = self._discard(reinstall)
+        place = " with your local changes in place" if self.stash else ""
+        raise UpdateRolledBack(
+            f"{cause}. The checkout is back at {self.before_head[:7]}{place}. {advice}",
+            kind, warnings, getattr(error, "paths", []),
+        ) from error
+
+    def recovery_steps(self) -> str:
+        commands = [f"git reset --hard {self.before_head}"]
+        if self.stash:
+            commands.append(f"git stash apply --index {self.stash['sha']}")
+        return "To restore it, run in the Discord Pals folder " + ", then ".join(f"`{c}`" for c in commands) + "."
+
+    def _discard(self, reinstall) -> list[str]:
+        """Remove what this attempt created once the checkout is restored; return warnings."""
+        warnings = []
+        cleanups = []
+        if self.stash:
+            cleanups.append((f"the stash entry {self.stash['sha']}", lambda: drop_stash(self.repo, self.stash["sha"])))
+        if self.backup_branch:
+            cleanups.append((f"the branch {self.backup_branch}",
+                             lambda: run(["git", "branch", "-D", self.backup_branch], self.repo, timeout=30, check=True)))
+        for label, cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception as e:
+                warnings.append(f"Could not remove {label}: {e}")
+        if self.snapshot:
+            shutil.rmtree(self.snapshot, ignore_errors=True)
+        if reinstall and self.dependencies_installed:
+            problem = None
+            try:
+                if requirements_changed(self.repo, self.before_head, self.target_head):
+                    problem = reinstall().get("warning")
+            except Exception as e:
+                problem = str(e)
+            if problem:
+                warnings.append(f"The requirements of the restored version were not fully reinstalled ({problem}). "
+                                "A reinstall restores only versions pinned with ==, so the installed packages may be "
+                                "newer than the code expects.")
+        return warnings
+
+
+def check_imports(repo: Path, python: str, timeout: int = IMPORT_CHECK_TIMEOUT) -> str | None:
+    """Import the app from repo in a new interpreter; return the last error line, or None.
+
+    The interpreter runs in an empty temporary directory. Importing the app creates and
+    rewrites state files under relative paths such as bot_data/, and in the checkout that
+    would race with the running process over those files. A check that cannot run returns
+    its reason like an import error.
+    """
+    imports = "; ".join(f"import {name}" for name in IMPORT_CHECK_MODULES)
+    try:
+        with tempfile.TemporaryDirectory(prefix="discord-pals-import-check-", ignore_cleanup_errors=True) as scratch:
+            result = subprocess.run(
+                [python, "-c", f"import sys; sys.path.insert(0, sys.argv[1]); {imports}", str(repo)],
+                cwd=scratch,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                timeout=timeout,
+            )
+    except subprocess.TimeoutExpired:
+        return f"importing the code took longer than {timeout} seconds"
+    except OSError as e:
+        return f"the import check could not run: {e}"
+    if result.returncode == 0:
+        return None
+    lines = [line.strip() for line in command_output(result).splitlines() if line.strip()]
+    return lines[-1] if lines else f"{python} exited with code {result.returncode}"
 
 
 def tracked_status(repo: Path) -> str:

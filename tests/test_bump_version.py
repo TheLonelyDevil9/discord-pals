@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 
@@ -110,6 +112,8 @@ class BumpVersionTests(unittest.TestCase):
 
         def fake_run_git(args):
             calls.append(args)
+            if args == ['status', '--porcelain']:
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if args == ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']:
                 return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if args == ['tag', '-l', 'v1.2.4']:
@@ -136,6 +140,7 @@ class BumpVersionTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ['status', '--porcelain'],
                 ['push', 'origin', 'HEAD:main'],
                 ['fetch', 'origin', 'main'],
                 ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'],
@@ -150,6 +155,8 @@ class BumpVersionTests(unittest.TestCase):
 
         def fake_run_git(args):
             calls.append(args)
+            if args == ['status', '--porcelain']:
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if args == ['push', 'origin', 'HEAD:main']:
                 return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "push failed"})()
             raise AssertionError(f"Unexpected git command: {args}")
@@ -158,17 +165,20 @@ class BumpVersionTests(unittest.TestCase):
                 patch.object(bump_version, "write_version"), \
                 patch.object(bump_version, "update_changelog"), \
                 patch.object(bump_version, "commit_release", return_value=True), \
+                patch.object(bump_version, "current_branch", return_value="main"), \
                 patch.object(bump_version, "run_git", side_effect=fake_run_git):
             result = bump_version.main(["patch", "--tag"])
 
         self.assertEqual(result, 1)
-        self.assertEqual(calls, [['push', 'origin', 'HEAD:main']])
+        self.assertEqual(calls, [['status', '--porcelain'], ['push', 'origin', 'HEAD:main']])
 
     def test_main_refreshes_origin_main_before_tagging(self):
         calls = []
 
         def fake_run_git(args):
             calls.append(args)
+            if args == ['status', '--porcelain']:
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if args == ['push', 'origin', 'HEAD:main']:
                 return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if args == ['fetch', 'origin', 'main']:
@@ -196,7 +206,54 @@ class BumpVersionTests(unittest.TestCase):
             result = bump_version.main(["patch", "--tag"])
 
         self.assertEqual(result, 0)
-        self.assertEqual(calls[0:2], [['push', 'origin', 'HEAD:main'], ['fetch', 'origin', 'main']])
+        self.assertEqual(calls[0:3], [['status', '--porcelain'], ['push', 'origin', 'HEAD:main'], ['fetch', 'origin', 'main']])
+
+    def run_main_recording(self, args, branch, status=""):
+        """Run main() with every write and git call recorded; return (result, writes, git_calls)."""
+        git_calls = []
+
+        def fake_run_git(git_args):
+            git_calls.append(git_args)
+            if git_args == ['status', '--porcelain']:
+                return type("Result", (), {"returncode": 0, "stdout": status, "stderr": ""})()
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with patch.object(bump_version, "read_version", return_value="1.2.3"), \
+                patch.object(bump_version, "write_version") as write_version, \
+                patch.object(bump_version, "update_changelog") as update_changelog, \
+                patch.object(bump_version, "current_branch", return_value=branch), \
+                patch.object(bump_version, "run_git", side_effect=fake_run_git):
+            result = bump_version.main(args)
+        return result, write_version.call_count + update_changelog.call_count, git_calls
+
+    def test_publishing_from_a_feature_branch_stops_before_any_write_or_push(self):
+        for args in (["patch", "--tag"], ["patch", "--commit"]):
+            with self.subTest(args=args):
+                result, writes, git_calls = self.run_main_recording(args, "staging")
+
+                self.assertEqual(result, 1)
+                self.assertEqual(writes, 0)
+                self.assertFalse(any(call[0] in ("push", "commit", "tag") for call in git_calls))
+
+    def test_the_refusal_names_what_was_refused(self):
+        for args, refused in ((["patch", "--commit"], "push the release commit"), (["patch", "--tag"], "create release tag")):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.run_main_recording(args, "staging")
+            self.assertIn(f"Refusing to {refused} from non-release branch staging", stderr.getvalue())
+
+    def test_unrelated_changes_stop_the_release_before_any_write(self):
+        result, writes, git_calls = self.run_main_recording(["patch", "--tag"], "main", status=" M dashboard.py\n")
+
+        self.assertEqual(result, 1)
+        self.assertEqual(writes, 0)
+        self.assertEqual(git_calls, [['status', '--porcelain']])
+
+    def test_a_local_bump_without_commit_or_tag_needs_no_release_branch(self):
+        result, writes, git_calls = self.run_main_recording(["patch"], "feature/demo")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(writes, 2)
+        self.assertEqual(git_calls, [])
 
     def test_tag_request_auto_commits_before_tagging(self):
         calls = []
@@ -204,6 +261,10 @@ class BumpVersionTests(unittest.TestCase):
         with patch.object(bump_version, "read_version", return_value="1.2.3"), \
                 patch.object(bump_version, "write_version") as write_version, \
                 patch.object(bump_version, "update_changelog") as update_changelog, \
+                patch.object(bump_version, "ensure_release_branch_allowed",
+                             side_effect=lambda allow_non_main=False, action="": calls.append(("branch-check", allow_non_main))), \
+                patch.object(bump_version, "ensure_clean_release_worktree",
+                             side_effect=lambda: calls.append(("worktree-check",))), \
                 patch.object(bump_version, "commit_release", side_effect=lambda version: calls.append(("commit", version))), \
                 patch.object(bump_version, "push_release_commit_to_main", side_effect=lambda: calls.append(("push-main",))), \
                 patch.object(bump_version, "refresh_origin_main", side_effect=lambda: calls.append(("refresh",))), \
@@ -217,6 +278,8 @@ class BumpVersionTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ("branch-check", False),
+                ("worktree-check",),
                 ("commit", "1.2.4"),
                 ("push-main",),
                 ("refresh",),

@@ -18,6 +18,8 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - A watchdog starts the Project worker again within a minute when its task stops, and the Worker check shows the restarts and the exception type of the last stop.
 - Operator alerts: when a health check reaches Alert, or the watchdog restarts the worker, each user under Config → Operators gets one Discord DM, and one more when the check recovers. A check that stays in Alert is not repeated. Each check sends at most one alert DM a day, and the watchdog's restart DMs share that limit. **Operator alerts** under Project → Helper setup turns them off. See [Health and alerts](docs/project-automation.md#health-and-alerts).
 - **Keep Log Files** (`log_retention_days`) under Config → Advanced → Debug Settings, from 0 to 365 days, default 14: log files under `bot_data/logs` whose oldest line is older than that are deleted at start and about once a day. See [Log Files](docs/operations.md#log-files).
+- A panel under the dashboard controls shows the result of an update: its message, every warning, the commit before and after, the dependency status, and the snapshot path, also for refused and rolled-back updates and for a refused restart.
+- `/api/version` reports `running_commit`, `disk_commit`, `tracked_ref`, and `commits_behind`. A commit on disk that is not running needs a restart, and with **Main** or **Staging** selected, only new commits on that branch show as an update. See [Updates And Recovery](docs/operations.md#updates-and-recovery).
 
 ### Changed
 
@@ -32,6 +34,12 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Each reconciliation cycle logs one line of counts. **Clear history and queue** also forgets when each PR was last scanned, so the next cycle scans every PR in scope again.
 - While **Keep Log Files** is above 0, the active log file also rotates on its first write of each UTC day. Past the five newest rotated files, older ones stay while all of them fit in the space of five full files, so small daily files do not shorten retention and the total size limit is unchanged.
 - Update snapshots leave out a Project database larger than 256 MB and record a warning in the update log.
+- The dashboard restarts by itself after an update only when the update applied with no warning and its dependencies installed; otherwise restart when ready. The new code must pass an import check in a separate process before an update is kept or a restart goes ahead.
+- The **Restart** button no longer calls `systemctl` or `sudo`. It waits for the bots to close, saves history, memories, reminders, and statistics, and then starts the code on disk. When the bot is the main process of a system service whose unit starts again after exit status 75, it exits with 75; otherwise it re-executes in place, or on Windows starts a new process from an argument list, so an install path with a space works. Any failure ends the process with a non-zero status. The page reloads once the bot answers again instead of after ten seconds.
+- The **Restart** button refuses while an update runs and while the checkout holds unresolved conflicts or an unfinished Git operation.
+- Version checks run in a background thread, so a page load never waits for GitHub or `git fetch`. A result is kept for 30 minutes, a failed check for 5. No check runs while an update holds the checkout, and the tracked-branch fetch leaves tags alone.
+- With **Main** or **Staging** selected, an update is complete when the checkout reaches that branch's tip, and a newer release tag on another branch is no longer reported as an update or a failed one.
+- `bump_version.py --commit` and `--tag` check the branch and the worktree before writing or pushing anything.
 
 ### Fixed
 
@@ -51,6 +59,11 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - Deleting a bot message removes only that message from history. It could remove the newest reply of any bot instead, also each time the bot deleted one of its own error notices.
 - A reconnect no longer discards history that was not saved yet: history loads once at start, before the bots connect.
 - A startup step that fails after a bot connects is logged and no longer leaves a bot that ignores every message. Slash commands sync once per start, and again only when the command list changed or a sync failed, instead of on every reconnect.
+- When local changes conflict with an update, the update rolls back to the commit it started from with the changes in place, where it used to leave conflict markers and unmerged files that stopped every later update. A failed import check, or any error after the checkout moved, rolls back the same way and reinstalls the previous requirements when they changed. A rollback deletes the stash entry, backup branch and snapshot of its attempt; when it cannot restore the checkout, the page gives the commands that do.
+- The updater refuses a checkout with unresolved conflicts or an unfinished merge, rebase, cherry-pick, or revert, and changes nothing. It also refuses an update that would overwrite a file Git does not track, such as an operator's own ignored character file.
+- Only a kept update prunes older snapshots, so refused, failed and rolled-back updates can no longer rotate the last real snapshot out.
+- A pip timeout during an update is a dependency warning instead of an error, and every dashboard update log entry records the commit before and after.
+- On Windows the dashboard updater reads Git's output as UTF-8 instead of with the ANSI code page, so an install folder or a file name with non-ASCII characters no longer breaks an update.
 
 ### Upgrade notes
 
@@ -61,6 +74,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
 - The first start rewrites each file under `bot_data/history_channels` once: channel files keep their names and gain their conversation key, and DM files named after their key, such as `dm:Firefly:user:123.json` on Linux, get new names. The dashboard's **Update** takes a snapshot first; when you update another way, copy `bot_data/history_channels` before you start this version. An earlier version still reads the channel files and ignores DM history, as it did before. On Linux it records DM messages in files named after the DM key again; when you update again, each such file that is newer than the DM's current file is renamed with `.superseded` added to its name and kept, and its messages are not loaded. A reminder question that this version asked in a DM makes an earlier version drop every DM from that user to that bot until the question expires, 24 hours at most.
+- Under systemd the **Restart** button exits with status 75 only when the unit starts the service again after it (`Restart=always`, `Restart=on-failure`, or `RestartForceExitStatus=75`); otherwise the process re-executes in place. To record that exit as a success, add `SuccessExitStatus=75` together with `RestartForceExitStatus=75`. With `SuccessExitStatus=75` alone, a `Restart=on-failure` unit does not start again after 75, so the process re-executes in place instead of exiting. A unit that relied on the old `sudo systemctl restart` can now set `NoNewPrivileges=yes`. See [Linux systemd](docs/operations.md#linux-systemd).
 
 ## [v2.9.0] - 2026-09-29
 
