@@ -42,6 +42,30 @@ def test_the_worker_records_a_heartbeat_on_every_pass(service, monkeypatch):
     assert beats == [5_000.0, 5_007.0, 5_014.0]
 
 
+def test_the_worker_sleeps_only_while_the_queue_is_idle(service, monkeypatch):
+    claimed = iter([True, True, False, True, False])
+    passes, sleeps = [], []
+
+    async def run_once():
+        passes.append(len(sleeps))
+        return next(claimed)
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(service, "run_once", run_once)
+    monkeypatch.setattr(service, "maintain", AsyncMock())
+    monkeypatch.setattr(service, "queue_sync_cycle", lambda: None)
+    monkeypatch.setattr(project_automation.asyncio, "sleep", sleep)
+    service._queue_cleaned = True
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(service._run())
+    assert passes == [0, 0, 0, 1, 1]
+    assert sleeps == [project_automation.IDLE_SECONDS] * 2
+
+
 @pytest.mark.parametrize("death,reason", [("raise", "RuntimeError"), ("cancel", "CancelledError")])
 def test_a_dead_worker_is_restarted_counted_and_its_reason_kept(service, monkeypatch, death, reason):
     started = []

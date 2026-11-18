@@ -653,10 +653,16 @@ def test_first_start_cleans_up_the_old_queue_before_claiming_work(setup, monkeyp
     delivery = enqueue(setup, key="github:kept")
     logged = []
     monkeypatch.setattr(project_automation, "info", lambda message, **fields: logged.append((message, fields)))
+    run_once = setup.service.run_once
+
+    async def run_one_job():
+        await run_once()
+        raise asyncio.CancelledError
 
     async def stop(_):
         raise asyncio.CancelledError
 
+    monkeypatch.setattr(setup.service, "run_once", run_one_job)
     monkeypatch.setattr(project_automation.asyncio, "sleep", stop)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(setup.service._run())

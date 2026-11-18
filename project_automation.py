@@ -25,6 +25,7 @@ from project_automation_activity import PRActivity, activate, mapping_key, oldes
 
 
 CLOSED_SYNC_DAYS = 7
+IDLE_SECONDS = 1
 WATCHDOG_SECONDS = 60
 ALERT_DM_TIMEOUT_SECONDS = 30
 RATE_LIMIT_NOTE = "Waiting for GitHub's rate limit to reset."
@@ -1210,6 +1211,7 @@ class AutomationService:
     async def _run(self):
         while True:
             self._heartbeat = time.monotonic()
+            claimed = False
             try:
                 # Recorded before the cleanup and the sweep, which can run long after downtime,
                 # so that the downtime does not raise the sync age while they run.
@@ -1221,12 +1223,15 @@ class AutomationService:
                     await self.maintain()
                 if self._automation_runs():
                     await run_store(self.queue_sync_cycle)
-                    await self.run_once()
+                    claimed = await self.run_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self._last_error = "Background processing needs attention"
-            await asyncio.sleep(1)
+            # After a job the next pass starts at once. Every job awaits the store thread and its
+            # remote calls, so the bots' event loop runs between the jobs of a long backlog.
+            if not claimed:
+                await asyncio.sleep(IDLE_SECONDS)
 
     async def _revive_worker(self):
         """Start the worker while the service is attached and its task is missing or finished.
