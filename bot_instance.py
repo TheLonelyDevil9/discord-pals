@@ -10,6 +10,8 @@ import json
 import random
 import re
 import time
+import traceback
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
@@ -30,8 +32,8 @@ from discord_utils import (
     get_guild_emojis, parse_reactions, add_reactions, convert_emojis_in_text,
     process_attachments, autonomous_manager, get_active_users,
     get_user_display_name, get_sticker_info,
-    update_history_on_edit, remove_assistant_from_history, remove_message_from_history,
-    resolve_discord_formatting, sanitize_discord_syntax_fallback, load_history, set_channel_name, get_other_bot_names,
+    update_history_on_edit, remove_deleted_bot_message,
+    resolve_discord_formatting, sanitize_discord_syntax_fallback, set_channel_name, get_other_bot_names,
     was_recently_cleared, acknowledge_cleared,
     build_time_passage_signal, build_idle_time_passage_signal, strip_discord_ooc_comments, visible_user_mention_ids
 )
@@ -292,6 +294,36 @@ class BotInstance:
         self.command_sync_status = status
         return status
 
+    async def _sync_slash_commands_once(self) -> None:
+        """Sync slash commands unless this command inventory already synced in this process.
+
+        on_ready runs again after every reconnect that cannot resume, and each
+        sync clears and rewrites this bot's commands in every guild. A sync with
+        any failure is tried again on the next ready.
+        """
+        inventory = self._get_command_inventory()
+        if inventory == getattr(self, "_synced_command_inventory", None):
+            log.debug("Slash commands unchanged since the last sync; skipping", self.name)
+            return
+        status = await self._sync_slash_commands()
+        if status["global"]["ok"] and all(guild["ok"] for guild in status["guilds"]):
+            self._synced_command_inventory = inventory
+
+    @contextmanager
+    def _ready_step(self, label: str):
+        """Log a failed on_ready step instead of ending on_ready, so later steps still run."""
+        try:
+            yield
+        except Exception as e:
+            log.error(
+                f"Startup step '{label}' failed ({type(e).__name__}): {e}",
+                self.name,
+                component="lifecycle",
+                event="ready_step_failed",
+                step=label,
+                traceback=traceback.format_exc(),
+            )
+
     # === MESSAGE HANDLING HELPERS (for on_message) ===
 
     def _should_ignore_self_loop(self, message: discord.Message) -> bool:
@@ -498,6 +530,24 @@ class BotInstance:
         is_dm = isinstance(channel, discord.DMChannel)
         channel_id = getattr(channel, "id", channel)
         return conversation_history_id(self.name, channel_id, is_dm=is_dm, user_id=user_id)
+
+    def _history_key_for_own_message(self, message):
+        """Return the history key of a message this bot sent, or None for an unknown DM.
+
+        A cached message from the gateway has a DM channel without a recipient,
+        so the user is looked up in the DM state, which each incoming DM that
+        passes the access check updates.
+        """
+        channel = message.channel
+        if not isinstance(channel, discord.DMChannel):
+            return channel.id
+        recipient = getattr(channel, "recipient", None)
+        if recipient is not None:
+            return self._conversation_key(channel, recipient.id)
+        for user_id, state in getattr(self, "_dm_followup_state", {}).items():
+            if state.get("channel_id") == channel.id:
+                return self._conversation_key(channel, user_id)
+        return None
 
     def _context_builder(self) -> ContextBuilder:
         """Return this bot's context identity builder, creating it lazily for tests."""
@@ -1022,7 +1072,7 @@ Return exactly one JSON object with this shape:
             return clarification_prompt.strip().rstrip("?") + "?"
         return "What time should I remind you about that?"
 
-    async def _send_auxiliary_followup(self, message: discord.Message, content: str, guild) -> bool:
+    async def _send_auxiliary_followup(self, message: discord.Message, content: str, guild, *, history_key) -> bool:
         """Send a short follow-up message such as a reminder clarification."""
         if not content or not content.strip():
             return False
@@ -1041,11 +1091,12 @@ Return exactly one JSON object with this shape:
             return False
 
         add_to_history(
-            message.channel.id,
+            history_key,
             "assistant",
             content,
             author_name=self.character.name,
             guild=guild,
+            message_id=getattr(sent, "id", None),
             timestamp=getattr(sent, "created_at", None) if sent else None
         )
         return True
@@ -1079,6 +1130,9 @@ Return exactly one JSON object with this shape:
         action = str(payload.get("action", "none")).strip().lower()
         event_summary = " ".join(str(payload.get("event_summary", "")).split())
         normalized_event = " ".join(str(payload.get("normalized_event", "")).split()).lower() or event_summary.lower()
+        # A DM's history key is not a Discord channel ID; reminders are
+        # delivered to, and clarifications matched by, the Discord channel.
+        source_channel_id = context["discord_channel_id"]
         source_type = "dm" if context["is_dm"] else "channel"
         source_channel_name = getattr(message.channel, "name", None) or ("DM" if context["is_dm"] else f"Channel {context['channel_id']}")
         source_guild_name = request["guild"].name if request.get("guild") else "DM"
@@ -1091,7 +1145,7 @@ Return exactly one JSON object with this shape:
                 reminder_manager.clear_pending_clarification(
                     bot_name=self.name,
                     target_user_id=context["user_id"],
-                    source_channel_id=context["channel_id"],
+                    source_channel_id=source_channel_id,
                 )
             return
 
@@ -1101,7 +1155,7 @@ Return exactly one JSON object with this shape:
                 bot_name=self.name,
                 target_user_id=context["user_id"],
                 target_user_name=context["user_name"],
-                source_channel_id=context["channel_id"],
+                source_channel_id=source_channel_id,
                 source_channel_name=source_channel_name,
                 source_guild_id=context["guild_id"],
                 source_guild_name=source_guild_name,
@@ -1120,7 +1174,9 @@ Return exactly one JSON object with this shape:
                 clarification_prompt=clarification_prompt,
                 event_summary=event_summary or (pending_draft or {}).get("event_summary", ""),
             )
-            await self._send_auxiliary_followup(message, clarification_text, request.get("guild"))
+            await self._send_auxiliary_followup(
+                message, clarification_text, request.get("guild"), history_key=context["channel_id"]
+            )
             return
 
         if action != "create":
@@ -1147,7 +1203,7 @@ Return exactly one JSON object with this shape:
                 reminder_manager.clear_pending_clarification(
                     bot_name=self.name,
                     target_user_id=context["user_id"],
-                    source_channel_id=context["channel_id"],
+                    source_channel_id=source_channel_id,
                 )
             return
 
@@ -1170,7 +1226,7 @@ Return exactly one JSON object with this shape:
             target_user_id=context["user_id"],
             target_user_name=context["user_name"],
             source_type=source_type,
-            source_channel_id=context["channel_id"],
+            source_channel_id=source_channel_id,
             source_channel_name=source_channel_name,
             source_guild_id=context["guild_id"],
             source_guild_name=source_guild_name,
@@ -1187,6 +1243,17 @@ Return exactly one JSON object with this shape:
             f"Reminder {status} for {context['user_name']} ({reminder['id']}): "
             f"{reminder['event_summary']} @ {reminder['due_at_utc']}",
             self.name
+        )
+
+    def _pending_reminder_clarification(self, message) -> dict | None:
+        """Return the open reminder question for this author in this Discord channel.
+
+        Drafts are keyed by the Discord channel ID, which a DM's history key is not.
+        """
+        return reminder_manager.get_pending_clarification(
+            bot_name=self.name,
+            target_user_id=message.author.id,
+            source_channel_id=message.channel.id,
         )
 
     async def _resolve_user(self, user_id: int):
@@ -1247,6 +1314,7 @@ Return exactly one JSON object with this shape:
         target_user_name = reminder.get("target_user_name") or f"User {target_user_id}"
         source_channel_id = int(reminder.get("source_channel_id"))
         is_dm = reminder.get("source_type") == "dm"
+        history_key = dm_history_key(self.name, target_user_id) if is_dm else source_channel_id
         get_guild = getattr(self.client, "get_guild", None)
         guild = get_guild(reminder.get("source_guild_id")) if callable(get_guild) and reminder.get("source_guild_id") else None
         server_id = self._dm_memory_server_id() if is_dm else int(reminder.get("source_guild_id") or 0)
@@ -1264,12 +1332,12 @@ Return exactly one JSON object with this shape:
         if memories:
             memories = remove_thinking_tags(memories)
 
-        active_users = get_active_users(source_channel_id) if not is_dm else []
-        other_bot_names = get_other_bot_names(source_channel_id, self.character.name if self.character else "")
+        active_users = get_active_users(history_key) if not is_dm else []
+        other_bot_names = get_other_bot_names(history_key, self.character.name if self.character else "")
         time_passage_context = ""
         if runtime_config.get("time_passage_context_enabled", True):
             time_passage_context = character_manager.build_time_passage_context(
-                build_time_passage_signal(get_history(source_channel_id)),
+                build_time_passage_signal(get_history(history_key)),
                 is_dm=is_dm,
                 now=prompt_now
             )
@@ -1292,7 +1360,7 @@ Return exactly one JSON object with this shape:
         )
 
         history_msgs, immediate = format_history_split(
-            source_channel_id,
+            history_key,
             total_limit=runtime_config.get("history_limit", 200),
             immediate_count=runtime_config.get("immediate_message_count", 5),
             current_bot_name=self.character.name if self.character else None
@@ -1426,52 +1494,62 @@ Return exactly one JSON object with this shape:
         
         @self.client.event
         async def on_ready():
-            ensure_data_dir()
-            load_history()  # Restore history from previous session
-            # Load character
-            self.character = character_manager.load(self.character_name)
-            if self.character:
-                log.ok(f"Loaded character: {self.character.name}", self.name)
-            else:
-                log.warn(f"Character '{self.character_name}' not found!", self.name)
-                available = character_manager.list_available()
-                if available:
-                    self.character = character_manager.load(available[0])
-                    log.info(f"Loaded fallback: {self.character.name}", self.name)
-
-            # Set up request processor
+            # Set up request processor first: the awaited steps below, the
+            # Project helper attach and the command sync, can be slow or hang,
+            # and a request that arrives while no processor is set is dropped.
             self.request_queue.set_processor(self._process_request)
 
-            # Register this bot for cross-bot awareness (mention features)
-            from discord_utils import register_bot
-            register_bot(self)
+            with self._ready_step("data directory"):
+                ensure_data_dir()
 
-            # Start periodic state cleanup task (every 5 minutes)
-            self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
+            with self._ready_step("character"):
+                # Load character
+                self.character = character_manager.load(self.character_name)
+                if self.character:
+                    log.ok(f"Loaded character: {self.character.name}", self.name)
+                else:
+                    log.warn(f"Character '{self.character_name}' not found!", self.name)
+                    available = character_manager.list_available()
+                    if available:
+                        self.character = character_manager.load(available[0])
+                        log.info(f"Loaded fallback: {self.character.name}", self.name)
 
-            # Start DM follow-up loop
-            self._track_background_task(self._dm_followup_loop(), name="dm-followups")
+            with self._ready_step("bot registry"):
+                # Register this bot for cross-bot awareness (mention features)
+                from discord_utils import register_bot
+                register_bot(self)
 
-            # Start durable reminder loop
-            self._track_background_task(self._reminder_loop(), name="reminders")
+            with self._ready_step("background tasks"):
+                # Start periodic state cleanup task (every 5 minutes)
+                self._track_background_task(self._periodic_state_cleanup(), name="periodic-state-cleanup")
 
-            # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
-            if getattr(provider_manager, "providers", None):
-                self._track_background_task(
-                    memory_manager.retry_pending_auto_profiles(provider_manager),
-                    name="retry-pending-auto-profiles",
+                # Start DM follow-up loop
+                self._track_background_task(self._dm_followup_loop(), name="dm-followups")
+
+                # Start durable reminder loop
+                self._track_background_task(self._reminder_loop(), name="reminders")
+
+                # Retry legacy/pending auto-memory profile consolidation once a provider loop exists.
+                if getattr(provider_manager, "providers", None):
+                    self._track_background_task(
+                        memory_manager.retry_pending_auto_profiles(provider_manager),
+                        name="retry-pending-auto-profiles",
+                    )
+
+            with self._ready_step("metrics"):
+                # Initialize Prometheus metrics for this bot
+                metrics_manager.update_bot_status(
+                    bot_name=self.name,
+                    character_name=self.character.name if self.character else 'None',
+                    online=True
                 )
 
-            # Initialize Prometheus metrics for this bot
-            metrics_manager.update_bot_status(
-                bot_name=self.name,
-                character_name=self.character.name if self.character else 'None',
-                online=True
-            )
+            with self._ready_step("Project helper"):
+                from project_automation import get_automation
+                await get_automation().attach(self)
 
-            from project_automation import get_automation
-            await get_automation().attach(self)
-            await self._sync_slash_commands()
+            with self._ready_step("slash commands"):
+                await self._sync_slash_commands_once()
 
             log.online(f"{self.client.user} is online!", self.name)
         
@@ -1539,11 +1617,7 @@ Return exactly one JSON object with this shape:
 
             pending_reminder_clarification = None
             if not is_other_bot:
-                pending_reminder_clarification = reminder_manager.get_pending_clarification(
-                    bot_name=self.name,
-                    target_user_id=message.author.id,
-                    source_channel_id=channel_id,
-                )
+                pending_reminder_clarification = self._pending_reminder_clarification(message)
 
             # Prevent self-loop: Don't respond to messages from bots with same character name
             if is_other_bot and self._should_ignore_self_loop(message):
@@ -1705,14 +1779,23 @@ Return exactly one JSON object with this shape:
             
             # Update history with the edited content (for context), but don't trigger a response
             user_name = get_user_display_name(after.author)
-            update_history_on_edit(after.channel.id, before.content, after.content, user_name)
+            history_key = self._conversation_key(after, after.author.id)
+            update_history_on_edit(history_key, before.content, after.content, user_name)
             # Note: Removed _maybe_respond_to_edit - edits no longer trigger bot responses
         
         @self.client.event
         async def on_message_delete(message: discord.Message):
-            if message.author == self.client.user:
-                if not remove_message_from_history(message.channel.id, message.id):
-                    remove_assistant_from_history(message.channel.id, 1)
+            if message.author != self.client.user:
+                return
+            history_key = self._history_key_for_own_message(message)
+            if history_key is None:
+                return
+            remove_deleted_bot_message(
+                history_key,
+                message.id,
+                author_name=self.character.name if self.character else None,
+                created_at=getattr(message, "created_at", None),
+            )
 
     def _split_response_for_delivery(self, response: str) -> list[str]:
         """Turn one model response into natural Discord-sized message parts."""
@@ -3216,15 +3299,14 @@ Return exactly one JSON object with this shape:
                 if reactions:
                     await self._send_staggered_reactions(sent_records[0]["message"], reactions, None)
 
-                delivered_response = "\n\n".join(record["content"] for record in sent_records).strip()
-                first_sent_message = sent_records[0]["message"]
-
                 # Add to history
-                add_to_history(
-                    delivery_target.history_id, "assistant", delivered_response,
-                    author_name=char_name,
-                    timestamp=getattr(first_sent_message, "created_at", None)
-                )
+                for record in sent_records:
+                    add_to_history(
+                        delivery_target.history_id, "assistant", record["content"],
+                        author_name=char_name,
+                        message_id=getattr(record["message"], "id", None),
+                        timestamp=getattr(record["message"], "created_at", None)
+                    )
 
                 # Update state
                 state["followups_sent"] = followups_sent + 1
@@ -3330,15 +3412,20 @@ Return exactly one JSON object with this shape:
                 messages.append(msg)
         
         messages.reverse()
-        
+
         guild = getattr(channel, 'guild', None)
-        bot_member = guild.me if guild else None
-        
+        bot_user_id = getattr(getattr(self.client, "user", None), "id", None)
+
         for msg in messages:
-            is_bot = msg.author.bot and (bot_member and msg.author == bot_member)
+            is_own = bot_user_id is not None and msg.author.id == bot_user_id
             is_any_bot = msg.author.bot  # Track all bots for context filtering
-            role = "assistant" if is_bot else "user"
-            user_name = get_user_display_name(msg.author)  # Always store author, even for bots
+            role = "assistant" if is_own else "user"
+            # Live replies store the character name, and history formatting
+            # renders an assistant turn under any other name as another bot.
+            if is_own and self.character:
+                user_name = self.character.name
+            else:
+                user_name = get_user_display_name(msg.author)  # Always store author, even for bots
             add_to_history(
                 history_key or channel.id, role, strip_discord_ooc_comments(msg.content),
                 author_name=user_name, user_id=msg.author.id, guild=guild,

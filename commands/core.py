@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from typing import Optional, Set
 
-from discord_utils import clear_history, remove_assistant_from_history, dm_history_key
+from discord_utils import clear_history, remove_deleted_bot_message
 from character import character_manager
 from .registry import maintenance_visibility, register_command_metadata
 import logger as log
@@ -110,11 +110,7 @@ def setup_core_commands(bot_instance) -> None:
     @history_group.command(name="clear", description="Clear this chat's conversation history")
     @maintenance_visibility()
     async def history_clear(interaction: discord.Interaction) -> None:
-        if isinstance(interaction.channel, discord.DMChannel):
-            history_key = dm_history_key(bot_instance.name, interaction.user.id)
-        else:
-            history_key = interaction.channel_id
-        clear_history(history_key)
+        clear_history(bot_instance._conversation_key(interaction.channel, interaction.user.id))
         await interaction.response.send_message("✅ Conversation history cleared", ephemeral=True)
 
     tree.add_command(history_group)
@@ -133,7 +129,8 @@ def setup_core_commands(bot_instance) -> None:
     async def cmd_recall(interaction: discord.Interaction, count: int = 20) -> None:
         count = max(1, min(200, count))
         await interaction.response.defer(ephemeral=True)
-        loaded = await bot_instance._recall_channel_history(interaction.channel, count)
+        history_key = bot_instance._conversation_key(interaction.channel, interaction.user.id)
+        loaded = await bot_instance._recall_channel_history(interaction.channel, count, history_key=history_key)
         await interaction.followup.send(f"✅ Loaded {loaded} messages into context", ephemeral=True)
     register_command_metadata(bot_instance, name="recall", audience="maintenance", description="Load recent Discord messages into context")
     
@@ -239,14 +236,16 @@ def setup_core_commands(bot_instance) -> None:
     async def cmd_delete_messages(interaction: discord.Interaction, count: int = 1) -> None:
         count = max(1, min(20, count))
         await interaction.response.defer(ephemeral=True)
-        
+        history_key = bot_instance._conversation_key(interaction.channel, interaction.user.id)
+        author_name = bot_instance.character.name if bot_instance.character else None
+
         deleted = 0
         async for msg in interaction.channel.history(limit=100):
             if msg.author == bot_instance.client.user:
                 try:
                     await msg.delete()
                     deleted += 1
-                    remove_assistant_from_history(interaction.channel_id, 1)
+                    remove_deleted_bot_message(history_key, msg.id, author_name=author_name, created_at=msg.created_at)
                     if deleted >= count:
                         break
                 except Exception as e:

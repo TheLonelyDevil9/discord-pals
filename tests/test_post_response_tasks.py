@@ -1,3 +1,4 @@
+import asyncio
 import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -127,6 +128,55 @@ class PostResponseTasksTests(unittest.TestCase):
         bot._remember_recent_response.assert_called_once_with(77, "confirmed")
         bot._update_mood.assert_called_once_with(77, "hello", "confirmed")
         self.assertIs(diagnostic_mock.call_args.kwargs["delivery_outcome"], outcome)
+
+
+class ReminderCaptureFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_failed_reminder_capture_is_logged(self):
+        bot = types.SimpleNamespace(
+            name="Nahida",
+            character=types.SimpleNamespace(name="Nahida"),
+            _record_emoji_budget=Mock(),
+            _remember_recent_response=Mock(),
+            _reset_failures=Mock(),
+            _record_response=Mock(),
+            _update_mood=Mock(),
+            _send_staggered_reactions=AsyncMock(),
+            _maybe_auto_memory=AsyncMock(),
+            _maybe_handle_reminder_capture=AsyncMock(side_effect=ValueError("Invalid reminder payload")),
+        )
+        task_context = PostResponseTaskContext(
+            channel_id="dm:Nahida:user:42",
+            discord_channel_id=77,
+            guild_id=None,
+            guild=None,
+            is_dm=True,
+            user_id=42,
+            user_name="Alice",
+            content="remind me tomorrow at 9",
+            delivered_response="Of course.",
+            sent_records=({"message": types.SimpleNamespace(id=101, created_at=None), "content": "Of course."},),
+            reactions=(),
+            split_target=None,
+            context={"channel_id": "dm:Nahida:user:42"},
+            message=types.SimpleNamespace(id=999),
+            request={"guild": None},
+            req_id="req-1",
+        )
+
+        with patch("post_response_tasks.add_to_history"), \
+                patch("post_response_tasks.runtime_config.update_last_activity"), \
+                patch("post_response_tasks.metrics_manager.update_last_activity"), \
+                patch("post_response_tasks.diagnostic_events.log_delivery_complete"), \
+                patch("post_response_tasks.log.error") as error_mock:
+            PostResponseTasks(bot).run_after_confirmed_delivery(task_context)
+            pending = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+            await asyncio.gather(*pending)
+
+        bot._maybe_handle_reminder_capture.assert_awaited_once()
+        error_mock.assert_called_once()
+        self.assertIn("Reminder capture failed", error_mock.call_args.args[0])
+        self.assertIn("Invalid reminder payload", error_mock.call_args.args[0])
+        self.assertEqual(error_mock.call_args.args[1], "Nahida")
 
 
 if __name__ == "__main__":

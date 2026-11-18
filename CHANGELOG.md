@@ -51,6 +51,13 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - An **Update** click that leaves the checkout at its commit no longer takes a snapshot, so idle clicks cannot rotate the last real snapshot out of the three kept.
 - A reconciliation cycle that starts again after a failure no longer ends early when an issue or PR changed in between. It skipped the rest of its refreshes, its PR activity scans and PR discovery.
 - An issue that GitHub turned into a pull request no longer has its post in Issue tracking overwritten with the pull request's title, text and state. The post is marked Converted with a link to the pull request, archived and locked, and keeps the title that the item had when the helper first recorded the conversion. The pull request gets its own post. A feedback report linked to such an issue gets one notice that it became the pull request, with its link, and no status notice after that. See [Recovery and operations](docs/project-automation.md#recovery-and-operations).
+- DM conversation history is kept across restarts. Each history file now stores its conversation key under a file name that every platform accepts; DM history was skipped at start on Linux and could not be saved on Windows.
+- When history is short, the bot's own DM replies pulled back from Discord count as its replies again instead of as messages from another speaker.
+- A reminder or reminder question asked for in a DM is created; such requests were acknowledged but created nothing.
+- Edits, deletions, `/recall`, reminders, and reminder questions in a DM update that DM's history instead of a history the bot never reads.
+- Deleting a bot message removes only that message from history. It could remove the newest reply of any bot instead, also each time the bot deleted one of its own error notices.
+- A reconnect no longer discards history that was not saved yet: history loads once at start, before the bots connect.
+- A startup step that fails after a bot connects is logged and no longer leaves a bot that ignores every message. Slash commands sync once per start, and again only when the command list changed or a sync failed, instead of on every reconnect.
 
 ### Upgrade notes
 
@@ -60,6 +67,7 @@ Keeps the Project helper's job queue bounded, gives operators controls that clea
 - The first reconciliation cycle after updating refreshes every open issue and PR, and every one closed within the last 7 days, once, writing each existing post once. It also scans the activity of every PR in scope once. Later cycles on an unchanged repository queue no refresh and no scan except the daily post checks and PR scans, which start a day later and can take up to another day to reach the last item. See [First start after upgrading](docs/project-automation.md#first-start-after-upgrading).
 - The first start deletes log files under `bot_data/logs` whose oldest line is more than 14 days old. Copy the folder elsewhere before updating to keep them, and set **Keep Log Files** to 0 after updating for rotation by size only.
 - Users under Config → Operators start to get Project alert DMs. Turn them off under Project → Helper setup → **Operator alerts**.
+- The first start rewrites each file under `bot_data/history_channels` once: channel files keep their names and gain their conversation key, and DM files named after their key, such as `dm:Firefly:user:123.json` on Linux, get new names. The dashboard's **Update** takes a snapshot first; when you update another way, copy `bot_data/history_channels` before you start this version. An earlier version still reads the channel files and ignores DM history, as it did before. On Linux it records DM messages in files named after the DM key again; when you update again, each such file that is newer than the DM's current file is renamed with `.superseded` added to its name and kept, and its messages are not loaded. A reminder question that this version asked in a DM makes an earlier version drop every DM from that user to that bot until the question expires, 24 hours at most.
 
 ## [v2.9.0] - 2026-09-29
 
