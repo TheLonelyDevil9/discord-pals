@@ -14,7 +14,7 @@ import runtime_config
 from project_automation_config import (
     CHANNEL_PURPOSES, config_errors, config_input_errors, credential_status, normalize_project_config,
 )
-from project_automation import WorkflowError
+from project_automation import MIRROR_CHANNELS, WorkflowError, mirror_key
 import project_automation_setup as setup
 from project_automation_store import Conflict
 from security import requires_auth, requires_csrf
@@ -88,6 +88,16 @@ def _issue_number(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 10**12 else None
 
 
+def _post_key(binding, kind, key) -> str:
+    """Return mirror_key for event key `key` under a job's recorded binding, or "" for a kind that
+    mirror_key does not know, a key that is not text, or a binding that lacks a field mirror_key reads."""
+    channel = MIRROR_CHANNELS.get(kind)
+    if not channel or not isinstance(key, str) or not all(
+            isinstance(binding.get(name), str) for name in ("guild_id", "bot_name", "repository", channel)):
+        return ""
+    return mirror_key(binding, kind, key)
+
+
 def _job_target(job: dict, service) -> dict:
     """Locate recovery work using recorded routing, never arbitrary payload data."""
     payload = job.get("payload")
@@ -136,22 +146,28 @@ def _job_target(job: dict, service) -> dict:
         number = _issue_number(payload.get("number"))
         if number:
             target["issue_number"] = number
+            if repository and not target["github_url"] and payload.get("kind") in {"issue", "pull"}:
+                # The payload's own URL is missing, as in a reconciliation refresh, or failed the
+                # check above, so the item's number gives the link.
+                path = "pull" if payload["kind"] == "pull" else "issues"
+                target["github_url"] = f"https://github.com/{repository}/{path}/{number}"
         if field and repository and binding.get("repository") == repository:
             target["discord_url"] = _discord_url(binding.get("guild_id"), binding.get(field))
             # If a receipt exists, open its exact thread instead of the parent forum.
             if store is not None:
-                key = f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get(field)}:{repository}:{payload.get('key')}"
+                key = _post_key(binding, payload.get("kind"), payload.get("key"))
                 if activity:
                     if (not isinstance(payload.get("key"), str) or not all(isinstance(binding.get(name), str)
                             for name in ("guild_id", "bot_name", "reviews_channel_id", "repository"))):
                         return {key: value for key, value in target.items() if value not in (None, "")}
                     from project_automation_activity import activity_receipt_key
                     key = activity_receipt_key(binding, payload)
-                link = store.get_link("pr_activity_delivery", key + ":" + str(payload.get("source_version", ""))) if activity else store.get_link("mirror", key)
+                link = (store.get_link("pr_activity_delivery", key + ":" + str(payload.get("source_version", ""))) if activity
+                        else store.get_link("mirror", key) if key else None)
                 if activity and not link:
                     link = store.get_link("pr_activity", key)
                     if not isinstance(link, dict) or link.get("source_version") != payload.get("source_version"):
-                        link = store.get_link("mirror", f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get(field)}:{repository}:pull:{number}")
+                        link = store.get_link("mirror", _post_key(binding, "pull", f"pull:{number}")) if number else None
                         if isinstance(link, dict) and all(link.get(name) == binding.get(name) for name in ("guild_id", "bot_name", "repository")):
                             target["discord_url"] = _discord_url(binding.get("guild_id"), link.get("channel_id")) or target["discord_url"]
                         link = None
@@ -168,8 +184,8 @@ def _job_target(job: dict, service) -> dict:
                           discord_url=_discord_url(binding.get("guild_id"), binding.get("reviews_channel_id")))
             store = getattr(service, "store", None)
             if number and store is not None:
-                key = f"{binding.get('guild_id')}:{binding.get('bot_name')}:{binding.get('reviews_channel_id')}:{repository}:pull:{number}"
-                link = store.get_link("mirror", key)
+                key = _post_key(binding, "pull", f"pull:{number}")
+                link = store.get_link("mirror", key) if key else None
                 if isinstance(link, dict) and all(link.get(name) == binding.get(name) for name in ("guild_id", "bot_name", "repository")):
                     target["discord_url"] = _discord_url(binding.get("guild_id"), link.get("channel_id")) or target["discord_url"]
     return {key: value for key, value in target.items() if value not in (None, "")}

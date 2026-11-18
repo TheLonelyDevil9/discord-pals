@@ -831,6 +831,32 @@ def _native_suite():
                     expected.append({"archived": True, "locked": True})
                 self.assertEqual([call.kwargs for call in thread.edit.await_args_list], expected)
 
+        async def test_a_mirror_that_must_not_create_edits_only_an_existing_post(self):
+            forum, thread, starter = self.configure_forum()
+            key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"
+            pull_url = "https://github.com/SillyBunnyTeam/SillyBunny/pull/17"
+            converted = event(state="converted", closed=True, html_url=pull_url,
+                              body=f"This issue became [pull request #17]({pull_url}).")
+            self.assertFalse(await self.transport.mirror(converted, create=False))
+            forum.create_thread.assert_not_awaited()
+            self.assertEqual(self.store.links, {})
+            await self.transport.mirror(event())
+            self.apply_thread_writes(forum, thread)
+            self.reset_writes(forum.create_thread, starter.edit, thread.edit)
+            self.assertTrue(await self.transport.mirror(converted, create=False))
+            forum.create_thread.assert_not_awaited()
+            written = starter.edit.await_args.kwargs["embed"]
+            self.assertEqual((written.title, written.url, written.footer.text),
+                             ("Converted · Settings fail to save", pull_url, f"Project {key}"))
+            self.assertEqual(written.description, converted["body"])
+            self.assertEqual([call.kwargs for call in thread.edit.await_args_list],
+                             [{"name": "Converted · Settings fail to save · #17"}, {"archived": True, "locked": True}])
+            self.apply_thread_writes(forum, thread)
+            self.reset_writes(starter.edit, thread.edit)
+            self.assertTrue(await self.transport.mirror(converted, create=False))
+            starter.edit.assert_not_awaited()
+            thread.edit.assert_not_awaited()
+
         async def test_first_refresh_after_upgrade_writes_once_and_stores_the_digest(self):
             forum, thread, starter = self.configure_forum()
             key = "100:Project Helper:201:SillyBunnyTeam/SillyBunny:issue:17"

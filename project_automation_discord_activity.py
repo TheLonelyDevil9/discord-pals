@@ -6,7 +6,7 @@ import re
 
 import discord
 
-from project_automation import WorkflowError
+from project_automation import WorkflowError, mirror_key
 from project_automation_activity import activity_receipt_key, marker_prefix
 
 
@@ -23,8 +23,8 @@ def receipt_key(config, event):
     """The source object belongs to this exact helper/server/forum/repository."""
     if event.get("kind") == "pr_activity":
         return activity_receipt_key(config, event)
-    # Keep existing parent-post mappings compatible.
-    return f"{config['guild_id']}:{config['bot_name']}:{config['reviews_channel_id']}:{config['repository']}:{event['key']}"
+    # Any other event is the parent pull request, so the key is the key of the PR's post.
+    return mirror_key(config, "pull", event["key"])
 
 
 def activity_version(event):
@@ -307,6 +307,5 @@ def confirm_not_delivered(transport, event):
         parent_key = receipt_key(config, parent)
         transport.service.store.put_link("mirror_attempt", parent_key, {"state": "retry_authorized"})
     else:
-        field = {"issue": "issues_channel_id", "pull": "reviews_channel_id", "commit": "commits_channel_id", "general": "github_channel_id"}[event["kind"]]
-        key = f"{config['guild_id']}:{config['bot_name']}:{config[field]}:{config['repository']}:{event['key']}"
-        transport.service.store.put_link("mirror_attempt", key, {"state": "retry_authorized"})
+        transport.service.store.put_link("mirror_attempt", mirror_key(config, event["kind"], event["key"]),
+                                         {"state": "retry_authorized"})
