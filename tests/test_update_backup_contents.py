@@ -177,7 +177,8 @@ class DashboardUpdateSnapshotTests(unittest.TestCase):
     """An Update click that leaves HEAD where it is must not rotate the last real snapshot away."""
 
     def update(self, repo, refs, ancestors):
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_git(refs, ancestors)):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_git(refs, ancestors)), \
+                patch.object(update_module, "preflight"):
             return dashboard_module._perform_git_update(str(repo), update_branch="main")
 
     def snapshots(self, repo):

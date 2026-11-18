@@ -1010,7 +1010,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), patch("update.preflight"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertTrue(result["updated"])
@@ -1068,7 +1068,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), patch("update.preflight"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertTrue(result["updated"])
@@ -1115,7 +1115,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), patch("update.preflight"):
             result = dashboard_module._perform_git_update("repo", expected_version="1.2.0")
 
         self.assertEqual(result["target_ref"], "origin/main")
@@ -1153,7 +1153,7 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Fast-forward\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
-        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
+        with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git), patch("update.preflight"):
             result = dashboard_module._perform_git_update(
                 "repo",
                 expected_version="1.2.0",
@@ -1178,12 +1178,15 @@ class DashboardPerformanceApiTests(MemorySandboxMixin, unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stdout="Saved working directory and index state", stderr="")
             if args[:3] == ["stash", "list", "--format=%gd%x00%s"]:
                 return types.SimpleNamespace(returncode=0, stdout="stash@{0}\x00discord-pals-dashboard-update-123\n", stderr="")
+            if args == ["rev-parse", "--verify", "stash@{0}^{commit}"]:
+                return types.SimpleNamespace(returncode=0, stdout="5a5a5a\n", stderr="")
             raise AssertionError(f"Unexpected git command: {args}")
 
         with patch.object(dashboard_module, "_run_git", side_effect=fake_run_git):
             stash = dashboard_module._stash_local_changes("repo")
 
         self.assertEqual(stash["ref"], "stash@{0}")
+        self.assertEqual(stash["sha"], "5a5a5a")
         self.assertNotIn(["stash", "push", "--include-untracked", "-m", "discord-pals-dashboard-update-123"], calls)
 
     def test_write_update_log_persists_entries(self):

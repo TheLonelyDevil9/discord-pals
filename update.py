@@ -31,6 +31,18 @@ BACKUP_DIRS = ("bot_data", "characters", "prompts")
 # Rotated logs live under bot_data/logs and are already size-capped; copying them
 # into every snapshot multiplied retained backups by the whole log budget.
 BACKUP_DIR_IGNORES = {"bot_data": ("logs", "project_automation.sqlite3*")}
+# (file in the Git directory, operation, command that abandons it)
+UNFINISHED_OPERATIONS = (
+    ("MERGE_HEAD", "merge", "git merge --abort"),
+    ("rebase-merge", "rebase", "git rebase --abort"),
+    ("rebase-apply", "rebase", "git rebase --abort"),
+    ("CHERRY_PICK_HEAD", "cherry-pick", "git cherry-pick --abort"),
+    ("REVERT_HEAD", "revert", "git revert --abort"),
+)
+
+
+class UpdateRefused(RuntimeError):
+    """The checkout is in a state that an update must not touch. Nothing was changed."""
 
 
 def info(message: str) -> None:
@@ -247,6 +259,38 @@ def create_state_backup(repo: Path, warnings: list | None = None) -> Path | None
         warnings.append(note)
     prune_backups(backup_root)
     return backup_dir
+
+
+def preflight(repo: Path) -> None:
+    """Raise UpdateRefused when the checkout holds unresolved conflicts or an unfinished operation.
+
+    A stash fails on unmerged paths, and the reset fallback would discard a half-finished
+    merge or rebase, so the update stops before it changes anything.
+    """
+    unmerged = run(["git", "ls-files", "--unmerged", "-z"], repo, timeout=30, check=True).stdout
+    paths = sorted({entry.split("\t", 1)[1] for entry in unmerged.split("\0") if "\t" in entry})
+    if paths:
+        raise UpdateRefused(
+            f"the checkout has unresolved conflicts in {', '.join(paths)}. Resolve them with Git, "
+            "or discard the conflicted version of a file with `git checkout HEAD -- <file>`, then update again."
+        )
+    git_dir = Path(run(["git", "rev-parse", "--absolute-git-dir"], repo, timeout=30, check=True).stdout.strip())
+    for name, operation, abort in UNFINISHED_OPERATIONS:
+        if (git_dir / name).exists():
+            raise UpdateRefused(
+                f"a Git {operation} is in progress in the checkout. Finish it or run `{abort}`, then update again."
+            )
+
+
+def restore_checkout(repo: Path, commit: str, stash_sha: str | None) -> None:
+    """Put the checkout back on commit and reapply the stashed local changes.
+
+    The stash was taken on commit, so reapplying it there cannot conflict. Its entry
+    stays in the stash list as a second copy of the changes.
+    """
+    run(["git", "reset", "--hard", commit], repo, timeout=120, check=True)
+    if stash_sha:
+        run(["git", "stash", "apply", "--index", stash_sha], repo, timeout=120, check=True)
 
 
 def tracked_status(repo: Path) -> str:
